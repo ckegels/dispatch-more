@@ -91,6 +91,8 @@ const M3U = ({
       stale_stream_days: 7,
       priority: 0,
       enable_vod: false,
+      probation_enabled: false,
+      probation_seconds: 10,
     },
 
     validate: {
@@ -126,6 +128,8 @@ const M3U = ({
             ? m3uAccount.priority
             : 0,
         enable_vod: m3uAccount.enable_vod || false,
+        probation_enabled: m3uAccount.probation_enabled || false,
+        probation_seconds: m3uAccount.probation_seconds ?? 10,
       });
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
 
@@ -344,6 +348,26 @@ const M3U = ({
                 min={0}
                 {...form.getInputProps('max_streams')}
                 key={form.key('max_streams')}
+              />
+              <Switch
+                id="probation_enabled"
+                name="probation_enabled"
+                label="Allow Channel Switch Overlap"
+                description="When all accounts are at their limit, start a new stream immediately on one temporary extra slot. If another stream on this account ends within the overlap window (a channel switch), it continues; otherwise it moves to an account with a free slot or is stopped. Streams already playing are never stopped."
+                key={form.key('probation_enabled')}
+                {...form.getInputProps('probation_enabled', {
+                  type: 'checkbox',
+                })}
+              />
+              <NumberInput
+                id="probation_seconds"
+                name="probation_seconds"
+                label="Overlap Window (seconds)"
+                description="How long this account may run one stream over its limit. Keep this below what the provider tolerates."
+                min={1}
+                max={120}
+                {...form.getInputProps('probation_seconds')}
+                key={form.key('probation_seconds')}
               />
               <Select
                 id="server_group"

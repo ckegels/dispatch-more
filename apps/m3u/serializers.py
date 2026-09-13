@@ -148,6 +148,10 @@ class M3UAccountSerializer(serializers.ModelSerializer):
     auto_enable_new_groups_live = serializers.BooleanField(required=False, write_only=True)
     auto_enable_new_groups_vod = serializers.BooleanField(required=False, write_only=True)
     auto_enable_new_groups_series = serializers.BooleanField(required=False, write_only=True)
+    probation_enabled = serializers.BooleanField(required=False, write_only=True)
+    probation_seconds = serializers.IntegerField(
+        required=False, write_only=True, min_value=1, max_value=120
+    )
     cron_expression = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
@@ -181,6 +185,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "auto_enable_new_groups_live",
             "auto_enable_new_groups_vod",
             "auto_enable_new_groups_series",
+            "probation_enabled",
+            "probation_seconds",
             "earliest_expiration",
             "all_expirations",
             "exp_date",
@@ -228,6 +234,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         data["auto_enable_new_groups_live"] = custom_props.get("auto_enable_new_groups_live", True)
         data["auto_enable_new_groups_vod"] = custom_props.get("auto_enable_new_groups_vod", True)
         data["auto_enable_new_groups_series"] = custom_props.get("auto_enable_new_groups_series", True)
+        data["probation_enabled"] = custom_props.get("probation_enabled", False)
+        data["probation_seconds"] = custom_props.get("probation_seconds", 10)
 
         # Derive cron_expression from the linked PeriodicTask's crontab (single source of truth)
         # But first check if we have a transient _cron_expression (from create/update before signal runs)
@@ -272,6 +280,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         auto_enable_new_groups_live = validated_data.pop("auto_enable_new_groups_live", None)
         auto_enable_new_groups_vod = validated_data.pop("auto_enable_new_groups_vod", None)
         auto_enable_new_groups_series = validated_data.pop("auto_enable_new_groups_series", None)
+        probation_enabled = validated_data.pop("probation_enabled", None)
+        probation_seconds = validated_data.pop("probation_seconds", None)
 
         # Merge client-supplied custom_properties over the existing blob
         # so unrelated keys persist. The dedicated preference fields below
@@ -296,6 +306,10 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["auto_enable_new_groups_vod"] = auto_enable_new_groups_vod
         if auto_enable_new_groups_series is not None:
             custom_props["auto_enable_new_groups_series"] = auto_enable_new_groups_series
+        if probation_enabled is not None:
+            custom_props["probation_enabled"] = probation_enabled
+        if probation_seconds is not None:
+            custom_props["probation_seconds"] = probation_seconds
 
         validated_data["custom_properties"] = custom_props
 
@@ -356,6 +370,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         auto_enable_new_groups_live = validated_data.pop("auto_enable_new_groups_live", True)
         auto_enable_new_groups_vod = validated_data.pop("auto_enable_new_groups_vod", True)
         auto_enable_new_groups_series = validated_data.pop("auto_enable_new_groups_series", True)
+        probation_enabled = validated_data.pop("probation_enabled", False)
+        probation_seconds = validated_data.pop("probation_seconds", 10)
 
         # Parse existing custom_properties or create new
         custom_props = validated_data.get("custom_properties") or {}
@@ -367,6 +383,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         custom_props["auto_enable_new_groups_live"] = auto_enable_new_groups_live
         custom_props["auto_enable_new_groups_vod"] = auto_enable_new_groups_vod
         custom_props["auto_enable_new_groups_series"] = auto_enable_new_groups_series
+        custom_props["probation_enabled"] = probation_enabled
+        custom_props["probation_seconds"] = probation_seconds
         validated_data["custom_properties"] = custom_props
 
         # Build instance manually so we can attach transient attr before save triggers signal

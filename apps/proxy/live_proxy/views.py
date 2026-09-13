@@ -19,6 +19,7 @@ from .output.ts.generator import create_stream_generator
 from .output.fmp4.generator import create_fmp4_stream_generator
 from dispatcharr.utils import get_client_ip, network_access_allowed
 from .redis_keys import RedisKeys
+from . import probation
 from apps.channels.models import Channel
 from apps.accounts.models import User
 from core.models import CoreSettings, PROXY_PROFILE_NAME
@@ -324,7 +325,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             error_reason,
                             resolved_stream_id,
                         ) = generate_stream_url(
-                            channel_id, user, allowed_m3u_profiles
+                            channel_id, user, allowed_m3u_profiles, client_ip
                         )
 
                         if stream_url is not None:
@@ -376,7 +377,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             error_reason,
                             resolved_stream_id,
                         ) = generate_stream_url(
-                            channel_id, user, allowed_m3u_profiles
+                            channel_id, user, allowed_m3u_profiles, client_ip
                         )
                         if stream_url is not None:
                             logger.info(
@@ -574,6 +575,11 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     # Channel initialized: lifecycle owns the connection and ownership lock
                     connection_allocated = False
                     owned_for_init = False
+
+                    if probation.has_pending_probation(
+                        proxy_server.redis_client, channel_id
+                    ):
+                        probation.start_probation_monitor(channel_id)
 
                     # If we're the owner, register the client now so the watchdog
                     # doesn't stop the channel during connection (which can take

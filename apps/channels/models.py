@@ -691,9 +691,14 @@ class Channel(models.Model):
         redis_client.delete(f"channel_stream:{self.id}")
         redis_client.delete(f"stream_profile:{stream_id}")
 
-    def get_stream(self, requester=None, allowed_m3u_profiles=None):
+    def get_stream(self, requester=None, allowed_m3u_profiles=None, viewer_ip=None):
         """
         Finds an available stream for the requested channel and returns the selected stream and profile.
+
+        viewer_ip is the requesting client's IP and is only passed for viewer requests.
+        When every profile is at its limit and that IP is already watching on an
+        account that allows probation, the stream starts on a temporary slot past
+        the limit (see apps.proxy.live_proxy.probation).
 
         Returns:
             Tuple[Optional[int], Optional[int], Optional[str], bool]:
@@ -761,6 +766,7 @@ class Channel(models.Model):
         # No existing active stream, attempt to assign a new one
         has_streams_but_maxed_out = False
         has_active_profiles = False
+        full_candidates = []
 
         # Iterate through channel streams and their profiles
         for stream in self.streams.all().order_by("channelstream__order"):
@@ -822,6 +828,7 @@ class Channel(models.Model):
                         # return self.id, profile.id, victim_channel_id
 
                     has_streams_but_maxed_out = True
+                    full_candidates.append((stream, profile))
                     if failure_reason == "profile_full":
                         logger.info(
                             f"Profile {profile.id} at max connections: "
@@ -836,6 +843,47 @@ class Channel(models.Model):
                             f"Profile {profile.id} reservation failed: "
                             f"{current_count}/{profile.max_streams}"
                         )
+
+        if has_streams_but_maxed_out and viewer_ip:
+            from apps.proxy.live_proxy import probation
+
+            # Every profile is full. An IP already watching on an account that allows
+            # probation is probably switching channels: start now on that profile's
+            # temporary slot. IPs that are not watching get the normal limit error.
+            full_candidates = [
+                (stream, profile)
+                for stream, profile in full_candidates
+                if profile.max_streams > 0
+                and probation.account_allows_probation(stream.m3u_account)
+            ]
+            if full_candidates and not self.get_stream_profile().is_redirect():
+                watched_profile_ids = probation.find_profile_ids_watched_by_ip(
+                    redis_client, viewer_ip
+                )
+                for stream, profile in full_candidates:
+                    if profile.id not in watched_profile_ids:
+                        continue
+                    reserved, current_count, _failure_reason = reserve_profile_slot(
+                        profile,
+                        redis_client,
+                        extra_capacity=probation.PROBATION_EXTRA_CAPACITY,
+                    )
+                    if not reserved:
+                        continue
+                    redis_client.set(f"channel_stream:{self.id}", stream.id)
+                    redis_client.set(f"stream_profile:{stream.id}", profile.id)
+                    probation.mark_probation(
+                        redis_client,
+                        self,
+                        stream.id,
+                        profile.id,
+                        probation.account_probation_seconds(stream.m3u_account),
+                    )
+                    logger.info(
+                        f"Channel {self.uuid}: assigned stream {stream.id} profile {profile.id} "
+                        f"({profile.name}) on probation ({current_count}/{profile.max_streams})"
+                    )
+                    return stream.id, profile.id, None, True
 
         # No available streams - determine specific reason
         if has_streams_but_maxed_out:

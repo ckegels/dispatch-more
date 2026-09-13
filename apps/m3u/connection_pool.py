@@ -266,7 +266,7 @@ def _release_credential_slot_by_profile_id(profile_id: int, redis_client) -> boo
 
 
 def _reserve_server_group_slot_for_profile(
-    profile, redis_client
+    profile, redis_client, extra_capacity: int = 0
 ) -> Tuple[bool, Optional[str]]:
     group = get_enforced_server_group_for_profile(profile)
     if not group or profile.max_streams == 0:
@@ -277,7 +277,7 @@ def _reserve_server_group_slot_for_profile(
         return False, None
 
     cred_count = redis_client.incr(cred_key)
-    if cred_count <= profile.max_streams:
+    if cred_count <= profile.max_streams + extra_capacity:
         return True, cred_key
 
     redis_client.decr(cred_key)
@@ -285,10 +285,13 @@ def _reserve_server_group_slot_for_profile(
 
 
 def reserve_profile_slot(
-    profile, redis_client
+    profile, redis_client, extra_capacity: int = 0
 ) -> Tuple[bool, int, Optional[ReserveFailureReason]]:
     """
     Atomically reserve profile + optional credential slots (INCR-first).
+
+    extra_capacity allows the counters to go that many slots past max_streams;
+    it is only used for short-lived probation slots during channel switches.
 
     Returns (reserved, profile_count_after_attempt, failure_reason).
     failure_reason is set when reserved is False.
@@ -298,12 +301,12 @@ def reserve_profile_slot(
 
     if profile.max_streams > 0:
         profile_count = redis_client.incr(profile_key)
-        if profile_count > profile.max_streams:
+        if profile_count > profile.max_streams + extra_capacity:
             redis_client.decr(profile_key)
             return False, profile_count - 1, "profile_full"
 
     cred_reserved, cred_key = _reserve_server_group_slot_for_profile(
-        profile, redis_client
+        profile, redis_client, extra_capacity
     )
     if not cred_reserved:
         if profile.max_streams > 0:
