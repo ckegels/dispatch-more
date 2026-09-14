@@ -56,9 +56,16 @@ Streams that were already playing are never stopped by this feature.
 
 Fast channel surfing (several channels within seconds) fills every slot: Dispatcharr
 only releases a channel once it notices the player left, and each account has a single
-overlap slot. With **Stop Skipped Channels** enabled on the account, a new request from
-an identified viewer (user or device ID, plus IP) first stops that viewer's *skipped*
-channels, so their slots are free for the channel it wants now.
+overlap slot. With **Stop Skipped Channels** enabled on the account, an identified viewer's
+(user or device ID, plus IP) *skipped* channels are stopped:
+
+- After its new channel got a slot (normally the overlap slot, so switching is not delayed).
+  The overlap slot is then free again for the next switch.
+- Before retrying, if not even the overlap slot was free; the released slots are then held
+  for this viewer (see *Held slots*).
+
+The skipped channel's slot is released immediately; the rest of the stop, which waits for
+the provider connection to close, runs in the background.
 
 A channel counts as skipped when all of these are true:
 
@@ -74,22 +81,38 @@ next channel is requested; A (watched longer) closes on its own and E is confirm
 Known risks: a single player intentionally opening two channels within the window
 (multiview / picture-in-picture), and two devices sharing one Xtream login behind one IP.
 
-### Stay On Same Account (optional)
+### Held slots
 
-With **Stay On Same Account** enabled, a viewer's next channel prefers the account
-(M3U profile) the viewer is watching on, or was last assigned within 60 seconds
-(`live:probation:last_profile:<viewer>`), ahead of the channel's normal stream order:
+Many players close the old stream just before requesting the next channel. A request that
+is already waiting for a slot (another viewer) would take the released slot in that gap and
+the switch would fail. When a channel on an account with the overlap enabled releases its
+slot and had exactly one viewer (identified, or anonymous where allowed), the slot is held
+for that viewer for the overlap window (`live:probation:held:<profile id>`). Everyone else,
+including requests without a viewer, treats it as taken; the viewer's next request takes
+it. No hold is created when the overlap stopped the channel because it was not a switch,
+or when a skipped channel is stopped after its viewer already has its new slot. With a
+Channel Shutdown Delay above 0 the viewer has left before the release, so no hold is made.
 
-- A free slot on that profile is used first.
-- If that profile is full and the viewer is watching on it (its own old stream is still
-  closing), the overlap slot is used instead of moving to another account, even when
-  another account has a free slot.
-- A profile the viewer only left is never overlapped (someone else may hold it).
-- Otherwise normal selection continues.
+### When Switching Channels (account preference)
 
-Anonymous viewers need Allow Anonymous Connections; several of them behind one IP can
-then be kept on one account, and a new stream that is not a switch is moved to a free
-account when the window expires.
+`probation_account_preference` chooses the account (M3U profile) for an identified viewer's
+next channel. The profile the viewer is *leaving* is the one it is watching on, was last
+assigned within 60 seconds (`live:probation:last_profile:<viewer>`), or has a held slot on.
+
+- **Follow channel order** (`order`, default): normal selection by stream order. Because many
+  players close the old stream first, this often returns to the same account.
+- **Stay on same account** (`same`): the profile being left is tried first: a free slot, or
+  the overlap slot when the viewer is still watching on it, even when another account has
+  a free slot. A profile the viewer only left is never overlapped (someone else may hold it).
+- **Use another account** (`alternate`): a free slot on any other profile of the channel is
+  tried first, so the next channel does not wait for the provider to close the old
+  connection. A slot held on the profile being left is released. When no other profile has
+  a free slot, normal selection continues (held slot, then overlap).
+
+The preference of the account being left decides. Anonymous viewers need Allow Anonymous
+Connections; several of them behind one IP can then be kept on one account, and a new
+stream that is not a switch is moved to a free account when the window expires. Earlier
+builds stored "Stay On Same Account" as `probation_sticky: true`, which still reads as `same`.
 
 ## Recognising the same viewer
 
@@ -146,7 +169,7 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 | Allow Channel Switch Overlap | `probation_enabled` | off |
 | Overlap Window (seconds, 1–120) | `probation_seconds` | 10 |
 | Stop Skipped Channels | `probation_stop_skipped` | off |
-| Stay On Same Account | `probation_sticky` | off |
+| When Switching Channels | `probation_account_preference` | `order` |
 | Allow Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
 
 The form only shows the toggle until it is enabled (after confirming the explanation

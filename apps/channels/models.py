@@ -768,13 +768,16 @@ class Channel(models.Model):
         has_active_profiles = False
         full_candidates = []
 
-        if viewer is not None:
-            from apps.proxy.live_proxy import probation
+        from apps.proxy.live_proxy import probation
 
-            # Stay On Same Account: prefer the account this viewer is on or just left
-            sticky_result = probation.reserve_sticky_slot(self, redis_client, viewer)
-            if sticky_result is not None:
-                return sticky_result
+        if viewer is not None:
+            # Account preference when switching (Channel Switch Overlap): stay on the
+            # account this viewer is on or just left, or start on another one
+            preferred_result = probation.reserve_sticky_slot(
+                self, redis_client, viewer
+            ) or probation.reserve_alternate_slot(self, redis_client, viewer)
+            if preferred_result is not None:
+                return preferred_result
 
         # Iterate through channel streams and their profiles
         for stream in self.streams.all().order_by("channelstream__order"):
@@ -807,11 +810,19 @@ class Channel(models.Model):
                 reserved, current_count, failure_reason = reserve_profile_slot(
                     profile, redis_client
                 )
+                # A slot held for a viewer switching channels (Channel Switch Overlap)
+                # counts as taken for everyone else
+                if reserved and probation.slot_taken_by_hold(
+                    redis_client, profile, m3u_account, viewer, current_count
+                ):
+                    release_profile_slot(profile.id, redis_client)
+                    reserved, failure_reason = False, "profile_full"
 
                 if reserved:
                     # Slot reserved — assign stream to this channel
                     redis_client.set(f"channel_stream:{self.id}", stream.id)
                     redis_client.set(f"stream_profile:{stream.id}", profile.id)
+                    probation.take_held_slot(redis_client, profile, m3u_account, viewer)
                     if viewer is not None:
                         probation.remember_viewer_profile(
                             redis_client, viewer, profile, stream.m3u_account
@@ -913,6 +924,16 @@ class Channel(models.Model):
                         redis_client,
                         extra_capacity=probation.PROBATION_EXTRA_CAPACITY,
                     )
+                    if reserved and probation.slot_taken_by_hold(
+                        redis_client,
+                        profile,
+                        stream.m3u_account,
+                        viewer,
+                        current_count,
+                        probation.PROBATION_EXTRA_CAPACITY,
+                    ):
+                        release_profile_slot(profile.id, redis_client)
+                        reserved = False
                     if not reserved:
                         probation.log_not_used(
                             self.uuid,
@@ -926,6 +947,7 @@ class Channel(models.Model):
                     redis_client.set(f"stream_profile:{stream.id}", profile.id)
                     seconds = probation.account_probation_seconds(stream.m3u_account)
                     probation.mark_probation(redis_client, self, stream.id, profile.id, seconds)
+                    probation.take_held_slot(redis_client, profile, stream.m3u_account, viewer)
                     probation.remember_viewer_profile(
                         redis_client, viewer, profile, stream.m3u_account
                     )
@@ -945,6 +967,12 @@ class Channel(models.Model):
             error_reason = "No active profiles found for any assigned stream"
 
         return None, None, error_reason, False
+
+    def _hold_slot_for_viewer(self, redis_client, profile_id):
+        # Channel Switch Overlap: keep the slot for this channel's viewer during a switch
+        from apps.proxy.live_proxy import probation
+
+        probation.hold_slot_for_viewer(redis_client, self.uuid, profile_id)
 
     def release_stream(self):
         """
@@ -988,6 +1016,7 @@ class Channel(models.Model):
                     ChannelMetadataField.M3U_PROFILE,
                 )
 
+                self._hold_slot_for_viewer(redis_client, profile_id)
                 release_profile_slot(profile_id, redis_client)
                 return True
 
@@ -1033,6 +1062,7 @@ class Channel(models.Model):
             f"stream {stream_id}"
         )
 
+        self._hold_slot_for_viewer(redis_client, profile_id)
         release_profile_slot(profile_id, redis_client)
 
         # Clear metadata fields so duplicate release_stream() calls

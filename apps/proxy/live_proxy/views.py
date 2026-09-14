@@ -300,12 +300,6 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
 
             if perform_setup:
                 try:
-                    # Channel Switch Overlap: free the slots of channels this viewer
-                    # surfed past a moment ago, before a slot is chosen for this one.
-                    probation.stop_skipped_channels(
-                        proxy_server.redis_client, viewer, channel_id
-                    )
-
                     # Use fixed retry interval and timeout
                     retry_timeout = 3  # 3 seconds total timeout
                     retry_interval = 0.1  # 100ms between attempts
@@ -350,6 +344,11 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                                 )
                                 should_retry = False
                                 break
+                            # Channel Switch Overlap: not even the overlap slot is free, so
+                            # release the channels this viewer surfed past and try again.
+                            probation.stop_skipped_channels(
+                                proxy_server.redis_client, viewer, channel_id, hold_slots=True
+                            )
 
                         # Check if we have time remaining for another sleep cycle
                         elapsed_time = time.time() - wait_start_time
@@ -409,6 +408,12 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                         return JsonResponse(
                             {"error": error_msg, "waited": wait_duration}, status=503
                         )  # 503 Service Unavailable is appropriate here
+
+                    # Channel Switch Overlap: this channel has its slot, so stop the channels
+                    # this viewer surfed past; the overlap slot is then free for the next switch.
+                    probation.stop_skipped_channels(
+                        proxy_server.redis_client, viewer, channel_id
+                    )
 
                     # generate_stream_url() called get_stream() which allocated a connection
                     # slot (INCR'd profile_connections) - track this for cleanup on error

@@ -50,15 +50,16 @@ What it does:
 • Only when every account a channel can use is at its Max Streams, a viewer who is already watching on this account can start a new channel immediately on one temporary extra connection.
 • If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
 • If none ends in time, the new channel moves to an account with a free slot, or the new stream is stopped.
-• With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as it requests the next one, so fast channel surfing does not fill every slot.
-• With "Stay On Same Account", a player's next channel goes to the account it is watching on or just left when the channel is available there, using the overlap slot if its old stream is still closing, even if another account has a free slot.
+• With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as its next channel has started, so fast channel surfing does not fill every slot.
+• When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between.
+• "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account first, and only falls back to its own account when none is free.
 • While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist. Jellyfin, Emby and Plex are recognised by their User-Agent and get no device ID (unless a custom User-Agent is set in their tuner settings), so their viewers count as anonymous.
 
 What it does not do:
 • It changes nothing while an account still has free slots.
 • It never stops a stream that was already playing, or a channel someone else is also watching.
 • It does not give extra connections to other viewers (other users, devices or IP addresses).
-• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels". With "Stay On Same Account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
+• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels". With "Stay on same account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
 
 The change takes effect after you save the account.`}
   </div>
@@ -124,7 +125,7 @@ const M3U = ({
       probation_seconds: 10,
       probation_allow_anonymous: false,
       probation_stop_skipped: false,
-      probation_sticky: false,
+      probation_account_preference: 'order',
     },
 
     validate: {
@@ -165,7 +166,8 @@ const M3U = ({
         probation_allow_anonymous:
           m3uAccount.probation_allow_anonymous || false,
         probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
-        probation_sticky: m3uAccount.probation_sticky || false,
+        probation_account_preference:
+          m3uAccount.probation_account_preference || 'order',
       });
       setOverlapEnabled(m3uAccount.probation_enabled || false);
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
@@ -438,15 +440,19 @@ const M3U = ({
                         type: 'checkbox',
                       })}
                     />
-                    <Switch
-                      id="probation_sticky"
-                      name="probation_sticky"
-                      label="Stay On Same Account"
-                      description="Keep a player on the account it is using."
-                      key={form.key('probation_sticky')}
-                      {...form.getInputProps('probation_sticky', {
-                        type: 'checkbox',
-                      })}
+                    <Select
+                      id="probation_account_preference"
+                      name="probation_account_preference"
+                      label="When Switching Channels"
+                      description="Which account a player's next channel prefers."
+                      allowDeselect={false}
+                      data={[
+                        { value: 'order', label: 'Follow channel order' },
+                        { value: 'same', label: 'Stay on same account' },
+                        { value: 'alternate', label: 'Use another account' },
+                      ]}
+                      key={form.key('probation_account_preference')}
+                      {...form.getInputProps('probation_account_preference')}
                     />
                     <Switch
                       id="probation_allow_anonymous"
