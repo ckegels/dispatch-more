@@ -23,6 +23,7 @@ from django.db.models.functions import Lower
 import os
 from apps.m3u.utils import calculate_tuner_count
 from apps.proxy.utils import get_user_active_connections
+from apps.proxy.live_proxy import probation
 import regex
 from core.models import CoreSettings
 from core.utils import log_system_event, build_absolute_uri_with_port
@@ -169,9 +170,17 @@ def generate_m3u(request, profile_name=None, user=None):
     )
     content_cache_key = f"m3u_content:{cache_params}"
 
+    # Stream links carry a device ID so Channel Switch Overlap can recognise the
+    # player; it is filled in per response so cached playlists are not shared.
+    requested_device_id = probation.normalize_device_id(
+        request.GET.get(probation.DEVICE_ID_PARAM)
+    )
+    device_id = requested_device_id or probation.new_device_id()
+
     cached_content = cache.get(content_cache_key)
     if cached_content:
         logger.debug("Serving M3U from cache")
+        cached_content = cached_content.replace(probation.DEVICE_ID_PLACEHOLDER, device_id)
         response = HttpResponse(cached_content, content_type="audio/x-mpegurl")
         response["Content-Disposition"] = 'attachment; filename="channels.m3u"'
         return response
@@ -255,6 +264,10 @@ def generate_m3u(request, profile_name=None, user=None):
         not is_xc_request
         or (user is not None and user.user_level >= 10)
     )
+    # Stream links only change while an M3U account has Channel Switch Overlap enabled
+    # (an explicit ?device_id= is ignored otherwise). Direct provider URLs never pass
+    # through the proxy, so they get none.
+    tag_device_id = not use_direct_urls and probation.any_account_allows_probation()
     allowed_m3u_profiles = None
     if use_direct_urls and user is not None:
         from apps.m3u.utils import get_allowed_m3u_profiles
@@ -281,6 +294,8 @@ def generate_m3u(request, profile_name=None, user=None):
             xc_qs['output_profile'] = output_profile_id
         if output_format_param:
             xc_qs['output_format'] = output_format_param
+        if tag_device_id:
+            xc_qs[probation.DEVICE_ID_PARAM] = probation.DEVICE_ID_PLACEHOLDER
         xc_qs_suffix = f"?{urlencode(xc_qs)}" if xc_qs else ""
     else:
         # Pre-compute proxy query-string suffix (same for every channel in this request)
@@ -289,6 +304,8 @@ def generate_m3u(request, profile_name=None, user=None):
             proxy_qs['output_profile'] = output_profile_id
         if output_format_param:
             proxy_qs['output_format'] = output_format_param
+        if tag_device_id:
+            proxy_qs[probation.DEVICE_ID_PARAM] = probation.DEVICE_ID_PLACEHOLDER
         proxy_qs_suffix = f"?{urlencode(proxy_qs)}" if proxy_qs else ""
         # Regular request - use standard EPG endpoint
         epg_path = reverse('output:epg_endpoint', args=[profile_name]) if profile_name else reverse('output:epg_endpoint')
@@ -418,6 +435,7 @@ def generate_m3u(request, profile_name=None, user=None):
         )
         cache.set(event_cache_key, True, 2)  # Prevent duplicate events for 2 seconds
 
+    m3u_content = m3u_content.replace(probation.DEVICE_ID_PLACEHOLDER, device_id)
     response = HttpResponse(m3u_content, content_type="audio/x-mpegurl")
     response["Content-Disposition"] = 'attachment; filename="channels.m3u"'
     return response

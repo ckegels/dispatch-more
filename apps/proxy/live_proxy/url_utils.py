@@ -75,14 +75,14 @@ def generate_stream_url(
     channel_id: str,
     user=None,
     allowed_m3u_profiles=None,
-    viewer_ip=None,
+    viewer=None,
 ) -> Tuple[
     Optional[str], Optional[str], bool, Optional[int], bool, Optional[str], Optional[int]
 ]:
     """
     Generate the appropriate stream URL for a channel or stream based on its profile settings.
 
-    viewer_ip is the requesting client's IP, passed to Channel.get_stream() for probation.
+    viewer is the requesting client's probation Viewer, passed to Channel.get_stream().
 
     Returns:
         Tuple: (stream_url, user_agent, transcode_flag, profile_id, slot_reserved,
@@ -146,7 +146,7 @@ def generate_stream_url(
 
         # Get stream and profile for this channel
         stream_id, profile_id, error_reason, slot_reserved = channel.get_stream(
-            user, allowed_m3u_profiles, viewer_ip=viewer_ip
+            user, allowed_m3u_profiles, viewer=viewer
         )
 
         if not stream_id or not profile_id:

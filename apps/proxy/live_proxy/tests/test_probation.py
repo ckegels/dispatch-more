@@ -3,7 +3,7 @@
 import fnmatch
 from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase, TestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 
 from apps.channels.models import Channel, ChannelStream, Stream
 from apps.m3u.connection_pool import profile_connections_key, reserve_profile_slot
@@ -119,7 +119,7 @@ class ReserveExtraCapacityTests(TestCase):
 
 @patch("apps.channels.models.Channel._pick_channel_to_preempt", return_value=None)
 class GetStreamProbationTests(TestCase):
-    VIEWER_IP = "192.168.1.20"
+    IP = "192.168.1.20"
 
     def setUp(self):
         self.redis = FakeRedis()
@@ -151,24 +151,30 @@ class GetStreamProbationTests(TestCase):
         self.redis.set(profile_connections_key(self.profile_a.id), 1)
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
 
-    def _disable(self, account):
-        account.custom_properties = {**account.custom_properties, "probation_enabled": False}
+    def _set_props(self, account, **props):
+        account.custom_properties = {**account.custom_properties, **props}
         account.save()
 
-    def _watching(self, channel_uuid, profile, client_ip):
+    def _watching(self, profile, ip=IP, user_id="0", device_id=None, channel_uuid="old-channel"):
         self.redis.hset(
             RedisKeys.channel_metadata(channel_uuid),
             mapping={ChannelMetadataField.M3U_PROFILE: profile.id},
         )
         self.redis.sadd(RedisKeys.clients(channel_uuid), "client_1")
-        self.redis.hset(
-            RedisKeys.client_metadata(channel_uuid, "client_1"),
-            mapping={"ip_address": client_ip, "user_agent": "TiviMate/5.1", "user_id": "0"},
-        )
+        client = {"ip_address": ip, "user_agent": "TiviMate/5.1", "user_id": user_id}
+        if device_id:
+            client[probation.DEVICE_ID_FIELD] = device_id
+        self.redis.hset(RedisKeys.client_metadata(channel_uuid, "client_1"), mapping=client)
 
     def _deadline_seconds(self):
         record = self.redis.hgetall(probation.probation_key(self.channel.uuid))
         return round(float(record["deadline"]) - float(record["started_at"]))
+
+    def _assert_probation_on(self, result, stream, profile):
+        self.assertEqual(result, (stream.id, profile.id, None, True))
+        self.assertEqual(self.redis.get(profile_connections_key(profile.id)), "2")
+        record = self.redis.hgetall(probation.probation_key(self.channel.uuid))
+        self.assertEqual(record["profile_id"], str(profile.id))
 
     def _assert_limit_error(self, result):
         stream_id, _profile_id, error, _reserved = result
@@ -178,75 +184,128 @@ class GetStreamProbationTests(TestCase):
         self.assertEqual(self.redis.get(profile_connections_key(self.profile_a.id)), "1")
         self.assertEqual(self.redis.get(profile_connections_key(self.profile_b.id)), "1")
 
-    def test_switching_viewer_starts_on_probation_on_its_profile(self, _preempt):
+    def test_user_switching_starts_on_probation_on_its_profile(self, _preempt):
         self._fill_both()
-        self._watching("old-channel", self.profile_b, self.VIEWER_IP)
+        self._watching(self.profile_b, user_id="7")
 
-        result = self.channel.get_stream(viewer_ip=self.VIEWER_IP)
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
 
-        self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
+        self._assert_probation_on(result, self.stream_b, self.profile_b)
         self.assertEqual(self.redis.get(profile_connections_key(self.profile_a.id)), "1")
-        self.assertEqual(self.redis.get(profile_connections_key(self.profile_b.id)), "2")
-        self.assertEqual(self.redis.get(f"channel_stream:{self.channel.id}"), str(self.stream_b.id))
-        record = self.redis.hgetall(probation.probation_key(self.channel.uuid))
-        self.assertEqual(record["profile_id"], str(self.profile_b.id))
         self.assertEqual(self._deadline_seconds(), 25)
 
-    def test_default_window_when_account_has_no_seconds(self, _preempt):
+    def test_device_switching_starts_on_probation(self, _preempt):
         self._fill_both()
-        self._watching("old-channel", self.profile_a, self.VIEWER_IP)
+        self._watching(self.profile_a, device_id="tv1")
 
-        _stream_id, profile_id, _error, _reserved = self.channel.get_stream(viewer_ip=self.VIEWER_IP)
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
 
-        self.assertEqual(profile_id, self.profile_a.id)
+        self._assert_probation_on(result, self.stream_a, self.profile_a)
         self.assertEqual(self._deadline_seconds(), probation.DEFAULT_PROBATION_SECONDS)
 
-    def test_new_ip_gets_limit_error(self, _preempt):
+    def test_other_device_behind_same_ip_gets_limit_error(self, _preempt):
         self._fill_both()
-        self._watching("old-channel", self.profile_b, "192.168.1.99")
+        self._watching(self.profile_a, device_id="tv1")
 
-        self._assert_limit_error(self.channel.get_stream(viewer_ip=self.VIEWER_IP))
+        self._assert_limit_error(
+            self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="phone"))
+        )
 
-    def test_no_viewer_ip_never_uses_probation(self, _preempt):
+    def test_other_user_behind_same_ip_gets_limit_error(self, _preempt):
         self._fill_both()
-        self._watching("old-channel", self.profile_a, self.VIEWER_IP)
+        self._watching(self.profile_a, user_id="7")
+
+        self._assert_limit_error(
+            self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=8))
+        )
+
+    def test_same_user_from_other_ip_gets_limit_error(self, _preempt):
+        self._fill_both()
+        self._watching(self.profile_a, ip="10.0.0.5", user_id="7")
+
+        self._assert_limit_error(
+            self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
+        )
+
+    def test_anonymous_viewer_needs_account_opt_in(self, _preempt):
+        self._fill_both()
+        self._watching(self.profile_a)
+
+        self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer(self.IP)))
+
+        self._set_props(self.account_a, probation_allow_anonymous=True)
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP))
+
+        self._assert_probation_on(result, self.stream_a, self.profile_a)
+
+    def test_anonymous_viewer_does_not_match_identified_client(self, _preempt):
+        self._set_props(self.account_a, probation_allow_anonymous=True)
+        self._fill_both()
+        self._watching(self.profile_a, device_id="tv1")
+
+        self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer(self.IP)))
+
+    def test_no_viewer_never_uses_probation(self, _preempt):
+        self._fill_both()
+        self._watching(self.profile_a)
 
         self._assert_limit_error(self.channel.get_stream())
 
-    def test_watching_on_account_without_probation_gets_limit_error(self, _preempt):
-        self._disable(self.account_a)
+    def test_disabled_accounts_do_no_probation_work_and_log_nothing(self, _preempt):
+        self._set_props(self.account_a, probation_enabled=False)
+        self._set_props(self.account_b, probation_enabled=False)
         self._fill_both()
-        self._watching("old-channel", self.profile_a, self.VIEWER_IP)
+        self._watching(self.profile_a, user_id="7")
 
-        self._assert_limit_error(self.channel.get_stream(viewer_ip=self.VIEWER_IP))
+        with patch.object(probation, "find_profile_ids_watched_by") as mock_find, \
+                patch("apps.channels.models.logger") as mock_logger:
+            for viewer in (probation.Viewer(self.IP, user_id=7), probation.Viewer(self.IP)):
+                self._assert_limit_error(self.channel.get_stream(viewer=viewer))
+
+        mock_find.assert_not_called()
+        self.stream_profile.is_redirect.assert_not_called()
+        logged = [str(call) for call in mock_logger.info.call_args_list]
+        self.assertFalse([line for line in logged if "Probation" in line], logged)
+
+    def test_watching_on_account_without_probation_gets_limit_error(self, _preempt):
+        self._set_props(self.account_a, probation_enabled=False)
+        self._fill_both()
+        self._watching(self.profile_a, user_id="7")
+
+        self._assert_limit_error(
+            self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
+        )
 
     def test_redirect_profiles_never_use_probation(self, _preempt):
         self.stream_profile.is_redirect.return_value = True
         self._fill_both()
-        self._watching("old-channel", self.profile_a, self.VIEWER_IP)
+        self._watching(self.profile_a, user_id="7")
 
-        self._assert_limit_error(self.channel.get_stream(viewer_ip=self.VIEWER_IP))
+        self._assert_limit_error(
+            self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
+        )
 
     def test_free_capacity_is_used_without_probation(self, _preempt):
         self.redis.set(profile_connections_key(self.profile_a.id), 1)
-        self._watching("old-channel", self.profile_a, self.VIEWER_IP)
+        self._watching(self.profile_a, user_id="7")
 
-        result = self.channel.get_stream(viewer_ip=self.VIEWER_IP)
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
 
         self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
         self.assertFalse(probation.has_pending_probation(self.redis, self.channel.uuid))
 
     def test_only_one_probation_slot_per_profile(self, _preempt):
         self._fill_both()
-        self._watching("old-channel", self.profile_a, self.VIEWER_IP)
+        self._watching(self.profile_a, user_id="7")
+        viewer = probation.Viewer(self.IP, user_id=7)
 
-        _stream_id, profile_id, _error, _reserved = self.channel.get_stream(viewer_ip=self.VIEWER_IP)
+        _stream_id, profile_id, _error, _reserved = self.channel.get_stream(viewer=viewer)
         self.assertEqual(profile_id, self.profile_a.id)
 
         other = Channel.objects.create(channel_number=901, name="Sports")
         ChannelStream.objects.create(channel=other, stream=self.stream_a, order=0)
         ChannelStream.objects.create(channel=other, stream=self.stream_b, order=1)
-        stream_id, _profile_id, error, _reserved = other.get_stream(viewer_ip=self.VIEWER_IP)
+        stream_id, _profile_id, error, _reserved = other.get_stream(viewer=viewer)
 
         self.assertIsNone(stream_id)
         self.assertIn("maximum connection limits", error)
@@ -350,39 +409,80 @@ class ResolveProbationTests(TestCase):
         mock_stop.assert_called_once_with(self.uuid)
 
 
-class WatchedProfilesTests(SimpleTestCase):
-    def test_finds_profiles_watched_by_ip(self):
+class ViewerIdentityTests(SimpleTestCase):
+    def _add_client(self, redis, channel_uuid, profile_id, client_id, **client):
+        redis.hset(
+            RedisKeys.channel_metadata(channel_uuid),
+            mapping={ChannelMetadataField.M3U_PROFILE: profile_id},
+        )
+        redis.sadd(RedisKeys.clients(channel_uuid), client_id)
+        redis.hset(RedisKeys.client_metadata(channel_uuid, client_id), mapping=client)
+
+    def test_find_profiles_matches_ip_user_and_device(self):
         redis = FakeRedis()
-        for channel_uuid, profile_id, ip in (
-            ("ch-1", 42, "10.0.0.2"),
-            ("ch-2", 43, "10.0.0.9"),
-            ("ch-3", 44, "10.0.0.2"),
-        ):
-            redis.hset(
-                RedisKeys.channel_metadata(channel_uuid),
-                mapping={ChannelMetadataField.M3U_PROFILE: profile_id},
-            )
-            redis.sadd(RedisKeys.clients(channel_uuid), "c1")
-            redis.hset(
-                RedisKeys.client_metadata(channel_uuid, "c1"),
-                mapping={"ip_address": ip, "user_agent": "Kodi/21", "user_id": "0"},
-            )
+        self._add_client(redis, "ch-1", 41, "c1", ip_address="10.0.0.2", user_id="0")
+        self._add_client(redis, "ch-2", 42, "c1", ip_address="10.0.0.2", user_id="7")
+        self._add_client(
+            redis, "ch-3", 43, "c1", ip_address="10.0.0.2", user_id="0", device_id="tv1"
+        )
+        self._add_client(redis, "ch-4", 44, "c1", ip_address="10.0.0.9", user_id="7")
+
+        find = probation.find_profile_ids_watched_by
+        self.assertEqual(find(redis, probation.Viewer("10.0.0.2")), [41])
+        self.assertEqual(find(redis, probation.Viewer("10.0.0.2", user_id=7)), [42])
+        self.assertEqual(find(redis, probation.Viewer("10.0.0.2", device_id="tv1")), [43])
+        self.assertEqual(find(redis, probation.Viewer("10.0.0.9", user_id=7)), [44])
+        self.assertEqual(find(redis, probation.Viewer("10.0.0.7", user_id=7)), [])
+        self.assertEqual(find(redis, None), [])
+
+    def test_viewer_from_request(self):
+        factory = RequestFactory()
+        user = MagicMock(id=5)
+
+        viewer = probation.viewer_from_request(
+            factory.get("/proxy/ts/stream/x", {"device_id": "living-room_1"}), user, "10.0.0.2"
+        )
+        self.assertEqual(viewer, probation.Viewer("10.0.0.2", user_id=5, device_id="living-room_1"))
+        self.assertTrue(viewer.identified)
+
+        viewer = probation.viewer_from_request(factory.get("/proxy/ts/stream/x"), None, "10.0.0.2")
+        self.assertEqual(viewer, probation.Viewer("10.0.0.2"))
+        self.assertFalse(viewer.identified)
+
+        self.assertIsNone(probation.viewer_from_request(factory.get("/"), None, None))
+
+    def test_normalize_device_id(self):
+        self.assertEqual(probation.normalize_device_id("tv-1_A"), "tv-1_A")
+        for bad in (None, "", "has space", "a/b", "x" * 65, probation.DEVICE_ID_PLACEHOLDER + "!"):
+            self.assertIsNone(probation.normalize_device_id(bad))
+        self.assertEqual(len(probation.new_device_id()), 12)
+        self.assertNotEqual(probation.new_device_id(), probation.new_device_id())
+
+    def test_record_client_device(self):
+        redis = FakeRedis()
+        probation.record_client_device(redis, "ch-1", "c1", "tv1")
+        probation.record_client_device(redis, "ch-1", "c2", None)
 
         self.assertEqual(
-            sorted(probation.find_profile_ids_watched_by_ip(redis, "10.0.0.2")), [42, 44]
+            redis.hget(RedisKeys.client_metadata("ch-1", "c1"), probation.DEVICE_ID_FIELD), "tv1"
         )
-        self.assertEqual(probation.find_profile_ids_watched_by_ip(redis, "10.0.0.7"), [])
-        self.assertEqual(probation.find_profile_ids_watched_by_ip(redis, None), [])
+        self.assertIsNone(redis.hgetall(RedisKeys.client_metadata("ch-1", "c2")).get("device_id"))
 
 
 class AccountProbationSettingsTests(TestCase):
     def test_account_settings_defaults_and_bounds(self):
         account = MagicMock(custom_properties={})
         self.assertFalse(probation.account_allows_probation(account))
+        self.assertFalse(probation.account_allows_anonymous(account))
         self.assertEqual(probation.account_probation_seconds(account), 10)
 
-        account.custom_properties = {"probation_enabled": True, "probation_seconds": 500}
+        account.custom_properties = {
+            "probation_enabled": True,
+            "probation_seconds": 500,
+            "probation_allow_anonymous": True,
+        }
         self.assertTrue(probation.account_allows_probation(account))
+        self.assertTrue(probation.account_allows_anonymous(account))
         self.assertEqual(probation.account_probation_seconds(account), 120)
 
         account.custom_properties = {"probation_enabled": "yes", "probation_seconds": "bad"}
@@ -396,7 +496,11 @@ class AccountProbationSettingsTests(TestCase):
 
         serializer = M3UAccountSerializer(
             account,
-            data={"probation_enabled": True, "probation_seconds": 30},
+            data={
+                "probation_enabled": True,
+                "probation_seconds": 30,
+                "probation_allow_anonymous": True,
+            },
             partial=True,
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
@@ -405,11 +509,34 @@ class AccountProbationSettingsTests(TestCase):
         account.refresh_from_db()
         self.assertTrue(account.custom_properties["probation_enabled"])
         self.assertEqual(account.custom_properties["probation_seconds"], 30)
+        self.assertTrue(account.custom_properties["probation_allow_anonymous"])
         self.assertTrue(account.custom_properties["enable_vod"])
 
         data = M3UAccountSerializer(account).data
         self.assertTrue(data["probation_enabled"])
         self.assertEqual(data["probation_seconds"], 30)
+        self.assertTrue(data["probation_allow_anonymous"])
+
+    def test_any_account_allows_probation(self):
+        self.assertFalse(probation.any_account_allows_probation())
+        _make_account("enabled-account", probation_enabled=True)
+        self.assertTrue(probation.any_account_allows_probation())
+
+    def test_serializer_create_without_settings_stores_nothing(self):
+        serializer = M3UAccountSerializer(
+            data={
+                "name": "created-without-overlap",
+                "account_type": "STD",
+                "server_url": "http://example.com/playlist.m3u",
+                "max_streams": 1,
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        account = serializer.save()
+
+        account.refresh_from_db()
+        self.assertFalse([k for k in account.custom_properties if k.startswith("probation")])
+        self.assertFalse(probation.account_allows_probation(account))
 
     def test_serializer_rejects_out_of_range_window(self):
         account, _profile = _make_account("serializer-bounds")
@@ -418,3 +545,46 @@ class AccountProbationSettingsTests(TestCase):
                 account, data={"probation_seconds": seconds}, partial=True
             )
             self.assertFalse(serializer.is_valid())
+
+
+class StreamTsDeviceIdTests(SimpleTestCase):
+    @patch("apps.proxy.live_proxy.views.close_old_connections")
+    @patch("apps.proxy.live_proxy.views.create_stream_generator", return_value=lambda: iter([b""]))
+    @patch("apps.proxy.live_proxy.views._resolve_output_format", return_value="mpegts")
+    @patch("apps.proxy.live_proxy.views._resolve_output_profile", return_value=None)
+    @patch(
+        "apps.proxy.live_proxy.views.ChannelService.is_channel_unavailable_for_new_clients",
+        return_value=False,
+    )
+    @patch("apps.proxy.live_proxy.views.get_stream_object")
+    @patch("apps.proxy.live_proxy.views.network_access_allowed", return_value=True)
+    @patch("apps.proxy.live_proxy.views.ProxyServer")
+    def test_joining_client_records_device_id(self, mock_proxy_cls, _network, mock_get_object, *_mocks):
+        channel_id = "channel-uuid"
+        channel = MagicMock(id=1, uuid=channel_id)
+        channel.name = "Test Channel"
+        channel.get_stream_profile.return_value.is_redirect.return_value = False
+        mock_get_object.return_value = channel
+
+        redis = FakeRedis()
+        redis.hset(RedisKeys.channel_metadata(channel_id), mapping={"state": "active"})
+        client_manager = MagicMock()
+        client_manager.add_client.return_value = 1
+        proxy_server = MagicMock(
+            redis_client=redis,
+            stream_buffers={channel_id: MagicMock()},
+            client_managers={channel_id: client_manager},
+        )
+        mock_proxy_cls.get_instance.return_value = proxy_server
+
+        from apps.proxy.live_proxy.views import stream_ts
+
+        request = RequestFactory().get(f"/proxy/ts/stream/{channel_id}", {"device_id": "tv1"})
+        request.user = MagicMock(is_authenticated=False)
+        stream_ts(request, channel_id)
+
+        client_id = client_manager.add_client.call_args.args[0]
+        self.assertEqual(
+            redis.hget(RedisKeys.client_metadata(channel_id, client_id), probation.DEVICE_ID_FIELD),
+            "tv1",
+        )

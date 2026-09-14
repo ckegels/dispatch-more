@@ -76,6 +76,18 @@ vi.mock('../ScheduleInput', () => ({
   ),
 }));
 
+vi.mock('../../ConfirmationDialog', () => ({
+  default: ({ opened, onClose, onConfirm, title, message }) =>
+    opened ? (
+      <div data-testid="confirmation-dialog">
+        <div>{title}</div>
+        <div>{message}</div>
+        <button onClick={onConfirm}>Confirm dialog</button>
+        <button onClick={onClose}>Cancel dialog</button>
+      </div>
+    ) : null,
+}));
+
 // ── Mantine dates ──────────────────────────────────────────────────────────────
 vi.mock('@mantine/dates', () => ({
   DateTimePicker: ({ label, value, onChange, placeholder }) => (
@@ -126,8 +138,11 @@ vi.mock('@mantine/form', () => {
           e?.preventDefault?.();
           if (_values?.name) handler();
         }),
-        getInputProps: vi.fn((field) => ({
+        getInputProps: vi.fn((field, options) => ({
           value: _values?.[field] ?? '',
+          ...(options?.type === 'checkbox'
+            ? { checked: !!_values?.[field] }
+            : {}),
           onChange: vi.fn((e) => {
             const val = e?.target?.value ?? e;
             if (_values) _values[field] = val;
@@ -699,6 +714,88 @@ describe('M3U', () => {
       setupStores();
       render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
       expect(screen.getByDisplayValue('user1')).toBeInTheDocument();
+    });
+  });
+
+  // ── Channel switch overlap ─────────────────────────────────────────────────
+
+  describe('channel switch overlap', () => {
+    const overlapSwitch = () =>
+      screen.getByRole('switch', { name: /allow channel switch overlap/i });
+
+    const submittedValues = async () => {
+      fireEvent.click(screen.getByRole('button', { name: /update|save/i }));
+      await waitFor(() => {
+        expect(M3uUtils.updatePlaylist).toHaveBeenCalled();
+      });
+      return vi.mocked(M3uUtils.prepareSubmitValues).mock.calls[0][0];
+    };
+
+    it('renders the overlap settings', () => {
+      setupStores();
+      render(<M3U {...defaultProps()} />);
+      expect(overlapSwitch()).toBeInTheDocument();
+      expect(
+        screen.getByRole('spinbutton', { name: /overlap window/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('switch', { name: /anonymous connections/i })
+      ).toBeInTheDocument();
+    });
+
+    it('explains the feature before enabling it', () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+
+      fireEvent.click(overlapSwitch());
+
+      const dialog = screen.getByTestId('confirmation-dialog');
+      expect(dialog).toHaveTextContent('Enable Channel Switch Overlap?');
+      expect(dialog).toHaveTextContent('What it does not do');
+      expect(dialog).toHaveTextContent(
+        'It never stops a stream that was already playing'
+      );
+    });
+
+    it('stays disabled when the explanation is cancelled', async () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+
+      fireEvent.click(overlapSwitch());
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel dialog' }));
+
+      expect(
+        screen.queryByTestId('confirmation-dialog')
+      ).not.toBeInTheDocument();
+      expect((await submittedValues()).probation_enabled).toBe(false);
+    });
+
+    it('is enabled only after the explanation is confirmed', async () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+
+      fireEvent.click(overlapSwitch());
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm dialog' }));
+
+      expect((await submittedValues()).probation_enabled).toBe(true);
+    });
+
+    it('turns off without asking', async () => {
+      setupStores();
+      render(
+        <M3U
+          {...defaultProps({
+            m3uAccount: makeM3uAccount({ probation_enabled: true }),
+          })}
+        />
+      );
+
+      fireEvent.click(overlapSwitch());
+
+      expect(
+        screen.queryByTestId('confirmation-dialog')
+      ).not.toBeInTheDocument();
+      expect((await submittedValues()).probation_enabled).toBe(false);
     });
   });
 

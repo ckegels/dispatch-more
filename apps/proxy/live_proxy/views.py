@@ -184,6 +184,8 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         # Generate a unique client ID
         client_id = f"client_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
         client_ip = get_client_ip(request)
+        # Who is asking (IP, user, device ID), used by Channel Switch Overlap
+        viewer = probation.viewer_from_request(request, user, client_ip)
         logger.info(f"[{client_id}] Requested stream for channel {channel_id}")
 
         # Extract client user agent early
@@ -325,7 +327,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             error_reason,
                             resolved_stream_id,
                         ) = generate_stream_url(
-                            channel_id, user, allowed_m3u_profiles, client_ip
+                            channel_id, user, allowed_m3u_profiles, viewer
                         )
 
                         if stream_url is not None:
@@ -377,7 +379,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             error_reason,
                             resolved_stream_id,
                         ) = generate_stream_url(
-                            channel_id, user, allowed_m3u_profiles, client_ip
+                            channel_id, user, allowed_m3u_profiles, viewer
                         )
                         if stream_url is not None:
                             logger.info(
@@ -576,6 +578,8 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     connection_allocated = False
                     owned_for_init = False
 
+                    # get_stream() placed this channel on an overlap slot: resolve it in
+                    # the background now that the channel lifecycle owns the slot.
                     if probation.has_pending_probation(
                         proxy_server.redis_client, channel_id
                     ):
@@ -605,6 +609,11 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             return JsonResponse(
                                 {"error": "Failed to register client"}, status=503
                             )
+                        # Lets later requests from this device be recognised as a switch
+                        probation.record_client_device(
+                            proxy_server.redis_client, channel_id, client_id,
+                            viewer.device_id if viewer else None,
+                        )
                         logger.info(
                             f"[{client_id}] Client registered with channel {channel_id} "
                             f"(output: {resolved_format}, profile: {resolved_output_profile.id if resolved_output_profile else None})"
@@ -724,6 +733,11 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                 return JsonResponse(
                     {"error": "Failed to register client"}, status=503
                 )
+            # Lets later requests from this device be recognised as a switch
+            probation.record_client_device(
+                proxy_server.redis_client, channel_id, client_id,
+                viewer.device_id if viewer else None,
+            )
             _client_pre_registered = True
             logger.info(
                 f"[{client_id}] Client registered with channel {channel_id} "
