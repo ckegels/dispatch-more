@@ -129,6 +129,11 @@ appended to each stream link, generated per download:
   favourites on stream URLs, or to avoid a new ID on every playlist refresh.
 - HDHomeRun lineups get no device ID: they are always read by one media server
   (Plex, Jellyfin, Emby) on behalf of all its viewers.
+- For the same reason, M3U playlists requested by a media server get no device ID. They
+  are recognised by User-Agent (`jellyfin`, `emby` or `plex`, case-insensitive; defaults
+  are `Jellyfin-Server/<version>`, `Emby/<version>`, `PlexMediaServer/<version>`). Stream
+  requests from such a User-Agent also ignore any device ID. A custom User-Agent configured
+  in the media server's tuner settings is not recognised.
 - Native Xtream players (`player_api.php`) build stream links themselves, so they
   are identified by user only.
 

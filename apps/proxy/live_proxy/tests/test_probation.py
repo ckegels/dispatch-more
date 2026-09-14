@@ -521,6 +521,7 @@ class ResolveProbationTests(TestCase):
         mock_stop.assert_called_once_with(self.uuid)
 
 
+@patch("apps.proxy.live_proxy.probation.gevent.spawn", side_effect=lambda fn, *args: fn(*args))
 @patch("apps.proxy.live_proxy.services.channel_service.ChannelService.stop_channel")
 class StopSkippedChannelsTests(TestCase):
     NOW = 10_000.0
@@ -533,6 +534,11 @@ class StopSkippedChannelsTests(TestCase):
         )
         self._set_props(self.account, probation_stop_skipped=True)
         self.viewer = probation.Viewer(self.IP, device_id="tv1")
+
+        # The background stop closes DB connections when done; keep the test transaction open
+        patcher = patch("django.db.close_old_connections")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _set_props(self, account, **props):
         account.custom_properties = {**account.custom_properties, **props}
@@ -561,7 +567,7 @@ class StopSkippedChannelsTests(TestCase):
             self.redis, viewer or self.viewer, requested, now=self.NOW
         )
 
-    def test_surfing_stops_skipped_channels_but_keeps_watched_one(self, mock_stop):
+    def test_surfing_stops_skipped_channels_but_keeps_watched_one(self, mock_stop, _mock_spawn):
         self._channel("watched", clients=[("c1", self.IP, "0", "tv1", 600)])
         self._channel("skipped-1", clients=[("c2", self.IP, "0", "tv1", 2)])
         self._channel("skipped-2", clients=[("c3", self.IP, "0", "tv1", 1)])
@@ -573,13 +579,13 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(sorted(c.args[0] for c in mock_stop.call_args_list), ["skipped-1", "skipped-2"])
         self.assertTrue(any("Probation: stopping skipped channel" in line for line in logs.output))
 
-    def test_requested_channel_is_never_stopped(self, mock_stop):
+    def test_requested_channel_is_never_stopped(self, mock_stop, _mock_spawn):
         self._channel("channel-new", clients=[("c1", self.IP, "0", "tv1", 1)])
 
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
 
-    def test_shared_channel_is_never_stopped(self, mock_stop):
+    def test_shared_channel_is_never_stopped(self, mock_stop, _mock_spawn):
         self._channel(
             "shared",
             clients=[("c1", self.IP, "0", "tv1", 1), ("c2", "192.168.1.30", "0", "tv2", 300)],
@@ -588,7 +594,7 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
 
-    def test_reconnect_on_watched_channel_does_not_count_as_skipped(self, mock_stop):
+    def test_reconnect_on_watched_channel_does_not_count_as_skipped(self, mock_stop, _mock_spawn):
         self._channel(
             "watched",
             clients=[("c1", self.IP, "0", "tv1", 600), ("c2", self.IP, "0", "tv1", 1)],
@@ -597,7 +603,7 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
 
-    def test_other_device_or_user_channels_are_never_stopped(self, mock_stop):
+    def test_other_device_or_user_channels_are_never_stopped(self, mock_stop, _mock_spawn):
         self._channel("other-device", clients=[("c1", self.IP, "0", "phone", 1)])
         self._channel("other-user", clients=[("c2", self.IP, "8", None, 1)])
         self._channel("other-ip", clients=[("c3", "10.0.0.9", "0", "tv1", 1)])
@@ -606,7 +612,7 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self._stop(viewer=probation.Viewer(self.IP, user_id=7)), [])
         mock_stop.assert_not_called()
 
-    def test_anonymous_viewer_never_stops_anything(self, mock_stop):
+    def test_anonymous_viewer_never_stops_anything(self, mock_stop, _mock_spawn):
         self._set_props(self.account, probation_allow_anonymous=True)
         self._channel("anonymous", clients=[("c1", self.IP, "0", None, 1)])
 
@@ -616,7 +622,7 @@ class StopSkippedChannelsTests(TestCase):
         mock_any.assert_not_called()
         mock_stop.assert_not_called()
 
-    def test_account_settings_are_required(self, mock_stop):
+    def test_account_settings_are_required(self, mock_stop, _mock_spawn):
         self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
 
         self._set_props(self.account, probation_stop_skipped=False)
@@ -628,14 +634,31 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
 
-    def test_only_accounts_with_the_option_are_affected(self, mock_stop):
+    def test_only_accounts_with_the_option_are_affected(self, mock_stop, _mock_spawn):
         _other_account, other_profile = _make_account("no-stop", probation_enabled=True)
         self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
         self._channel("other", profile=other_profile, clients=[("c2", self.IP, "0", "tv1", 1)])
 
         self.assertEqual(self._stop(), ["skipped"])
 
-    def test_window_limits_what_counts_as_skipped(self, mock_stop):
+    def test_stop_runs_in_background(self, mock_stop, mock_spawn):
+        mock_spawn.side_effect = None
+        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+
+        self.assertEqual(self._stop(), ["skipped"])
+
+        mock_stop.assert_not_called()
+        mock_spawn.assert_called_once_with(probation._stop_skipped_channel, "skipped")
+
+    def test_channel_already_being_stopped_is_not_stopped_again(self, mock_stop, _mock_spawn):
+        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+
+        self.assertEqual(self._stop(requested="channel-c"), ["skipped"])
+        self.assertEqual(self._stop(requested="channel-d"), [])
+
+        mock_stop.assert_called_once_with("skipped")
+
+    def test_window_limits_what_counts_as_skipped(self, mock_stop, _mock_spawn):
         self._channel("inside", clients=[("c1", self.IP, "0", "tv1", 9)])
         self._channel("outside", clients=[("c2", self.IP, "0", "tv1", 11)])
 
@@ -715,6 +738,39 @@ class ViewerIdentityTests(SimpleTestCase):
         self.assertFalse(viewer.identified)
 
         self.assertIsNone(probation.viewer_from_request(factory.get("/"), None, None))
+
+    def test_media_server_detection(self):
+        for user_agent in ("Jellyfin-Server/10.10.7", "Emby/4.8.10.0", "PlexMediaServer/1.41.0"):
+            self.assertTrue(probation.is_media_server(user_agent), user_agent)
+        for user_agent in (None, "", "TiviMate/5.1.6", "VLC/3.0.20 LibVLC/3.0.20", "Kodi/21.0"):
+            self.assertFalse(probation.is_media_server(user_agent), user_agent)
+
+    def test_fill_device_id(self):
+        placeholder = probation.DEVICE_ID_PLACEHOLDER
+        content = (
+            f"http://x/proxy/ts/stream/a?device_id={placeholder}\n"
+            f"http://x/proxy/ts/stream/b?output_format=mpegts&device_id={placeholder}\n"
+        )
+
+        self.assertEqual(
+            probation.fill_device_id(content, "tv1"),
+            "http://x/proxy/ts/stream/a?device_id=tv1\n"
+            "http://x/proxy/ts/stream/b?output_format=mpegts&device_id=tv1\n",
+        )
+        self.assertEqual(
+            probation.fill_device_id(content, None),
+            "http://x/proxy/ts/stream/a\nhttp://x/proxy/ts/stream/b?output_format=mpegts\n",
+        )
+
+    def test_media_server_stream_requests_stay_anonymous(self):
+        request = RequestFactory().get(
+            "/proxy/ts/stream/x", {"device_id": "tv1"}, HTTP_USER_AGENT="Jellyfin-Server/10.10.7"
+        )
+
+        viewer = probation.viewer_from_request(request, None, "10.0.0.2")
+
+        self.assertEqual(viewer, probation.Viewer("10.0.0.2"))
+        self.assertFalse(viewer.identified)
 
     def test_normalize_device_id(self):
         self.assertEqual(probation.normalize_device_id("tv-1_A"), "tv-1_A")

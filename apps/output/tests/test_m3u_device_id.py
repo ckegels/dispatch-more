@@ -44,9 +44,10 @@ class M3UDeviceIdTests(OutputEndpointTestMixin, TestCase):
             ids.update(parse_qs(urlparse(link).query).get(probation.DEVICE_ID_PARAM, [None]))
         return ids
 
-    def _get_m3u(self, **params):
+    def _get_m3u(self, user_agent=None, **params):
         url = reverse("output:m3u_endpoint", kwargs={"profile_name": self.profile.name})
-        response = self.client.get(url, params)
+        headers = {"HTTP_USER_AGENT": user_agent} if user_agent else {}
+        response = self.client.get(url, params, **headers)
         self.assertEqual(response.status_code, 200)
         return _response_text(response)
 
@@ -78,6 +79,36 @@ class M3UDeviceIdTests(OutputEndpointTestMixin, TestCase):
             links = self._stream_links(content)
             self.assertEqual(len(links), 2)
             self.assertTrue(all(re.fullmatch(r"http://testserver/proxy/ts/stream/[0-9a-f-]+", link) for link in links), links)
+
+    def test_media_servers_get_no_device_id(self):
+        self._enable_overlap()
+
+        for user_agent in ("Jellyfin-Server/10.10.7", "Emby/4.8.10.0", "PlexMediaServer/1.41.0.8992"):
+            content = self._get_m3u(user_agent=user_agent)
+            links = self._stream_links(content)
+            self.assertEqual(len(links), 2, user_agent)
+            self.assertTrue(
+                all(re.fullmatch(r"http://testserver/proxy/ts/stream/[0-9a-f-]+", link) for link in links),
+                (user_agent, links),
+            )
+
+    def test_media_server_and_player_sharing_the_playlist_cache(self):
+        self._enable_overlap()
+
+        player = self._get_m3u(user_agent="TiviMate/5.1.6")
+        # Within the 2-second cache: same cached content, different result per requester
+        jellyfin = self._get_m3u(user_agent="Jellyfin-Server/10.10.7")
+
+        self.assertNotIn(None, self._device_ids(player))
+        self.assertEqual(self._device_ids(jellyfin), {None})
+
+    def test_media_server_keeps_other_link_parameters(self):
+        self._enable_overlap()
+
+        content = self._get_m3u(user_agent="Emby/4.8.10.0", output_format="mpegts")
+
+        for link in self._stream_links(content):
+            self.assertEqual(parse_qs(urlparse(link).query), {"output_format": ["mpegts"]})
 
     def test_requested_device_id_is_kept(self):
         self._enable_overlap()

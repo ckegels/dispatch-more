@@ -696,9 +696,9 @@ class Channel(models.Model):
         Finds an available stream for the requested channel and returns the selected stream and profile.
 
         viewer (apps.proxy.live_proxy.probation.Viewer) is only passed for viewer
-        requests. When every profile is at its limit and that viewer is already
-        watching on an account that allows probation, the stream starts on a
-        temporary slot past the limit.
+        requests. On accounts with Channel Switch Overlap enabled it lets that viewer
+        stay on its current account and, when every profile is full, start on a
+        temporary slot past the limit (see apps.proxy.live_proxy.probation).
 
         Returns:
             Tuple[Optional[int], Optional[int], Optional[str], bool]:

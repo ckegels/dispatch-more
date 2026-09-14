@@ -175,12 +175,18 @@ def generate_m3u(request, profile_name=None, user=None):
     requested_device_id = probation.normalize_device_id(
         request.GET.get(probation.DEVICE_ID_PARAM)
     )
-    device_id = requested_device_id or probation.new_device_id()
+    # Media servers (Jellyfin, Emby, Plex) share one playlist between all their viewers,
+    # so their links get no device ID and those viewers stay anonymous.
+    device_id = (
+        None
+        if probation.is_media_server(request.META.get("HTTP_USER_AGENT"))
+        else requested_device_id or probation.new_device_id()
+    )
 
     cached_content = cache.get(content_cache_key)
     if cached_content:
         logger.debug("Serving M3U from cache")
-        cached_content = cached_content.replace(probation.DEVICE_ID_PLACEHOLDER, device_id)
+        cached_content = probation.fill_device_id(cached_content, device_id)
         response = HttpResponse(cached_content, content_type="audio/x-mpegurl")
         response["Content-Disposition"] = 'attachment; filename="channels.m3u"'
         return response
@@ -435,7 +441,7 @@ def generate_m3u(request, profile_name=None, user=None):
         )
         cache.set(event_cache_key, True, 2)  # Prevent duplicate events for 2 seconds
 
-    m3u_content = m3u_content.replace(probation.DEVICE_ID_PLACEHOLDER, device_id)
+    m3u_content = probation.fill_device_id(m3u_content, device_id)
     response = HttpResponse(m3u_content, content_type="audio/x-mpegurl")
     response["Content-Disposition"] = 'attachment; filename="channels.m3u"'
     return response

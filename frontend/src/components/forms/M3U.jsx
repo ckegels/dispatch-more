@@ -52,7 +52,7 @@ What it does:
 • If none ends in time, the new channel moves to an account with a free slot, or the new stream is stopped.
 • With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as it requests the next one, so fast channel surfing does not fill every slot.
 • With "Stay On Same Account", a player's next channel goes to the account it is watching on or just left when the channel is available there, using the overlap slot if its old stream is still closing, even if another account has a free slot.
-• While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist.
+• While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist. Jellyfin, Emby and Plex are recognised by their User-Agent and get no device ID (unless a custom User-Agent is set in their tuner settings), so their viewers count as anonymous.
 
 What it does not do:
 • It changes nothing while an account still has free slots.
