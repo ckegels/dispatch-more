@@ -74,6 +74,23 @@ next channel is requested; A (watched longer) closes on its own and E is confirm
 Known risks: a single player intentionally opening two channels within the window
 (multiview / picture-in-picture), and two devices sharing one Xtream login behind one IP.
 
+### Stay On Same Account (optional)
+
+With **Stay On Same Account** enabled, a viewer's next channel prefers the account
+(M3U profile) the viewer is watching on, or was last assigned within 60 seconds
+(`live:probation:last_profile:<viewer>`), ahead of the channel's normal stream order:
+
+- A free slot on that profile is used first.
+- If that profile is full and the viewer is watching on it (its own old stream is still
+  closing), the overlap slot is used instead of moving to another account, even when
+  another account has a free slot.
+- A profile the viewer only left is never overlapped (someone else may hold it).
+- Otherwise normal selection continues.
+
+Anonymous viewers need Allow Anonymous Connections; several of them behind one IP can
+then be kept on one account, and a new stream that is not a switch is moved to a free
+account when the window expires.
+
 ## Recognising the same viewer
 
 A stream request carries a client IP, a User-Agent and whatever is in the URL. Players
@@ -124,6 +141,7 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 | Allow Channel Switch Overlap | `probation_enabled` | off |
 | Overlap Window (seconds, 1–120) | `probation_seconds` | 10 |
 | Stop Skipped Channels | `probation_stop_skipped` | off |
+| Stay On Same Account | `probation_sticky` | off |
 | Allow Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
 
 The form only shows the toggle until it is enabled (after confirming the explanation

@@ -744,6 +744,9 @@ describe('M3U', () => {
         screen.queryByRole('switch', { name: /stop skipped channels/i })
       ).not.toBeInTheDocument();
       expect(
+        screen.queryByRole('switch', { name: /stay on same account/i })
+      ).not.toBeInTheDocument();
+      expect(
         screen.queryByRole('switch', { name: /anonymous connections/i })
       ).not.toBeInTheDocument();
     });
@@ -762,6 +765,9 @@ describe('M3U', () => {
         screen.getByRole('switch', { name: /stop skipped channels/i })
       ).toBeInTheDocument();
       expect(
+        screen.getByRole('switch', { name: /stay on same account/i })
+      ).toBeInTheDocument();
+      expect(
         screen.getByRole('switch', { name: /anonymous connections/i })
       ).toBeInTheDocument();
     });
@@ -774,6 +780,7 @@ describe('M3U', () => {
             m3uAccount: makeM3uAccount({
               probation_enabled: true,
               probation_stop_skipped: true,
+              probation_sticky: true,
             }),
           })}
         />
@@ -782,6 +789,12 @@ describe('M3U', () => {
       expect(
         screen.getByRole('switch', { name: /stop skipped channels/i })
       ).toBeChecked();
+      expect(
+        screen.getByRole('switch', { name: /stay on same account/i })
+      ).toBeChecked();
+      expect(
+        screen.getByRole('switch', { name: /anonymous connections/i })
+      ).not.toBeChecked();
     });
 
     it('opens the explanation from the help link', () => {

@@ -40,6 +40,10 @@ logger = logging.getLogger("live_proxy")
 
 # Redis hash describing a channel's pending probation (see mark_probation).
 PROBATION_KEY = "live:probation:{channel_uuid}"
+# Profile a viewer was last assigned, for "Stay On Same Account" after its old channel
+# is gone (for example stopped as skipped). Watched channels are found by scanning.
+LAST_PROFILE_KEY = "live:probation:last_profile:{viewer}"
+LAST_PROFILE_TTL = 60
 
 # Extra slots a profile may use past max_streams while a stream is on probation.
 # One per profile keeps the provider at most one connection over its limit.
@@ -143,6 +147,10 @@ def account_probation_seconds(m3u_account) -> int:
 
 def account_stops_skipped_channels(m3u_account) -> bool:
     return _account_props(m3u_account).get("probation_stop_skipped") is True
+
+
+def account_keeps_viewers(m3u_account) -> bool:
+    return _account_props(m3u_account).get("probation_sticky") is True
 
 
 def any_account_stops_skipped_channels() -> bool:
@@ -363,6 +371,96 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
     except Exception as e:
         logger.error(f"Probation: error stopping skipped channels for {viewer}: {e}", exc_info=True)
         return []
+
+
+def _last_profile_key(viewer) -> str:
+    return LAST_PROFILE_KEY.format(
+        viewer=f"{viewer.ip}|{viewer.user_id or 0}|{viewer.device_id or ''}"
+    )
+
+
+def remember_viewer_profile(redis_client, viewer, profile, m3u_account):
+    """Remember the profile a viewer was just assigned, on accounts that keep viewers."""
+    if viewer is None or not redis_client:
+        return
+    if not (account_allows_probation(m3u_account) and account_keeps_viewers(m3u_account)):
+        return
+    try:
+        redis_client.setex(_last_profile_key(viewer), LAST_PROFILE_TTL, profile.id)
+    except Exception as e:
+        logger.debug(f"Could not remember profile for {viewer}: {e}")
+
+
+def reserve_sticky_slot(channel, redis_client, viewer):
+    """
+    "Stay On Same Account": reserve a slot on the M3U profile this viewer is watching on
+    or was just assigned, ahead of the channel's normal stream order.
+
+    Only streams on accounts with probation_enabled and probation_sticky are considered
+    (anonymous viewers additionally need probation_allow_anonymous). A free slot on the
+    preferred profile is used first; when that profile is full and the viewer is watching
+    on it (its own old stream is still closing), the overlap slot is used instead of
+    moving the viewer to another account. Returns get_stream()'s result tuple, or None
+    to continue with normal selection.
+    """
+    if viewer is None or not redis_client:
+        return None
+
+    from apps.m3u.connection_pool import reserve_profile_slot
+
+    # Candidate (stream, profile) pairs in channel order, default profile first,
+    # limited to accounts that keep viewers. Profiles are only loaded for those.
+    candidates = []
+    for stream in channel.streams.select_related("m3u_account").order_by("channelstream__order"):
+        account = stream.m3u_account
+        if not account or not account.is_active:
+            continue
+        if not (account_allows_probation(account) and account_keeps_viewers(account)):
+            continue
+        if not viewer.identified and not account_allows_anonymous(account):
+            continue
+        profiles = sorted(account.profiles.filter(is_active=True), key=lambda p: not p.is_default)
+        candidates.extend((stream, profile) for profile in profiles)
+    if not candidates or channel.get_stream_profile().is_redirect():
+        return None
+
+    watched_profile_ids = find_profile_ids_watched_by(redis_client, viewer)
+    preferred_profile_ids = list(watched_profile_ids)
+    last_profile_id = _as_str(redis_client.get(_last_profile_key(viewer)))
+    if last_profile_id and int(last_profile_id) not in preferred_profile_ids:
+        preferred_profile_ids.append(int(last_profile_id))
+
+    for preferred_profile_id in preferred_profile_ids:
+        for stream, profile in candidates:
+            if profile.id != preferred_profile_id:
+                continue
+            reserved, current_count, _failure_reason = reserve_profile_slot(profile, redis_client)
+            on_overlap = False
+            # Full only because of this viewer's own stream: overlap instead of switching
+            # accounts. A profile the viewer merely left may be full with someone else.
+            if not reserved and profile.max_streams > 0 and profile.id in watched_profile_ids:
+                reserved, current_count, _failure_reason = reserve_profile_slot(
+                    profile, redis_client, extra_capacity=PROBATION_EXTRA_CAPACITY
+                )
+                on_overlap = reserved
+            if not reserved:
+                continue
+
+            redis_client.set(f"channel_stream:{channel.id}", stream.id)
+            redis_client.set(f"stream_profile:{stream.id}", profile.id)
+            window = ""
+            if on_overlap:
+                seconds = account_probation_seconds(stream.m3u_account)
+                mark_probation(redis_client, channel, stream.id, profile.id, seconds)
+                window = f" on overlap slot, window {seconds}s"
+            remember_viewer_profile(redis_client, viewer, profile, stream.m3u_account)
+            logger.info(
+                f"Probation: keeping {viewer} on profile {profile.id} ({profile.name}) for "
+                f"channel {channel.uuid}, stream {stream.id} "
+                f"({current_count}/{profile.max_streams}){window} (stay on same account)"
+            )
+            return stream.id, profile.id, None, True
+    return None
 
 
 def mark_probation(redis_client, channel, stream_id, profile_id, seconds):

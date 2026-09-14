@@ -154,6 +154,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
     )
     probation_allow_anonymous = serializers.BooleanField(required=False, write_only=True)
     probation_stop_skipped = serializers.BooleanField(required=False, write_only=True)
+    probation_sticky = serializers.BooleanField(required=False, write_only=True)
     cron_expression = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
@@ -191,6 +192,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "probation_seconds",
             "probation_allow_anonymous",
             "probation_stop_skipped",
+            "probation_sticky",
             "earliest_expiration",
             "all_expirations",
             "exp_date",
@@ -242,6 +244,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         data["probation_seconds"] = custom_props.get("probation_seconds", 10)
         data["probation_allow_anonymous"] = custom_props.get("probation_allow_anonymous", False)
         data["probation_stop_skipped"] = custom_props.get("probation_stop_skipped", False)
+        data["probation_sticky"] = custom_props.get("probation_sticky", False)
 
         # Derive cron_expression from the linked PeriodicTask's crontab (single source of truth)
         # But first check if we have a transient _cron_expression (from create/update before signal runs)
@@ -290,6 +293,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         probation_seconds = validated_data.pop("probation_seconds", None)
         probation_allow_anonymous = validated_data.pop("probation_allow_anonymous", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
+        probation_sticky = validated_data.pop("probation_sticky", None)
 
         # Merge client-supplied custom_properties over the existing blob
         # so unrelated keys persist. The dedicated preference fields below
@@ -322,6 +326,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_allow_anonymous"] = probation_allow_anonymous
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
+        if probation_sticky is not None:
+            custom_props["probation_sticky"] = probation_sticky
 
         validated_data["custom_properties"] = custom_props
 
@@ -386,6 +392,7 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         probation_seconds = validated_data.pop("probation_seconds", None)
         probation_allow_anonymous = validated_data.pop("probation_allow_anonymous", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
+        probation_sticky = validated_data.pop("probation_sticky", None)
 
         # Parse existing custom_properties or create new
         custom_props = validated_data.get("custom_properties") or {}
@@ -407,6 +414,8 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_allow_anonymous"] = probation_allow_anonymous
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
+        if probation_sticky is not None:
+            custom_props["probation_sticky"] = probation_sticky
         validated_data["custom_properties"] = custom_props
 
         # Build instance manually so we can attach transient attr before save triggers signal

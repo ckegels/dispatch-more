@@ -310,6 +310,102 @@ class GetStreamProbationTests(TestCase):
         self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
         self.assertFalse(probation.has_pending_probation(self.redis, self.channel.uuid))
 
+    # ── Stay On Same Account ────────────────────────────────────────────────
+
+    def _count(self, profile):
+        return self.redis.get(profile_connections_key(profile.id))
+
+    def test_sticky_uses_overlap_on_watched_account_even_if_other_is_free(self, _preempt):
+        self._set_props(self.account_b, probation_sticky=True)
+        self.redis.set(profile_connections_key(self.profile_b.id), 1)
+        self._watching(self.profile_b, device_id="tv1")
+
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+
+        self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
+        self.assertEqual(self._count(self.profile_b), "2")
+        self.assertIsNone(self._count(self.profile_a))
+        self.assertTrue(probation.has_pending_probation(self.redis, self.channel.uuid))
+        self.assertTrue(any("stay on same account" in line for line in logs.output))
+
+    def test_sticky_uses_free_slot_on_watched_account(self, _preempt):
+        self._set_props(self.account_b, probation_sticky=True)
+        self.profile_b.max_streams = 2
+        self.profile_b.save()
+        self.redis.set(profile_connections_key(self.profile_b.id), 1)
+        self._watching(self.profile_b, user_id="7")
+
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
+
+        self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
+        self.assertEqual(self._count(self.profile_b), "2")
+        self.assertFalse(probation.has_pending_probation(self.redis, self.channel.uuid))
+
+    def test_sticky_uses_account_viewer_just_left(self, _preempt):
+        self._set_props(self.account_b, probation_sticky=True)
+        viewer = probation.Viewer(self.IP, device_id="tv1")
+        probation.remember_viewer_profile(self.redis, viewer, self.profile_b, self.account_b)
+
+        result = self.channel.get_stream(viewer=viewer)
+
+        self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
+        self.assertEqual(self._count(self.profile_b), "1")
+
+    def test_sticky_never_overlaps_account_viewer_only_left(self, _preempt):
+        self._set_props(self.account_b, probation_sticky=True)
+        viewer = probation.Viewer(self.IP, device_id="tv1")
+        probation.remember_viewer_profile(self.redis, viewer, self.profile_b, self.account_b)
+        self.redis.set(profile_connections_key(self.profile_b.id), 1)  # someone else took it
+
+        result = self.channel.get_stream(viewer=viewer)
+
+        self.assertEqual(result, (self.stream_a.id, self.profile_a.id, None, True))
+        self.assertEqual(self._count(self.profile_b), "1")
+
+    def test_sticky_disabled_keeps_stock_order(self, _preempt):
+        self._watching(self.profile_b, device_id="tv1")
+        self.redis.set(profile_connections_key(self.profile_b.id), 1)
+
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+
+        self.assertEqual(result, (self.stream_a.id, self.profile_a.id, None, True))
+        self.assertIsNone(self.redis.get(probation._last_profile_key(probation.Viewer(self.IP, device_id="tv1"))))
+
+    def test_sticky_anonymous_needs_account_opt_in(self, _preempt):
+        self._set_props(self.account_b, probation_sticky=True)
+        self.redis.set(profile_connections_key(self.profile_b.id), 1)
+        self._watching(self.profile_b)
+        viewer = probation.Viewer(self.IP)
+
+        self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
+
+        self.redis.set(profile_connections_key(self.profile_a.id), 0)
+        self.redis.delete(f"channel_stream:{self.channel.id}")
+        self._set_props(self.account_b, probation_allow_anonymous=True)
+        self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_b.id)
+
+    def test_sticky_ignores_redirect_profiles(self, _preempt):
+        self.stream_profile.is_redirect.return_value = True
+        self._set_props(self.account_b, probation_sticky=True)
+        self._watching(self.profile_b, device_id="tv1")
+
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+
+        self.assertEqual(result[1], self.profile_a.id)
+
+    def test_assignment_is_remembered_only_on_sticky_accounts(self, _preempt):
+        viewer = probation.Viewer(self.IP, device_id="tv1")
+
+        self.channel.get_stream(viewer=viewer)
+        self.assertIsNone(self.redis.get(probation._last_profile_key(viewer)))
+
+        self.redis.delete(f"channel_stream:{self.channel.id}")
+        self.redis.set(profile_connections_key(self.profile_a.id), 0)
+        self._set_props(self.account_a, probation_sticky=True)
+        self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
+        self.assertEqual(self.redis.get(probation._last_profile_key(viewer)), str(self.profile_a.id))
+
     def test_only_one_probation_slot_per_profile(self, _preempt):
         self._fill_both()
         self._watching(self.profile_a, user_id="7")
@@ -656,6 +752,9 @@ class AccountProbationSettingsTests(TestCase):
         self.assertTrue(probation.account_allows_probation(account))
         self.assertTrue(probation.account_allows_anonymous(account))
         self.assertTrue(probation.account_stops_skipped_channels(account))
+        self.assertFalse(probation.account_keeps_viewers(account))
+        account.custom_properties["probation_sticky"] = True
+        self.assertTrue(probation.account_keeps_viewers(account))
         self.assertEqual(probation.account_probation_seconds(account), 120)
 
         account.custom_properties = {"probation_enabled": "yes", "probation_seconds": "bad"}
@@ -674,6 +773,7 @@ class AccountProbationSettingsTests(TestCase):
                 "probation_seconds": 30,
                 "probation_allow_anonymous": True,
                 "probation_stop_skipped": True,
+                "probation_sticky": True,
             },
             partial=True,
         )
@@ -691,6 +791,7 @@ class AccountProbationSettingsTests(TestCase):
         self.assertEqual(data["probation_seconds"], 30)
         self.assertTrue(data["probation_allow_anonymous"])
         self.assertTrue(data["probation_stop_skipped"])
+        self.assertTrue(data["probation_sticky"])
 
     def test_any_account_allows_probation(self):
         self.assertFalse(probation.any_account_allows_probation())

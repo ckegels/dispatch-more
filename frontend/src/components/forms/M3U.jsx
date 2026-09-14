@@ -51,13 +51,14 @@ What it does:
 • If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
 • If none ends in time, the new channel moves to an account with a free slot, or the new stream is stopped.
 • With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as it requests the next one, so fast channel surfing does not fill every slot.
+• With "Stay On Same Account", a player's next channel goes to the account it is watching on or just left when the channel is available there, using the overlap slot if its old stream is still closing, even if another account has a free slot.
 • While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist.
 
 What it does not do:
 • It changes nothing while an account still has free slots.
 • It never stops a stream that was already playing, or a channel someone else is also watching.
 • It does not give extra connections to other viewers (other users, devices or IP addresses).
-• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels".
+• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels". With "Stay On Same Account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
 
 The change takes effect after you save the account.`}
   </div>
@@ -123,6 +124,7 @@ const M3U = ({
       probation_seconds: 10,
       probation_allow_anonymous: false,
       probation_stop_skipped: false,
+      probation_sticky: false,
     },
 
     validate: {
@@ -163,6 +165,7 @@ const M3U = ({
         probation_allow_anonymous:
           m3uAccount.probation_allow_anonymous || false,
         probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
+        probation_sticky: m3uAccount.probation_sticky || false,
       });
       setOverlapEnabled(m3uAccount.probation_enabled || false);
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
@@ -432,6 +435,16 @@ const M3U = ({
                       description="Close channels a player surfed past."
                       key={form.key('probation_stop_skipped')}
                       {...form.getInputProps('probation_stop_skipped', {
+                        type: 'checkbox',
+                      })}
+                    />
+                    <Switch
+                      id="probation_sticky"
+                      name="probation_sticky"
+                      label="Stay On Same Account"
+                      description="Keep a player on the account it is using."
+                      key={form.key('probation_sticky')}
+                      {...form.getInputProps('probation_sticky', {
                         type: 'checkbox',
                       })}
                     />

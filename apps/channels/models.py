@@ -768,6 +768,14 @@ class Channel(models.Model):
         has_active_profiles = False
         full_candidates = []
 
+        if viewer is not None:
+            from apps.proxy.live_proxy import probation
+
+            # Stay On Same Account: prefer the account this viewer is on or just left
+            sticky_result = probation.reserve_sticky_slot(self, redis_client, viewer)
+            if sticky_result is not None:
+                return sticky_result
+
         # Iterate through channel streams and their profiles
         for stream in self.streams.all().order_by("channelstream__order"):
             # Retrieve the M3U account associated with the stream.
@@ -804,6 +812,10 @@ class Channel(models.Model):
                     # Slot reserved — assign stream to this channel
                     redis_client.set(f"channel_stream:{self.id}", stream.id)
                     redis_client.set(f"stream_profile:{stream.id}", profile.id)
+                    if viewer is not None:
+                        probation.remember_viewer_profile(
+                            redis_client, viewer, profile, stream.m3u_account
+                        )
                     logger.info(
                         f"Channel {self.uuid}: assigned stream {stream.id} "
                         f"profile {profile.id} ({profile.name})"
@@ -914,6 +926,9 @@ class Channel(models.Model):
                     redis_client.set(f"stream_profile:{stream.id}", profile.id)
                     seconds = probation.account_probation_seconds(stream.m3u_account)
                     probation.mark_probation(redis_client, self, stream.id, profile.id, seconds)
+                    probation.remember_viewer_profile(
+                        redis_client, viewer, profile, stream.m3u_account
+                    )
                     logger.info(
                         f"Probation: channel {self.uuid} assigned stream {stream.id} profile "
                         f"{profile.id} ({profile.name}) on overlap slot "
