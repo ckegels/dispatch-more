@@ -59,6 +59,10 @@ DEVICE_ID_FIELD = "device_id"
 DEVICE_ID_PLACEHOLDER = "__dispatcharr_device_id__"
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+# stream_ts retries get_stream() for a few seconds while every profile is full, so each
+# "not used" reason is logged once per channel and viewer within this interval.
+NOT_USED_LOG_INTERVAL = 10
+
 # resolve_probation() outcomes
 GONE = "gone"
 ENDED = "ended"
@@ -94,6 +98,24 @@ def probation_key(channel_uuid) -> str:
     return PROBATION_KEY.format(channel_uuid=channel_uuid)
 
 
+# (channel uuid, viewer, reason) -> monotonic time last logged, per worker process
+_not_used_logged = {}
+
+
+def log_not_used(channel_uuid, viewer, reason):
+    """Log why the overlap was not used, without repeating it on every retry attempt."""
+    key = (str(channel_uuid), viewer, reason)
+    now = time.monotonic()
+    last = _not_used_logged.get(key)
+    if last is not None and now - last < NOT_USED_LOG_INTERVAL:
+        return
+    # Forget expired entries so long-running workers do not accumulate keys
+    for stale in [k for k, t in _not_used_logged.items() if now - t >= NOT_USED_LOG_INTERVAL]:
+        del _not_used_logged[stale]
+    _not_used_logged[key] = now
+    logger.info(f"Probation: not used for channel {channel_uuid}: {reason}")
+
+
 def _account_props(m3u_account):
     from core.utils import custom_properties_as_dict
 
@@ -117,6 +139,21 @@ def account_probation_seconds(m3u_account) -> int:
     except (TypeError, ValueError):
         return DEFAULT_PROBATION_SECONDS
     return min(max(seconds, MIN_PROBATION_SECONDS), MAX_PROBATION_SECONDS)
+
+
+def account_stops_skipped_channels(m3u_account) -> bool:
+    return _account_props(m3u_account).get("probation_stop_skipped") is True
+
+
+def any_account_stops_skipped_channels() -> bool:
+    """Whether stop_skipped_channels() can apply to any account at all."""
+    from apps.m3u.models import M3UAccount
+
+    return M3UAccount.objects.filter(
+        is_active=True,
+        custom_properties__probation_enabled=True,
+        custom_properties__probation_stop_skipped=True,
+    ).exists()
 
 
 def any_account_allows_probation() -> bool:
@@ -225,6 +262,107 @@ def find_profile_ids_watched_by(redis_client, viewer):
         logger.debug(f"Could not resolve profiles watched by {viewer}: {e}")
 
     return profile_ids
+
+
+def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None):
+    """
+    Stop channels this viewer surfed past moments ago, so their slots are free for the
+    channel it is requesting now.
+
+    A player watches one channel at a time, so when an identified viewer requests a new
+    channel, a channel where it is the only client and joined within the account's
+    overlap window was skipped. Dispatcharr would otherwise keep it (and its provider
+    connection) until it notices the player left, which during fast channel surfing
+    fills every slot. Only accounts with both probation_enabled and
+    probation_stop_skipped are affected; channels watched longer than the window, shared
+    channels and anonymous viewers (matched by IP only) are never stopped.
+
+    Returns the UUIDs of the stopped channels.
+    """
+    if viewer is None or not viewer.identified or not redis_client:
+        return []
+
+    try:
+        if not any_account_stops_skipped_channels():
+            return []
+
+        from apps.m3u.models import M3UAccountProfile
+        from .services.channel_service import ChannelService
+
+        now = now if now is not None else time.time()
+        requested_channel_uuid = str(requested_channel_uuid)
+
+        # (channel uuid, profile id, when this viewer first joined it)
+        candidates = []
+        for metadata_key in redis_client.scan_iter(match="live:channel:*:metadata", count=500):
+            metadata_key = _as_str(metadata_key)
+            channel_uuid = metadata_key[len("live:channel:"):-len(":metadata")]
+            if channel_uuid == requested_channel_uuid:
+                continue
+            profile_id = _as_str(
+                redis_client.hget(metadata_key, ChannelMetadataField.M3U_PROFILE)
+            )
+            client_ids = redis_client.smembers(RedisKeys.clients(channel_uuid)) or ()
+            if not profile_id or not client_ids:
+                continue
+
+            joined = []
+            for client_id in client_ids:
+                client = redis_client.hgetall(
+                    RedisKeys.client_metadata(channel_uuid, _as_str(client_id))
+                ) or {}
+                client = {_as_str(k): _as_str(v) for k, v in client.items()}
+                if not viewer.matches(
+                    client.get("ip_address"),
+                    _client_user_id(client.get("user_id")),
+                    normalize_device_id(client.get(DEVICE_ID_FIELD)),
+                ):
+                    # Someone else is watching too: never stop a shared channel
+                    joined = None
+                    break
+                try:
+                    joined.append(float(client.get("connected_at")))
+                except (TypeError, ValueError):
+                    joined = None
+                    break
+            if joined:
+                # The earliest join counts, so a player reconnecting to a channel it has
+                # watched for a while does not make that channel look skipped.
+                candidates.append((channel_uuid, int(profile_id), min(joined)))
+
+        if not candidates:
+            return []
+
+        profiles = {
+            profile.id: profile
+            for profile in M3UAccountProfile.objects.select_related("m3u_account").filter(
+                id__in={profile_id for _uuid, profile_id, _joined in candidates}
+            )
+        }
+
+        stopped = []
+        for channel_uuid, profile_id, joined_at in candidates:
+            profile = profiles.get(profile_id)
+            if profile is None:
+                continue
+            account = profile.m3u_account
+            if not (
+                account_allows_probation(account) and account_stops_skipped_channels(account)
+            ):
+                continue
+            watched_for = now - joined_at
+            if watched_for > account_probation_seconds(account):
+                continue
+            logger.info(
+                f"Probation: stopping skipped channel {channel_uuid} (watched {watched_for:.1f}s) "
+                f"for {viewer}, who requested channel {requested_channel_uuid}"
+            )
+            ChannelService.stop_channel(channel_uuid)
+            stopped.append(channel_uuid)
+        return stopped
+    except Exception as e:
+        logger.error(f"Probation: error stopping skipped channels for {viewer}: {e}", exc_info=True)
+        return []
 
 
 def mark_probation(redis_client, channel, stream_id, profile_id, seconds):

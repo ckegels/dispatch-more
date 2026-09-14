@@ -169,6 +169,8 @@ vi.mock('@mantine/core', () => ({
       {children}
     </button>
   ),
+  Collapse: ({ in: opened, children }) =>
+    opened ? <div data-testid="collapse">{children}</div> : null,
   Checkbox: ({ label, checked, onChange, disabled }) => (
     <label>
       <input
@@ -731,16 +733,72 @@ describe('M3U', () => {
       return vi.mocked(M3uUtils.prepareSubmitValues).mock.calls[0][0];
     };
 
-    it('renders the overlap settings', () => {
+    it('only shows the overlap toggle while disabled', () => {
       setupStores();
       render(<M3U {...defaultProps()} />);
       expect(overlapSwitch()).toBeInTheDocument();
       expect(
+        screen.queryByRole('spinbutton', { name: /overlap window/i })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('switch', { name: /stop skipped channels/i })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('switch', { name: /anonymous connections/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it('shows the overlap settings once enabled', () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+
+      fireEvent.click(overlapSwitch());
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm dialog' }));
+
+      expect(
         screen.getByRole('spinbutton', { name: /overlap window/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('switch', { name: /stop skipped channels/i })
       ).toBeInTheDocument();
       expect(
         screen.getByRole('switch', { name: /anonymous connections/i })
       ).toBeInTheDocument();
+    });
+
+    it('shows the overlap settings for an account that has it enabled', () => {
+      setupStores();
+      render(
+        <M3U
+          {...defaultProps({
+            m3uAccount: makeM3uAccount({
+              probation_enabled: true,
+              probation_stop_skipped: true,
+            }),
+          })}
+        />
+      );
+
+      expect(
+        screen.getByRole('switch', { name: /stop skipped channels/i })
+      ).toBeChecked();
+    });
+
+    it('opens the explanation from the help link', () => {
+      setupStores();
+      render(<M3U {...defaultProps()} />);
+
+      fireEvent.click(
+        screen.getByRole('button', { name: /what does this do/i })
+      );
+
+      expect(screen.getByText('Channel Switch Overlap')).toBeInTheDocument();
+      expect(
+        screen.getByText(/It never stops a stream that was already playing/)
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('confirmation-dialog')
+      ).not.toBeInTheDocument();
     });
 
     it('explains the feature before enabling it', () => {
@@ -794,6 +852,9 @@ describe('M3U', () => {
 
       expect(
         screen.queryByTestId('confirmation-dialog')
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('spinbutton', { name: /overlap window/i })
       ).not.toBeInTheDocument();
       expect((await submittedValues()).probation_enabled).toBe(false);
     });

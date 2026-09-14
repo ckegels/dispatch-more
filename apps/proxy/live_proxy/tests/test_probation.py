@@ -245,6 +245,20 @@ class GetStreamProbationTests(TestCase):
 
         self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer(self.IP)))
 
+    def test_retries_log_not_used_once(self, _preempt):
+        probation._not_used_logged.clear()
+        self.addCleanup(probation._not_used_logged.clear)
+        self._fill_both()
+        self._watching(self.profile_a, device_id="tv1")
+        viewer = probation.Viewer(self.IP, device_id="phone")
+
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            for _ in range(3):
+                self._assert_limit_error(self.channel.get_stream(viewer=viewer))
+
+        not_used = [line for line in logs.output if "Probation: not used" in line]
+        self.assertEqual(len(not_used), 1, logs.output)
+
     def test_no_viewer_never_uses_probation(self, _preempt):
         self._fill_both()
         self._watching(self.profile_a)
@@ -258,11 +272,13 @@ class GetStreamProbationTests(TestCase):
         self._watching(self.profile_a, user_id="7")
 
         with patch.object(probation, "find_profile_ids_watched_by") as mock_find, \
+                patch.object(probation, "log_not_used") as mock_log_not_used, \
                 patch("apps.channels.models.logger") as mock_logger:
             for viewer in (probation.Viewer(self.IP, user_id=7), probation.Viewer(self.IP)):
                 self._assert_limit_error(self.channel.get_stream(viewer=viewer))
 
         mock_find.assert_not_called()
+        mock_log_not_used.assert_not_called()
         self.stream_profile.is_redirect.assert_not_called()
         logged = [str(call) for call in mock_logger.info.call_args_list]
         self.assertFalse([line for line in logged if "Probation" in line], logged)
@@ -409,6 +425,159 @@ class ResolveProbationTests(TestCase):
         mock_stop.assert_called_once_with(self.uuid)
 
 
+@patch("apps.proxy.live_proxy.services.channel_service.ChannelService.stop_channel")
+class StopSkippedChannelsTests(TestCase):
+    NOW = 10_000.0
+    IP = "192.168.1.20"
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        self.account, self.profile = _make_account(
+            "surf-account", probation_enabled=True, probation_seconds=10
+        )
+        self._set_props(self.account, probation_stop_skipped=True)
+        self.viewer = probation.Viewer(self.IP, device_id="tv1")
+
+    def _set_props(self, account, **props):
+        account.custom_properties = {**account.custom_properties, **props}
+        account.save()
+
+    def _channel(self, channel_uuid, profile=None, clients=()):
+        """clients: (client_id, ip, user_id, device_id, seconds_ago)"""
+        profile = profile or self.profile
+        self.redis.hset(
+            RedisKeys.channel_metadata(channel_uuid),
+            mapping={ChannelMetadataField.M3U_PROFILE: profile.id},
+        )
+        for client_id, ip, user_id, device_id, seconds_ago in clients:
+            self.redis.sadd(RedisKeys.clients(channel_uuid), client_id)
+            client = {
+                "ip_address": ip,
+                "user_id": user_id,
+                "connected_at": str(self.NOW - seconds_ago),
+            }
+            if device_id:
+                client[probation.DEVICE_ID_FIELD] = device_id
+            self.redis.hset(RedisKeys.client_metadata(channel_uuid, client_id), mapping=client)
+
+    def _stop(self, viewer=None, requested="channel-new"):
+        return probation.stop_skipped_channels(
+            self.redis, viewer or self.viewer, requested, now=self.NOW
+        )
+
+    def test_surfing_stops_skipped_channels_but_keeps_watched_one(self, mock_stop):
+        self._channel("watched", clients=[("c1", self.IP, "0", "tv1", 600)])
+        self._channel("skipped-1", clients=[("c2", self.IP, "0", "tv1", 2)])
+        self._channel("skipped-2", clients=[("c3", self.IP, "0", "tv1", 1)])
+
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            stopped = self._stop()
+
+        self.assertEqual(sorted(stopped), ["skipped-1", "skipped-2"])
+        self.assertEqual(sorted(c.args[0] for c in mock_stop.call_args_list), ["skipped-1", "skipped-2"])
+        self.assertTrue(any("Probation: stopping skipped channel" in line for line in logs.output))
+
+    def test_requested_channel_is_never_stopped(self, mock_stop):
+        self._channel("channel-new", clients=[("c1", self.IP, "0", "tv1", 1)])
+
+        self.assertEqual(self._stop(), [])
+        mock_stop.assert_not_called()
+
+    def test_shared_channel_is_never_stopped(self, mock_stop):
+        self._channel(
+            "shared",
+            clients=[("c1", self.IP, "0", "tv1", 1), ("c2", "192.168.1.30", "0", "tv2", 300)],
+        )
+
+        self.assertEqual(self._stop(), [])
+        mock_stop.assert_not_called()
+
+    def test_reconnect_on_watched_channel_does_not_count_as_skipped(self, mock_stop):
+        self._channel(
+            "watched",
+            clients=[("c1", self.IP, "0", "tv1", 600), ("c2", self.IP, "0", "tv1", 1)],
+        )
+
+        self.assertEqual(self._stop(), [])
+        mock_stop.assert_not_called()
+
+    def test_other_device_or_user_channels_are_never_stopped(self, mock_stop):
+        self._channel("other-device", clients=[("c1", self.IP, "0", "phone", 1)])
+        self._channel("other-user", clients=[("c2", self.IP, "8", None, 1)])
+        self._channel("other-ip", clients=[("c3", "10.0.0.9", "0", "tv1", 1)])
+
+        self.assertEqual(self._stop(), [])
+        self.assertEqual(self._stop(viewer=probation.Viewer(self.IP, user_id=7)), [])
+        mock_stop.assert_not_called()
+
+    def test_anonymous_viewer_never_stops_anything(self, mock_stop):
+        self._set_props(self.account, probation_allow_anonymous=True)
+        self._channel("anonymous", clients=[("c1", self.IP, "0", None, 1)])
+
+        with patch.object(probation, "any_account_stops_skipped_channels") as mock_any:
+            self.assertEqual(self._stop(viewer=probation.Viewer(self.IP)), [])
+
+        mock_any.assert_not_called()
+        mock_stop.assert_not_called()
+
+    def test_account_settings_are_required(self, mock_stop):
+        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+
+        self._set_props(self.account, probation_stop_skipped=False)
+        with patch.object(self.redis, "scan_iter", wraps=self.redis.scan_iter) as mock_scan:
+            self.assertEqual(self._stop(), [])
+        mock_scan.assert_not_called()
+
+        self._set_props(self.account, probation_stop_skipped=True, probation_enabled=False)
+        self.assertEqual(self._stop(), [])
+        mock_stop.assert_not_called()
+
+    def test_only_accounts_with_the_option_are_affected(self, mock_stop):
+        _other_account, other_profile = _make_account("no-stop", probation_enabled=True)
+        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+        self._channel("other", profile=other_profile, clients=[("c2", self.IP, "0", "tv1", 1)])
+
+        self.assertEqual(self._stop(), ["skipped"])
+
+    def test_window_limits_what_counts_as_skipped(self, mock_stop):
+        self._channel("inside", clients=[("c1", self.IP, "0", "tv1", 9)])
+        self._channel("outside", clients=[("c2", self.IP, "0", "tv1", 11)])
+
+        self.assertEqual(self._stop(), ["inside"])
+
+
+class NotUsedLoggingTests(SimpleTestCase):
+    def setUp(self):
+        probation._not_used_logged.clear()
+        self.addCleanup(probation._not_used_logged.clear)
+
+    @patch("apps.proxy.live_proxy.probation.time.monotonic")
+    def test_repeated_reason_is_logged_once_per_interval(self, mock_monotonic):
+        viewer = probation.Viewer("10.0.0.2", device_id="tv1")
+        mock_monotonic.return_value = 100.0
+
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            for _ in range(14):
+                probation.log_not_used("ch-1", viewer, "not watching")
+            probation.log_not_used("ch-2", viewer, "not watching")
+            probation.log_not_used("ch-1", probation.Viewer("10.0.0.3"), "not watching")
+            mock_monotonic.return_value = 100.0 + probation.NOT_USED_LOG_INTERVAL
+            probation.log_not_used("ch-1", viewer, "not watching")
+
+        self.assertEqual(len(logs.output), 4)
+        self.assertIn("Probation: not used for channel ch-1: not watching", logs.output[0])
+
+    @patch("apps.proxy.live_proxy.probation.time.monotonic")
+    def test_expired_entries_are_forgotten(self, mock_monotonic):
+        mock_monotonic.return_value = 0.0
+        with self.assertLogs("live_proxy", level="INFO"):
+            probation.log_not_used("ch-1", probation.Viewer("10.0.0.2"), "reason")
+            mock_monotonic.return_value = probation.NOT_USED_LOG_INTERVAL + 1.0
+            probation.log_not_used("ch-2", probation.Viewer("10.0.0.2"), "reason")
+
+        self.assertEqual(list(probation._not_used_logged), [("ch-2", probation.Viewer("10.0.0.2"), "reason")])
+
+
 class ViewerIdentityTests(SimpleTestCase):
     def _add_client(self, redis, channel_uuid, profile_id, client_id, **client):
         redis.hset(
@@ -476,13 +645,17 @@ class AccountProbationSettingsTests(TestCase):
         self.assertFalse(probation.account_allows_anonymous(account))
         self.assertEqual(probation.account_probation_seconds(account), 10)
 
+        self.assertFalse(probation.account_stops_skipped_channels(account))
+
         account.custom_properties = {
             "probation_enabled": True,
             "probation_seconds": 500,
             "probation_allow_anonymous": True,
+            "probation_stop_skipped": True,
         }
         self.assertTrue(probation.account_allows_probation(account))
         self.assertTrue(probation.account_allows_anonymous(account))
+        self.assertTrue(probation.account_stops_skipped_channels(account))
         self.assertEqual(probation.account_probation_seconds(account), 120)
 
         account.custom_properties = {"probation_enabled": "yes", "probation_seconds": "bad"}
@@ -500,6 +673,7 @@ class AccountProbationSettingsTests(TestCase):
                 "probation_enabled": True,
                 "probation_seconds": 30,
                 "probation_allow_anonymous": True,
+                "probation_stop_skipped": True,
             },
             partial=True,
         )
@@ -516,6 +690,7 @@ class AccountProbationSettingsTests(TestCase):
         self.assertTrue(data["probation_enabled"])
         self.assertEqual(data["probation_seconds"], 30)
         self.assertTrue(data["probation_allow_anonymous"])
+        self.assertTrue(data["probation_stop_skipped"])
 
     def test_any_account_allows_probation(self):
         self.assertFalse(probation.any_account_allows_probation())

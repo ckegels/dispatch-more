@@ -868,14 +868,16 @@ class Channel(models.Model):
                     if probation.account_allows_anonymous(stream.m3u_account)
                 ]
                 if not full_candidates:
-                    logger.info(
-                        f"Probation: not used for channel {self.uuid}: {viewer} has no user or "
-                        f"device ID and no full account allows anonymous connections"
+                    probation.log_not_used(
+                        self.uuid,
+                        viewer,
+                        f"{viewer} has no user or device ID and no full account allows "
+                        f"anonymous connections",
                     )
             if full_candidates and self.get_stream_profile().is_redirect():
                 # Redirects hand the provider URL to the player and release the slot,
                 # so there is no proxied stream whose probation could be resolved.
-                logger.info(f"Probation: not used for channel {self.uuid}: redirect stream profile")
+                probation.log_not_used(self.uuid, viewer, "redirect stream profile")
             elif full_candidates:
                 watched_profile_ids = probation.find_profile_ids_watched_by(
                     redis_client, viewer
@@ -886,9 +888,10 @@ class Channel(models.Model):
                     if profile.id in watched_profile_ids
                 ]
                 if not watched_candidates:
-                    logger.info(
-                        f"Probation: not used for channel {self.uuid}: {viewer} is not "
-                        f"watching on an account that allows the overlap"
+                    probation.log_not_used(
+                        self.uuid,
+                        viewer,
+                        f"{viewer} is not watching on an account that allows the overlap",
                     )
                 for stream, profile in watched_candidates:
                     # Same atomic INCR-first reservation, allowed one slot past the limit.
@@ -899,9 +902,10 @@ class Channel(models.Model):
                         extra_capacity=probation.PROBATION_EXTRA_CAPACITY,
                     )
                     if not reserved:
-                        logger.info(
-                            f"Probation: not used on profile {profile.id} for channel "
-                            f"{self.uuid}: its overlap slot is already in use"
+                        probation.log_not_used(
+                            self.uuid,
+                            viewer,
+                            f"overlap slot on profile {profile.id} is already in use",
                         )
                         continue
                     # Assigned like a normal slot; the probation record makes the proxy

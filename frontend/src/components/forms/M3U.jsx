@@ -7,6 +7,7 @@ import M3UProfiles from './M3UProfiles';
 import {
   Box,
   Button,
+  Collapse,
   Divider,
   FileInput,
   Flex,
@@ -41,6 +42,27 @@ import {
 import ServerGroupsManagerModal from '../ServerGroupsManagerModal';
 import ConfirmationDialog from '../ConfirmationDialog';
 
+const OVERLAP_EXPLANATION = (
+  <div style={{ whiteSpace: 'pre-line' }}>
+    {`Only use this if your provider tolerates one extra connection for a few seconds. Some providers block accounts that go over their limit.
+
+What it does:
+• Only when every account a channel can use is at its Max Streams, a viewer who is already watching on this account can start a new channel immediately on one temporary extra connection.
+• If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
+• If none ends in time, the new channel moves to an account with a free slot, or the new stream is stopped.
+• With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as it requests the next one, so fast channel surfing does not fill every slot.
+• While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist.
+
+What it does not do:
+• It changes nothing while an account still has free slots.
+• It never stops a stream that was already playing, or a channel someone else is also watching.
+• It does not give extra connections to other viewers (other users, devices or IP addresses).
+• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels".
+
+The change takes effect after you save the account.`}
+  </div>
+);
+
 const M3U = ({
   m3uAccount = null,
   isOpen,
@@ -63,8 +85,11 @@ const M3U = ({
   const [serverGroupsManagerOpen, setServerGroupsManagerOpen] = useState(false);
   const [serverGroupsCreateOnOpen, setServerGroupsCreateOnOpen] =
     useState(false);
-  // Channel Switch Overlap is only enabled after its explanation is confirmed
+  // Channel Switch Overlap is only enabled after its explanation is confirmed;
+  // its sub-settings are only shown while it is enabled.
   const [overlapConfirmOpen, setOverlapConfirmOpen] = useState(false);
+  const [overlapInfoOpen, setOverlapInfoOpen] = useState(false);
+  const [overlapEnabled, setOverlapEnabled] = useState(false);
 
   // Keep expiration in sync when the default profile is edited (store refreshes).
   // Do not rebind the whole form to the live playlist or unsaved edits are wiped.
@@ -97,6 +122,7 @@ const M3U = ({
       probation_enabled: false,
       probation_seconds: 10,
       probation_allow_anonymous: false,
+      probation_stop_skipped: false,
     },
 
     validate: {
@@ -136,7 +162,9 @@ const M3U = ({
         probation_seconds: m3uAccount.probation_seconds ?? 10,
         probation_allow_anonymous:
           m3uAccount.probation_allow_anonymous || false,
+        probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
       });
+      setOverlapEnabled(m3uAccount.probation_enabled || false);
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
 
       // Determine schedule type from existing data
@@ -150,6 +178,7 @@ const M3U = ({
       form.reset();
       setScheduleType('interval');
       setExpDate(null);
+      setOverlapEnabled(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [m3uAccount]);
@@ -202,6 +231,7 @@ const M3U = ({
     if (playlist?.id) {
       await updatePlaylist(playlist, values, file);
       form.reset();
+      setOverlapEnabled(false);
       setFile(null);
       onClose();
       return;
@@ -213,6 +243,7 @@ const M3U = ({
 
   const close = () => {
     form.reset();
+    setOverlapEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -222,6 +253,7 @@ const M3U = ({
     setGroupFilterModalOpen(false);
     // After group filter setup for a new account, reset everything
     form.reset();
+    setOverlapEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -355,43 +387,67 @@ const M3U = ({
                 {...form.getInputProps('max_streams')}
                 key={form.key('max_streams')}
               />
-              <Switch
-                id="probation_enabled"
-                name="probation_enabled"
-                label="Allow Channel Switch Overlap"
-                description="When all accounts are at their limit, a viewer already watching on this account can start a new channel immediately on one temporary extra slot. If a stream on this account ends within the overlap window (a channel switch), it continues; otherwise it moves to an account with a free slot or is stopped. Streams already playing are never stopped."
-                key={form.key('probation_enabled')}
-                {...form.getInputProps('probation_enabled', {
-                  type: 'checkbox',
-                })}
-                onChange={(event) => {
-                  if (event.currentTarget.checked) {
-                    setOverlapConfirmOpen(true);
-                  } else {
-                    form.setFieldValue('probation_enabled', false);
-                  }
-                }}
-              />
-              <NumberInput
-                id="probation_seconds"
-                name="probation_seconds"
-                label="Overlap Window (seconds)"
-                description="How long this account may run one stream over its limit. Keep this below what the provider tolerates."
-                min={1}
-                max={120}
-                {...form.getInputProps('probation_seconds')}
-                key={form.key('probation_seconds')}
-              />
-              <Switch
-                id="probation_allow_anonymous"
-                name="probation_allow_anonymous"
-                label="Allow Overlap For Anonymous Connections"
-                description="Also allow the overlap for connections without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby), matched by IP only. Viewers sharing that IP cannot be told apart."
-                key={form.key('probation_allow_anonymous')}
-                {...form.getInputProps('probation_allow_anonymous', {
-                  type: 'checkbox',
-                })}
-              />
+              <Box>
+                <Switch
+                  id="probation_enabled"
+                  name="probation_enabled"
+                  label="Allow Channel Switch Overlap"
+                  description="Faster channel switching when every account is at its limit."
+                  key={form.key('probation_enabled')}
+                  {...form.getInputProps('probation_enabled', {
+                    type: 'checkbox',
+                  })}
+                  onChange={(event) => {
+                    if (event.currentTarget.checked) {
+                      setOverlapConfirmOpen(true);
+                    } else {
+                      form.setFieldValue('probation_enabled', false);
+                      setOverlapEnabled(false);
+                    }
+                  }}
+                />
+                <Button
+                  variant="subtle"
+                  size="compact-xs"
+                  onClick={() => setOverlapInfoOpen(true)}
+                >
+                  What does this do?
+                </Button>
+                <Collapse in={overlapEnabled}>
+                  <Stack gap="xs" pl="md" pt="xs">
+                    <NumberInput
+                      id="probation_seconds"
+                      name="probation_seconds"
+                      label="Overlap Window (seconds)"
+                      description="Keep below what the provider tolerates."
+                      min={1}
+                      max={120}
+                      {...form.getInputProps('probation_seconds')}
+                      key={form.key('probation_seconds')}
+                    />
+                    <Switch
+                      id="probation_stop_skipped"
+                      name="probation_stop_skipped"
+                      label="Stop Skipped Channels"
+                      description="Close channels a player surfed past."
+                      key={form.key('probation_stop_skipped')}
+                      {...form.getInputProps('probation_stop_skipped', {
+                        type: 'checkbox',
+                      })}
+                    />
+                    <Switch
+                      id="probation_allow_anonymous"
+                      name="probation_allow_anonymous"
+                      label="Allow Anonymous Connections"
+                      description="Match viewers without a login by IP only."
+                      key={form.key('probation_allow_anonymous')}
+                      {...form.getInputProps('probation_allow_anonymous', {
+                        type: 'checkbox',
+                      })}
+                    />
+                  </Stack>
+                </Collapse>
+              </Box>
               <Select
                 id="server_group"
                 name="server_group"
@@ -611,31 +667,30 @@ const M3U = ({
         onClose={() => setOverlapConfirmOpen(false)}
         onConfirm={() => {
           form.setFieldValue('probation_enabled', true);
+          setOverlapEnabled(true);
           setOverlapConfirmOpen(false);
         }}
         title="Enable Channel Switch Overlap?"
         confirmLabel="Enable"
         size="lg"
-        message={
-          <div style={{ whiteSpace: 'pre-line' }}>
-            {`Only use this if your provider tolerates one extra connection for a few seconds. Some providers block accounts that go over their limit.
-
-What it does:
-• Only when every account a channel can use is at its Max Streams, a viewer who is already watching on this account can start a new channel immediately on one temporary extra connection.
-• If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
-• If none ends in time, the new channel moves to an account with a free slot, or the new stream is stopped.
-• While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist.
-
-What it does not do:
-• It changes nothing while an account still has free slots.
-• It never stops a stream that was already playing.
-• It does not give extra connections to other viewers (other users, devices or IP addresses).
-• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Overlap For Anonymous Connections" is also enabled.
-
-The change takes effect after you save the account.`}
-          </div>
-        }
+        message={OVERLAP_EXPLANATION}
       />
+
+      <Modal
+        opened={overlapInfoOpen}
+        onClose={() => setOverlapInfoOpen(false)}
+        title="Channel Switch Overlap"
+        size="lg"
+        centered
+        zIndex={1000}
+      >
+        {OVERLAP_EXPLANATION}
+        <Group justify="flex-end" mt="md">
+          <Button variant="outline" onClick={() => setOverlapInfoOpen(false)}>
+            Close
+          </Button>
+        </Group>
+      </Modal>
 
       <ServerGroupsManagerModal
         isOpen={serverGroupsManagerOpen}

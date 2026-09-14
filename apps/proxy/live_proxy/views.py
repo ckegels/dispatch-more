@@ -300,6 +300,12 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
 
             if perform_setup:
                 try:
+                    # Channel Switch Overlap: free the slots of channels this viewer
+                    # surfed past a moment ago, before a slot is chosen for this one.
+                    probation.stop_skipped_channels(
+                        proxy_server.redis_client, viewer, channel_id
+                    )
+
                     # Use fixed retry interval and timeout
                     retry_timeout = 3  # 3 seconds total timeout
                     retry_interval = 0.1  # 100ms between attempts

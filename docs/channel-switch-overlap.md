@@ -52,6 +52,28 @@ checked every 0.5 s until the account's **Overlap Window** expires:
 
 Streams that were already playing are never stopped by this feature.
 
+### Stop Skipped Channels (optional)
+
+Fast channel surfing (several channels within seconds) fills every slot: Dispatcharr
+only releases a channel once it notices the player left, and each account has a single
+overlap slot. With **Stop Skipped Channels** enabled on the account, a new request from
+an identified viewer (user or device ID, plus IP) first stops that viewer's *skipped*
+channels, so their slots are free for the channel it wants now.
+
+A channel counts as skipped when all of these are true:
+
+- The requesting viewer is its only client (shared channels are never stopped).
+- The viewer joined it within the account's Overlap Window (the earliest join counts,
+  so reconnecting to a channel watched for a while does not qualify).
+- Its account has both Allow Channel Switch Overlap and Stop Skipped Channels enabled.
+- It is not the channel being requested.
+
+Anonymous viewers never trigger it. Surfing A → B → C → D → E stops B, C and D as the
+next channel is requested; A (watched longer) closes on its own and E is confirmed.
+
+Known risks: a single player intentionally opening two channels within the window
+(multiview / picture-in-picture), and two devices sharing one Xtream login behind one IP.
+
 ## Recognising the same viewer
 
 A stream request carries a client IP, a User-Agent and whatever is in the URL. Players
@@ -101,7 +123,12 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 |---|---|---|
 | Allow Channel Switch Overlap | `probation_enabled` | off |
 | Overlap Window (seconds, 1–120) | `probation_seconds` | 10 |
-| Allow Overlap For Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
+| Stop Skipped Channels | `probation_stop_skipped` | off |
+| Allow Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
+
+The form only shows the toggle until it is enabled (after confirming the explanation
+popup); the other settings then appear below it. "What does this do?" reopens the
+explanation.
 
 Keep Max Streams at the provider's real limit and the window below how long the
 provider tolerates the extra connection.
@@ -159,12 +186,16 @@ overlap window.
 | `apps/channels/models.py` | `Channel.get_stream(viewer=…)` grants the overlap slot when every profile is full |
 | `apps/m3u/connection_pool.py` | `reserve_profile_slot(..., extra_capacity=0)` |
 | `apps/proxy/live_proxy/url_utils.py` | Pass the viewer to `get_stream` |
-| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record the client's device ID, start the monitor |
+| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record the client's device ID, stop skipped channels, start the monitor |
 | `apps/output/views.py` | Automatic device ID in M3U stream links |
 | `apps/m3u/serializers.py`, `frontend/src/components/forms/M3U.jsx` | Per-account settings |
 
 Redis keys: `live:probation:<channel uuid>` (probation record, TTL window + 120 s);
 `device_id` field on `live:channel:<uuid>:clients:<client id>`.
+
+Logging: every decision logs a line starting with `Probation:`. "Not used" reasons are
+logged once per channel and viewer per 10 seconds, because `stream_ts` retries slot
+selection several times per second while all profiles are full.
 
 ## Open questions
 
