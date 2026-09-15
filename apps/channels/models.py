@@ -724,7 +724,7 @@ class Channel(models.Model):
                 streams = list(self.streams.all().order_by("channelstream__order"))
                 for stream in streams:
                     for profile in allowed_m3u_profiles.get(stream.m3u_account_id, []):
-                        if pool_has_capacity_for_profile(profile, redis_client):
+                        if pool_has_capacity_for_profile(profile, redis_client, viewer):
                             return stream.id, profile.id, None, False
                 return None, None, "No compatible active profile found for any assigned stream", False
 
@@ -766,11 +766,13 @@ class Channel(models.Model):
         # No existing active stream, attempt to assign a new one
         has_streams_but_maxed_out = False
         has_active_profiles = False
+        # Full (stream, profile) pairs, for Channel Switch Overlap
         full_candidates = []
+        overlap_checked = 0
 
         from apps.proxy.live_proxy import probation
 
-        if viewer is not None:
+        if probation.is_viewer_request(viewer):
             # Account preference when switching (Channel Switch Overlap): stay on the
             # account this viewer is on or just left, or start on another one
             preferred_result = probation.reserve_sticky_slot(
@@ -781,6 +783,17 @@ class Channel(models.Model):
 
         # Iterate through channel streams and their profiles
         for stream in self.streams.all().order_by("channelstream__order"):
+            # Channel Switch Overlap comes before custom streams once the streams before them
+            # are full, so a fallback slate on the unlimited "custom" account (for example
+            # from the could-not-dispatch plugin) does not replace a channel switch
+            if stream.is_custom and len(full_candidates) > overlap_checked:
+                overlap_checked = len(full_candidates)
+                overlap_result = probation.reserve_overlap_slot(
+                    self, redis_client, viewer, full_candidates
+                )
+                if overlap_result is not None:
+                    return overlap_result
+
             # Retrieve the M3U account associated with the stream.
             m3u_account = stream.m3u_account
             if not m3u_account:
@@ -808,25 +821,17 @@ class Channel(models.Model):
 
                 # Atomically check and reserve a slot (INCR-first pattern)
                 reserved, current_count, failure_reason = reserve_profile_slot(
-                    profile, redis_client
+                    profile, redis_client, viewer=viewer
                 )
-                # A slot held for a viewer switching channels (Channel Switch Overlap)
-                # counts as taken for everyone else
-                if reserved and probation.slot_taken_by_hold(
-                    redis_client, profile, m3u_account, viewer, current_count
-                ):
-                    release_profile_slot(profile.id, redis_client)
-                    reserved, failure_reason = False, "profile_full"
 
                 if reserved:
                     # Slot reserved — assign stream to this channel
                     redis_client.set(f"channel_stream:{self.id}", stream.id)
                     redis_client.set(f"stream_profile:{stream.id}", profile.id)
-                    probation.take_held_slot(redis_client, profile, m3u_account, viewer)
-                    if viewer is not None:
-                        probation.remember_viewer_profile(
-                            redis_client, viewer, profile, stream.m3u_account
-                        )
+                    probation.take_held_slot(redis_client, profile, viewer)
+                    probation.remember_viewer_profile(
+                        redis_client, viewer, profile, stream.m3u_account
+                    )
                     logger.info(
                         f"Channel {self.uuid}: assigned stream {stream.id} "
                         f"profile {profile.id} ({profile.name})"
@@ -851,7 +856,6 @@ class Channel(models.Model):
                         # return self.id, profile.id, victim_channel_id
 
                     has_streams_but_maxed_out = True
-                    # Remembered for the probation pass below
                     full_candidates.append((stream, profile))
                     if failure_reason == "profile_full":
                         logger.info(
@@ -868,95 +872,14 @@ class Channel(models.Model):
                             f"{current_count}/{profile.max_streams}"
                         )
 
-        if has_streams_but_maxed_out and viewer is not None:
-            from apps.proxy.live_proxy import probation
-
-            # Every profile is full. A viewer already watching on an account that
-            # allows probation is probably switching channels: start now on that
-            # profile's temporary slot. Other viewers get the normal limit error.
-            # Unlimited profiles (max_streams 0) are never full.
-            full_candidates = [
-                (stream, profile)
-                for stream, profile in full_candidates
-                if profile.max_streams > 0
-                and probation.account_allows_probation(stream.m3u_account)
-            ]
-            # Accounts without the overlap enabled keep the existing behavior exactly:
-            # nothing below runs and nothing is logged for them.
-            if full_candidates and not viewer.identified:
-                # Anonymous viewers can only be matched by IP; accounts opt in separately.
-                full_candidates = [
-                    (stream, profile)
-                    for stream, profile in full_candidates
-                    if probation.account_allows_anonymous(stream.m3u_account)
-                ]
-                if not full_candidates:
-                    probation.log_not_used(
-                        self.uuid,
-                        viewer,
-                        f"{viewer} has no user or device ID and no full account allows "
-                        f"anonymous connections",
-                    )
-            if full_candidates and self.get_stream_profile().is_redirect():
-                # Redirects hand the provider URL to the player and release the slot,
-                # so there is no proxied stream whose probation could be resolved.
-                probation.log_not_used(self.uuid, viewer, "redirect stream profile")
-            elif full_candidates:
-                watched_profile_ids = probation.find_profile_ids_watched_by(
-                    redis_client, viewer
-                )
-                watched_candidates = [
-                    (stream, profile)
-                    for stream, profile in full_candidates
-                    if profile.id in watched_profile_ids
-                ]
-                if not watched_candidates:
-                    probation.log_not_used(
-                        self.uuid,
-                        viewer,
-                        f"{viewer} is not watching on an account that allows the overlap",
-                    )
-                for stream, profile in watched_candidates:
-                    # Same atomic INCR-first reservation, allowed one slot past the limit.
-                    # Fails when another switch already holds this profile's extra slot.
-                    reserved, current_count, _failure_reason = reserve_profile_slot(
-                        profile,
-                        redis_client,
-                        extra_capacity=probation.PROBATION_EXTRA_CAPACITY,
-                    )
-                    if reserved and probation.slot_taken_by_hold(
-                        redis_client,
-                        profile,
-                        stream.m3u_account,
-                        viewer,
-                        current_count,
-                        probation.PROBATION_EXTRA_CAPACITY,
-                    ):
-                        release_profile_slot(profile.id, redis_client)
-                        reserved = False
-                    if not reserved:
-                        probation.log_not_used(
-                            self.uuid,
-                            viewer,
-                            f"overlap slot on profile {profile.id} is already in use",
-                        )
-                        continue
-                    # Assigned like a normal slot; the probation record makes the proxy
-                    # start a monitor that confirms, moves or stops it (stream_ts).
-                    redis_client.set(f"channel_stream:{self.id}", stream.id)
-                    redis_client.set(f"stream_profile:{stream.id}", profile.id)
-                    seconds = probation.account_probation_seconds(stream.m3u_account)
-                    probation.mark_probation(redis_client, self, stream.id, profile.id, seconds)
-                    probation.take_held_slot(redis_client, profile, stream.m3u_account, viewer)
-                    probation.remember_viewer_profile(
-                        redis_client, viewer, profile, stream.m3u_account
-                    )
-                    logger.info(
-                        f"Probation: channel {self.uuid} assigned stream {stream.id} profile "
-                        f"{profile.id} ({profile.name}) on overlap slot "
-                        f"({current_count}/{profile.max_streams}) for {viewer}, window {seconds}s"
-                    )
-                    return stream.id, profile.id, None, True
+        if has_streams_but_maxed_out and len(full_candidates) > overlap_checked:
+            # Every profile is full: a viewer switching channels may start on a temporary
+            # slot past the limit (Channel Switch Overlap)
+            overlap_result = probation.reserve_overlap_slot(
+                self, redis_client, viewer, full_candidates
+            )
+            if overlap_result is not None:
+                return overlap_result
 
         # No available streams - determine specific reason
         if has_streams_but_maxed_out:

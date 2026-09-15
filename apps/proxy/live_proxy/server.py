@@ -25,6 +25,7 @@ from .client_manager import ClientManager
 from .output.fmp4.manager import FMP4RemuxManager
 from .output.profile.manager import OutputProfileManager, PROFILE_STATE_ACTIVE
 from .redis_keys import RedisKeys
+from . import probation
 from .constants import ChannelState, EventType, StreamType, ChannelMetadataField, REDIS_TTL_DEFAULT
 from .config_helper import ConfigHelper
 from .utils import get_logger
@@ -1850,6 +1851,9 @@ class ProxyServer:
 
                     # Recover channels whose stop_channel call never returned
                     self._recover_stuck_channel_stops()
+
+                    # Channel Switch Overlap: resume overlap checks lost with a restarted worker
+                    probation.recover_unmonitored_probations(self.redis_client)
 
                     # Create a unified list of all channels we have locally
                     all_local_channels = (

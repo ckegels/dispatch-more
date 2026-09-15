@@ -46,19 +46,25 @@ const OVERLAP_EXPLANATION = (
   <div style={{ whiteSpace: 'pre-line' }}>
     {`Only use this if your provider tolerates one extra connection for a few seconds. Some providers block accounts that go over their limit.
 
+Warnings:
+• Every device that logs in with a Dispatcharr username and password (for example an Xtream app) needs its own user. A login shared by several devices does not work with this feature: the overlap can go to the wrong device, and "Stop Skipped Channels" can stop a channel another device is watching.
+• Stream links in M3U playlists change every time a player downloads the playlist. Players that remember favourites by stream link can lose them. Adding a fixed name to the playlist URL (?device_id=livingroom) keeps the links the same for that device.
+• "Stop Skipped Channels" does not support multiview or picture-in-picture: a player that opens a second channel within the Overlap Window closes the first one.
+
 What it does:
 • Only when every account a channel can use is at its Max Streams, a viewer who is already watching on this account can start a new channel immediately on one temporary extra connection.
 • If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
-• If none ends in time, the new channel moves to an account with a free slot, or the new stream is stopped.
+• If none ends in time, the new channel moves to an account with a free slot, or to a custom fallback stream if the channel has one (such as the could-not-dispatch plugin's), or the new stream is stopped. A fallback stream at the end of a channel does not replace a channel switch.
 • With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as its next channel has started, so fast channel surfing does not fill every slot.
-• When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between.
-• "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account first, and only falls back to its own account when none is free.
+• When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between. Failover, stream changes, VOD, catch-up and previews leave it alone too (also on a login shared through a Server Group); DVR recordings can still use it. Channels stopped from the dashboard, deleted or removed by a refresh are not kept.
+• With a Channel Shutdown Delay, a channel nobody watches any more is closed early when it keeps this account over its limit during a switch.
+• "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account with this setting enabled first (never on custom fallback streams), and only falls back to its own account when none is free.
 • While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist. Jellyfin, Emby and Plex are recognised by their User-Agent and get no device ID (unless a custom User-Agent is set in their tuner settings), so their viewers count as anonymous.
 
 What it does not do:
 • It changes nothing while an account still has free slots.
 • It never stops a stream that was already playing, or a channel someone else is also watching.
-• It does not give extra connections to other viewers (other users, devices or IP addresses).
+• It does not give extra connections to other viewers (other users, devices or IP addresses) or to DVR recordings.
 • Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels". With "Stay on same account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
 
 The change takes effect after you save the account.`}

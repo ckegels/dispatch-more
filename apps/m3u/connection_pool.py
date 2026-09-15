@@ -148,6 +148,17 @@ def _credential_counter_key(profile, group) -> Optional[str]:
     return server_group_connections_key(group.id, fingerprint)
 
 
+def _slots_held_for_others(profile, redis_client, viewer=None, credential_key=None) -> int:
+    """
+    Slots Channel Switch Overlap holds for a viewer that is switching channels; they count
+    as taken for every other request. Always 0 while no M3U account uses the overlap.
+    See apps.proxy.live_proxy.probation.slots_held_for_others().
+    """
+    from apps.proxy.live_proxy import probation
+
+    return probation.slots_held_for_others(redis_client, profile, viewer, credential_key)
+
+
 def get_profile_connection_count(profile, redis_client) -> int:
     return int(redis_client.get(profile_connections_key(profile.id)) or 0)
 
@@ -162,14 +173,16 @@ def get_credential_connection_count(profile, redis_client) -> int:
     return int(redis_client.get(cred_key) or 0)
 
 
-def profile_has_capacity_for_selection(profile, redis_client) -> bool:
+def profile_has_capacity_for_selection(profile, redis_client, viewer=None) -> bool:
     """Per-profile capacity check used when rotating across profiles on one account."""
     if profile.max_streams == 0:
         return True
-    return get_profile_connection_count(profile, redis_client) < profile.max_streams
+    return get_profile_connection_count(profile, redis_client) < (
+        profile.max_streams - _slots_held_for_others(profile, redis_client, viewer)
+    )
 
 
-def group_has_capacity_for_profile(profile, redis_client) -> bool:
+def group_has_capacity_for_profile(profile, redis_client, viewer=None) -> bool:
     # Profiles with max_streams=0 skip credential enforcement entirely. An unlimited
     # profile in a pooled group can still stream while other accounts share the login.
     group = get_enforced_server_group_for_profile(profile)
@@ -179,14 +192,16 @@ def group_has_capacity_for_profile(profile, redis_client) -> bool:
     if not cred_key:
         # Profile is in an enforced group but its login can't be fingerprinted
         return False
-    return int(redis_client.get(cred_key) or 0) < profile.max_streams
-
-
-def pool_has_capacity_for_profile(profile, redis_client) -> bool:
-    """Non-mutating check before reserve: profile slot and credential slot if applicable."""
-    return profile_has_capacity_for_selection(profile, redis_client) and group_has_capacity_for_profile(
-        profile, redis_client
+    return int(redis_client.get(cred_key) or 0) < (
+        profile.max_streams - _slots_held_for_others(profile, redis_client, viewer, cred_key)
     )
+
+
+def pool_has_capacity_for_profile(profile, redis_client, viewer=None) -> bool:
+    """Non-mutating check before reserve: profile slot and credential slot if applicable."""
+    return profile_has_capacity_for_selection(
+        profile, redis_client, viewer
+    ) and group_has_capacity_for_profile(profile, redis_client, viewer)
 
 
 def profile_available_for_channel_switch(
@@ -222,8 +237,9 @@ def move_credential_slot_on_profile_switch(
         new_profile, redis_client
     )
     if not cred_reserved:
+        # Putting back the slot this channel already had, not taking a new one
         restore_reserved, restore_key = _reserve_server_group_slot_for_profile(
-            old_profile, redis_client
+            old_profile, redis_client, respect_holds=False
         )
         if restore_reserved and restore_key:
             _remember_credential_release_key(
@@ -266,7 +282,7 @@ def _release_credential_slot_by_profile_id(profile_id: int, redis_client) -> boo
 
 
 def _reserve_server_group_slot_for_profile(
-    profile, redis_client, extra_capacity: int = 0
+    profile, redis_client, extra_capacity: int = 0, viewer=None, respect_holds: bool = True
 ) -> Tuple[bool, Optional[str]]:
     group = get_enforced_server_group_for_profile(profile)
     if not group or profile.max_streams == 0:
@@ -276,8 +292,11 @@ def _reserve_server_group_slot_for_profile(
     if not cred_key:
         return False, None
 
+    held = (
+        _slots_held_for_others(profile, redis_client, viewer, cred_key) if respect_holds else 0
+    )
     cred_count = redis_client.incr(cred_key)
-    if cred_count <= profile.max_streams + extra_capacity:
+    if cred_count <= profile.max_streams + extra_capacity - held:
         return True, cred_key
 
     redis_client.decr(cred_key)
@@ -285,13 +304,15 @@ def _reserve_server_group_slot_for_profile(
 
 
 def reserve_profile_slot(
-    profile, redis_client, extra_capacity: int = 0
+    profile, redis_client, extra_capacity: int = 0, viewer=None
 ) -> Tuple[bool, int, Optional[ReserveFailureReason]]:
     """
     Atomically reserve profile + optional credential slots (INCR-first).
 
     extra_capacity allows the counters to go that many slots past max_streams;
     it is only used for short-lived probation slots during channel switches.
+    Slots held for a viewer switching channels count as taken, except for that
+    viewer (apps.proxy.live_proxy.probation.Viewer).
 
     Returns (reserved, profile_count_after_attempt, failure_reason).
     failure_reason is set when reserved is False.
@@ -300,13 +321,14 @@ def reserve_profile_slot(
     profile_count = 0
 
     if profile.max_streams > 0:
+        held = _slots_held_for_others(profile, redis_client, viewer)
         profile_count = redis_client.incr(profile_key)
-        if profile_count > profile.max_streams + extra_capacity:
+        if profile_count > profile.max_streams + extra_capacity - held:
             redis_client.decr(profile_key)
             return False, profile_count - 1, "profile_full"
 
     cred_reserved, cred_key = _reserve_server_group_slot_for_profile(
-        profile, redis_client, extra_capacity
+        profile, redis_client, extra_capacity, viewer
     )
     if not cred_reserved:
         if profile.max_streams > 0:

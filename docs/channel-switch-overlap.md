@@ -29,7 +29,7 @@ ever stopping a stream that was already playing.
 All of the following must be true:
 
 1. The request is a live viewer request through the TS proxy (not a Redirect stream
-   profile, not failover, not VOD or timeshift).
+   profile, not failover, not VOD or timeshift, not a DVR recording).
 2. Every M3U profile the channel can use is at its limit.
 3. The requesting viewer is **already watching** on one of those profiles (see
    *Recognising the same viewer*).
@@ -45,12 +45,44 @@ checked every 0.5 s until the account's **Overlap Window** expires:
 
 | Outcome | Condition | Action |
 |---|---|---|
-| Confirmed | A stream on that profile ended; the profile is within its limit again | Nothing: the stream continues normally |
+| Confirmed | A stream on that profile ended, or only channels nobody watches keep it over its limit (see *Channel Shutdown Delay*) | Nothing: the stream continues normally |
 | Ended | The new channel itself stopped, or failover moved it | Nothing |
-| Moved | Window expired, profile still over its limit, another profile of the channel has a free slot | The channel switches to that stream/profile (short hiccup) |
+| Moved | Window expired, profile still over its limit, another profile of the channel has a free slot | The channel switches to that stream/profile (short hiccup); custom streams (such as a fallback slate) only when no provider profile is free |
 | Stopped | Window expired, still over its limit, no free slot anywhere | **Only the new channel** is stopped |
 
 Streams that were already playing are never stopped by this feature.
+
+### Custom and fallback streams
+
+Plugins such as could-not-dispatch attach a custom stream at the end of every channel: a
+slate on the built-in `custom` account, which has no connection limit. Dispatcharr would pick
+it as soon as the streams before it are full, so a channel switch would land on the slate.
+
+- `Channel.get_stream()` tries the overlap before the first custom stream whose earlier
+  streams are all full, and again after the last stream. A custom stream placed before the
+  provider streams is still used first, as before.
+- When the overlap does not apply (another viewer, no request viewer, anonymous not
+  allowed), the custom stream is used exactly as without this feature.
+- When an overlap window expires, provider streams with a free slot are tried first; a custom
+  stream is the last resort before stopping the channel. That is where the channel would
+  have ended up without the overlap.
+- "Use another account" never moves a viewer to a custom stream.
+
+This does not depend on the plugin: it applies to any custom stream, and nothing changes
+until a channel actually has one.
+
+### When the worker running the check restarts
+
+The check (monitor) runs as a greenlet in the uWSGI worker that started the channel. It
+renews a lease (`live:probation:monitor:<channel uuid>`, 20 s) on every check, and every
+pending channel is listed in `live:probation:pending`. Every worker's proxy cleanup loop
+calls `recover_unmonitored_probations()`: a probation whose lease ran out is taken over by
+the first worker that claims the lease, so the extra connection does not stay open when a
+worker restarts. A monitor that finds its lease taken over stops.
+
+Moving or stopping the channel keeps the record until it succeeded. When it raises, the next
+takeover tries again, at most three times; after that the record is dropped with an error in
+the log.
 
 ### Stop Skipped Channels (optional)
 
@@ -78,8 +110,18 @@ A channel counts as skipped when all of these are true:
 Anonymous viewers never trigger it. Surfing A → B → C → D → E stops B, C and D as the
 next channel is requested; A (watched longer) closes on its own and E is confirmed.
 
-Known risks: a single player intentionally opening two channels within the window
-(multiview / picture-in-picture), and two devices sharing one Xtream login behind one IP.
+**Returning to a channel that is still being stopped.** Stopping takes a moment (the provider
+connection has to close). A request for that channel in the meantime would get Dispatcharr's
+`503 {"error": "Channel is stopping, retry shortly"}`, which players such as TiviMate show as
+an error ("unrecognized format"), or would join the channel just before the stop ends it.
+While `live:probation:stopping:<uuid>` is set (skipped channels, and idle channels stopped by
+the overlap), `stream_ts` waits for the stop to finish (at most 5 s) and then starts the
+channel again. The marker is removed when the background stop is done. Stops started any
+other way (dashboard, deletes, refreshes) keep the normal 503.
+
+Not supported (warnings in the explanation popup): a single player intentionally opening two
+channels within the window (multiview / picture-in-picture) closes the first one, and two
+devices sharing one login can stop each other's channels.
 
 ### Held slots
 
@@ -87,11 +129,59 @@ Many players close the old stream just before requesting the next channel. A req
 is already waiting for a slot (another viewer) would take the released slot in that gap and
 the switch would fail. When a channel on an account with the overlap enabled releases its
 slot and had exactly one viewer (identified, or anonymous where allowed), the slot is held
-for that viewer for the overlap window (`live:probation:held:<profile id>`). Everyone else,
-including requests without a viewer, treats it as taken; the viewer's next request takes
-it. No hold is created when the overlap stopped the channel because it was not a switch,
-or when a skipped channel is stopped after its viewer already has its new slot. With a
-Channel Shutdown Delay above 0 the viewer has left before the release, so no hold is made.
+for that viewer for the overlap window (`live:probation:held:<profile id>`).
+
+The hold is enforced in `reserve_profile_slot()` and `pool_has_capacity_for_profile()`, so
+every way of getting a slot treats it as taken: other viewers, automatic failover, manual
+stream changes, plugins, VOD, timeshift and stream previews. The viewer it is held for
+(passed as `viewer=`) takes it with its next request. DVR recordings ignore holds, because
+a scheduled recording must start on time. For accounts in a Server Group the shared login
+counter is held as well (`live:probation:held_login:<login counter key>`), since other
+accounts using the same login count against it too.
+
+No hold is created when:
+
+- the overlap stopped the channel because it was not a switch, or a skipped channel is
+  stopped after its viewer already has its new slot;
+- the channel is being stopped on purpose (from the dashboard, deleted, or its stream
+  removed by an M3U refresh), or its client was disconnected from the dashboard;
+- the only client is a DVR recording;
+- the channel had no clients left when it released its slot (Channel Shutdown Delay above
+  0: the old channel is then handled as below).
+
+### Channel Shutdown Delay
+
+With a delay above 0, a channel whose last client left keeps its slot until the delay has
+passed. The old channel of a switch would then keep the profile over its limit, and a player
+that closes the old stream first would no longer count as watching.
+
+- Every viewer that joins a channel is remembered in `live:probation:viewers:<channel uuid>`.
+  A channel waiting out the delay (no clients, `last_client_disconnect_time` set, no stop
+  under way) counts as watched by a viewer when that viewer was its only one.
+- While an overlap is pending and its profile is over its limit, channels on that profile
+  that are waiting out the delay are stopped at once (slot released immediately, stop in the
+  background). Nobody watches them, and the provider does not stay over its limit.
+  The switch is then confirmed.
+
+Channels that still have clients, or have not had a client yet (still starting), are never
+stopped this way.
+
+### DVR recordings
+
+Recordings request channels through the proxy as `Dispatcharr-DVR/recording-<id>` from the
+Dispatcharr host. They are recognised by that User-Agent and never use the overlap, account
+preferences or held slots, are never matched as a viewer (not even by an anonymous player on
+the same address), and a channel with a recording as its only client is not held. Recordings
+on Redirect channels send the provider's User-Agent and are not recognised, but Redirect
+channels do not use the overlap.
+
+### While the feature is not used
+
+`probation.in_use()` answers whether any active account has the overlap enabled. It is cached
+in Django's (Redis) cache for 60 seconds and cleared whenever an M3U account is saved or
+deleted. Every entry point checks it first, so with the overlap off on every account no
+device IDs are added, nothing is stored in Redis, no slot is held and no extra database
+queries run. A database error during this check counts as "not in use".
 
 ### When Switching Channels (account preference)
 
@@ -104,9 +194,11 @@ assigned within 60 seconds (`live:probation:last_profile:<viewer>`), or has a he
 - **Stay on same account** (`same`): the profile being left is tried first: a free slot, or
   the overlap slot when the viewer is still watching on it, even when another account has
   a free slot. A profile the viewer only left is never overlapped (someone else may hold it).
-- **Use another account** (`alternate`): a free slot on any other profile of the channel is
+- **Use another account** (`alternate`): a free slot on another profile of the channel is
   tried first, so the next channel does not wait for the provider to close the old
-  connection. A slot held on the profile being left is released. When no other profile has
+  connection. Only accounts that have the overlap enabled themselves are used, and never
+  custom streams: fallback streams such as the could-not-dispatch plugin's slate live on the
+  unlimited `custom` account and would otherwise be picked on every switch. A slot held on the profile being left is released. When no other profile has
   a free slot, normal selection continues (held slot, then overlap).
 
 The preference of the account being left decides. Anonymous viewers need Allow Anonymous
@@ -150,6 +242,9 @@ appended to each stream link, generated per download:
 - A fixed ID can be requested with `?device_id=<name>` on the playlist URL
   (letters, digits, `-`, `_`, up to 64 characters). Useful for players that key
   favourites on stream URLs, or to avoid a new ID on every playlist refresh.
+- **Warning (shown in the explanation popup):** stream links change on every playlist
+  download, so players that remember favourites by stream link can lose them. This is
+  accepted; a fixed `?device_id=<name>` avoids it.
 - HDHomeRun lineups get no device ID: they are always read by one media server
   (Plex, Jellyfin, Emby) on behalf of all its viewers.
 - For the same reason, M3U playlists requested by a media server get no device ID. They
@@ -159,6 +254,12 @@ appended to each stream link, generated per download:
   in the media server's tuner settings is not recognised.
 - Native Xtream players (`player_api.php`) build stream links themselves, so they
   are identified by user only.
+- **Warning (shown in the explanation popup):** every device that logs in with a
+  Dispatcharr username and password needs its own user. A login shared by several devices
+  is not supported: a request can be taken for the other device's switch, and Stop Skipped
+  Channels can stop the other device's channel. A Dispatcharr login carries no device
+  information (one Xtream password per user, no sessions or device tokens), so this cannot
+  be detected reliably.
 
 ## Settings
 
@@ -207,7 +308,8 @@ provider tolerates the extra connection.
   in use; the new channel is moved or stopped after the window).
 - Slow provider start-up (the overlap removes the slot wait, not provider latency).
 - Two simultaneous switches on one profile (one extra slot per profile).
-- Redirect stream profiles, VOD, timeshift, automatic failover.
+- Redirect stream profiles, VOD, timeshift, automatic failover and DVR recordings never
+  get an overlap slot (held slots do apply to all of them except recordings).
 
 ## Alternatives considered
 
@@ -228,16 +330,22 @@ overlap window.
 
 | File | Change |
 |---|---|
-| `apps/proxy/live_proxy/probation.py` | Viewer identity, account settings, probation record, resolution (confirm/move/stop), background monitor |
-| `apps/channels/models.py` | `Channel.get_stream(viewer=…)` grants the overlap slot when every profile is full |
-| `apps/m3u/connection_pool.py` | `reserve_profile_slot(..., extra_capacity=0)` |
+| `apps/proxy/live_proxy/probation.py` | Viewer identity, account settings, overlap slot, probation record, resolution (confirm/move/stop), background monitor and its recovery |
+| `apps/channels/models.py` | `Channel.get_stream(viewer=…)` calls the account preferences, and the overlap before custom streams and when every profile is full; holds a released slot |
+| `apps/proxy/live_proxy/server.py` | The cleanup loop resumes overlap checks whose worker restarted |
+| `apps/m3u/connection_pool.py` | `reserve_profile_slot(..., extra_capacity=0, viewer=None)`; held slots count as taken in reservations and capacity checks |
 | `apps/proxy/live_proxy/url_utils.py` | Pass the viewer to `get_stream` |
-| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record the client's device ID, stop skipped channels, start the monitor |
+| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record the client's viewer and device ID, stop skipped channels, start the monitor |
 | `apps/output/views.py` | Automatic device ID in M3U stream links |
 | `apps/m3u/serializers.py`, `frontend/src/components/forms/M3U.jsx` | Per-account settings |
 
 Redis keys: `live:probation:<channel uuid>` (probation record, TTL window + 120 s);
-`device_id` field on `live:channel:<uuid>:clients:<client id>`.
+`live:probation:pending` and `live:probation:monitor:<channel uuid>` (monitor recovery);
+`live:probation:held:<profile id>` and `live:probation:held_login:<login counter key>`
+(held slots); `live:probation:viewers:<channel uuid>` (viewers that joined, TTL 24 h,
+removed on release); `live:probation:last_profile:<viewer>`, `live:probation:stopping:<uuid>`,
+`live:probation:no_hold:<uuid>`; `device_id` field on `live:channel:<uuid>:clients:<client id>`.
+Django cache: `live:probation:in_use`.
 
 Logging: every decision logs a line starting with `Probation:`. "Not used" reasons are
 logged once per channel and viewer per 10 seconds, because `stream_ts` retries slot

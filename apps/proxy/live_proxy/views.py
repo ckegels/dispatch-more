@@ -204,6 +204,10 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     status=429
                 )
 
+        # Channel Switch Overlap: a channel this viewer just surfed past may still be closing;
+        # wait for that instead of answering "Channel is stopping"
+        probation.wait_for_stop_to_finish(proxy_server.redis_client, channel_id)
+
         if ChannelService.is_channel_unavailable_for_new_clients(channel_id):
             logger.info(
                 f"[{client_id}] Channel {channel_id} unavailable. Teardown or pending shutdown"
@@ -621,9 +625,8 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                                 {"error": "Failed to register client"}, status=503
                             )
                         # Lets later requests from this device be recognised as a switch
-                        probation.record_client_device(
-                            proxy_server.redis_client, channel_id, client_id,
-                            viewer.device_id if viewer else None,
+                        probation.record_client_viewer(
+                            proxy_server.redis_client, channel_id, client_id, viewer
                         )
                         logger.info(
                             f"[{client_id}] Client registered with channel {channel_id} "
@@ -745,9 +748,8 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     {"error": "Failed to register client"}, status=503
                 )
             # Lets later requests from this device be recognised as a switch
-            probation.record_client_device(
-                proxy_server.redis_client, channel_id, client_id,
-                viewer.device_id if viewer else None,
+            probation.record_client_viewer(
+                proxy_server.redis_client, channel_id, client_id, viewer
             )
             _client_pre_registered = True
             logger.info(

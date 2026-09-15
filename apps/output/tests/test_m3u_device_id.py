@@ -16,6 +16,9 @@ from apps.proxy.live_proxy import probation
 
 class M3UDeviceIdTests(OutputEndpointTestMixin, TestCase):
     def setUp(self):
+        # probation.in_use() is cached in Redis, which test database rollbacks do not reset
+        probation.forget_in_use()
+        self.addCleanup(probation.forget_in_use)
         super().setUp()
         self.client = Client()
         group = ChannelGroup.objects.create(name=f"Device Group {uuid4().hex[:8]}")

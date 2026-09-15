@@ -273,7 +273,7 @@ def generate_m3u(request, profile_name=None, user=None):
     # Stream links only change while an M3U account has Channel Switch Overlap enabled
     # (an explicit ?device_id= is ignored otherwise). Direct provider URLs never pass
     # through the proxy, so they get none.
-    tag_device_id = not use_direct_urls and probation.any_account_allows_probation()
+    tag_device_id = not use_direct_urls and probation.in_use()
     allowed_m3u_profiles = None
     if use_direct_urls and user is not None:
         from apps.m3u.utils import get_allowed_m3u_profiles
