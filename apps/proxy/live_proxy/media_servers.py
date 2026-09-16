@@ -427,6 +427,81 @@ def cached_sessions(redis_client):
         return []
 
 
+# Which of a media server's devices is watching which channel, learned a moment after the
+# channel started (see _watch). Outlives the channel a little, so a device that has just
+# stopped watching can still be recognised as the one switching.
+CHANNEL_DEVICE_KEY = "live:media_servers:channel:{channel_uuid}"
+CHANNEL_DEVICE_TTL = 4 * 3600
+
+
+def bind_device(redis_client, channel_uuid, session):
+    """
+    Remember which device is watching this channel, and tell the channel's clients, so the
+    people watching through a media server are as recognisable as any other player.
+    """
+    from .redis_keys import RedisKeys
+
+    device = f"server|{session.get('device_id') or ''}"
+    if not session.get("device_id") or not channel_uuid:
+        return
+    try:
+        redis_client.setex(
+            CHANNEL_DEVICE_KEY.format(channel_uuid=channel_uuid), CHANNEL_DEVICE_TTL, device
+        )
+        for client_id in redis_client.smembers(RedisKeys.clients(channel_uuid)) or ():
+            client_id = client_id.decode() if isinstance(client_id, bytes) else client_id
+            redis_client.hset(
+                RedisKeys.client_metadata(channel_uuid, client_id), "server_device", device
+            )
+        logger.info(
+            f"Media server: {session.get('user') or 'someone'} on "
+            f"{session.get('player') or 'a device'} is watching channel {channel_uuid}"
+        )
+    except Exception as e:
+        logger.debug(f"Could not remember who is watching channel {channel_uuid}: {e}")
+
+
+def device_watching(redis_client, channel_uuid):
+    """The media server device watching a channel, when its server told us."""
+    try:
+        return _as_str(redis_client.get(CHANNEL_DEVICE_KEY.format(channel_uuid=channel_uuid)))
+    except Exception:
+        return None
+
+
+def _as_str(value):
+    return value.decode() if isinstance(value, bytes) else value
+
+
+def switching_device(redis_client):
+    """
+    The device that was watching a channel which is no longer running: the one that is
+    switching. None when it is not clear, which is when more than one has just stopped.
+    """
+    from .redis_keys import RedisKeys
+
+    try:
+        watching = {
+            session.get("device_id")
+            for session in cached_sessions(redis_client)
+            if session.get("live")
+        }
+        stopped = set()
+        for key in redis_client.scan_iter(CHANNEL_DEVICE_KEY.format(channel_uuid="*")) or ():
+            key = _as_str(key)
+            channel_uuid = key[len("live:media_servers:channel:"):]
+            if redis_client.exists(RedisKeys.channel_metadata(channel_uuid)):
+                continue
+            device = _as_str(redis_client.get(key))
+            # It is only switching if its server still says it is watching something
+            if device and device.split("|", 1)[-1] in watching:
+                stopped.add(device)
+        return next(iter(stopped)) if len(stopped) == 1 else None
+    except Exception as e:
+        logger.debug(f"Could not work out which device is switching: {e}")
+        return None
+
+
 def sole_device(redis_client):
     """
     The one device streaming from a media server right now, or None when there are several.
@@ -444,7 +519,7 @@ def sole_device(redis_client):
     return next(iter(devices)) if len(devices) == 1 else None
 
 
-def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None):
+def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None, channel_uuid=None):
     """
     After a channel start on a media server, watch its sessions for a moment and add what the
     server did to the start (see timing.finish). Returns at once; the watching runs in the
@@ -455,7 +530,7 @@ def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None):
             return
         if not [server for server in load_servers() if is_enabled(server)]:
             return
-        gevent.spawn(_watch, redis_client, start_id, started_at or time.time())
+        gevent.spawn(_watch, redis_client, start_id, started_at or time.time(), channel_uuid)
     except Exception as e:
         logger.debug(f"Could not watch a media server for start {start_id}: {e}")
 
@@ -466,7 +541,7 @@ def _is_media_server(user_agent, ip=None) -> bool:
     return probation.is_media_server(user_agent, ip)
 
 
-def _watch(redis_client, start_id, started_at):
+def _watch(redis_client, start_id, started_at, channel_uuid=None):
     """Poll until the session is playing, or until it has been long enough."""
     from django.db import close_old_connections
 
@@ -489,6 +564,10 @@ def _watch(redis_client, start_id, started_at):
                 continue
 
             now = round(max(time.time() - started_at, 0), 1)
+            if "session opened" not in seen:
+                # The first time the server names a session for this channel, its device
+                # becomes the viewer of that channel (see bind_device)
+                bind_device(redis_client, channel_uuid, session)
             seen.setdefault("session opened", now)
             if session["transcoding"]:
                 seen.setdefault("transcode started", now)

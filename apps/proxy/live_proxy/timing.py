@@ -176,6 +176,7 @@ def finish(redis_client, channel_uuid, channel_name=None):
             marks.get("client"),
             float(marks["requested"]),
             ip=marks.get("client_ip"),
+            channel_uuid=channel_uuid,
         )
         redis_client.expire(key, 10)
     except Exception as e:

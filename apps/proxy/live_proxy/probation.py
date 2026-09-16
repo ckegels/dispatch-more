@@ -580,7 +580,10 @@ def _server_device(user_agent, client_ip, redis_client):
         from . import media_servers
 
         device = media_servers.sole_device(redis_client)
-        return f"server|{device}" if device else None
+        if device:
+            return f"server|{device}"
+        # Several are watching: the one whose channel has just stopped is the one switching
+        return media_servers.switching_device(redis_client)
     except Exception as e:
         logger.debug(f"Could not ask the media server who is watching: {e}")
         return None

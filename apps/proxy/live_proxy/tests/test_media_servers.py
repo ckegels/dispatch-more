@@ -1022,3 +1022,106 @@ class MediaServerViewerTests(TestCase):
             probation.identity_key(back, self.account),
             probation.identity_key(viewer, self.account),
         )
+
+
+@patch("django.db.close_old_connections")
+class WhoIsWatchingTests(TestCase):
+    """The server says which device is watching which channel, a moment after it starts."""
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        media_servers.save_servers(
+            [{"id": "a1", "url": "http://plex:32400", "token": "t"}]
+        )
+        self.redis.hset(
+            timing.START_KEY.format(start_id="s1"), mapping={"time": "1", "channel": "ZIB"}
+        )
+
+    def _sessions(self, *devices):
+        import json
+
+        self.redis.setex(
+            media_servers.SESSIONS_KEY,
+            10,
+            json.dumps([{"device_id": d, "live": True} for d in devices]),
+        )
+
+    def _channel_is_live(self, channel_uuid):
+        from apps.proxy.live_proxy.redis_keys import RedisKeys
+
+        self.redis.hset(RedisKeys.channel_metadata(channel_uuid), "state", "active")
+
+    def test_the_channel_learns_who_is_watching_it(self, _close):
+        from apps.proxy.live_proxy import probation
+        from apps.proxy.live_proxy.redis_keys import RedisKeys
+
+        self._channel_is_live("channel-1")
+        self.redis.sadd(RedisKeys.clients("channel-1"), "c1")
+        self.redis.hset(
+            RedisKeys.client_metadata("channel-1", "c1"),
+            mapping={"ip_address": "192.168.2.141", "user_id": "0"},
+        )
+
+        # A live session (no playback position), so the watching ends as soon as it plays
+        live = {
+            "MediaContainer": {
+                "Metadata": [
+                    {
+                        k: v
+                        for k, v in SESSION["MediaContainer"]["Metadata"][0].items()
+                        if k != "viewOffset"
+                    }
+                ]
+            }
+        }
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ):
+            get.return_value = fake_response(live)
+            media_servers._watch(self.redis, "s1", 1789580681.0, channel_uuid="channel-1")
+
+        self.assertEqual(
+            media_servers.device_watching(self.redis, "channel-1"), "server|mkk9dgqsm9p8"
+        )
+        # And the client on that channel is that viewer, so holds and Stop Skipped apply
+        client = self.redis.hgetall(RedisKeys.client_metadata("channel-1", "c1"))
+        self.assertEqual(client["server_device"], "server|mkk9dgqsm9p8")
+        viewer = probation._client_viewer(client)
+        self.assertEqual(viewer.server_device, "server|mkk9dgqsm9p8")
+
+    def test_the_device_whose_channel_stopped_is_the_one_switching(self, _close):
+        self._sessions("apple-tv", "living-room")
+        # Both were watching; the living room one has stopped
+        self.redis.setex(
+            media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid="channel-1"), 60,
+            "server|apple-tv",
+        )
+        self.redis.setex(
+            media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid="channel-2"), 60,
+            "server|living-room",
+        )
+        self._channel_is_live("channel-1")
+
+        self.assertEqual(
+            media_servers.switching_device(self.redis), "server|living-room"
+        )
+
+    def test_two_devices_switching_at_once_cannot_be_told_apart(self, _close):
+        self._sessions("apple-tv", "living-room")
+        for number, device in ((1, "apple-tv"), (2, "living-room")):
+            self.redis.setex(
+                media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid=f"channel-{number}"),
+                60,
+                f"server|{device}",
+            )
+
+        self.assertIsNone(media_servers.switching_device(self.redis))
+
+    def test_a_device_that_stopped_watching_is_not_switching(self, _close):
+        # Its channel is gone and so is its session: it went away, it did not switch
+        self._sessions("apple-tv")
+        self.redis.setex(
+            media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid="channel-2"), 60,
+            "server|living-room",
+        )
+        self.assertIsNone(media_servers.switching_device(self.redis))
