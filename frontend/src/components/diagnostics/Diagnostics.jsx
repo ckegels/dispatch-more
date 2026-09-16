@@ -13,7 +13,9 @@ import {
   Table,
   Text,
 } from '@mantine/core';
+import { Copy } from 'lucide-react';
 import API from '../../api';
+import { allAsText, copy } from './copyText';
 import ChannelStarts, {
   PHASE_COLORS,
   PHASE_MEANINGS,
@@ -39,6 +41,14 @@ const Diagnostics = ({ active }) => {
   const [error, setError] = useState(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const [tab, setTab] = useState('starts');
+  const [copied, setCopied] = useState(null);
+
+  // One place for every copy button: it says whether it worked, and forgets after a moment
+  const copyToClipboard = async (text) => {
+    const ok = await copy(text);
+    setCopied(ok ? 'Copied' : 'Could not copy: select the text by hand');
+    setTimeout(() => setCopied(null), 2500);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -91,9 +101,9 @@ const Diagnostics = ({ active }) => {
       />
 
       {tab === 'starts' ? (
-        <ChannelStarts starts={activity.starts} />
+        <ChannelStarts starts={activity.starts} onCopy={copyToClipboard} />
       ) : (
-        <ChannelSwitches activity={activity} />
+        <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
 
       <Group gap="xs" align="center">
@@ -121,6 +131,19 @@ const Diagnostics = ({ active }) => {
         >
           What do these mean?
         </Button>
+        <Button
+          variant="subtle"
+          size="compact-xs"
+          leftSection={<Copy size={13} />}
+          onClick={() => copyToClipboard(allAsText(activity, tab))}
+        >
+          Copy all as text
+        </Button>
+        {copied && (
+          <Text size="xs" c="dimmed">
+            {copied}
+          </Text>
+        )}
       </Group>
 
       <Modal

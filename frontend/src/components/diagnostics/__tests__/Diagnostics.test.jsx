@@ -18,6 +18,11 @@ vi.mock('@mantine/core', () => {
   Table.ScrollContainer = ({ children }) => <div>{children}</div>;
 
   return {
+    ActionIcon: ({ children, onClick, ...rest }) => (
+      <button aria-label={rest['aria-label']} onClick={onClick}>
+        {children}
+      </button>
+    ),
     Alert: ({ children }) => <div role="alert">{children}</div>,
     Badge: ({ children }) => <span>{children}</span>,
     Box: (props) => <div {...props} />,
@@ -65,6 +70,8 @@ vi.mock('@mantine/core', () => {
     Tooltip: ({ label, children }) => <div title={label}>{children}</div>,
   };
 });
+
+vi.mock('lucide-react', () => ({ Copy: () => <span>copy</span> }));
 
 import API from '../../../api';
 
@@ -183,6 +190,39 @@ describe('Diagnostics', () => {
     render(<Diagnostics active={true} />);
 
     expect(await screen.findByText('never played')).toBeInTheDocument();
+  });
+
+  it('copies one start, and all of them, as text', async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+
+    fireEvent.click(screen.getByLabelText('Copy the start of ZIB'));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const line = writeText.mock.calls[0][0];
+    expect(line).toContain('ZIB');
+    expect(line).toContain('took 4.3s');
+    expect(line).toContain('first keyframe 4.3s');
+    expect(line).toContain('media server: session opened 2.1s');
+    expect(await screen.findByText('Copied')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /copy all as text/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+  });
+
+  it('says when copying did not work', async () => {
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error('no')) },
+    });
+
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+
+    fireEvent.click(screen.getByLabelText('Copy the start of ZIB'));
+
+    expect(await screen.findByText(/Could not copy/)).toBeInTheDocument();
   });
 
   it('says so when no channel has started recently', async () => {

@@ -1,5 +1,16 @@
 import React from 'react';
-import { Badge, Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core';
+import {
+  ActionIcon,
+  Badge,
+  Box,
+  Group,
+  Stack,
+  Table,
+  Text,
+  Tooltip,
+} from '@mantine/core';
+import { Copy } from 'lucide-react';
+import { startAsText } from './copyText';
 
 // Each phase of a channel start keeps its colour everywhere, so the bars can be compared
 // between rows at a glance.
@@ -90,7 +101,7 @@ const PhaseBar = ({ phases, total, colors = PHASE_COLORS }) => (
   </Group>
 );
 
-const ChannelStarts = ({ starts }) => {
+const ChannelStarts = ({ starts, onCopy }) => {
   if (!starts || starts.length === 0) {
     return (
       <Text size="sm" c="dimmed">
@@ -137,6 +148,7 @@ const ChannelStarts = ({ starts }) => {
               {/* The bar gets what is left: it is the reason for this table */}
               <Table.Th>Where the time went</Table.Th>
               <Table.Th w="28%">After the handover</Table.Th>
+              <Table.Th w={40} />
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -229,6 +241,19 @@ const ChannelStarts = ({ starts }) => {
                       —
                     </Text>
                   )}
+                </Table.Td>
+                <Table.Td>
+                  <Tooltip label="Copy this start as text" withArrow>
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      size="sm"
+                      aria-label={`Copy the start of ${start.channel}`}
+                      onClick={() => onCopy(startAsText(start))}
+                    >
+                      <Copy size={14} />
+                    </ActionIcon>
+                  </Tooltip>
                 </Table.Td>
               </Table.Tr>
             ))}

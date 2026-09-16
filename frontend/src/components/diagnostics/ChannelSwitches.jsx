@@ -1,5 +1,16 @@
 import React from 'react';
-import { Alert, Badge, Group, Stack, Table, Text } from '@mantine/core';
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Group,
+  Stack,
+  Table,
+  Text,
+  Tooltip,
+} from '@mantine/core';
+import { Copy } from 'lucide-react';
+import { switchAsText } from './copyText';
 
 // A switch is coloured by what Channel Switch Overlap did with it, so the table reads at a
 // glance. Also used by the legend.
@@ -56,7 +67,7 @@ const shortTime = (seconds) =>
     second: '2-digit',
   });
 
-const ChannelSwitches = ({ activity }) => {
+const ChannelSwitches = ({ activity, onCopy }) => {
   if (!activity.enabled) {
     return (
       <Alert color="gray">
@@ -120,6 +131,7 @@ const ChannelSwitches = ({ activity }) => {
                 <Table.Th>Channel</Table.Th>
                 <Table.Th w={210}>What happened</Table.Th>
                 <Table.Th>Result</Table.Th>
+                <Table.Th w={40} />
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -144,6 +156,19 @@ const ChannelSwitches = ({ activity }) => {
                     </Badge>
                   </Table.Td>
                   <Table.Td c="dimmed">{event.result}</Table.Td>
+                  <Table.Td>
+                    <Tooltip label="Copy this switch as text" withArrow>
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="sm"
+                        aria-label={`Copy the switch of ${event.viewer}`}
+                        onClick={() => onCopy(switchAsText(event))}
+                      >
+                        <Copy size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
