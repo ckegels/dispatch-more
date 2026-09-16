@@ -15,28 +15,7 @@ vi.mock('@mantine/core', () => {
   Table.Tr = ({ children }) => <tr>{children}</tr>;
   Table.Th = ({ children }) => <th>{children}</th>;
   Table.Td = ({ children }) => <td>{children}</td>;
-
-  // A minimal stateful Tabs: the list are buttons, only the open panel renders
-  const TabsContext = React.createContext(null);
-  const Tabs = ({ defaultValue, children }) => {
-    const [value, setValue] = React.useState(defaultValue);
-    return (
-      <TabsContext.Provider value={{ value, setValue }}>
-        <div>{children}</div>
-      </TabsContext.Provider>
-    );
-  };
-  const TabsTab = ({ value, children }) => {
-    const ctx = React.useContext(TabsContext);
-    return <button onClick={() => ctx.setValue(value)}>{children}</button>;
-  };
-  const TabsPanel = ({ value, children }) => {
-    const ctx = React.useContext(TabsContext);
-    return ctx.value === value ? <div>{children}</div> : null;
-  };
-  Tabs.List = ({ children }) => <div>{children}</div>;
-  Tabs.Tab = TabsTab;
-  Tabs.Panel = TabsPanel;
+  Table.ScrollContainer = ({ children }) => <div>{children}</div>;
 
   return {
     Alert: ({ children }) => <div role="alert">{children}</div>,
@@ -54,6 +33,19 @@ vi.mock('@mantine/core', () => {
           {children}
         </div>
       ) : null,
+    SegmentedControl: ({ value, onChange, data, ...rest }) => (
+      <div role="group" aria-label={rest['aria-label']}>
+        {data.map((option) => (
+          <button
+            key={option.value}
+            aria-pressed={value === option.value}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    ),
     Select: ({ label, value, onChange, data, ...rest }) => (
       <select
         aria-label={rest['aria-label'] || label}
@@ -69,7 +61,6 @@ vi.mock('@mantine/core', () => {
     ),
     Stack: ({ children }) => <div>{children}</div>,
     Table,
-    Tabs,
     Text: ({ children }) => <span>{children}</span>,
     Tooltip: ({ label, children }) => <div title={label}>{children}</div>,
   };
@@ -123,7 +114,7 @@ const activity = {
 };
 
 const openSwitches = () =>
-  fireEvent.click(screen.getByRole('button', { name: 'Channel switches' }));
+  fireEvent.click(screen.getByRole('button', { name: /Channel switches/ }));
 
 describe('Diagnostics', () => {
   beforeEach(() => {

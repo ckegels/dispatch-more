@@ -8,9 +8,9 @@ import {
   Loader,
   Modal,
   Select,
+  SegmentedControl,
   Stack,
   Table,
-  Tabs,
   Text,
 } from '@mantine/core';
 import API from '../../api';
@@ -33,6 +33,7 @@ const Diagnostics = ({ active }) => {
   const [activity, setActivity] = useState(null);
   const [error, setError] = useState(null);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [tab, setTab] = useState('starts');
 
   const load = useCallback(async () => {
     try {
@@ -68,19 +69,27 @@ const Diagnostics = ({ active }) => {
 
   return (
     <Stack gap="md">
-      <Tabs defaultValue="starts">
-        <Tabs.List>
-          <Tabs.Tab value="starts">Channel starts</Tabs.Tab>
-          <Tabs.Tab value="switches">Channel switches</Tabs.Tab>
-        </Tabs.List>
+      <SegmentedControl
+        value={tab}
+        onChange={setTab}
+        aria-label="What to show"
+        data={[
+          {
+            value: 'starts',
+            label: `Channel starts (${activity.starts.length})`,
+          },
+          {
+            value: 'switches',
+            label: `Channel switches (${activity.events.length})`,
+          },
+        ]}
+      />
 
-        <Tabs.Panel value="starts" pt="md">
-          <ChannelStarts starts={activity.starts} />
-        </Tabs.Panel>
-        <Tabs.Panel value="switches" pt="md">
-          <ChannelSwitches activity={activity} />
-        </Tabs.Panel>
-      </Tabs>
+      {tab === 'starts' ? (
+        <ChannelStarts starts={activity.starts} />
+      ) : (
+        <ChannelSwitches activity={activity} />
+      )}
 
       <Group gap="xs" align="center">
         <Text size="xs" c="dimmed">

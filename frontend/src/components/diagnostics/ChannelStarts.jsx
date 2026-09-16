@@ -92,80 +92,93 @@ const ChannelStarts = ({ starts }) => {
         ))}
       </Group>
 
-      <Table
-        striped
-        highlightOnHover
-        withTableBorder
-        verticalSpacing={6}
-        fz="sm"
-      >
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th w={90}>Time</Table.Th>
-            <Table.Th>Channel</Table.Th>
-            <Table.Th w={130}>Player</Table.Th>
-            <Table.Th w={70}>Took</Table.Th>
-            <Table.Th>Where the time went</Table.Th>
-            <Table.Th w={170}>Slowest step</Table.Th>
-            <Table.Th w={200}>After the handover</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {starts.map((start) => (
-            <Table.Tr key={`${start.time}-${start.channel}`}>
-              <Table.Td c="dimmed">{shortTime(start.time)}</Table.Td>
-              <Table.Td>{start.channel}</Table.Td>
-              <Table.Td c="dimmed">{start.client}</Table.Td>
-              <Table.Td>
-                <Text
-                  size="sm"
-                  fw={600}
-                  c={start.total >= SLOW_START ? 'orange' : undefined}
-                >
-                  {start.total.toFixed(1)}s
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                <PhaseBar phases={start.phases} total={start.total} />
-              </Table.Td>
-              <Table.Td c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-                {start.slowest}
-              </Table.Td>
-              {/* Only filled in for a media server that is configured (see Media Servers) */}
-              <Table.Td>
-                {start.server_buffering > 0 ? (
-                  <Group gap={6} wrap="wrap">
-                    <Text
-                      size="sm"
-                      c={start.server_buffering >= 3 ? 'orange' : 'dimmed'}
-                    >
-                      playing after {start.server_buffering.toFixed(1)}s
-                    </Text>
-                    {start.server_decision && (
-                      <Badge
-                        size="sm"
-                        variant="light"
-                        color={
-                          start.server_decision === 'direct play'
-                            ? 'teal'
-                            : 'orange'
-                        }
-                      >
-                        {start.server_decision}
-                        {start.server_speed ? ` ${start.server_speed}×` : ''}
-                      </Badge>
-                    )}
-                  </Group>
-                ) : (
-                  <Text size="sm" c="dimmed">
-                    —
-                  </Text>
-                )}
-              </Table.Td>
+      <Table.ScrollContainer minWidth={760} type="native">
+        <Table
+          striped
+          highlightOnHover
+          withTableBorder
+          verticalSpacing={6}
+          fz="sm"
+          layout="fixed"
+        >
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th w={80}>Time</Table.Th>
+              <Table.Th w="16%">Channel</Table.Th>
+              <Table.Th w={100}>Player</Table.Th>
+              <Table.Th w={60}>Took</Table.Th>
+              {/* The bar gets what is left: it is the reason for this table */}
+              <Table.Th>Where the time went</Table.Th>
+              <Table.Th w="20%">After the handover</Table.Th>
             </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+          </Table.Thead>
+          <Table.Tbody>
+            {starts.map((start) => (
+              <Table.Tr key={`${start.time}-${start.channel}`}>
+                <Table.Td c="dimmed">{shortTime(start.time)}</Table.Td>
+                <Table.Td style={{ wordBreak: 'break-word' }}>
+                  {start.channel}
+                </Table.Td>
+                <Table.Td
+                  c="dimmed"
+                  fz="xs"
+                  style={{ wordBreak: 'break-word' }}
+                >
+                  {start.client}
+                </Table.Td>
+                <Table.Td>
+                  <Text
+                    size="sm"
+                    fw={600}
+                    c={start.total >= SLOW_START ? 'orange' : undefined}
+                  >
+                    {start.total.toFixed(1)}s
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <PhaseBar phases={start.phases} total={start.total} />
+                    <Text size="xs" c="dimmed">
+                      slowest: {start.slowest}
+                    </Text>
+                  </Stack>
+                </Table.Td>
+                {/* Only filled in for a media server that is configured (Media Servers) */}
+                <Table.Td>
+                  {start.server_buffering > 0 ? (
+                    <Stack gap={2}>
+                      <Text
+                        size="sm"
+                        c={start.server_buffering >= 3 ? 'orange' : 'dimmed'}
+                      >
+                        playing after {start.server_buffering.toFixed(1)}s
+                      </Text>
+                      {start.server_decision && (
+                        <Badge
+                          size="sm"
+                          variant="light"
+                          color={
+                            start.server_decision === 'direct play'
+                              ? 'teal'
+                              : 'orange'
+                          }
+                        >
+                          {start.server_decision}
+                          {start.server_speed ? ` ${start.server_speed}×` : ''}
+                        </Badge>
+                      )}
+                    </Stack>
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      —
+                    </Text>
+                  )}
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
 
       <Text size="xs" c="dimmed">
         Hover a bar to see how long that step took. The steps are measured in

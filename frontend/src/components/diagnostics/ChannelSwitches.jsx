@@ -105,46 +105,50 @@ const ChannelSwitches = ({ activity }) => {
           No channel switches recorded yet.
         </Text>
       ) : (
-        <Table
-          striped
-          highlightOnHover
-          withTableBorder
-          verticalSpacing={4}
-          fz="sm"
-        >
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th w={90}>Time</Table.Th>
-              <Table.Th>Viewer</Table.Th>
-              <Table.Th>Channel</Table.Th>
-              <Table.Th w={210}>What happened</Table.Th>
-              <Table.Th>Result</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {activity.events.map((event) => (
-              <Table.Tr key={`${event.time}-${event.viewer}-${event.channel}`}>
-                <Table.Td c="dimmed">{shortTime(event.time)}</Table.Td>
-                <Table.Td>{event.viewer}</Table.Td>
-                <Table.Td>
-                  {event.from_channel ? `${event.from_channel} → ` : ''}
-                  {event.channel || '—'}
-                </Table.Td>
-                {/* Wide enough for the longest label, so it never wraps or is cut off */}
-                <Table.Td style={{ whiteSpace: 'nowrap' }}>
-                  <Badge
-                    size="sm"
-                    variant="light"
-                    color={ACTION_COLORS[event.action] || 'gray'}
-                  >
-                    {event.action}
-                  </Badge>
-                </Table.Td>
-                <Table.Td c="dimmed">{event.result}</Table.Td>
+        <Table.ScrollContainer minWidth={720} type="native">
+          <Table
+            striped
+            highlightOnHover
+            withTableBorder
+            verticalSpacing={4}
+            fz="sm"
+          >
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th w={90}>Time</Table.Th>
+                <Table.Th>Viewer</Table.Th>
+                <Table.Th>Channel</Table.Th>
+                <Table.Th w={210}>What happened</Table.Th>
+                <Table.Th>Result</Table.Th>
               </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+            </Table.Thead>
+            <Table.Tbody>
+              {activity.events.map((event) => (
+                <Table.Tr
+                  key={`${event.time}-${event.viewer}-${event.channel}`}
+                >
+                  <Table.Td c="dimmed">{shortTime(event.time)}</Table.Td>
+                  <Table.Td>{event.viewer}</Table.Td>
+                  <Table.Td>
+                    {event.from_channel ? `${event.from_channel} → ` : ''}
+                    {event.channel || '—'}
+                  </Table.Td>
+                  {/* Wide enough for the longest label, so it never wraps or is cut off */}
+                  <Table.Td style={{ whiteSpace: 'nowrap' }}>
+                    <Badge
+                      size="sm"
+                      variant="light"
+                      color={ACTION_COLORS[event.action] || 'gray'}
+                    >
+                      {event.action}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td c="dimmed">{event.result}</Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
       )}
     </Stack>
   );
