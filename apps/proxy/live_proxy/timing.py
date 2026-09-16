@@ -48,7 +48,7 @@ def _key(channel_uuid) -> str:
     return TIMING_KEY.format(channel_uuid=channel_uuid)
 
 
-def start(redis_client, channel_uuid, channel_name=None, client=None):
+def start(redis_client, channel_uuid, channel_name=None, client=None, client_ip=None):
     """Called when a player asks for a channel: the moment everything else is measured from."""
     if not redis_client:
         return
@@ -60,6 +60,8 @@ def start(redis_client, channel_uuid, channel_name=None, client=None):
                 redis_client.hset(key, "channel", channel_name)
             if client:
                 redis_client.hset(key, "client", client)
+            if client_ip:
+                redis_client.hset(key, "client_ip", client_ip)
             redis_client.expire(key, TIMING_TTL)
     except Exception as e:
         logger.debug(f"Could not start timing for channel {channel_uuid}: {e}")
@@ -169,7 +171,11 @@ def finish(redis_client, channel_uuid, channel_name=None):
         from . import media_servers
 
         media_servers.watch_start(
-            redis_client, start_id, marks.get("client"), float(marks["requested"])
+            redis_client,
+            start_id,
+            marks.get("client"),
+            float(marks["requested"]),
+            ip=marks.get("client_ip"),
         )
         redis_client.expire(key, 10)
     except Exception as e:

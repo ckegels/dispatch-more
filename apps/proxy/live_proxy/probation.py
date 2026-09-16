@@ -127,7 +127,11 @@ SWEEP_INTERVAL = 30
 # Media servers stream on behalf of all of their viewers, so their requests say nothing about
 # a single device. Matched against the default User-Agents (for example
 # "Jellyfin-Server/10.10.7", "Emby/4.8.10.0", "PlexMediaServer/1.41.0").
-_MEDIA_SERVER_RE = re.compile(r"jellyfin|emby|plex", re.IGNORECASE)
+# Jellyfin, Emby and Plex by name, and "Lavf/..." (ffmpeg's own User-Agent): Plex pulls a
+# tuner channel with ffmpeg, so that is a server fetching on behalf of its viewers, never one
+# player we could tell apart. A media server is also recognised by its address (see
+# media_servers.server_hosts), which is what a configured server is really known by.
+_MEDIA_SERVER_RE = re.compile(r"jellyfin|emby|plex|lavf", re.IGNORECASE)
 # DVR recordings request channels through the proxy with this User-Agent
 # (core.utils.dispatcharr_dvr_user_agent). They are not viewers switching channels.
 _RECORDING_USER_AGENT_PREFIX = "Dispatcharr-DVR"
@@ -518,21 +522,32 @@ post_delete.connect(forget_in_use, sender="m3u.M3UAccount", dispatch_uid="probat
 # ── Recognising the player of a request ──────────────────────────────────────
 
 
-def is_media_server(user_agent) -> bool:
-    return bool(user_agent and _MEDIA_SERVER_RE.search(user_agent))
+def is_media_server(user_agent, ip=None) -> bool:
+    """A media server by name, or by the address of a server configured in Media Servers."""
+    if user_agent and _MEDIA_SERVER_RE.search(user_agent):
+        return True
+    if not ip:
+        return False
+    try:
+        from . import media_servers
+
+        return str(ip).lower() in media_servers.server_hosts()
+    except Exception as e:
+        logger.debug(f"Could not check whether {ip} is a media server: {e}")
+        return False
 
 
 def is_recording(user_agent) -> bool:
     return bool(user_agent and user_agent.startswith(_RECORDING_USER_AGENT_PREFIX))
 
 
-def app_name(user_agent):
+def app_name(user_agent, ip=None):
     """
     The player app from a User-Agent without version numbers, so an app update does not
     look like another device. None for media servers and recordings, which LAN Device
     Tracking never applies to.
     """
-    if not user_agent or is_media_server(user_agent) or is_recording(user_agent):
+    if not user_agent or is_media_server(user_agent, ip) or is_recording(user_agent):
         return None
     return re.sub(r"\s+", " ", _VERSION_RE.sub("", user_agent)).strip() or None
 
@@ -548,7 +563,7 @@ def viewer_from_request(request, user, client_ip):
         ip=client_ip,
         user_id=user.id if user is not None else None,
         # None for media servers, so their viewers stay anonymous (see app_name)
-        app=app_name(user_agent),
+        app=app_name(user_agent, client_ip),
     )
 
 
@@ -620,7 +635,7 @@ def _client_viewer(client) -> Viewer:
         client.get("ip_address"),
         _client_user_id(client.get("user_id")),
         recording=is_recording(client.get("user_agent")),
-        app=app_name(client.get("user_agent")),
+        app=app_name(client.get("user_agent"), client.get("ip_address")),
     )
 
 

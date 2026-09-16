@@ -13,7 +13,9 @@ write-only in the API, never sent back to the browser.
 
 import logging
 import secrets
+import socket
 import time
+from urllib.parse import urlparse
 
 import gevent
 import requests
@@ -29,6 +31,55 @@ WATCH_SECONDS = 25
 WATCH_INTERVAL = 1.0
 # A session belongs to this start when it appeared around the same time
 MATCH_WINDOW = 15
+
+
+HOSTS_CACHE_KEY = "live:media_servers:hosts"
+HOSTS_CACHE_TTL = 60
+
+
+def server_hosts() -> frozenset:
+    """
+    The addresses of the configured media servers, as hostnames and resolved IPs.
+
+    A media server pulls a channel like any other client, and Plex does it with ffmpeg's
+    User-Agent ("Lavf/..."), which says nothing about who is watching. Its address does: a
+    request from a server we know is that server, whatever it calls itself.
+    """
+    from django.core.cache import cache
+
+    try:
+        cached = cache.get(HOSTS_CACHE_KEY)
+    except Exception:
+        cached = None
+    if cached is not None:
+        return frozenset(cached)
+
+    hosts = set()
+    for server in load_servers():
+        host = urlparse(clean_url(server.get("url"))).hostname
+        if not host:
+            continue
+        hosts.add(host.lower())
+        try:
+            for info in socket.getaddrinfo(host, None):
+                hosts.add(info[4][0])
+        except OSError:
+            # A name that cannot be resolved right now still matches by name
+            pass
+    try:
+        cache.set(HOSTS_CACHE_KEY, list(hosts), HOSTS_CACHE_TTL)
+    except Exception:
+        pass
+    return frozenset(hosts)
+
+
+def forget_hosts():
+    from django.core.cache import cache
+
+    try:
+        cache.delete(HOSTS_CACHE_KEY)
+    except Exception:
+        pass
 
 
 def load_servers():
@@ -52,6 +103,7 @@ def save_servers(servers):
         key=SETTINGS_KEY,
         defaults={"name": "Media Servers", "value": {"servers": servers}},
     )
+    forget_hosts()
 
 
 def public(server):
@@ -161,24 +213,24 @@ def _decision(transcode) -> str:
     return f"transcode ({' + '.join(parts)})" if parts else "direct play"
 
 
-def watch_start(redis_client, start_id, user_agent, started_at=None):
+def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None):
     """
     After a channel start on a media server, watch its sessions for a moment and add what the
     server did to the start (see timing.finish). Returns at once; the watching runs in the
     background and never touches the stream.
     """
     try:
-        if not start_id or not _is_media_server(user_agent) or not load_servers():
+        if not start_id or not _is_media_server(user_agent, ip) or not load_servers():
             return
         gevent.spawn(_watch, redis_client, start_id, started_at or time.time())
     except Exception as e:
         logger.debug(f"Could not watch a media server for start {start_id}: {e}")
 
 
-def _is_media_server(user_agent) -> bool:
+def _is_media_server(user_agent, ip=None) -> bool:
     from . import probation
 
-    return probation.is_media_server(user_agent)
+    return probation.is_media_server(user_agent, ip)
 
 
 def _watch(redis_client, start_id, started_at):

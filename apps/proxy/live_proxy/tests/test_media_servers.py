@@ -96,6 +96,24 @@ class MediaServerTests(TestCase):
             "transcode (audio)",
         )
 
+    def test_plex_is_recognised_by_its_address_and_by_ffmpeg(self):
+        from apps.proxy.live_proxy import probation
+
+        # Plex pulls a tuner channel with ffmpeg, which says nothing about who is watching
+        self.assertTrue(probation.is_media_server("Lavf/61.7.100"))
+        self.assertIsNone(probation.app_name("Lavf/61.7.100"))
+        # And a request from a configured server is that server, whatever it calls itself
+        media_servers.forget_hosts()
+        self.addCleanup(media_servers.forget_hosts)
+        media_servers.save_servers(
+            [{"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}]
+        )
+        self.assertTrue(probation.is_media_server("SomePlayer/1.0", "192.168.2.141"))
+        self.assertIsNone(probation.app_name("SomePlayer/1.0", "192.168.2.141"))
+        # Another address on the same network is still an ordinary player
+        self.assertFalse(probation.is_media_server("SomePlayer/1.0", "192.168.2.50"))
+        self.assertEqual(probation.app_name("SomePlayer/1.0", "192.168.2.50"), "SomePlayer/")
+
     def test_the_token_never_leaves_the_server(self):
         public = media_servers.public(self.server)
         self.assertNotIn("token", public)
@@ -194,6 +212,11 @@ class StartWatchingTests(TestCase):
 
             # A media server, with a server configured: now it is worth watching
             media_servers.watch_start(self.redis, "s1", "PlexMediaServer/1.41", 1.0)
+            fake_gevent.spawn.assert_called_once()
+
+            # And Plex's real User-Agent when it pulls a tuner channel
+            fake_gevent.spawn.reset_mock()
+            media_servers.watch_start(self.redis, "s1", "Lavf/61.7.100", 1.0)
             fake_gevent.spawn.assert_called_once()
 
     def test_a_playing_session_is_added_to_the_start(self, _close):

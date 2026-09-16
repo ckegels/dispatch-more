@@ -193,6 +193,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             proxy_server.redis_client,
             channel_id,
             client=request.META.get("HTTP_USER_AGENT"),
+            client_ip=client_ip,
         )
 
         # Extract client user agent early

@@ -99,7 +99,9 @@ def _starts(redis_client):
         starts.append({
             "time": float(record.get("time", 0)),
             "channel": record.get("channel", ""),
-            "client": probation.app_name(record.get("client")) or "media server",
+            "client": probation.app_name(
+                record.get("client"), record.get("client_ip")
+            ) or "media server",
             "total": float(record.get("total", 0)),
             "slowest": record.get("slowest", ""),
             "phases": phases,
