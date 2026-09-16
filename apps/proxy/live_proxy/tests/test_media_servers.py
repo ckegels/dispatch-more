@@ -403,7 +403,14 @@ DEVICES = {
 }
 DVRS = {
     "MediaContainer": {
-        "Dvr": [{"key": "32", "lineupTitle": "Belgium", "Device": [{"key": "22"}]}]
+        "Dvr": [
+            {
+                "key": "32",
+                "lineupTitle": "Belgium",
+                "Device": [{"key": "22", "title": "Austria"}],
+                "Lineup": [{"title": "Austria"}],
+            }
+        ]
     }
 }
 
@@ -841,7 +848,10 @@ class TunerTests(TestCase):
         called = [call.args[0] for call in put.call_args_list]
         self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/1", called)
         # The DVRs are offered by name, so there is something to choose
-        self.assertEqual(response.json()["dvrs"], [{"id": "32", "title": "Belgium"}])
+        self.assertEqual(
+            response.json()["dvrs"],
+            [{"id": "32", "title": "Belgium", "tuners": ["Austria"], "lineups": ["Austria"]}],
+        )
 
     def test_a_tuner_of_ours_put_into_a_dvr_takes_its_guide_with_it(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
@@ -870,6 +880,26 @@ class TunerTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Choose a DVR", response.json()["error"])
+
+    def test_a_dvr_is_removed(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.delete"
+        ) as delete:
+            get.side_effect = plex_with_tuners
+            delete.return_value = fake_response({})
+            response = self.client_api.delete("/proxy/media-servers/tuners/?server=a1&dvr=32")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(delete.call_args.args[0], "http://192.168.2.141:32400/livetv/dvrs/32")
+
+    def test_the_dvrs_say_what_is_in_them(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = plex_with_tuners
+            data = self.client_api.get("/proxy/media-servers/tuners/?server=a1").json()
+
+        (dvr,) = data["dvrs"]
+        self.assertEqual(dvr["title"], "Belgium")
+        self.assertEqual(dvr["tuners"], ["Austria"])
 
     def test_a_tuner_is_removed(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(

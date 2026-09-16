@@ -13,6 +13,7 @@ vi.mock('../../../api', () => ({
     syncMediaServerTuner: vi.fn(),
     deleteMediaServerTuner: vi.fn(),
     attachMediaServerTuner: vi.fn(),
+    deleteMediaServerDvr: vi.fn(),
   },
 }));
 
@@ -146,7 +147,9 @@ const tuners = {
   base_url: 'http://192.168.2.142:9191',
   max_tuners: 64,
   calculated_tuners: 1362,
-  dvrs: [{ id: '32', title: 'Belgium' }],
+  dvrs: [
+    { id: '32', title: 'Belgium', tuners: ['Austria'], lineups: ['Austria'] },
+  ],
   channel_profiles: [{ id: 1, name: 'austria' }],
   channel_groups: [{ id: 5, name: 'Austria', channels: 25 }],
   output_profiles: [{ id: 3, name: 'Remux' }],
@@ -307,6 +310,25 @@ describe('MediaServers', () => {
         dvr_id: '',
         language: 'eng',
       })
+    );
+  });
+
+  it('removes a DVR and says the tuners stay', async () => {
+    API.deleteMediaServerDvr.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    // "Belgium" is both the DVR and an option in the dropdowns, so wait for the button
+    await screen.findByRole('button', { name: 'Remove DVR' });
+
+    expect(
+      screen.getByText(
+        'Removing a DVR leaves its tuners registered on the server, outside any DVR, so they can be put in another one.'
+      )
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove DVR' }));
+
+    await waitFor(() =>
+      expect(API.deleteMediaServerDvr).toHaveBeenCalledWith('a1', '32')
     );
   });
 

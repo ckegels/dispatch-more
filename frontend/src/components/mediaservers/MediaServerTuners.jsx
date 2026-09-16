@@ -202,6 +202,41 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         the media server.
       </Text>
 
+      {(data.dvrs || []).length > 0 && (
+        <>
+          <Text size="sm" fw={600} mt="xs">
+            DVRs
+          </Text>
+          {data.dvrs.map((dvr) => (
+            <Group key={dvr.id} gap="xs" wrap="wrap">
+              <Text size="sm">{dvr.title}</Text>
+              <Text size="xs" c="dimmed">
+                {dvr.tuners.length > 0
+                  ? dvr.tuners.join(', ')
+                  : 'no tuners in it'}
+                {dvr.lineups.length > 0 &&
+                  ` · guides: ${dvr.lineups.join(', ')}`}
+              </Text>
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                color="red"
+                disabled={busy}
+                onClick={() =>
+                  run(() => API.deleteMediaServerDvr(serverId, dvr.id))
+                }
+              >
+                Remove DVR
+              </Button>
+            </Group>
+          ))}
+          <Text size="xs" c="dimmed">
+            Removing a DVR leaves its tuners registered on the server, outside
+            any DVR, so they can be put in another one.
+          </Text>
+        </>
+      )}
+
       <Text size="sm" fw={600} mt="xs">
         Add a tuner
       </Text>

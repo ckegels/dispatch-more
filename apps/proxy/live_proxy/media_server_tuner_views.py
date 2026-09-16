@@ -141,12 +141,27 @@ def media_server_tuners(request):
             **_choices(),
         })
 
+    if request.method == "DELETE" and request.query_params.get("dvr"):
+        dvr_id = request.query_params.get("dvr")
+        if not media_servers.delete_dvr(server, dvr_id):
+            return JsonResponse({"error": "The server refused to remove that DVR"}, status=400)
+        logger.info(f"Removed DVR {dvr_id} from media server {server.get('name')}")
+        return JsonResponse({
+            "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
+            **_choices(),
+        })
+
     if request.method == "DELETE":
         device_id = request.query_params.get("id")
         if not media_servers.delete_tuner(server, device_id):
             return JsonResponse({"error": "The server refused to remove that tuner"}, status=400)
         logger.info(f"Removed tuner {device_id} from media server {server.get('name')}")
-        return JsonResponse({"tuners": media_servers.tuners(server, hosts), **_choices()})
+        return JsonResponse({
+            "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
+            **_choices(),
+        })
 
     action = request.data.get("action") or "add"
     if action in ("sync", "attach"):

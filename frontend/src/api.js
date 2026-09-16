@@ -2648,6 +2648,14 @@ export default class API {
     });
   }
 
+  static async deleteMediaServerDvr(server, dvrId) {
+    // The DVR goes; its tuners stay registered, outside any DVR
+    return await request(
+      `${host}/proxy/media-servers/tuners/?server=${server}&dvr=${dvrId}`,
+      { method: 'DELETE' }
+    );
+  }
+
   static async deleteMediaServerTuner(server, id) {
     return await request(
       `${host}/proxy/media-servers/tuners/?server=${server}&id=${id}`,

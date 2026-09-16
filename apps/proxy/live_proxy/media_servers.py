@@ -275,14 +275,21 @@ def dvrs(server):
 
 
 def dvr_list(server):
-    """The DVRs as the page offers them: which one to put a new tuner in."""
+    """The DVRs as the page offers them: which one to put a new tuner in, and what is in it."""
     return [
         {
             "id": str(dvr.get("key")),
             "title": dvr.get("lineupTitle") or dvr.get("language") or f"DVR {dvr.get('key')}",
+            "tuners": [device.get("title") or "tuner" for device in dvr.get("Device") or ()],
+            "lineups": [lineup.get("title") or "" for lineup in dvr.get("Lineup") or ()],
         }
         for dvr in dvrs(server)
     ]
+
+
+def delete_dvr(server, dvr_id):
+    """Remove a DVR. Its tuners stay registered on the server, outside any DVR."""
+    return _delete(server, f"/livetv/dvrs/{dvr_id}")
 
 
 def _put(server, path, params=None):
