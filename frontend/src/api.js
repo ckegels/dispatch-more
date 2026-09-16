@@ -2580,6 +2580,16 @@ export default class API {
     }
   }
 
+  static async getOverlapActivity() {
+    // Channel Switch Overlap: accounts and recent switches for its settings page
+    try {
+      return await request(`${host}/proxy/overlap/`);
+    } catch (e) {
+      errorNotification('Failed to retrieve channel switch overlap activity', e);
+      throw e;
+    }
+  }
+
   static async getCatchupPrograms(sessions) {
     try {
       const response = await request(`${host}/proxy/catchup/programs/`, {

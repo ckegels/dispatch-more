@@ -116,6 +116,26 @@ class M3UAccountProfileSerializer(serializers.ModelSerializer):
         return super().destroy(request, *args, **kwargs)
 
 
+class LanSubnetsField(serializers.Field):
+    """
+    LAN subnets for Channel Switch Overlap's LAN Device Tracking: a list, or a comma or space
+    separated string (form uploads send lists that way). Stored as a list of local networks.
+    """
+
+    def to_internal_value(self, data):
+        from apps.proxy.live_proxy.probation import parse_lan_subnets
+
+        if not isinstance(data, (list, tuple, str)):
+            raise serializers.ValidationError("Expected a list of subnets.")
+        try:
+            return parse_lan_subnets(data)
+        except ValueError as e:
+            raise serializers.ValidationError(str(e))
+
+    def to_representation(self, value):
+        return value
+
+
 class M3UAccountSerializer(serializers.ModelSerializer):
     """Serializer for M3U Account"""
 
@@ -154,9 +174,14 @@ class M3UAccountSerializer(serializers.ModelSerializer):
     )
     probation_allow_anonymous = serializers.BooleanField(required=False, write_only=True)
     probation_stop_skipped = serializers.BooleanField(required=False, write_only=True)
+    probation_surf_delay_ms = serializers.IntegerField(
+        required=False, write_only=True, min_value=0, max_value=2000
+    )
     probation_account_preference = serializers.ChoiceField(
         choices=["order", "same", "alternate"], required=False, write_only=True
     )
+    probation_lan_tracking = serializers.BooleanField(required=False, write_only=True)
+    probation_lan_subnets = LanSubnetsField(required=False, write_only=True)
     cron_expression = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
@@ -194,7 +219,10 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "probation_seconds",
             "probation_allow_anonymous",
             "probation_stop_skipped",
+            "probation_surf_delay_ms",
             "probation_account_preference",
+            "probation_lan_tracking",
+            "probation_lan_subnets",
             "earliest_expiration",
             "all_expirations",
             "exp_date",
@@ -246,9 +274,13 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         data["probation_seconds"] = custom_props.get("probation_seconds", 10)
         data["probation_allow_anonymous"] = custom_props.get("probation_allow_anonymous", False)
         data["probation_stop_skipped"] = custom_props.get("probation_stop_skipped", False)
-        from apps.proxy.live_proxy.probation import account_switch_preference
+        data["probation_surf_delay_ms"] = custom_props.get("probation_surf_delay_ms", 500)
+        from apps.proxy.live_proxy.probation import account_switch_preference, suggested_lan_subnet
 
         data["probation_account_preference"] = account_switch_preference(instance)
+        data["probation_lan_tracking"] = custom_props.get("probation_lan_tracking", False)
+        data["probation_lan_subnets"] = custom_props.get("probation_lan_subnets", [])
+        data["probation_lan_subnet_suggestion"] = suggested_lan_subnet()
 
         # Derive cron_expression from the linked PeriodicTask's crontab (single source of truth)
         # But first check if we have a transient _cron_expression (from create/update before signal runs)
@@ -297,7 +329,10 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         probation_seconds = validated_data.pop("probation_seconds", None)
         probation_allow_anonymous = validated_data.pop("probation_allow_anonymous", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
+        probation_surf_delay_ms = validated_data.pop("probation_surf_delay_ms", None)
         probation_account_preference = validated_data.pop("probation_account_preference", None)
+        probation_lan_tracking = validated_data.pop("probation_lan_tracking", None)
+        probation_lan_subnets = validated_data.pop("probation_lan_subnets", None)
 
         # Merge client-supplied custom_properties over the existing blob
         # so unrelated keys persist. The dedicated preference fields below
@@ -330,6 +365,12 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_allow_anonymous"] = probation_allow_anonymous
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
+        if probation_surf_delay_ms is not None:
+            custom_props["probation_surf_delay_ms"] = probation_surf_delay_ms
+        if probation_lan_tracking is not None:
+            custom_props["probation_lan_tracking"] = probation_lan_tracking
+        if probation_lan_subnets is not None:
+            custom_props["probation_lan_subnets"] = probation_lan_subnets
         if probation_account_preference is not None:
             custom_props["probation_account_preference"] = probation_account_preference
             # Replaces the boolean "Stay On Same Account" setting of earlier builds
@@ -398,7 +439,10 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         probation_seconds = validated_data.pop("probation_seconds", None)
         probation_allow_anonymous = validated_data.pop("probation_allow_anonymous", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
+        probation_surf_delay_ms = validated_data.pop("probation_surf_delay_ms", None)
         probation_account_preference = validated_data.pop("probation_account_preference", None)
+        probation_lan_tracking = validated_data.pop("probation_lan_tracking", None)
+        probation_lan_subnets = validated_data.pop("probation_lan_subnets", None)
 
         # Parse existing custom_properties or create new
         custom_props = validated_data.get("custom_properties") or {}
@@ -420,6 +464,12 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_allow_anonymous"] = probation_allow_anonymous
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
+        if probation_surf_delay_ms is not None:
+            custom_props["probation_surf_delay_ms"] = probation_surf_delay_ms
+        if probation_lan_tracking is not None:
+            custom_props["probation_lan_tracking"] = probation_lan_tracking
+        if probation_lan_subnets is not None:
+            custom_props["probation_lan_subnets"] = probation_lan_subnets
         if probation_account_preference is not None:
             custom_props["probation_account_preference"] = probation_account_preference
             # Replaces the boolean "Stay On Same Account" setting of earlier builds

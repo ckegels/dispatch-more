@@ -828,7 +828,7 @@ class Channel(models.Model):
                     # Slot reserved — assign stream to this channel
                     redis_client.set(f"channel_stream:{self.id}", stream.id)
                     redis_client.set(f"stream_profile:{stream.id}", profile.id)
-                    probation.take_held_slot(redis_client, profile, viewer)
+                    probation.take_held_slot(redis_client, profile, viewer, self.uuid)
                     probation.remember_viewer_profile(
                         redis_client, viewer, profile, stream.m3u_account
                     )

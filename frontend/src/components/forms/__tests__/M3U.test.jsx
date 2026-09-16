@@ -290,6 +290,14 @@ vi.mock('@mantine/core', () => ({
     </div>
   ),
   Stack: ({ children }) => <div>{children}</div>,
+  TagsInput: ({ label, value }) => (
+    <div>
+      <span>{label}</span>
+      {(value || []).map((tag) => (
+        <span key={tag}>{tag}</span>
+      ))}
+    </div>
+  ),
   Switch: ({ label, checked, onChange, disabled }) => (
     <label>
       <input
@@ -762,6 +770,9 @@ describe('M3U', () => {
         screen.getByRole('spinbutton', { name: /overlap window/i })
       ).toBeInTheDocument();
       expect(
+        screen.getByRole('spinbutton', { name: /surfing delay/i })
+      ).toHaveValue(500);
+      expect(
         screen.getByRole('switch', { name: /stop skipped channels/i })
       ).toBeInTheDocument();
       expect(
@@ -770,6 +781,9 @@ describe('M3U', () => {
       expect(
         screen.getByRole('switch', { name: /anonymous connections/i })
       ).toBeInTheDocument();
+      expect(
+        screen.getByRole('switch', { name: /lan device tracking/i })
+      ).not.toBeChecked();
     });
 
     it('shows the overlap settings for an account that has it enabled', () => {
@@ -795,6 +809,27 @@ describe('M3U', () => {
       expect(
         screen.getByRole('switch', { name: /anonymous connections/i })
       ).not.toBeChecked();
+    });
+
+    it('shows the LAN subnets of an account that tracks LAN devices', () => {
+      setupStores();
+      render(
+        <M3U
+          {...defaultProps({
+            m3uAccount: makeM3uAccount({
+              probation_enabled: true,
+              probation_lan_tracking: true,
+              probation_lan_subnets: ['192.168.2.0/24', '10.0.0.0/8'],
+            }),
+          })}
+        />
+      );
+
+      expect(
+        screen.getByRole('switch', { name: /lan device tracking/i })
+      ).toBeChecked();
+      expect(screen.getByText('192.168.2.0/24')).toBeInTheDocument();
+      expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument();
     });
 
     it('opens the explanation from the help link', () => {

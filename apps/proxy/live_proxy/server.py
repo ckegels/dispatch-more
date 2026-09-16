@@ -1852,8 +1852,10 @@ class ProxyServer:
                     # Recover channels whose stop_channel call never returned
                     self._recover_stuck_channel_stops()
 
-                    # Channel Switch Overlap: resume overlap checks lost with a restarted worker
+                    # Channel Switch Overlap: resume overlap checks lost with a restarted worker,
+                    # and release slots left behind by channels that stopped without cleanup
                     probation.recover_unmonitored_probations(self.redis_client)
+                    probation.release_abandoned_slots(self.redis_client)
 
                     # Create a unified list of all channels we have locally
                     all_local_channels = (

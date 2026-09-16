@@ -14,20 +14,25 @@ account has "probation_enabled":
   channel on the account it is on or just left, "alternate" starts it on another account
   with a free slot first, "order" (default) follows the channel's stream order.
 
-A viewer is identified by client IP plus Dispatcharr user and/or a device ID that the M3U
-output adds to stream links. Viewers with neither (HDHomeRun, media servers) are anonymous:
-matched on IP only, and only where "probation_allow_anonymous" is set. Streams that were
-already playing, or that someone else also watches, are never stopped.
+A viewer is recognised by its Dispatcharr user (Xtream login), or, on the account's LAN
+Subnets, by its IP address plus its player app ("probation_lan_tracking"): on a local network
+every device has its own address. A device outside those subnets therefore needs its own
+login. Viewers with neither (HDHomeRun, media servers, a shared login) are anonymous: matched
+on IP only, and only where "probation_allow_anonymous" is set. Streams that were already
+playing, or that someone else also watches, are never stopped.
 
 "Probation" is the internal name; the UI and logs say overlap. See
 docs/channel-switch-overlap.md for the full design.
 """
 
+import ipaddress
 import logging
 import re
 import secrets
+import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional
 
 import gevent
@@ -49,6 +54,17 @@ LAST_PROFILE_TTL = 60
 # waits for the stop to finish. Removed when the stop is done.
 SKIPPED_STOPPING_KEY = "live:probation:stopping:{channel_uuid}"
 SKIPPED_STOPPING_TTL = 30
+# Surfing Delay ("probation_surf_delay_ms"): a viewer that switches again within the overlap
+# window of its previous channel request waits this long before Dispatcharr connects to the
+# provider, so a channel it passes in the meantime is never requested there.
+DEFAULT_SURF_DELAY_MS = 500
+MAX_SURF_DELAY_MS = 2000
+# A viewer's latest channel request: "request time|token|channel uuid"
+LAST_REQUEST_KEY = "live:probation:last_request:{viewer}"
+# A provider that closes a new connection before sending any data is almost always refusing
+# it (account full, or blocked for too many connections). Dispatcharr retries after 0.25 s and
+# 0.5 s; on accounts with the overlap enabled the retries wait this long per attempt instead.
+REFUSAL_RETRY_SECONDS = 1.5
 # How long a request for a channel that is still being stopped waits before giving up
 STOP_WAIT_SECONDS = 5
 STOP_WAIT_POLL_INTERVAL = 0.1
@@ -86,18 +102,27 @@ MONITOR_LEASE_KEY = "live:probation:monitor:{channel_uuid}"
 MONITOR_LEASE_TTL = 20
 # Moving or stopping an expired probation is retried this often when it keeps failing.
 MAX_RESOLVE_ATTEMPTS = 3
+# Recent switches for the Channel Switch Overlap page in the settings: a sorted set of event
+# ids by time, and one short-lived hash per event (see record_event).
+EVENTS_KEY = "live:probation:events"
+EVENT_KEY = "live:probation:event:{event_id}"
+# Small and short-lived on purpose: enough to see whether the feature is doing its job
+EVENTS_KEPT = 20
+EVENT_TTL = 30 * 60
 
-# Query parameter on stream links (written by the M3U output, read by stream_ts).
-DEVICE_ID_PARAM = "device_id"
-# Field added to the client metadata hash that ClientManager maintains.
-DEVICE_ID_FIELD = "device_id"
-# Stands in for the device ID in cached M3U content; replaced per response.
-DEVICE_ID_PLACEHOLDER = "__dispatcharr_device_id__"
-_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Slot assignments (channel_stream:<id>) whose channel has no live proxy keys at all: hash of
+# assignment key -> first time it was seen that way. Released after ABANDONED_SLOT_GRACE
+# seconds (see release_abandoned_slots). One worker checks every SWEEP_INTERVAL seconds.
+# Unlike everything else in this module this does not depend on the overlap being enabled:
+# it fixes accounts that stay "full" after a restart for every Dispatcharr setup.
+ABANDONED_SLOTS_KEY = "live:probation:abandoned_slots"
+ABANDONED_SLOT_GRACE = 60
+SWEEP_LOCK_KEY = "live:probation:sweep_lock"
+SWEEP_INTERVAL = 30
 
-# Media servers download one playlist for all of their viewers, so a device ID would make
-# every viewer look like the same device. Matched against the default User-Agents
-# (for example "Jellyfin-Server/10.10.7", "Emby/4.8.10.0", "PlexMediaServer/1.41.0").
+# Media servers stream on behalf of all of their viewers, so their requests say nothing about
+# a single device. Matched against the default User-Agents (for example
+# "Jellyfin-Server/10.10.7", "Emby/4.8.10.0", "PlexMediaServer/1.41.0").
 _MEDIA_SERVER_RE = re.compile(r"jellyfin|emby|plex", re.IGNORECASE)
 # DVR recordings request channels through the proxy with this User-Agent
 # (core.utils.dispatcharr_dvr_user_agent). They are not viewers switching channels.
@@ -108,6 +133,12 @@ _RECORDING_USER_AGENT_PREFIX = "Dispatcharr-DVR"
 # extra work while the feature is not used.
 IN_USE_CACHE_KEY = "live:probation:in_use"
 IN_USE_CACHE_TTL = 60
+# The same for LAN Device Tracking ("probation_lan_tracking"), cleared together with it.
+LAN_TRACKING_CACHE_KEY = "live:probation:lan_tracking"
+
+# Version numbers in a User-Agent, removed to recognise the app across updates
+# ("TiviMate/5.1.6 (Android 12)" -> "TiviMate/ (Android )")
+_VERSION_RE = re.compile(r"\d+(?:[._]\d+)*")
 
 # stream_ts retries get_stream() for a few seconds while every profile is full, so each
 # "not used" reason is logged once per channel and viewer within this interval.
@@ -132,23 +163,10 @@ class Viewer:
 
     ip: str
     user_id: Optional[int] = None
-    device_id: Optional[str] = None
     # A DVR recording: never uses the overlap, account preferences or held slots
     recording: bool = False
-
-    @property
-    def identified(self) -> bool:
-        return self.user_id is not None or self.device_id is not None
-
-    def matches(self, ip, user_id, device_id) -> bool:
-        # A missing user or device ID only equals a missing one, so anonymous
-        # viewers never match identified clients behind the same IP (and vice versa).
-        return (
-            not self.recording
-            and self.ip == ip
-            and self.user_id == user_id
-            and self.device_id == device_id
-        )
+    # The player app without version numbers (see app_name), used on an account's LAN subnets
+    app: Optional[str] = field(default=None, compare=False)
 
 
 def is_viewer_request(viewer) -> bool:
@@ -178,6 +196,81 @@ def log_not_used(channel_uuid, viewer, reason):
         del _not_used_logged[stale]
     _not_used_logged[key] = now
     logger.info(f"Probation: not used for channel {channel_uuid}: {reason}")
+    if not str(channel_uuid).startswith("profile-"):
+        from core.utils import RedisClient
+
+        record_event(
+            RedisClient.get_client(), viewer, "not used", channel=channel_uuid, result=reason
+        )
+
+
+# ── Recent switches (settings page) ──────────────────────────────────────────
+
+
+def _event_key(event_id) -> str:
+    return EVENT_KEY.format(event_id=event_id)
+
+
+def record_event(redis_client, viewer, action, **fields):
+    """
+    Remember one decision for the Channel Switch Overlap page: who switched, from and to
+    which channel, and what happened. Returns the event id, which update_event() uses to fill
+    in the result once it is known.
+
+    Kept deliberately small: only the last EVENTS_KEPT switches, and only for EVENT_TTL.
+    Never lets a failure reach the stream request.
+    """
+    if not redis_client:
+        return None
+    try:
+        now = time.time()
+        event_id = secrets.token_hex(6)
+        event = {
+            "time": str(now),
+            "ip": (viewer.ip if viewer else "") or "",
+            "user_id": str((viewer.user_id if viewer else None) or ""),
+            "app": (viewer.app if viewer else "") or "",
+            "action": action,
+        }
+        event.update({key: str(value) for key, value in fields.items() if value is not None})
+        redis_client.hset(_event_key(event_id), mapping=event)
+        redis_client.expire(_event_key(event_id), EVENT_TTL)
+        redis_client.zadd(EVENTS_KEY, {event_id: now})
+        redis_client.zremrangebyrank(EVENTS_KEY, 0, -(EVENTS_KEPT + 1))
+        redis_client.zremrangebyscore(EVENTS_KEY, "-inf", now - EVENT_TTL)
+        redis_client.expire(EVENTS_KEY, EVENT_TTL)
+        return event_id
+    except Exception as e:
+        logger.debug(f"Could not record an overlap event: {e}")
+        return None
+
+
+def update_event(redis_client, event_id, **fields):
+    """Fill in the result of an earlier event (confirmed, moved, stopped, ...)."""
+    if not redis_client or not event_id:
+        return
+    try:
+        if redis_client.exists(_event_key(event_id)):
+            redis_client.hset(
+                _event_key(event_id),
+                mapping={key: str(value) for key, value in fields.items() if value is not None},
+            )
+    except Exception as e:
+        logger.debug(f"Could not update overlap event {event_id}: {e}")
+
+
+def recent_events(redis_client):
+    """The last switches, newest first, for the settings page."""
+    events = []
+    try:
+        event_ids = redis_client.zrevrange(EVENTS_KEY, 0, EVENTS_KEPT - 1) or ()
+        for event_id in event_ids:
+            event = redis_client.hgetall(_event_key(_as_str(event_id))) or {}
+            if event:
+                events.append({_as_str(k): _as_str(v) for k, v in event.items()})
+    except Exception as e:
+        logger.debug(f"Could not read overlap events: {e}")
+    return events
 
 
 # ── Account settings ─────────────────────────────────────────────────────────
@@ -210,6 +303,91 @@ def account_probation_seconds(m3u_account) -> int:
 
 def account_stops_skipped_channels(m3u_account) -> bool:
     return _account_props(m3u_account).get("probation_stop_skipped") is True
+
+
+def account_tracks_lan_devices(m3u_account) -> bool:
+    return (
+        account_allows_probation(m3u_account)
+        and _account_props(m3u_account).get("probation_lan_tracking") is True
+    )
+
+
+@lru_cache(maxsize=256)
+def _parse_subnets(subnets):
+    networks = []
+    for subnet in subnets:
+        try:
+            network = ipaddress.ip_network(str(subnet).strip(), strict=False)
+        except ValueError:
+            continue
+        # Only local networks: a public address says nothing about a single device
+        if network.is_private:
+            networks.append(network)
+    return tuple(networks)
+
+
+def account_lan_subnets(m3u_account):
+    """The account's LAN Device Tracking subnets as ip_network objects (invalid entries skipped)."""
+    subnets = _account_props(m3u_account).get("probation_lan_subnets") or ()
+    if isinstance(subnets, str):
+        subnets = re.split(r"[,\s]+", subnets)
+    return _parse_subnets(tuple(s for s in subnets if s))
+
+
+def parse_lan_subnets(value):
+    """
+    Normalise LAN subnets from the API: a list, or a comma or space separated string (form
+    uploads send lists that way). Raises ValueError for an invalid or non-local subnet.
+    """
+    if isinstance(value, str):
+        value = re.split(r"[,\s]+", value)
+    subnets = []
+    for entry in value or ():
+        entry = str(entry).strip()
+        if not entry:
+            continue
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            raise ValueError(f"{entry} is not a valid IP address or subnet")
+        if not network.is_private:
+            raise ValueError(f"{entry} is not a local network address")
+        if str(network) not in subnets:
+            subnets.append(str(network))
+    return subnets
+
+
+@lru_cache(maxsize=1)
+def suggested_lan_subnet():
+    """
+    A /24 around the address Dispatcharr uses to reach the network, as a starting point for
+    the subnet field, or None. Not suggested for Docker networks (172.16.0.0/12), where that
+    address is not the address of the LAN the players are on.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            # UDP connect sends nothing; it only picks the outgoing interface
+            probe.connect(("10.255.255.255", 1))
+            address = ipaddress.ip_address(probe.getsockname()[0])
+    except OSError:
+        return None
+    if (
+        not address.is_private
+        or address.is_loopback
+        or address in ipaddress.ip_network("172.16.0.0/12")
+    ):
+        return None
+    return str(ipaddress.ip_network(f"{address}/24", strict=False))
+
+
+def account_surf_delay_seconds(m3u_account) -> float:
+    try:
+        delay_ms = int(
+            _account_props(m3u_account).get("probation_surf_delay_ms", DEFAULT_SURF_DELAY_MS)
+        )
+    except (TypeError, ValueError):
+        delay_ms = DEFAULT_SURF_DELAY_MS
+    return min(max(delay_ms, 0), MAX_SURF_DELAY_MS) / 1000
 
 
 ACCOUNT_PREFERENCE_ORDER = "order"
@@ -257,26 +435,47 @@ def any_account_allows_probation() -> bool:
     ).exists()
 
 
-def in_use() -> bool:
-    """Whether any active M3U account has the overlap enabled (cached, see IN_USE_CACHE_KEY)."""
+def any_account_tracks_lan_devices() -> bool:
+    from apps.m3u.models import M3UAccount
+
+    return M3UAccount.objects.filter(
+        is_active=True,
+        custom_properties__probation_enabled=True,
+        custom_properties__probation_lan_tracking=True,
+    ).exists()
+
+
+def _cached_flag(cache_key, compute, description) -> bool:
     from django.core.cache import cache
 
     try:
-        cached = cache.get(IN_USE_CACHE_KEY)
+        cached = cache.get(cache_key)
     except Exception:
         cached = None
     if cached is None:
         try:
-            cached = int(any_account_allows_probation())
+            cached = int(compute())
         except Exception as e:
             # Never let this break a stream request; ask again next time
-            logger.debug(f"Could not check whether Channel Switch Overlap is in use: {e}")
+            logger.debug(f"Could not check whether {description} is in use: {e}")
             return False
         try:
-            cache.set(IN_USE_CACHE_KEY, cached, IN_USE_CACHE_TTL)
+            cache.set(cache_key, cached, IN_USE_CACHE_TTL)
         except Exception:
             pass
     return bool(cached)
+
+
+def in_use() -> bool:
+    """Whether any active M3U account has the overlap enabled (cached, see IN_USE_CACHE_KEY)."""
+    return _cached_flag(IN_USE_CACHE_KEY, any_account_allows_probation, "Channel Switch Overlap")
+
+
+def lan_tracking_in_use() -> bool:
+    """Whether any active account uses LAN Device Tracking (cached like in_use())."""
+    return in_use() and _cached_flag(
+        LAN_TRACKING_CACHE_KEY, any_account_tracks_lan_devices, "LAN Device Tracking"
+    )
 
 
 def forget_in_use(**_kwargs):
@@ -284,7 +483,7 @@ def forget_in_use(**_kwargs):
     from django.core.cache import cache
 
     try:
-        cache.delete(IN_USE_CACHE_KEY)
+        cache.delete_many([IN_USE_CACHE_KEY, LAN_TRACKING_CACHE_KEY])
     except Exception as e:
         logger.debug(f"Could not clear {IN_USE_CACHE_KEY}: {e}")
 
@@ -293,40 +492,26 @@ post_save.connect(forget_in_use, sender="m3u.M3UAccount", dispatch_uid="probatio
 post_delete.connect(forget_in_use, sender="m3u.M3UAccount", dispatch_uid="probation_in_use_delete")
 
 
-# ── Device IDs and requests ──────────────────────────────────────────────────
-
-
-def normalize_device_id(value):
-    """Return a usable device ID, or None for missing or malformed values."""
-    if isinstance(value, str) and _DEVICE_ID_RE.match(value):
-        return value
-    return None
+# ── Recognising the player of a request ──────────────────────────────────────
 
 
 def is_media_server(user_agent) -> bool:
     return bool(user_agent and _MEDIA_SERVER_RE.search(user_agent))
 
 
-def fill_device_id(m3u_content, device_id):
-    """
-    Put this response's device ID into playlist content built with DEVICE_ID_PLACEHOLDER,
-    or remove the parameter when device_id is None (media servers).
-    """
-    if device_id:
-        return m3u_content.replace(DEVICE_ID_PLACEHOLDER, device_id)
-    # The device ID is always the last query parameter on a stream link
-    return m3u_content.replace(f"&{DEVICE_ID_PARAM}={DEVICE_ID_PLACEHOLDER}", "").replace(
-        f"?{DEVICE_ID_PARAM}={DEVICE_ID_PLACEHOLDER}", ""
-    )
-
-
-def new_device_id() -> str:
-    """Random per-playlist-download ID; 12 hex chars is plenty for one household."""
-    return secrets.token_hex(6)
-
-
 def is_recording(user_agent) -> bool:
     return bool(user_agent and user_agent.startswith(_RECORDING_USER_AGENT_PREFIX))
+
+
+def app_name(user_agent):
+    """
+    The player app from a User-Agent without version numbers, so an app update does not
+    look like another device. None for media servers and recordings, which LAN Device
+    Tracking never applies to.
+    """
+    if not user_agent or is_media_server(user_agent) or is_recording(user_agent):
+        return None
+    return re.sub(r"\s+", " ", _VERSION_RE.sub("", user_agent)).strip() or None
 
 
 def viewer_from_request(request, user, client_ip):
@@ -336,15 +521,11 @@ def viewer_from_request(request, user, client_ip):
     user_agent = request.META.get("HTTP_USER_AGENT")
     if is_recording(user_agent):
         return Viewer(ip=client_ip, recording=True)
-    device_id = normalize_device_id(request.GET.get(DEVICE_ID_PARAM))
-    # A media server may still use links from a playlist it fetched before it was
-    # recognised; its viewers must stay anonymous either way.
-    if is_media_server(user_agent):
-        device_id = None
     return Viewer(
         ip=client_ip,
         user_id=user.id if user is not None else None,
-        device_id=device_id,
+        # None for media servers, so their viewers stay anonymous (see app_name)
+        app=app_name(user_agent),
     )
 
 
@@ -356,26 +537,16 @@ def record_client_viewer(redis_client, channel_uuid, client_id, viewer):
     """
     Remember which viewer a newly registered client is, while the overlap is in use.
 
-    ClientManager already stores ip_address and user_id; the device ID is added to the
-    same hash so find_profile_ids_watched_by() can compare all three. The viewer is also
-    added to the channel's viewer set, which outlives the client (see CHANNEL_VIEWERS_KEY).
+    ClientManager stores ip_address, user_id and user_agent per client, which is everything an
+    identity needs. The viewer is also added to the channel's viewer set, which outlives the
+    client (see CHANNEL_VIEWERS_KEY).
     """
     if not redis_client or not is_viewer_request(viewer) or not in_use():
         return
     channel_uuid = str(channel_uuid)
     try:
-        if viewer.device_id:
-            redis_client.hset(
-                RedisKeys.client_metadata(channel_uuid, client_id),
-                DEVICE_ID_FIELD,
-                viewer.device_id,
-            )
-            logger.debug(
-                f"Probation: client {client_id} on channel {channel_uuid} has device ID "
-                f"{viewer.device_id}"
-            )
         viewers_key = _channel_viewers_key(channel_uuid)
-        redis_client.sadd(viewers_key, _viewer_key(viewer))
+        redis_client.sadd(viewers_key, _viewer_member(viewer))
         redis_client.expire(viewers_key, CHANNEL_VIEWERS_TTL)
     except Exception as e:
         logger.debug(f"Could not record viewer for client {client_id}: {e}")
@@ -425,13 +596,103 @@ def _client_viewer(client) -> Viewer:
     return Viewer(
         client.get("ip_address"),
         _client_user_id(client.get("user_id")),
-        normalize_device_id(client.get(DEVICE_ID_FIELD)),
         recording=is_recording(client.get("user_agent")),
+        app=app_name(client.get("user_agent")),
     )
 
 
-def _is_viewer(viewer, client) -> bool:
-    return _client_viewer(client) == viewer
+def _lan_device_key(viewer, m3u_account):
+    """
+    LAN Device Tracking: a key for a device on the account's own network, by its IP address,
+    user and app, or None when it does not apply (setting off, IP outside the subnets, media
+    server or recording, or no app in the User-Agent).
+
+    On a local network every device has its own IP address, so that address plus the player
+    app identifies a device without a login and without anything in the stream links. A device
+    outside those subnets needs its own Dispatcharr login.
+    """
+    if (
+        m3u_account is None
+        or not is_viewer_request(viewer)
+        or not viewer.app
+        or not account_tracks_lan_devices(m3u_account)
+    ):
+        return None
+    try:
+        address = ipaddress.ip_address(viewer.ip)
+    except (TypeError, ValueError):
+        return None
+    if getattr(address, "ipv4_mapped", None):
+        address = address.ipv4_mapped
+    if not any(address in network for network in account_lan_subnets(m3u_account)):
+        return None
+    return f"lan|{viewer.ip}|{viewer.user_id or 0}|{viewer.app}"
+
+
+def identity_key(viewer, m3u_account=None) -> str:
+    """
+    How a viewer is told apart on an account: IP + user, or IP + user + app when the account
+    tracks LAN devices and the viewer is on one of its subnets.
+    """
+    if viewer.recording:
+        return f"recording|{viewer.ip}"
+    return _lan_device_key(viewer, m3u_account) or _viewer_key(viewer)
+
+
+def is_identified(viewer, m3u_account=None) -> bool:
+    """
+    Whether this request stands for one device on the account: a Dispatcharr user (an Xtream
+    login), or a player on one of the account's LAN subnets (its IP address is its own there).
+
+    Everything else is anonymous: media servers, and devices outside the subnets without a
+    login, which cannot be told apart from other devices behind the same address.
+    """
+    return is_viewer_request(viewer) and (
+        viewer.user_id is not None or _lan_device_key(viewer, m3u_account) is not None
+    )
+
+
+def may_be_identified(viewer) -> bool:
+    """Cheap pre-check without an account: could this viewer be identified anywhere?"""
+    return is_viewer_request(viewer) and (
+        viewer.user_id is not None or (bool(viewer.app) and lan_tracking_in_use())
+    )
+
+
+def _is_viewer(viewer, client, m3u_account=None) -> bool:
+    client_viewer = _client_viewer(client)
+    if client_viewer.recording or viewer.recording:
+        return False
+    return identity_key(client_viewer, m3u_account) == identity_key(viewer, m3u_account)
+
+
+def _accounts_for_profiles(profile_ids):
+    """M3U account per profile ID, only loaded while any account tracks LAN devices."""
+    profile_ids = {profile_id for profile_id in profile_ids if profile_id is not None}
+    if not profile_ids or not lan_tracking_in_use():
+        return {}
+    from apps.m3u.models import M3UAccountProfile
+
+    return {
+        profile.id: profile.m3u_account
+        for profile in M3UAccountProfile.objects.select_related("m3u_account").filter(
+            id__in=profile_ids
+        )
+    }
+
+
+def _viewer_member(viewer) -> str:
+    """A viewer as stored in CHANNEL_VIEWERS_KEY: IP, user and app."""
+    return f"{viewer.ip}|{viewer.user_id or 0}|{viewer.app or ''}"
+
+
+def _viewer_from_member(member):
+    parts = _as_str(member).split("|", 2)
+    if len(parts) < 2:
+        return None
+    ip, user_id = parts[:2]
+    app = parts[2] if len(parts) > 2 else ""
+    return Viewer(ip, _client_user_id(user_id), app=app or None)
 
 
 def _being_stopped(redis_client, channel_uuid) -> bool:
@@ -466,37 +727,47 @@ def _waiting_for_shutdown(redis_client, channel_uuid) -> bool:
     )
 
 
-def _only_viewer_was(redis_client, channel_uuid, viewer) -> bool:
-    viewer_keys = {
-        _as_str(key) for key in redis_client.smembers(_channel_viewers_key(channel_uuid)) or ()
-    }
-    return viewer_keys == {_viewer_key(viewer)}
+def _only_viewer_was(redis_client, channel_uuid, viewer, m3u_account=None) -> bool:
+    members = [
+        _viewer_from_member(member)
+        for member in redis_client.smembers(_channel_viewers_key(channel_uuid)) or ()
+    ]
+    keys = {identity_key(member, m3u_account) for member in members if member is not None}
+    return keys == {identity_key(viewer, m3u_account)}
 
 
-def find_profile_ids_watched_by(redis_client, viewer):
+def watched_channels_by(redis_client, viewer):
     """
-    Profile IDs of the live channels this viewer is watching, including a channel it was
-    the only viewer of that is waiting out the Channel Shutdown Delay.
+    {profile id: channel uuid} of the live channels this viewer is watching, including a
+    channel it was the only viewer of that is waiting out the Channel Shutdown Delay.
     """
-    profile_ids = []
+    watched = {}
     if not is_viewer_request(viewer):
-        return profile_ids
+        return watched
 
     try:
-        for channel_uuid, profile_id in _active_channels(redis_client):
-            if profile_id is None or profile_id in profile_ids:
+        channels = list(_active_channels(redis_client))
+        accounts = _accounts_for_profiles(profile_id for _uuid, profile_id in channels)
+        for channel_uuid, profile_id in channels:
+            if profile_id is None or profile_id in watched:
                 continue
+            account = accounts.get(profile_id)
             clients = list(_channel_clients(redis_client, channel_uuid))
-            if any(_is_viewer(viewer, client) for client in clients) or (
+            if any(_is_viewer(viewer, client, account) for client in clients) or (
                 not clients
                 and _waiting_for_shutdown(redis_client, channel_uuid)
-                and _only_viewer_was(redis_client, channel_uuid, viewer)
+                and _only_viewer_was(redis_client, channel_uuid, viewer, account)
             ):
-                profile_ids.append(profile_id)
+                watched[profile_id] = channel_uuid
     except Exception as e:
         logger.debug(f"Could not resolve profiles watched by {viewer}: {e}")
 
-    return profile_ids
+    return watched
+
+
+def find_profile_ids_watched_by(redis_client, viewer):
+    """Profile IDs of the live channels this viewer is watching (see watched_channels_by)."""
+    return list(watched_channels_by(redis_client, viewer))
 
 
 # ── Stop Skipped Channels ────────────────────────────────────────────────────
@@ -530,14 +801,44 @@ def _release_channel_slot_now(redis_client, channel_uuid, hold_slot):
     channel.release_stream()
 
 
+def _dispatcharr_is_stopping(redis_client, channel_uuid) -> bool:
+    """Whether Dispatcharr itself has started stopping the channel (not this feature)."""
+    if redis_client.exists(RedisKeys.channel_stopping(channel_uuid)):
+        return True
+    state = _as_str(
+        redis_client.hget(RedisKeys.channel_metadata(channel_uuid), ChannelMetadataField.STATE)
+    )
+    return state == ChannelState.STOPPING
+
+
 def _stop_channel(channel_uuid):
-    """Background stop of a skipped or idle channel whose slot was already released."""
+    """
+    Background stop of a skipped or idle channel whose slot was already released.
+
+    When the player leaves the channel at the same moment, Dispatcharr stops it too. A second
+    stop that arrives while the first one is still closing the provider connection leaves a
+    stopping marker behind (see _clear_leftover_stop_marker), so this does not stop a channel
+    that is already stopping or already gone.
+    """
     from django.db import close_old_connections
     from core.utils import RedisClient
+    from .server import ProxyServer
     from .services.channel_service import ChannelService
 
     try:
-        ChannelService.stop_channel(channel_uuid)
+        redis_client = RedisClient.get_client()
+        stopping_here = channel_uuid in getattr(ProxyServer.get_instance(), "_stopping_channels", ())
+        if (
+            stopping_here
+            or _dispatcharr_is_stopping(redis_client, channel_uuid)
+            or not redis_client.exists(RedisKeys.channel_metadata(channel_uuid))
+        ):
+            logger.info(
+                f"Probation: channel {channel_uuid} is already stopping or stopped; "
+                f"not stopping it again"
+            )
+        else:
+            ChannelService.stop_channel(channel_uuid)
     except Exception as e:
         logger.error(f"Probation: error stopping channel {channel_uuid}: {e}", exc_info=True)
     finally:
@@ -549,30 +850,62 @@ def _stop_channel(channel_uuid):
         close_old_connections()
 
 
+def _clear_leftover_stop_marker(redis_client, channel_uuid) -> bool:
+    """
+    Remove a stopping marker that no stop will ever clear. Returns whether one was removed.
+
+    Dispatcharr's stop deletes every live:channel:<uuid>:* key, including its own stopping
+    marker, and only then closes the provider connection. A second stop command that arrives
+    in that moment (for example a skipped channel stopped by this feature while the player
+    also disconnects) sets the marker again and returns without cleanup, because a stop is
+    already running. The channel then answers "Channel is stopping" (503) for 60 seconds. A
+    marker without channel metadata is such a leftover: a stop that is still running has not
+    deleted the metadata yet.
+    """
+    stop_key = RedisKeys.channel_stopping(channel_uuid)
+    if not redis_client.exists(stop_key) or redis_client.exists(
+        RedisKeys.channel_metadata(channel_uuid)
+    ):
+        return False
+    redis_client.delete(stop_key)
+    logger.info(
+        f"Probation: removed a leftover stopping marker from channel {channel_uuid}, "
+        f"which is no longer running"
+    )
+    return True
+
+
 def wait_for_stop_to_finish(redis_client, channel_uuid) -> bool:
     """
-    Called by stream_ts before it looks at the requested channel. When that channel is being
-    stopped by this feature (a skipped or idle channel), wait until the stop is done, so the
-    request starts the channel again.
+    Called by stream_ts before it looks at the requested channel, while the overlap is in use.
 
-    Without this, a player returning to a channel it just surfed past gets "Channel is
-    stopping" (a 503 with a JSON body, which players such as TiviMate show as an error), or
-    joins the channel just before the stop ends it. Other stops (dashboard, deletes) keep
-    Dispatcharr's normal answer. Gives up after STOP_WAIT_SECONDS. Returns whether it waited.
+    - A leftover stopping marker (see _clear_leftover_stop_marker) is removed, so the channel
+      can start instead of answering 503 for up to a minute.
+    - When the channel is being stopped by this feature (a skipped or idle channel), wait
+      until the stop is done, so the request starts the channel again. Without this, a player
+      returning to a channel it just surfed past gets "Channel is stopping" (a 503 with a JSON
+      body, which players such as TiviMate show as an error), or joins the channel just
+      before the stop ends it. Gives up after STOP_WAIT_SECONDS.
+
+    Other stops that are really running (dashboard, deletes) keep Dispatcharr's normal answer.
+    Returns whether it waited or removed a marker.
     """
     channel_uuid = str(channel_uuid)
     try:
         if not redis_client or not in_use():
             return False
+        cleared = _clear_leftover_stop_marker(redis_client, channel_uuid)
         if not redis_client.exists(_skipped_stopping_key(channel_uuid)):
-            return False
+            return cleared
 
         from .services.channel_service import ChannelService
 
         def stopping():
-            return bool(
-                redis_client.exists(_skipped_stopping_key(channel_uuid))
-            ) or ChannelService.is_channel_teardown_active(channel_uuid)
+            if redis_client.exists(_skipped_stopping_key(channel_uuid)):
+                return True
+            # A second stop may have left its marker behind while we waited
+            _clear_leftover_stop_marker(redis_client, channel_uuid)
+            return ChannelService.is_channel_teardown_active(channel_uuid)
 
         logger.info(
             f"Probation: channel {channel_uuid} is still being stopped after it was skipped; "
@@ -597,6 +930,154 @@ def wait_for_stop_to_finish(redis_client, channel_uuid) -> bool:
         return False
 
 
+def refusal_retry_delay(stream_id, failures, refused) -> float:
+    """
+    Seconds the stream manager waits before retrying a connection the provider refused, or 0
+    to keep Dispatcharr's normal retry timing.
+
+    Only applies when the connection was refused (closed before any data arrived) and the
+    stream's account has the overlap enabled. Retrying a refusing provider within a quarter
+    second, three times per channel while surfing, piles up connection attempts and can keep
+    the provider refusing.
+    """
+    if not refused or not stream_id:
+        return 0
+    try:
+        if not in_use():
+            return 0
+
+        from core.utils import RedisClient
+        from apps.channels.models import Stream
+        from apps.m3u.models import M3UAccountProfile
+
+        profile_id = _as_str(RedisClient.get_client().get(f"stream_profile:{stream_id}"))
+        profile = (
+            M3UAccountProfile.objects.select_related("m3u_account").filter(id=profile_id).first()
+            if profile_id
+            else None
+        )
+        if profile is not None:
+            account = profile.m3u_account
+        else:
+            stream = Stream.objects.select_related("m3u_account").filter(id=stream_id).first()
+            account = stream.m3u_account if stream else None
+        if account is None or not account_allows_probation(account):
+            return 0
+
+        delay = REFUSAL_RETRY_SECONDS * failures
+        record_event(
+            RedisClient.get_client(),
+            None,
+            "provider refused",
+            account=account.name,
+            result=f"waiting {delay:.1f}s before attempt {failures + 1}",
+        )
+        logger.info(
+            f"Probation: the provider closed the connection for stream {stream_id} before "
+            f"sending any data (probably refused: account full or blocked); waiting "
+            f"{delay:.1f}s before trying again (attempt {failures})"
+        )
+        return delay
+    except Exception as e:
+        logger.debug(f"Could not check the retry delay for stream {stream_id}: {e}")
+        return 0
+
+
+def _surf_delay_for_channel(channel_uuid, viewer):
+    """
+    (delay, window) in seconds for a channel: the longest Surfing Delay and Overlap Window of
+    its active accounts that have the overlap enabled and recognise this viewer, or (0, 0).
+    """
+    from django.core.exceptions import ValidationError
+    from apps.channels.models import Channel
+
+    try:
+        channel = Channel.objects.filter(uuid=channel_uuid).first()
+    except (ValidationError, ValueError):
+        # Stream previews use a stream hash instead of a channel UUID
+        return 0, 0
+    if channel is None:
+        return 0, 0
+    delay = window = 0
+    for stream in channel.streams.select_related("m3u_account"):
+        account = stream.m3u_account
+        if (
+            not account
+            or not account.is_active
+            or not account_allows_probation(account)
+            or not is_identified(viewer, account)
+        ):
+            continue
+        account_delay = account_surf_delay_seconds(account)
+        if account_delay > 0:
+            delay = max(delay, account_delay)
+            window = max(window, account_probation_seconds(account))
+    return delay, window
+
+
+def skipped_while_surfing(proxy_server, viewer, channel_uuid) -> bool:
+    """
+    Called by stream_ts first: while a viewer surfs, wait a moment before its channel is
+    requested from the provider, so a channel it passes in the meantime never is.
+
+    Fast channel surfing otherwise opens a provider connection for every channel on the way,
+    for streams the player drops a second later, and providers may start refusing
+    connections. The delay (the account's Surfing Delay) only applies when:
+
+    - the viewer is identified (a login, or a device on the account's LAN subnets); anonymous
+      viewers such as Plex share one identity between several people;
+    - its previous channel request was a different channel, within the Overlap Window. The
+      first switch after watching something starts at once;
+    - the channel is not running yet; joining a running channel costs the provider nothing.
+
+    Returns True when the viewer requested another channel during the delay; stream_ts then
+    does not start this one.
+    """
+    if not may_be_identified(viewer):
+        return False
+    redis_client = getattr(proxy_server, "redis_client", None)
+    channel_uuid = str(channel_uuid)
+    try:
+        if not redis_client or not in_use():
+            return False
+
+        now = time.time()
+        token = secrets.token_hex(6)
+        key = LAST_REQUEST_KEY.format(viewer=_viewer_key(viewer))
+        previous = _as_str(redis_client.get(key))
+        redis_client.setex(key, MAX_PROBATION_SECONDS, f"{now}|{token}|{channel_uuid}")
+        if not previous:
+            return False
+        previous_time, _previous_token, previous_channel = previous.split("|", 2)
+        if previous_channel == channel_uuid:
+            # The player reconnecting to the same channel
+            return False
+        if proxy_server.check_if_channel_exists(channel_uuid):
+            return False
+
+        delay, window = _surf_delay_for_channel(channel_uuid, viewer)
+        since_previous = now - float(previous_time)
+        if delay <= 0 or since_previous > window:
+            return False
+
+        logger.info(
+            f"Probation: {viewer} switched again {since_previous:.1f}s after its previous "
+            f"channel; waiting {delay:.1f}s before requesting channel {channel_uuid} from the "
+            f"provider"
+        )
+        gevent.sleep(delay)
+        if f"|{token}|" not in (_as_str(redis_client.get(key)) or ""):
+            logger.info(
+                f"Probation: {viewer} moved on before channel {channel_uuid} started; not "
+                f"requesting it from the provider"
+            )
+            return True
+        return False
+    except Exception as e:
+        logger.debug(f"Could not apply the surfing delay for {viewer}: {e}")
+        return False
+
+
 def _stop_channel_now(redis_client, channel_uuid, hold_slot=False):
     """Release a channel's slot at once and run the slower full stop in the background."""
     redis_client.setex(_skipped_stopping_key(channel_uuid), SKIPPED_STOPPING_TTL, "1")
@@ -618,7 +1099,7 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
     at once; the rest of the stop, which waits for the provider connection to close, runs in
     the background. Returns the UUIDs of the channels being stopped.
     """
-    if not is_viewer_request(viewer) or not viewer.identified or not redis_client:
+    if not may_be_identified(viewer) or not redis_client:
         return []
 
     try:
@@ -632,11 +1113,15 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
 
         # (channel uuid, profile id, when this viewer first joined it)
         candidates = []
-        for channel_uuid, profile_id in _active_channels(redis_client):
+        channels = list(_active_channels(redis_client))
+        accounts = _accounts_for_profiles(profile_id for _uuid, profile_id in channels)
+        for channel_uuid, profile_id in channels:
             if (
                 profile_id is None
                 or channel_uuid == requested_channel_uuid
                 or redis_client.exists(_skipped_stopping_key(channel_uuid))
+                # Already on its way out; a second stop would leave a stopping marker behind
+                or _dispatcharr_is_stopping(redis_client, channel_uuid)
             ):
                 continue
 
@@ -646,7 +1131,7 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
                     joined_at = float(client.get("connected_at"))
                 except (TypeError, ValueError):
                     joined_at = None
-                if joined_at is None or not _is_viewer(viewer, client):
+                if joined_at is None or not _is_viewer(viewer, client, accounts.get(profile_id)):
                     # Someone else is watching too: never stop a shared channel
                     joined = []
                     break
@@ -673,7 +1158,9 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
                 continue
             account = profile.m3u_account
             if not (
-                account_allows_probation(account) and account_stops_skipped_channels(account)
+                account_allows_probation(account)
+                and account_stops_skipped_channels(account)
+                and is_identified(viewer, account)
             ):
                 continue
             watched_for = now - joined_at
@@ -682,6 +1169,14 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
             logger.info(
                 f"Probation: stopping skipped channel {channel_uuid} (watched {watched_for:.1f}s) "
                 f"for {viewer}, who requested channel {requested_channel_uuid}"
+            )
+            record_event(
+                redis_client,
+                viewer,
+                "stopped skipped channel",
+                channel=channel_uuid,
+                account=account.name,
+                result=f"watched {watched_for:.1f}s",
             )
             _stop_channel_now(redis_client, channel_uuid, hold_slots)
             stopped.append(channel_uuid)
@@ -695,7 +1190,7 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
 
 
 def _viewer_key(viewer) -> str:
-    return f"{viewer.ip}|{viewer.user_id or 0}|{viewer.device_id or ''}"
+    return f"{viewer.ip}|{viewer.user_id or 0}"
 
 
 def _held_slots_key(profile_id) -> str:
@@ -751,17 +1246,6 @@ def hold_slot_for_viewer(redis_client, channel_uuid, profile_id):
             return
         if _stop_was_requested(redis_client, channel_uuid):
             return
-        viewers = {
-            _client_viewer(client)
-            for client in _channel_clients(redis_client, channel_uuid)
-            if client.get("ip_address")
-        }
-        if len(viewers) != 1:
-            return
-        (viewer,) = viewers
-        if viewer.recording:
-            return
-
         from apps.m3u.connection_pool import profile_credential_release_key
         from apps.m3u.models import M3UAccountProfile
 
@@ -771,7 +1255,19 @@ def hold_slot_for_viewer(redis_client, channel_uuid, profile_id):
         account = profile.m3u_account
         if not account_allows_probation(account):
             return
-        if not viewer.identified and not account_allows_anonymous(account):
+
+        # Distinct viewers as the account tells them apart (see identity_key)
+        viewers = {}
+        for client in _channel_clients(redis_client, channel_uuid):
+            if client.get("ip_address"):
+                client_viewer = _client_viewer(client)
+                viewers.setdefault(identity_key(client_viewer, account), client_viewer)
+        if len(viewers) != 1:
+            return
+        ((viewer_key, viewer),) = viewers.items()
+        if viewer.recording:
+            return
+        if not is_identified(viewer, account) and not account_allows_anonymous(account):
             return
 
         seconds = account_probation_seconds(account)
@@ -779,12 +1275,12 @@ def hold_slot_for_viewer(redis_client, channel_uuid, profile_id):
         # Server Groups: the shared login counter this slot used, still known before release
         credential_key = _as_str(redis_client.get(profile_credential_release_key(profile.id)))
         key = _held_slots_key(profile.id)
-        redis_client.hset(key, _viewer_key(viewer), f"{expires_at}|{credential_key or ''}")
+        redis_client.hset(key, viewer_key, f"{expires_at}|{credential_key or ''}")
         # Expired entries are ignored anyway; the TTL only cleans up the hash
         redis_client.expire(key, MAX_PROBATION_SECONDS + 5)
         if credential_key:
             login_key = _held_login_slots_key(credential_key)
-            redis_client.hset(login_key, _viewer_key(viewer), f"{expires_at}|{profile.id}")
+            redis_client.hset(login_key, viewer_key, f"{expires_at}|{profile.id}")
             redis_client.expire(login_key, MAX_PROBATION_SECONDS + 5)
         logger.info(
             f"Probation: holding the released slot on profile {profile.id} for {viewer} "
@@ -810,10 +1306,13 @@ def slots_held_for_others(redis_client, profile, viewer=None, credential_key=Non
         if not in_use():
             return 0
         key = _held_login_slots_key(credential_key) if credential_key else _held_slots_key(profile.id)
-        own_key = _viewer_key(viewer) if viewer is not None else None
+        holds = redis_client.hgetall(key) or {}
+        if not holds:
+            return 0
+        own_key = identity_key(viewer, profile.m3u_account) if viewer is not None else None
         now = time.time()
         held, expired = 0, []
-        for viewer_key, value in (redis_client.hgetall(key) or {}).items():
+        for viewer_key, value in holds.items():
             viewer_key = _as_str(viewer_key)
             if _parse_hold(value)[0] <= now:
                 expired.append(viewer_key)
@@ -862,7 +1361,7 @@ def _drop_login_hold(redis_client, viewer_key, credential_key) -> bool:
     return True
 
 
-def take_held_slot(redis_client, profile, viewer):
+def take_held_slot(redis_client, profile, viewer, channel_uuid=None):
     """Use up this viewer's hold after it got a slot on the profile (or its shared login) again."""
     if not is_viewer_request(viewer) or profile.max_streams == 0:
         return
@@ -871,13 +1370,21 @@ def take_held_slot(redis_client, profile, viewer):
             return
         from apps.m3u.connection_pool import profile_credential_release_key
 
-        viewer_key = _viewer_key(viewer)
+        viewer_key = identity_key(viewer, profile.m3u_account)
         taken = _drop_hold(redis_client, viewer_key, profile.id)
         credential_key = _as_str(redis_client.get(profile_credential_release_key(profile.id)))
         if credential_key:
             taken = _drop_login_hold(redis_client, viewer_key, credential_key) or taken
         if taken:
             logger.info(f"Probation: {viewer} took its held slot on profile {profile.id}")
+            record_event(
+                redis_client,
+                viewer,
+                "held slot",
+                channel=channel_uuid,
+                account=profile.m3u_account.name,
+                result="playing",
+            )
     except Exception as e:
         logger.debug(f"Could not clear held slot for {viewer}: {e}")
 
@@ -885,8 +1392,21 @@ def take_held_slot(redis_client, profile, viewer):
 # ── Account preference when switching ────────────────────────────────────────
 
 
-def _last_profile_key(viewer) -> str:
-    return LAST_PROFILE_KEY.format(viewer=_viewer_key(viewer))
+def _last_profile_key(viewer_key) -> str:
+    return LAST_PROFILE_KEY.format(viewer=viewer_key)
+
+
+def _last_profile_id(redis_client, viewer):
+    """The profile this viewer was last assigned, also when only its LAN address matched."""
+    last_profile_id = _as_str(redis_client.get(_last_profile_key(_viewer_key(viewer))))
+    if not last_profile_id and viewer.app:
+        # Stored by remember_viewer_profile() when the account tracked this LAN device
+        last_profile_id = _as_str(
+            redis_client.get(
+                _last_profile_key(f"lan|{viewer.ip}|{viewer.user_id or 0}|{viewer.app}")
+            )
+        )
+    return int(last_profile_id) if last_profile_id else None
 
 
 def remember_viewer_profile(redis_client, viewer, profile, m3u_account):
@@ -898,7 +1418,10 @@ def remember_viewer_profile(redis_client, viewer, profile, m3u_account):
     if account_switch_preference(m3u_account) == ACCOUNT_PREFERENCE_ORDER:
         return
     try:
-        redis_client.setex(_last_profile_key(viewer), LAST_PROFILE_TTL, profile.id)
+        redis_client.setex(_last_profile_key(_viewer_key(viewer)), LAST_PROFILE_TTL, profile.id)
+        lan_key = _lan_device_key(viewer, m3u_account)
+        if lan_key:
+            redis_client.setex(_last_profile_key(lan_key), LAST_PROFILE_TTL, profile.id)
     except Exception as e:
         logger.debug(f"Could not remember profile for {viewer}: {e}")
 
@@ -925,16 +1448,17 @@ def reserve_sticky_slot(channel, redis_client, viewer):
         channel,
         lambda account: account_allows_probation(account)
         and account_keeps_viewers(account)
-        and (viewer.identified or account_allows_anonymous(account)),
+        and (is_identified(viewer, account) or account_allows_anonymous(account)),
     )
     if not candidates or channel.get_stream_profile().is_redirect():
         return None
 
-    watched_profile_ids = find_profile_ids_watched_by(redis_client, viewer)
+    watched = watched_channels_by(redis_client, viewer)
+    watched_profile_ids = list(watched)
     preferred_profile_ids = list(watched_profile_ids)
-    last_profile_id = _as_str(redis_client.get(_last_profile_key(viewer)))
-    if last_profile_id and int(last_profile_id) not in preferred_profile_ids:
-        preferred_profile_ids.append(int(last_profile_id))
+    last_profile_id = _last_profile_id(redis_client, viewer)
+    if last_profile_id and last_profile_id not in preferred_profile_ids:
+        preferred_profile_ids.append(last_profile_id)
 
     for preferred_profile_id in preferred_profile_ids:
         for stream, profile in candidates:
@@ -953,7 +1477,7 @@ def reserve_sticky_slot(channel, redis_client, viewer):
                 on_overlap = reserved
             if not reserved:
                 continue
-            take_held_slot(redis_client, profile, viewer)
+            take_held_slot(redis_client, profile, viewer, channel.uuid)
 
             redis_client.set(f"channel_stream:{channel.id}", stream.id)
             redis_client.set(f"stream_profile:{stream.id}", profile.id)
@@ -963,6 +1487,15 @@ def reserve_sticky_slot(channel, redis_client, viewer):
                 mark_probation(redis_client, channel, stream.id, profile.id, seconds)
                 window = f" on overlap slot, window {seconds}s"
             remember_viewer_profile(redis_client, viewer, profile, stream.m3u_account)
+            record_event(
+                redis_client,
+                viewer,
+                "overlap slot" if on_overlap else "same account",
+                channel=channel.uuid,
+                from_channel=watched.get(profile.id),
+                account=stream.m3u_account.name,
+                result="waiting" if on_overlap else "playing",
+            )
             logger.info(
                 f"Probation: keeping {viewer} on profile {profile.id} ({profile.name}) for "
                 f"channel {channel.uuid}, stream {stream.id} "
@@ -989,9 +1522,9 @@ def _channel_candidates(channel, account_filter=None):
     return candidates
 
 
-def _release_viewer_holds(redis_client, viewer, profile_ids):
+def _release_viewer_holds(redis_client, viewer, profile_ids, accounts):
     for profile_id in profile_ids:
-        _drop_hold(redis_client, _viewer_key(viewer), profile_id)
+        _drop_hold(redis_client, identity_key(viewer, accounts.get(profile_id)), profile_id)
 
 
 def reserve_alternate_slot(channel, redis_client, viewer):
@@ -1017,15 +1550,15 @@ def reserve_alternate_slot(channel, redis_client, viewer):
     if not any(account_alternates_viewers(account) for account in accounts.values()):
         return None
 
-    left_profile_ids = set(find_profile_ids_watched_by(redis_client, viewer))
-    last_profile_id = _as_str(redis_client.get(_last_profile_key(viewer)))
+    left_channels = watched_channels_by(redis_client, viewer)
+    left_profile_ids = set(left_channels)
+    last_profile_id = _last_profile_id(redis_client, viewer)
     if last_profile_id:
-        left_profile_ids.add(int(last_profile_id))
-    viewer_key = _viewer_key(viewer)
+        left_profile_ids.add(last_profile_id)
     left_profile_ids.update(
         profile_id
-        for profile_id in accounts
-        if redis_client.hget(_held_slots_key(profile_id), viewer_key)
+        for profile_id, account in accounts.items()
+        if redis_client.hget(_held_slots_key(profile_id), identity_key(viewer, account))
     )
     left_profile_ids = {
         profile_id
@@ -1033,7 +1566,7 @@ def reserve_alternate_slot(channel, redis_client, viewer):
         if profile_id in accounts
         and account_allows_probation(accounts[profile_id])
         and account_alternates_viewers(accounts[profile_id])
-        and (viewer.identified or account_allows_anonymous(accounts[profile_id]))
+        and (is_identified(viewer, accounts[profile_id]) or account_allows_anonymous(accounts[profile_id]))
     }
     if not left_profile_ids or channel.get_stream_profile().is_redirect():
         return None
@@ -1055,10 +1588,19 @@ def reserve_alternate_slot(channel, redis_client, viewer):
 
         redis_client.set(f"channel_stream:{channel.id}", stream.id)
         redis_client.set(f"stream_profile:{stream.id}", profile.id)
-        take_held_slot(redis_client, profile, viewer)
+        take_held_slot(redis_client, profile, viewer, channel.uuid)
         # The viewer does not need the slot it left any more; let others have it
-        _release_viewer_holds(redis_client, viewer, left_profile_ids)
+        _release_viewer_holds(redis_client, viewer, left_profile_ids, accounts)
         remember_viewer_profile(redis_client, viewer, profile, account)
+        record_event(
+            redis_client,
+            viewer,
+            "another account",
+            channel=channel.uuid,
+            from_channel=left_channels.get(next(iter(left_profile_ids), None)),
+            account=account.name,
+            result="playing",
+        )
         logger.info(
             f"Probation: moving {viewer} to profile {profile.id} ({profile.name}) for channel "
             f"{channel.uuid}, stream {stream.id} ({current_count}/{profile.max_streams}), "
@@ -1094,19 +1636,25 @@ def reserve_overlap_slot(channel, redis_client, viewer, full_candidates):
         for stream, profile in full_candidates
         if profile.max_streams > 0 and account_allows_probation(stream.m3u_account)
     ]
-    if candidates and not viewer.identified:
+    anonymous_candidates = [
+        (stream, profile)
+        for stream, profile in candidates
+        if not is_identified(viewer, stream.m3u_account)
+    ]
+    if anonymous_candidates:
         # Anonymous viewers can only be matched by IP; accounts opt in separately.
         candidates = [
             (stream, profile)
             for stream, profile in candidates
-            if account_allows_anonymous(stream.m3u_account)
+            if (stream, profile) not in anonymous_candidates
+            or account_allows_anonymous(stream.m3u_account)
         ]
         if not candidates:
             log_not_used(
                 channel.uuid,
                 viewer,
-                f"{viewer} has no user or device ID and no full account allows anonymous "
-                f"connections",
+                f"{viewer} has no login and is not on a LAN subnet of these accounts, and "
+                f"none of them allows anonymous connections",
             )
     if not candidates:
         return None
@@ -1116,9 +1664,9 @@ def reserve_overlap_slot(channel, redis_client, viewer, full_candidates):
         log_not_used(channel.uuid, viewer, "redirect stream profile")
         return None
 
-    watched_profile_ids = find_profile_ids_watched_by(redis_client, viewer)
+    watched = watched_channels_by(redis_client, viewer)
     watched_candidates = [
-        (stream, profile) for stream, profile in candidates if profile.id in watched_profile_ids
+        (stream, profile) for stream, profile in candidates if profile.id in watched
     ]
     if not watched_candidates:
         log_not_used(
@@ -1140,8 +1688,17 @@ def reserve_overlap_slot(channel, redis_client, viewer, full_candidates):
         redis_client.set(f"channel_stream:{channel.id}", stream.id)
         redis_client.set(f"stream_profile:{stream.id}", profile.id)
         seconds = account_probation_seconds(stream.m3u_account)
-        mark_probation(redis_client, channel, stream.id, profile.id, seconds)
-        take_held_slot(redis_client, profile, viewer)
+        event_id = record_event(
+            redis_client,
+            viewer,
+            "overlap slot",
+            channel=channel.uuid,
+            from_channel=watched.get(profile.id),
+            account=stream.m3u_account.name,
+            result="waiting",
+        )
+        mark_probation(redis_client, channel, stream.id, profile.id, seconds, event_id)
+        take_held_slot(redis_client, profile, viewer, channel.uuid)
         remember_viewer_profile(redis_client, viewer, profile, stream.m3u_account)
         logger.info(
             f"Probation: channel {channel.uuid} assigned stream {stream.id} profile "
@@ -1156,7 +1713,7 @@ def _monitor_lease_key(channel_uuid) -> str:
     return MONITOR_LEASE_KEY.format(channel_uuid=channel_uuid)
 
 
-def mark_probation(redis_client, channel, stream_id, profile_id, seconds):
+def mark_probation(redis_client, channel, stream_id, profile_id, seconds, event_id=None):
     """
     Record that a channel's newly reserved slot is over its profile limit.
 
@@ -1174,6 +1731,7 @@ def mark_probation(redis_client, channel, stream_id, profile_id, seconds):
             "profile_id": str(profile_id),
             "started_at": str(now),
             "deadline": str(now + seconds),
+            "event_id": event_id or "",
         },
     )
     # Outlives the window so the monitor can still resolve it, but cannot linger
@@ -1355,9 +1913,13 @@ def resolve_probation(channel_uuid, redis_client=None, now=None) -> str:
         within_limits = _profile_within_limits(profile, redis_client)
 
     if within_limits:
+        seconds_taken = now - float(record.get("started_at", now))
         logger.info(
             f"Probation: channel {channel_uuid} confirmed on profile {profile_id} "
-            f"after {now - float(record.get('started_at', now)):.1f}s"
+            f"after {seconds_taken:.1f}s"
+        )
+        update_event(
+            redis_client, record.get("event_id"), result=f"confirmed after {seconds_taken:.1f}s"
         )
         _clear(redis_client, channel_uuid)
         return CONFIRMED
@@ -1385,6 +1947,7 @@ def resolve_probation(channel_uuid, redis_client=None, now=None) -> str:
         logger.error(f"Probation: error moving channel {channel_uuid}: {e}", exc_info=True)
         migrated = False
     if migrated:
+        update_event(redis_client, record.get("event_id"), result="moved to another account")
         _clear(redis_client, channel_uuid)
         return MIGRATED
 
@@ -1398,6 +1961,9 @@ def resolve_probation(channel_uuid, redis_client=None, now=None) -> str:
         f"and no other profile has capacity; stopping channel {channel_uuid}"
     )
     ChannelService.stop_channel(channel_uuid)
+    update_event(
+        redis_client, record.get("event_id"), result="stopped: no slot free within the window"
+    )
     _clear(redis_client, channel_uuid)
     return STOPPED
 
@@ -1481,3 +2047,138 @@ def recover_unmonitored_probations(redis_client):
                 gevent.spawn(_monitor, channel_uuid, token)
     except Exception as e:
         logger.debug(f"Could not recover overlap checks: {e}")
+
+
+def _assignment_channel_ids(owner_id, stream_id):
+    """
+    Live proxy IDs an assignment can belong to: a channel's UUID for channel_stream:<channel id>,
+    and the stream hash for a stream preview (channel_stream:<stream id> -> <stream id>).
+    """
+    from apps.channels.models import Channel, Stream
+
+    channel_ids = []
+    channel_uuid = Channel.objects.filter(id=owner_id).values_list("uuid", flat=True).first()
+    if channel_uuid:
+        channel_ids.append(str(channel_uuid))
+    if owner_id == stream_id:
+        stream_hash = Stream.objects.filter(id=stream_id).values_list("stream_hash", flat=True).first()
+        if stream_hash:
+            channel_ids.append(stream_hash)
+    return channel_ids
+
+
+def _live_channel_ids(redis_client):
+    """
+    IDs with at least one live:channel:<id>:* key that expires: metadata, buffer chunks,
+    clients, owner, stop and disconnect markers. Those only exist while the channel runs, or
+    shortly after. Keys without an expiry (such as the buffer index) outlive an unclean stop,
+    so they do not count.
+    """
+    keys = [_as_str(key) for key in redis_client.scan_iter(match="live:channel:*", count=1000)]
+    live_ids = set()
+    for start in range(0, len(keys), 500):
+        batch = keys[start:start + 500]
+        pipe = redis_client.pipeline(transaction=False)
+        for key in batch:
+            pipe.ttl(key)
+        for key, ttl in zip(batch, pipe.execute()):
+            parts = key.split(":", 3)
+            if len(parts) >= 3 and ttl is not None and int(ttl) >= 0:
+                live_ids.add(parts[2])
+    return live_ids
+
+
+def release_abandoned_slots(redis_client, now=None) -> list:
+    """
+    Release slots whose channel no longer exists in the live proxy. Returns the released
+    assignment keys.
+
+    A channel holds its slot through channel_stream:<channel id>, stream_profile:<stream id>
+    and the profile's counter, none of which expire, while all of its live:channel:<uuid>:*
+    keys do (metadata, buffer chunks, clients, owner). When Dispatcharr stops without cleaning
+    up (a reboot, a service restart, a crash) those keys expire but the slot stays counted,
+    and the account looks full until someone fixes Redis by hand.
+
+    A channel that is starting, streaming, waiting out a shutdown delay or being stopped always
+    has some of those expiring keys (a streaming channel writes buffer chunks every fraction of
+    a second), so an assignment is only released when its channel has had none at all on every
+    check for ABANDONED_SLOT_GRACE seconds.
+
+    Called from every worker's proxy cleanup loop; a Redis lock makes one worker do the work
+    every SWEEP_INTERVAL seconds.
+    """
+    if not redis_client:
+        return []
+    try:
+        if not redis_client.set(SWEEP_LOCK_KEY, "1", nx=True, ex=SWEEP_INTERVAL):
+            return []
+
+        from apps.m3u.connection_pool import release_profile_slot
+
+        now = now if now is not None else time.time()
+        first_seen = {
+            _as_str(key): _parse_hold(value)[0]
+            for key, value in (redis_client.hgetall(ABANDONED_SLOTS_KEY) or {}).items()
+        }
+
+        assignment_keys = [
+            _as_str(key) for key in redis_client.scan_iter(match="channel_stream:*", count=500)
+        ]
+        if not assignment_keys and not first_seen:
+            return []
+        live_ids = _live_channel_ids(redis_client)
+
+        # (assignment key, owner id, stream id, running)
+        assignments = []
+        for key in assignment_keys:
+            key = _as_str(key)
+            try:
+                owner_id = int(key.split(":", 1)[1])
+                stream_id = int(_as_str(redis_client.get(key)))
+            except (TypeError, ValueError):
+                continue
+            running = any(
+                channel_id in live_ids
+                for channel_id in _assignment_channel_ids(owner_id, stream_id)
+            )
+            assignments.append((key, owner_id, stream_id, running))
+
+        streams_in_use = {stream_id for _k, _o, stream_id, running in assignments if running}
+        not_running = set()
+        released = []
+        for key, owner_id, stream_id, running in assignments:
+            if running:
+                continue
+            not_running.add(key)
+            if key not in first_seen:
+                redis_client.hset(ABANDONED_SLOTS_KEY, key, str(now))
+                continue
+            if now - first_seen[key] < ABANDONED_SLOT_GRACE:
+                continue
+
+            redis_client.delete(key)
+            not_running.discard(key)
+            profile_id = _as_str(redis_client.get(f"stream_profile:{stream_id}"))
+            if stream_id in streams_in_use or not profile_id:
+                # Another running channel shares the stream's profile record, or no slot was
+                # counted (stream previews keep an empty assignment after they end)
+                logger.info(f"Probation: removed a leftover assignment {key} (stream {stream_id})")
+                continue
+            redis_client.delete(f"stream_profile:{stream_id}")
+            release_profile_slot(int(profile_id), redis_client)
+            logger.warning(
+                f"Probation: released the slot on profile {profile_id} that {key} (stream "
+                f"{stream_id}) still held; its channel has not been running for "
+                f"{now - first_seen[key]:.0f}s (for example after a restart or crash)"
+            )
+            released.append(key)
+
+        finished = [key for key in first_seen if key not in not_running]
+        if finished:
+            redis_client.hdel(ABANDONED_SLOTS_KEY, *finished)
+        redis_client.expire(ABANDONED_SLOTS_KEY, ABANDONED_SLOT_GRACE * 10)
+        return released
+    except Exception as e:
+        logger.debug(f"Could not check for abandoned slots: {e}")
+        return []
+

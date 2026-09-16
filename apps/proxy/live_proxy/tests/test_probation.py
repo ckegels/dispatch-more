@@ -29,6 +29,9 @@ class FakeRedis:
         self.strings = {}
         self.hashes = {}
         self.sets = {}
+        self.zsets = {}
+        # Keys with an expiry (values are not tracked: nothing expires by itself here)
+        self.expiring = set()
 
     def get(self, key):
         value = self.strings.get(key)
@@ -38,24 +41,41 @@ class FakeRedis:
         if nx and self.exists(key):
             return None
         self.strings[key] = str(value)
+        if ex is None:
+            self.expiring.discard(key)
+        else:
+            self.expiring.add(key)
         return True
 
     def setex(self, key, ttl, value):
         self.strings[key] = str(value)
+        self.expiring.add(key)
 
     def delete(self, *keys):
         removed = 0
         for key in keys:
-            for store in (self.strings, self.hashes, self.sets):
+            for store in (self.strings, self.hashes, self.sets, self.zsets):
                 if store.pop(key, None) is not None:
                     removed += 1
         return removed
 
     def exists(self, key):
-        return int(key in self.strings or key in self.hashes or key in self.sets)
+        return int(
+            key in self.strings or key in self.hashes or key in self.sets or key in self.zsets
+        )
 
     def expire(self, key, ttl):
+        if self.exists(key):
+            self.expiring.add(key)
         return True
+
+    def ttl(self, key):
+        if not self.exists(key):
+            return -2
+        return 30 if key in self.expiring else -1
+
+    def pipeline(self, transaction=True):
+        return _FakePipeline(self)
 
     def incr(self, key):
         value = int(self.strings.get(key) or 0) + 1
@@ -89,6 +109,24 @@ class FakeRedis:
         bucket = self.hashes.get(key, {})
         return sum(1 for field in fields if bucket.pop(field, None) is not None)
 
+    def zadd(self, key, mapping):
+        self.zsets.setdefault(key, {}).update({str(k): float(v) for k, v in mapping.items()})
+
+    def zrevrange(self, key, start, stop):
+        members = sorted(self.zsets.get(key, {}).items(), key=lambda item: -item[1])
+        return [member for member, _score in members][start : (None if stop == -1 else stop + 1)]
+
+    def zremrangebyrank(self, key, start, stop):
+        members = sorted(self.zsets.get(key, {}).items(), key=lambda item: item[1])
+        for member, _score in members[start : (None if stop == -1 else stop + 1)]:
+            self.zsets[key].pop(member, None)
+
+    def zremrangebyscore(self, key, minimum, maximum):
+        minimum = float("-inf") if minimum == "-inf" else float(minimum)
+        for member, score in list(self.zsets.get(key, {}).items()):
+            if minimum <= score <= float(maximum):
+                self.zsets[key].pop(member, None)
+
     def sadd(self, key, *members):
         self.sets.setdefault(key, set()).update(str(m) for m in members)
 
@@ -107,14 +145,33 @@ class FakeRedis:
         return [k for k in keys if fnmatch.fnmatchcase(k, match)]
 
 
+class _FakePipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.calls = []
+
+    def __getattr__(self, name):
+        def queue(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return self
+        return queue
+
+    def execute(self):
+        return [getattr(self.redis, name)(*args, **kwargs) for name, args, kwargs in self.calls]
+
+
 def _reset_in_use_cache(test):
     """probation.in_use() is cached in Redis, which test database rollbacks do not reset."""
     probation.forget_in_use()
     test.addCleanup(probation.forget_in_use)
 
 
-def _make_account(name, max_streams=1, probation_enabled=False, probation_seconds=None):
+def _make_account(name, max_streams=1, probation_enabled=False, probation_seconds=None, lan=True):
     custom_properties = {"probation_enabled": probation_enabled}
+    if probation_enabled and lan:
+        # Test players are on 192.168.x: recognised by IP address and app (LAN Device Tracking)
+        custom_properties["probation_lan_tracking"] = True
+        custom_properties["probation_lan_subnets"] = ["192.168.0.0/16"]
     if probation_seconds is not None:
         custom_properties["probation_seconds"] = probation_seconds
     account = M3UAccount.objects.create(
@@ -190,15 +247,14 @@ class GetStreamProbationTests(TestCase):
         account.custom_properties = {**account.custom_properties, **props}
         account.save()
 
-    def _watching(self, profile, ip=IP, user_id="0", device_id=None, channel_uuid="old-channel"):
+    def _watching(self, profile, ip=IP, user_id="0", user_agent=None, channel_uuid="old-channel"):
         self.redis.hset(
             RedisKeys.channel_metadata(channel_uuid),
             mapping={ChannelMetadataField.M3U_PROFILE: profile.id},
         )
         self.redis.sadd(RedisKeys.clients(channel_uuid), "client_1")
-        client = {"ip_address": ip, "user_agent": "TiviMate/5.1", "user_id": user_id}
-        if device_id:
-            client[probation.DEVICE_ID_FIELD] = device_id
+        # No User-Agent means no app, like a media server: the viewer in the test has none either
+        client = {"ip_address": ip, "user_id": user_id, "user_agent": user_agent or ""}
         self.redis.hset(RedisKeys.client_metadata(channel_uuid, "client_1"), mapping=client)
 
     def _deadline_seconds(self):
@@ -231,19 +287,19 @@ class GetStreamProbationTests(TestCase):
 
     def test_device_switching_starts_on_probation(self, _preempt):
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self._assert_probation_on(result, self.stream_a, self.profile_a)
         self.assertEqual(self._deadline_seconds(), probation.DEFAULT_PROBATION_SECONDS)
 
     def test_other_device_behind_same_ip_gets_limit_error(self, _preempt):
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
         self._assert_limit_error(
-            self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="phone"))
+            self.channel.get_stream(viewer=probation.Viewer(self.IP, app="Smarters"))
         )
 
     def test_other_user_behind_same_ip_gets_limit_error(self, _preempt):
@@ -263,6 +319,7 @@ class GetStreamProbationTests(TestCase):
         )
 
     def test_anonymous_viewer_needs_account_opt_in(self, _preempt):
+        # No app in the User-Agent (a media server), so no account recognises it
         self._fill_both()
         self._watching(self.profile_a)
 
@@ -276,7 +333,7 @@ class GetStreamProbationTests(TestCase):
     def test_anonymous_viewer_does_not_match_identified_client(self, _preempt):
         self._set_props(self.account_a, probation_allow_anonymous=True)
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
         self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer(self.IP)))
 
@@ -284,8 +341,8 @@ class GetStreamProbationTests(TestCase):
         probation._not_used_logged.clear()
         self.addCleanup(probation._not_used_logged.clear)
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
-        viewer = probation.Viewer(self.IP, device_id="phone")
+        self._watching(self.profile_a, user_agent="TiviMate")
+        viewer = probation.Viewer(self.IP, app="Smarters")
 
         with self.assertLogs("live_proxy", level="INFO") as logs:
             for _ in range(3):
@@ -353,10 +410,10 @@ class GetStreamProbationTests(TestCase):
     def test_sticky_uses_overlap_on_watched_account_even_if_other_is_free(self, _preempt):
         self._set_props(self.account_b, probation_account_preference="same")
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
-        self._watching(self.profile_b, device_id="tv1")
+        self._watching(self.profile_b, user_agent="TiviMate")
 
         with self.assertLogs("live_proxy", level="INFO") as logs:
-            result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+            result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(result, (self.stream_b.id, self.profile_b.id, None, True))
         self.assertEqual(self._count(self.profile_b), "2")
@@ -379,7 +436,7 @@ class GetStreamProbationTests(TestCase):
 
     def test_sticky_uses_account_viewer_just_left(self, _preempt):
         self._set_props(self.account_b, probation_account_preference="same")
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         probation.remember_viewer_profile(self.redis, viewer, self.profile_b, self.account_b)
 
         result = self.channel.get_stream(viewer=viewer)
@@ -389,7 +446,7 @@ class GetStreamProbationTests(TestCase):
 
     def test_sticky_never_overlaps_account_viewer_only_left(self, _preempt):
         self._set_props(self.account_b, probation_account_preference="same")
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         probation.remember_viewer_profile(self.redis, viewer, self.profile_b, self.account_b)
         self.redis.set(profile_connections_key(self.profile_b.id), 1)  # someone else took it
 
@@ -399,13 +456,13 @@ class GetStreamProbationTests(TestCase):
         self.assertEqual(self._count(self.profile_b), "1")
 
     def test_sticky_disabled_keeps_stock_order(self, _preempt):
-        self._watching(self.profile_b, device_id="tv1")
+        self._watching(self.profile_b, user_agent="TiviMate")
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(result, (self.stream_a.id, self.profile_a.id, None, True))
-        self.assertIsNone(self.redis.get(probation._last_profile_key(probation.Viewer(self.IP, device_id="tv1"))))
+        self.assertIsNone(self.redis.get(probation._last_profile_key(probation._viewer_key(probation.Viewer(self.IP, app="TiviMate")))))
 
     def test_sticky_anonymous_needs_account_opt_in(self, _preempt):
         self._set_props(self.account_b, probation_account_preference="same")
@@ -423,29 +480,29 @@ class GetStreamProbationTests(TestCase):
     def test_sticky_ignores_redirect_profiles(self, _preempt):
         self.stream_profile.is_redirect.return_value = True
         self._set_props(self.account_b, probation_account_preference="same")
-        self._watching(self.profile_b, device_id="tv1")
+        self._watching(self.profile_b, user_agent="TiviMate")
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(result[1], self.profile_a.id)
 
     def test_assignment_is_remembered_only_on_sticky_accounts(self, _preempt):
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
 
         self.channel.get_stream(viewer=viewer)
-        self.assertIsNone(self.redis.get(probation._last_profile_key(viewer)))
+        self.assertIsNone(self.redis.get(probation._last_profile_key(probation._viewer_key(viewer))))
 
         self.redis.delete(f"channel_stream:{self.channel.id}")
         self.redis.set(profile_connections_key(self.profile_a.id), 0)
         self._set_props(self.account_a, probation_account_preference="same")
         self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
-        self.assertEqual(self.redis.get(probation._last_profile_key(viewer)), str(self.profile_a.id))
+        self.assertEqual(self.redis.get(probation._last_profile_key(probation._viewer_key(viewer))), str(self.profile_a.id))
 
     # ── Use another account ─────────────────────────────────────────────────
 
     def test_alternate_starts_on_other_account_after_old_one_was_released(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         probation.remember_viewer_profile(self.redis, viewer, self.profile_a, self.account_a)
 
         with self.assertLogs("live_proxy", level="INFO") as logs:
@@ -456,14 +513,14 @@ class GetStreamProbationTests(TestCase):
         self.assertTrue(any("use another account" in line for line in logs.output))
 
     def test_order_preference_returns_to_the_same_account(self, _preempt):
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
 
         self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
 
     def test_alternate_releases_the_hold_it_leaves_behind(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
 
         result = self.channel.get_stream(viewer=viewer)
@@ -473,7 +530,7 @@ class GetStreamProbationTests(TestCase):
 
     def test_alternate_falls_back_to_own_held_slot_when_others_are_full(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
 
@@ -485,9 +542,9 @@ class GetStreamProbationTests(TestCase):
     def test_alternate_falls_back_to_overlap_when_others_are_full(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(result[1], self.profile_a.id)
         self.assertEqual(self._count(self.profile_a), "2")
@@ -505,7 +562,7 @@ class GetStreamProbationTests(TestCase):
     def test_alternate_never_picks_a_custom_fallback_stream(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
         fallback = self._add_fallback_stream()
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
 
@@ -517,7 +574,7 @@ class GetStreamProbationTests(TestCase):
     def test_alternate_ignores_accounts_without_overlap(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
         self._set_props(self.account_b, probation_enabled=False)
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
 
         self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
@@ -525,7 +582,7 @@ class GetStreamProbationTests(TestCase):
     def test_alternate_depends_on_the_account_being_left(self, _preempt):
         # Only account B alternates; the viewer leaves account A, which follows channel order
         self._set_props(self.account_b, probation_account_preference="alternate")
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
 
         self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
@@ -533,37 +590,38 @@ class GetStreamProbationTests(TestCase):
     def test_alternate_only_applies_to_the_viewer_that_left(self, _preempt):
         self._set_props(self.account_a, probation_account_preference="alternate")
         probation.remember_viewer_profile(
-            self.redis, probation.Viewer(self.IP, device_id="tv1"), self.profile_a, self.account_a
+            self.redis, probation.Viewer(self.IP, app="TiviMate"), self.profile_a, self.account_a
         )
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="phone"))
+        # Another device on the network: the remembered account does not apply to it
+        result = self.channel.get_stream(viewer=probation.Viewer("192.168.1.55", app="Smarters"))
 
         self.assertEqual(result[1], self.profile_a.id)
 
     # ── Held slots ──────────────────────────────────────────────────────────
 
-    def _hold(self, profile, viewer, seconds=10):
+    def _hold(self, profile, viewer, account=None, seconds=10):
         self.redis.hset(
             probation._held_slots_key(profile.id),
-            probation._viewer_key(viewer),
+            probation.identity_key(viewer, account or self.account_a),
             str(time.time() + seconds),
         )
 
     def test_held_slot_is_taken_for_other_viewers(self, _preempt):
-        self._hold(self.profile_a, probation.Viewer(self.IP, device_id="tv1"))
+        self._hold(self.profile_a, probation.Viewer(self.IP, app="TiviMate"))
 
-        result = self.channel.get_stream(viewer=probation.Viewer("192.168.1.99", device_id="phone"))
+        result = self.channel.get_stream(viewer=probation.Viewer("192.168.1.99", app="Smarters"))
 
         self.assertEqual(result[1], self.profile_b.id)
         self.assertEqual(self._count(self.profile_a), "0")
 
     def test_held_slot_is_taken_for_requests_without_viewer(self, _preempt):
-        self._hold(self.profile_a, probation.Viewer(self.IP, device_id="tv1"))
+        self._hold(self.profile_a, probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(self.channel.get_stream()[1], self.profile_b.id)
 
     def test_viewer_gets_its_held_slot_back(self, _preempt):
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
         self._hold(self.profile_a, viewer)
 
@@ -575,21 +633,21 @@ class GetStreamProbationTests(TestCase):
         self.assertTrue(any("took its held slot" in line for line in logs.output))
 
     def test_expired_hold_is_ignored(self, _preempt):
-        self._hold(self.profile_a, probation.Viewer(self.IP, device_id="tv1"), seconds=-1)
+        self._hold(self.profile_a, probation.Viewer(self.IP, app="TiviMate"), seconds=-1)
 
-        result = self.channel.get_stream(viewer=probation.Viewer("192.168.1.99", device_id="phone"))
+        result = self.channel.get_stream(viewer=probation.Viewer("192.168.1.99", app="Smarters"))
 
         self.assertEqual(result[1], self.profile_a.id)
         self.assertEqual(self.redis.hgetall(probation._held_slots_key(self.profile_a.id)), {})
 
     def test_holds_are_ignored_on_accounts_without_overlap(self, _preempt):
         self._set_props(self.account_a, probation_enabled=False)
-        self._hold(self.profile_a, probation.Viewer(self.IP, device_id="tv1"))
+        self._hold(self.profile_a, probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(self.channel.get_stream()[1], self.profile_a.id)
 
     def test_release_holds_slot_for_its_single_viewer(self, _preempt):
-        self._watching(self.profile_a, device_id="tv1", channel_uuid=str(self.channel.uuid))
+        self._watching(self.profile_a, user_agent="TiviMate", channel_uuid=str(self.channel.uuid))
         self.redis.set(f"channel_stream:{self.channel.id}", self.stream_a.id)
         self.redis.set(f"stream_profile:{self.stream_a.id}", self.profile_a.id)
         self.redis.set(profile_connections_key(self.profile_a.id), 1)
@@ -599,7 +657,10 @@ class GetStreamProbationTests(TestCase):
 
         self.assertEqual(self._count(self.profile_a), "0")
         held = self.redis.hgetall(probation._held_slots_key(self.profile_a.id))
-        self.assertEqual(list(held), [probation._viewer_key(probation.Viewer(self.IP, device_id="tv1"))])
+        self.assertEqual(
+            list(held),
+            [probation.identity_key(probation.Viewer(self.IP, app="TiviMate"), self.account_a)],
+        )
 
     def test_no_hold_without_identity_multiple_viewers_or_no_hold_marker(self, _preempt):
         uuid = str(self.channel.uuid)
@@ -611,7 +672,7 @@ class GetStreamProbationTests(TestCase):
                 self.redis.sadd(RedisKeys.clients(uuid), client_id)
                 self.redis.hset(
                     RedisKeys.client_metadata(uuid, client_id),
-                    mapping={"ip_address": self.IP, "user_id": "0", "device_id": device_id or ""},
+                    mapping={"ip_address": self.IP, "user_id": "0", "user_agent": device_id or ""},
                 )
             if setup.get("no_hold"):
                 self.redis.setex(probation.NO_HOLD_KEY.format(channel_uuid=uuid), 30, "1")
@@ -619,10 +680,10 @@ class GetStreamProbationTests(TestCase):
             return self.redis.hgetall(probation._held_slots_key(self.profile_a.id))
 
         self.assertEqual(release_with(clients=[("c1", None)]), {})  # anonymous, not allowed
-        self.assertEqual(release_with(clients=[("c1", "tv1"), ("c2", "tv2")]), {})
-        self.assertEqual(release_with(clients=[("c1", "tv1")], no_hold=True), {})
+        self.assertEqual(release_with(clients=[("c1", "TiviMate"), ("c2", "Kodi")]), {})
+        self.assertEqual(release_with(clients=[("c1", "TiviMate")], no_hold=True), {})
         self._set_props(self.account_a, probation_enabled=False)
-        self.assertEqual(release_with(clients=[("c1", "tv1")]), {})
+        self.assertEqual(release_with(clients=[("c1", "TiviMate")]), {})
 
     def test_only_one_probation_slot_per_profile(self, _preempt):
         self._fill_both()
@@ -642,7 +703,7 @@ class GetStreamProbationTests(TestCase):
         self.assertEqual(self.redis.get(profile_connections_key(self.profile_a.id)), "2")
 
     def test_holds_apply_to_every_way_of_getting_a_slot(self, _preempt):
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._hold(self.profile_a, viewer)
 
         # Failover, stream changes, plugins, VOD and timeshift use these checks
@@ -677,7 +738,7 @@ class GetStreamProbationTests(TestCase):
             self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer("127.0.0.1")))
 
     def test_recording_ignores_held_slots(self, _preempt):
-        self._hold(self.profile_a, probation.Viewer(self.IP, device_id="tv1"))
+        self._hold(self.profile_a, probation.Viewer(self.IP, app="TiviMate"))
 
         result = self.channel.get_stream(viewer=probation.Viewer("127.0.0.1", recording=True))
 
@@ -685,11 +746,11 @@ class GetStreamProbationTests(TestCase):
 
     def test_no_hold_when_stopped_on_purpose_or_recording(self, _preempt):
         uuid = str(self.channel.uuid)
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
 
         def release_with(setup):
             self.redis = FakeRedis()
-            self._watching(self.profile_a, device_id="tv1", channel_uuid=uuid)
+            self._watching(self.profile_a, user_agent="TiviMate", channel_uuid=uuid)
             setup(self.redis)
             probation.hold_slot_for_viewer(self.redis, uuid, self.profile_a.id)
             return self.redis.hgetall(probation._held_slots_key(self.profile_a.id))
@@ -721,7 +782,108 @@ class GetStreamProbationTests(TestCase):
         )
         # A viewer leaving still gets its hold
         with self.assertLogs("live_proxy", level="INFO"):
-            self.assertEqual(list(release_with(lambda r: None)), [probation._viewer_key(viewer)])
+            self.assertEqual(
+                list(release_with(lambda r: None)),
+                [probation.identity_key(viewer, self.account_a)],
+            )
+
+    # ── How a device is recognised ──────────────────────────────────────────
+
+    def _track_lan(self, account, subnets=("192.168.1.0/24",)):
+        self._set_props(account, probation_lan_tracking=True, probation_lan_subnets=list(subnets))
+
+    def _player(self, user_agent="TiviMate/5.1.6 (Android 12)", ip=IP, user_id=None):
+        return probation.Viewer(ip, user_id=user_id, app=probation.app_name(user_agent))
+
+    def _watching_player(self, profile, user_agent="TiviMate/5.1.6 (Android 12)", ip=IP, user_id="0"):
+        self._watching(profile, ip=ip, user_id=user_id)
+        self.redis.hset(RedisKeys.client_metadata("old-channel", "client_1"), "user_agent", user_agent)
+
+    def test_lan_player_is_recognised_without_a_login(self, _preempt):
+        for account in (self.account_a, self.account_b):
+            self._set_props(account, probation_lan_tracking=False)
+        self._fill_both()
+        self._watching_player(self.profile_a)
+        player = self._player()
+
+        # Without LAN Device Tracking a player without a login is anonymous
+        with self.assertLogs("live_proxy", level="INFO"):
+            self._assert_limit_error(self.channel.get_stream(viewer=player))
+
+        self._track_lan(self.account_a)
+        self.assertEqual(probation.find_profile_ids_watched_by(self.redis, player), [self.profile_a.id])
+        self._assert_probation_on(self.channel.get_stream(viewer=player), self.stream_a, self.profile_a)
+
+    def test_another_app_or_address_is_another_device(self, _preempt):
+        self._track_lan(self.account_a)
+        self._watching_player(self.profile_a)
+
+        # Another app on the same device, and another device on the network
+        for other in (
+            self._player(user_agent="Kodi/21.0 (Linux; Android 12)"),
+            self._player(ip="192.168.1.30"),
+        ):
+            self.assertEqual(probation.find_profile_ids_watched_by(self.redis, other), [])
+        # The same app after an update is the same device
+        updated = self._player(user_agent="TiviMate/5.2.0 (Android 12)")
+        self.assertEqual(probation.find_profile_ids_watched_by(self.redis, updated), [self.profile_a.id])
+
+    def test_outside_the_lan_subnets_a_login_is_needed(self, _preempt):
+        self._track_lan(self.account_a)
+        remote = "77.100.5.9"
+        self._watching_player(self.profile_a, ip=remote, user_id="7")
+
+        # Same address and app, but no login: anonymous, so not the same viewer
+        self.assertEqual(
+            probation.find_profile_ids_watched_by(self.redis, self._player(ip=remote)), []
+        )
+        # With its own login it is recognised
+        self.assertEqual(
+            probation.find_profile_ids_watched_by(self.redis, self._player(ip=remote, user_id=7)),
+            [self.profile_a.id],
+        )
+
+    def test_media_servers_and_recordings_are_never_lan_devices(self, _preempt):
+        self._track_lan(self.account_a)
+        self._fill_both()
+        self._watching_player(self.profile_a, user_agent="Jellyfin-Server/10.10.7")
+        media_server = self._player(user_agent="Jellyfin-Server/10.10.7")
+
+        # Anonymous: matched by IP only, so the account has to allow that
+        self.assertFalse(probation.is_identified(media_server, self.account_a))
+        with self.assertLogs("live_proxy", level="INFO"):
+            self._assert_limit_error(self.channel.get_stream(viewer=media_server))
+
+        # A recording never takes part at all
+        recording = probation.Viewer(self.IP, recording=True)
+        self.assertFalse(probation.is_identified(recording, self.account_a))
+        self.assertEqual(probation.find_profile_ids_watched_by(self.redis, recording), [])
+
+    def test_lan_player_keeps_its_held_slot(self, _preempt):
+        self._track_lan(self.account_a)
+        self.redis.set(profile_connections_key(self.profile_b.id), 1)
+        uuid = str(self.channel.uuid)
+        self.redis.hset(RedisKeys.channel_metadata(uuid), mapping={ChannelMetadataField.M3U_PROFILE: self.profile_a.id})
+        self.redis.sadd(RedisKeys.clients(uuid), "c1")
+        self.redis.hset(
+            RedisKeys.client_metadata(uuid, "c1"),
+            mapping={"ip_address": self.IP, "user_id": "0", "user_agent": "TiviMate/5.1.6 (Android 12)"},
+        )
+        with self.assertLogs("live_proxy", level="INFO"):
+            probation.hold_slot_for_viewer(self.redis, uuid, self.profile_a.id)
+        self.redis.delete(RedisKeys.clients(uuid))
+
+        # Another device on the network is kept out
+        self.assertFalse(
+            pool_has_capacity_for_profile(self.profile_a, self.redis, self._player(ip="192.168.1.30"))
+        )
+        # The player itself gets its slot back
+        other_channel = Channel.objects.create(channel_number=905, name="Next")
+        ChannelStream.objects.create(channel=other_channel, stream=self.stream_a, order=0)
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            self.assertEqual(other_channel.get_stream(viewer=self._player())[1], self.profile_a.id)
+        self.assertTrue(any("took its held slot" in line for line in logs.output))
+        self.assertEqual(self.redis.hgetall(probation._held_slots_key(self.profile_a.id)), {})
 
     def _idle_channel(self, profile, viewers, channel_uuid="idle-channel"):
         """A channel whose clients all left; it waits out the Channel Shutdown Delay."""
@@ -733,11 +895,11 @@ class GetStreamProbationTests(TestCase):
         for viewer in viewers:
             self.redis.sadd(
                 probation.CHANNEL_VIEWERS_KEY.format(channel_uuid=channel_uuid),
-                probation._viewer_key(viewer),
+                probation._viewer_member(viewer),
             )
 
     def test_channel_waiting_for_shutdown_delay_counts_for_its_viewer(self, _preempt):
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         self._fill_both()
         self._idle_channel(self.profile_a, [viewer])
 
@@ -746,8 +908,8 @@ class GetStreamProbationTests(TestCase):
         self._assert_probation_on(result, self.stream_a, self.profile_a)
 
     def test_channel_waiting_for_shutdown_delay_only_counts_for_its_only_viewer(self, _preempt):
-        viewer = probation.Viewer(self.IP, device_id="tv1")
-        other = probation.Viewer(self.IP, device_id="tv2")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
+        other = probation.Viewer(self.IP, app="Kodi")
 
         self._idle_channel(self.profile_a, [viewer, other])
         self.assertEqual(probation.find_profile_ids_watched_by(self.redis, viewer), [])
@@ -774,9 +936,9 @@ class GetStreamProbationTests(TestCase):
     def test_overlap_comes_before_a_custom_fallback_stream(self, _preempt):
         slate = self._add_custom_stream(order=99)
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self._assert_probation_on(result, self.stream_a, self.profile_a)
         self.assertNotEqual(result[0], slate.id)
@@ -784,11 +946,11 @@ class GetStreamProbationTests(TestCase):
     def test_custom_fallback_stream_is_used_when_the_overlap_does_not_apply(self, _preempt):
         slate = self._add_custom_stream(order=99)
         self._fill_both()
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
         # Another viewer, and a request without viewer, get the fallback as before
         with self.assertLogs("live_proxy", level="INFO"):
-            other = self.channel.get_stream(viewer=probation.Viewer("192.168.1.99", device_id="phone"))
+            other = self.channel.get_stream(viewer=probation.Viewer("192.168.1.99", app="Smarters"))
         self.assertEqual(other[0], slate.id)
         self.assertEqual(self.channel.get_stream()[0], slate.id)
         self.assertFalse(probation.has_pending_probation(self.redis, self.channel.uuid))
@@ -796,9 +958,9 @@ class GetStreamProbationTests(TestCase):
     def test_custom_stream_first_in_order_is_still_used_first(self, _preempt):
         ChannelStream.objects.filter(channel=self.channel).update(order=5)
         custom = self._add_custom_stream(order=0, name="My own stream")
-        self._watching(self.profile_a, device_id="tv1")
+        self._watching(self.profile_a, user_agent="TiviMate")
 
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, device_id="tv1"))
+        result = self.channel.get_stream(viewer=probation.Viewer(self.IP, app="TiviMate"))
 
         self.assertEqual(result[0], custom.id)
 
@@ -1072,10 +1234,14 @@ class ServerGroupHeldSlotTests(TestCase):
                 server_url="http://xc.example.com",
                 server_group=group,
                 max_streams=1,
-                custom_properties={"probation_enabled": True},
+                custom_properties={
+                    "probation_enabled": True,
+                    "probation_lan_tracking": True,
+                    "probation_lan_subnets": ["192.168.0.0/16"],
+                },
             )
             self.profiles.append(M3UAccountProfile.objects.get(m3u_account=account, is_default=True))
-        self.viewer = probation.Viewer("192.168.1.20", device_id="tv1")
+        self.viewer = probation.Viewer("192.168.1.20", app="TiviMate")
 
     def _login_holds(self):
         return {
@@ -1092,7 +1258,7 @@ class ServerGroupHeldSlotTests(TestCase):
         self.redis.sadd(RedisKeys.clients(uuid), "c1")
         self.redis.hset(
             RedisKeys.client_metadata(uuid, "c1"),
-            mapping={"ip_address": self.viewer.ip, "user_id": "0", "device_id": "tv1"},
+            mapping={"ip_address": self.viewer.ip, "user_id": "0", "user_agent": self.viewer.app},
         )
         with self.assertLogs("live_proxy", level="INFO"):
             probation.hold_slot_for_viewer(self.redis, uuid, profile_a.id)
@@ -1143,7 +1309,7 @@ class FeatureNotInUseTests(TestCase):
 
     def test_get_stream_with_a_viewer_does_the_same_work_as_without(self):
         probation.in_use()  # warm the cache like a running server
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         for full in (False, True):
             self.assertEqual(self._get_stream(viewer, full), self._get_stream(None, full))
 
@@ -1166,10 +1332,10 @@ class FeatureNotInUseTests(TestCase):
         redis.sadd(RedisKeys.clients(uuid), "c1")
         redis.hset(
             RedisKeys.client_metadata(uuid, "c1"),
-            mapping={"ip_address": self.IP, "user_id": "0", "device_id": "tv1", "connected_at": str(time.time())},
+            mapping={"ip_address": self.IP, "user_id": "0", "user_agent": "TiviMate", "connected_at": str(time.time())},
         )
         before = (dict(redis.strings), {k: dict(v) for k, v in redis.hashes.items()}, dict(redis.sets))
-        viewer = probation.Viewer(self.IP, device_id="tv1")
+        viewer = probation.Viewer(self.IP, app="TiviMate")
         probation.in_use()
 
         with self.assertNumQueries(0):
@@ -1194,19 +1360,27 @@ class StopSkippedChannelsTests(TestCase):
             "surf-account", probation_enabled=True, probation_seconds=10
         )
         self._set_props(self.account, probation_stop_skipped=True)
-        self.viewer = probation.Viewer(self.IP, device_id="tv1")
+        self.viewer = probation.Viewer(self.IP, app="TiviMate")
 
         # The background stop closes DB connections when done; keep the test transaction open
-        patcher = patch("django.db.close_old_connections")
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        patchers = [
+            patch("django.db.close_old_connections"),
+            patch("core.utils.RedisClient.get_client", side_effect=lambda: self.redis),
+            patch(
+                "apps.proxy.live_proxy.server.ProxyServer.get_instance",
+                return_value=MagicMock(_stopping_channels=set()),
+            ),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _set_props(self, account, **props):
         account.custom_properties = {**account.custom_properties, **props}
         account.save()
 
     def _channel(self, channel_uuid, profile=None, clients=()):
-        """clients: (client_id, ip, user_id, device_id, seconds_ago)"""
+        """clients: (client_id, ip, user_id, user_agent, seconds_ago)"""
         profile = profile or self.profile
         self.redis.hset(
             RedisKeys.channel_metadata(channel_uuid),
@@ -1220,7 +1394,7 @@ class StopSkippedChannelsTests(TestCase):
                 "connected_at": str(self.NOW - seconds_ago),
             }
             if device_id:
-                client[probation.DEVICE_ID_FIELD] = device_id
+                client["user_agent"] = device_id
             self.redis.hset(RedisKeys.client_metadata(channel_uuid, client_id), mapping=client)
 
     def _stop(self, viewer=None, requested="channel-new"):
@@ -1229,9 +1403,9 @@ class StopSkippedChannelsTests(TestCase):
         )
 
     def test_surfing_stops_skipped_channels_but_keeps_watched_one(self, mock_stop, _mock_spawn):
-        self._channel("watched", clients=[("c1", self.IP, "0", "tv1", 600)])
-        self._channel("skipped-1", clients=[("c2", self.IP, "0", "tv1", 2)])
-        self._channel("skipped-2", clients=[("c3", self.IP, "0", "tv1", 1)])
+        self._channel("watched", clients=[("c1", self.IP, "0", "TiviMate", 600)])
+        self._channel("skipped-1", clients=[("c2", self.IP, "0", "TiviMate", 2)])
+        self._channel("skipped-2", clients=[("c3", self.IP, "0", "TiviMate", 1)])
 
         with self.assertLogs("live_proxy", level="INFO") as logs:
             stopped = self._stop()
@@ -1241,7 +1415,7 @@ class StopSkippedChannelsTests(TestCase):
         self.assertTrue(any("Probation: stopping skipped channel" in line for line in logs.output))
 
     def test_requested_channel_is_never_stopped(self, mock_stop, _mock_spawn):
-        self._channel("channel-new", clients=[("c1", self.IP, "0", "tv1", 1)])
+        self._channel("channel-new", clients=[("c1", self.IP, "0", "TiviMate", 1)])
 
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
@@ -1249,7 +1423,7 @@ class StopSkippedChannelsTests(TestCase):
     def test_shared_channel_is_never_stopped(self, mock_stop, _mock_spawn):
         self._channel(
             "shared",
-            clients=[("c1", self.IP, "0", "tv1", 1), ("c2", "192.168.1.30", "0", "tv2", 300)],
+            clients=[("c1", self.IP, "0", "TiviMate", 1), ("c2", "192.168.1.30", "0", "Kodi", 300)],
         )
 
         self.assertEqual(self._stop(), [])
@@ -1258,16 +1432,16 @@ class StopSkippedChannelsTests(TestCase):
     def test_reconnect_on_watched_channel_does_not_count_as_skipped(self, mock_stop, _mock_spawn):
         self._channel(
             "watched",
-            clients=[("c1", self.IP, "0", "tv1", 600), ("c2", self.IP, "0", "tv1", 1)],
+            clients=[("c1", self.IP, "0", "TiviMate", 600), ("c2", self.IP, "0", "TiviMate", 1)],
         )
 
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
 
     def test_other_device_or_user_channels_are_never_stopped(self, mock_stop, _mock_spawn):
-        self._channel("other-device", clients=[("c1", self.IP, "0", "phone", 1)])
+        self._channel("other-device", clients=[("c1", self.IP, "0", "Smarters", 1)])
         self._channel("other-user", clients=[("c2", self.IP, "8", None, 1)])
-        self._channel("other-ip", clients=[("c3", "10.0.0.9", "0", "tv1", 1)])
+        self._channel("other-ip", clients=[("c3", "10.0.0.9", "0", "TiviMate", 1)])
 
         self.assertEqual(self._stop(), [])
         self.assertEqual(self._stop(viewer=probation.Viewer(self.IP, user_id=7)), [])
@@ -1284,7 +1458,7 @@ class StopSkippedChannelsTests(TestCase):
         mock_stop.assert_not_called()
 
     def test_account_settings_are_required(self, mock_stop, _mock_spawn):
-        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
 
         self._set_props(self.account, probation_stop_skipped=False)
         with patch.object(self.redis, "scan_iter", wraps=self.redis.scan_iter) as mock_scan:
@@ -1297,26 +1471,78 @@ class StopSkippedChannelsTests(TestCase):
 
     def test_only_accounts_with_the_option_are_affected(self, mock_stop, _mock_spawn):
         _other_account, other_profile = _make_account("no-stop", probation_enabled=True)
-        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
-        self._channel("other", profile=other_profile, clients=[("c2", self.IP, "0", "tv1", 1)])
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
+        self._channel("other", profile=other_profile, clients=[("c2", self.IP, "0", "TiviMate", 1)])
 
         self.assertEqual(self._stop(), ["skipped"])
 
     def test_stop_runs_in_background(self, mock_stop, mock_spawn):
         mock_spawn.side_effect = None
-        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
 
         self.assertEqual(self._stop(), ["skipped"])
 
         mock_stop.assert_not_called()
         mock_spawn.assert_called_once_with(probation._stop_channel, "skipped")
 
-    def test_channel_already_being_stopped_is_not_stopped_again(self, mock_stop, _mock_spawn):
-        self._channel("skipped", clients=[("c1", self.IP, "0", "tv1", 1)])
+    def test_channel_already_being_stopped_is_not_stopped_again(self, mock_stop, mock_spawn):
+        # The background stop is still running when the next channel is requested
+        mock_spawn.side_effect = None
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
 
         self.assertEqual(self._stop(requested="channel-c"), ["skipped"])
         self.assertEqual(self._stop(requested="channel-d"), [])
 
+        mock_spawn.assert_called_once_with(probation._stop_channel, "skipped")
+
+    def test_lan_player_without_a_login_stops_its_skipped_channels(self, mock_stop, _mock_spawn):
+        player = probation.Viewer(self.IP, app=probation.app_name("TiviMate/5.1.6 (Android 12)"))
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate/5.1.6 (Android 12)", 2)])
+
+        # Without LAN Device Tracking a player without a login is anonymous
+        self._set_props(self.account, probation_lan_tracking=False)
+        self.assertEqual(self._stop(viewer=player), [])
+
+        self._set_props(self.account, probation_lan_tracking=True, probation_lan_subnets=["192.168.1.0/24"])
+        with self.assertLogs("live_proxy", level="INFO"):
+            self.assertEqual(self._stop(viewer=player), ["skipped"])
+
+    def test_channel_dispatcharr_is_already_stopping_is_left_alone(self, mock_stop, _mock_spawn):
+        # The player left and Dispatcharr is stopping it: a second stop would leave a
+        # stopping marker behind that blocks the channel for a minute
+        self._channel("leaving", clients=[("c1", self.IP, "0", "TiviMate", 1)])
+        self.redis.setex(RedisKeys.channel_stopping("leaving"), 60, "true")
+        self._channel("closing", clients=[("c2", self.IP, "0", "TiviMate", 1)])
+        self.redis.hset(RedisKeys.channel_metadata("closing"), ChannelMetadataField.STATE, ChannelState.STOPPING)
+
+        self.assertEqual(self._stop(), [])
+        mock_stop.assert_not_called()
+
+    def test_background_stop_is_skipped_when_dispatcharr_got_there_first(self, mock_stop, _mock_spawn):
+        def run_stop(setup):
+            mock_stop.reset_mock()
+            self.redis = FakeRedis()
+            self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
+            self.redis.setex(probation._skipped_stopping_key("skipped"), 30, "1")
+            stopping_here = setup(self.redis) or set()
+            with patch(
+                "apps.proxy.live_proxy.server.ProxyServer.get_instance",
+                return_value=MagicMock(_stopping_channels=stopping_here),
+            ), self.assertLogs("live_proxy", level="INFO"):
+                probation._stop_channel("skipped")
+            # Waiting requests may go ahead either way
+            self.assertFalse(self.redis.exists(probation._skipped_stopping_key("skipped")))
+            return mock_stop.called
+
+        # Dispatcharr marked it stopping, already removed it, or is stopping it in this worker
+        self.assertFalse(run_stop(lambda r: r.setex(RedisKeys.channel_stopping("skipped"), 60, "true")))
+        self.assertFalse(run_stop(lambda r: r.delete(RedisKeys.channel_metadata("skipped")) and None))
+        self.assertFalse(run_stop(lambda r: {"skipped"}))
+        # Otherwise it is stopped
+        mock_stop.reset_mock()
+        self.redis = FakeRedis()
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
+        probation._stop_channel("skipped")
         mock_stop.assert_called_once_with("skipped")
 
     def _real_skipped_channel(self):
@@ -1326,7 +1552,7 @@ class StopSkippedChannelsTests(TestCase):
         channel = Channel.objects.create(channel_number=990, name="Skipped")
         ChannelStream.objects.create(channel=channel, stream=stream, order=0)
         uuid = str(channel.uuid)
-        self._channel(uuid, clients=[("c1", self.IP, "0", "tv1", 1)])
+        self._channel(uuid, clients=[("c1", self.IP, "0", "TiviMate", 1)])
         self.redis.set(f"channel_stream:{channel.id}", stream.id)
         self.redis.set(f"stream_profile:{stream.id}", self.profile.id)
         self.redis.set(profile_connections_key(self.profile.id), 2)
@@ -1357,12 +1583,12 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "1")
         self.assertEqual(
             list(self.redis.hgetall(probation._held_slots_key(self.profile.id))),
-            [probation._viewer_key(self.viewer)],
+            [probation.identity_key(self.viewer, self.account)],
         )
 
     def test_window_limits_what_counts_as_skipped(self, mock_stop, _mock_spawn):
-        self._channel("inside", clients=[("c1", self.IP, "0", "tv1", 9)])
-        self._channel("outside", clients=[("c2", self.IP, "0", "tv1", 11)])
+        self._channel("inside", clients=[("c1", self.IP, "0", "TiviMate", 9)])
+        self._channel("outside", clients=[("c2", self.IP, "0", "TiviMate", 11)])
 
         self.assertEqual(self._stop(), ["inside"])
 
@@ -1375,7 +1601,7 @@ class NotUsedLoggingTests(SimpleTestCase):
 
     @patch("apps.proxy.live_proxy.probation.time.monotonic")
     def test_repeated_reason_is_logged_once_per_interval(self, mock_monotonic):
-        viewer = probation.Viewer("10.0.0.2", device_id="tv1")
+        viewer = probation.Viewer("10.0.0.2", app="TiviMate")
         mock_monotonic.return_value = 100.0
 
         with self.assertLogs("live_proxy", level="INFO") as logs:
@@ -1409,19 +1635,16 @@ class ViewerIdentityTests(SimpleTestCase):
         redis.sadd(RedisKeys.clients(channel_uuid), client_id)
         redis.hset(RedisKeys.client_metadata(channel_uuid, client_id), mapping=client)
 
-    def test_find_profiles_matches_ip_user_and_device(self):
+    def test_find_profiles_matches_ip_and_user(self):
+        # Without an account (so without LAN Device Tracking) a viewer is IP + user
         redis = FakeRedis()
         self._add_client(redis, "ch-1", 41, "c1", ip_address="10.0.0.2", user_id="0")
         self._add_client(redis, "ch-2", 42, "c1", ip_address="10.0.0.2", user_id="7")
-        self._add_client(
-            redis, "ch-3", 43, "c1", ip_address="10.0.0.2", user_id="0", device_id="tv1"
-        )
         self._add_client(redis, "ch-4", 44, "c1", ip_address="10.0.0.9", user_id="7")
 
         find = probation.find_profile_ids_watched_by
         self.assertEqual(find(redis, probation.Viewer("10.0.0.2")), [41])
         self.assertEqual(find(redis, probation.Viewer("10.0.0.2", user_id=7)), [42])
-        self.assertEqual(find(redis, probation.Viewer("10.0.0.2", device_id="tv1")), [43])
         self.assertEqual(find(redis, probation.Viewer("10.0.0.9", user_id=7)), [44])
         self.assertEqual(find(redis, probation.Viewer("10.0.0.7", user_id=7)), [])
         self.assertEqual(find(redis, None), [])
@@ -1431,20 +1654,25 @@ class ViewerIdentityTests(SimpleTestCase):
         user = MagicMock(id=5)
 
         viewer = probation.viewer_from_request(
-            factory.get("/proxy/ts/stream/x", {"device_id": "living-room_1"}), user, "10.0.0.2"
+            factory.get("/proxy/ts/stream/x", HTTP_USER_AGENT="TiviMate/5.1.6 (Android 12)"),
+            user,
+            "10.0.0.2",
         )
-        self.assertEqual(viewer, probation.Viewer("10.0.0.2", user_id=5, device_id="living-room_1"))
-        self.assertTrue(viewer.identified)
+        self.assertEqual(viewer, probation.Viewer("10.0.0.2", user_id=5))
+        self.assertEqual(viewer.app, probation.app_name("TiviMate/5.1.6 (Android 12)"))
+        # A login is enough on its own; without one an account has to recognise the address
+        self.assertTrue(probation.is_identified(viewer))
+        self.assertTrue(probation.may_be_identified(viewer))
 
         viewer = probation.viewer_from_request(factory.get("/proxy/ts/stream/x"), None, "10.0.0.2")
         self.assertEqual(viewer, probation.Viewer("10.0.0.2"))
-        self.assertFalse(viewer.identified)
+        self.assertFalse(probation.is_identified(viewer))
 
         self.assertIsNone(probation.viewer_from_request(factory.get("/"), None, None))
 
     def test_recordings_are_recognised(self):
         request = RequestFactory().get(
-            "/proxy/ts/stream/x", {"device_id": "tv1"}, HTTP_USER_AGENT="Dispatcharr-DVR/recording-12"
+            "/proxy/ts/stream/x", HTTP_USER_AGENT="Dispatcharr-DVR/recording-12"
         )
         viewer = probation.viewer_from_request(request, None, "127.0.0.1")
 
@@ -1458,54 +1686,27 @@ class ViewerIdentityTests(SimpleTestCase):
         for user_agent in (None, "", "TiviMate/5.1.6", "VLC/3.0.20 LibVLC/3.0.20", "Kodi/21.0"):
             self.assertFalse(probation.is_media_server(user_agent), user_agent)
 
-    def test_fill_device_id(self):
-        placeholder = probation.DEVICE_ID_PLACEHOLDER
-        content = (
-            f"http://x/proxy/ts/stream/a?device_id={placeholder}\n"
-            f"http://x/proxy/ts/stream/b?output_format=mpegts&device_id={placeholder}\n"
-        )
-
-        self.assertEqual(
-            probation.fill_device_id(content, "tv1"),
-            "http://x/proxy/ts/stream/a?device_id=tv1\n"
-            "http://x/proxy/ts/stream/b?output_format=mpegts&device_id=tv1\n",
-        )
-        self.assertEqual(
-            probation.fill_device_id(content, None),
-            "http://x/proxy/ts/stream/a\nhttp://x/proxy/ts/stream/b?output_format=mpegts\n",
-        )
-
     def test_media_server_stream_requests_stay_anonymous(self):
         request = RequestFactory().get(
-            "/proxy/ts/stream/x", {"device_id": "tv1"}, HTTP_USER_AGENT="Jellyfin-Server/10.10.7"
+            "/proxy/ts/stream/x", HTTP_USER_AGENT="Jellyfin-Server/10.10.7"
         )
 
         viewer = probation.viewer_from_request(request, None, "10.0.0.2")
 
         self.assertEqual(viewer, probation.Viewer("10.0.0.2"))
-        self.assertFalse(viewer.identified)
-
-    def test_normalize_device_id(self):
-        self.assertEqual(probation.normalize_device_id("tv-1_A"), "tv-1_A")
-        for bad in (None, "", "has space", "a/b", "x" * 65, probation.DEVICE_ID_PLACEHOLDER + "!"):
-            self.assertIsNone(probation.normalize_device_id(bad))
-        self.assertEqual(len(probation.new_device_id()), 12)
-        self.assertNotEqual(probation.new_device_id(), probation.new_device_id())
+        self.assertIsNone(viewer.app)
+        self.assertFalse(probation.may_be_identified(viewer))
 
     @patch.object(probation, "in_use", return_value=True)
     def test_record_client_viewer(self, _in_use):
         redis = FakeRedis()
-        probation.record_client_viewer(redis, "ch-1", "c1", probation.Viewer("10.0.0.2", device_id="tv1"))
+        probation.record_client_viewer(redis, "ch-1", "c1", probation.Viewer("10.0.0.2", app="TiviMate"))
         probation.record_client_viewer(redis, "ch-1", "c2", probation.Viewer("10.0.0.3"))
         probation.record_client_viewer(redis, "ch-2", "c3", probation.Viewer("127.0.0.1", recording=True))
 
         self.assertEqual(
-            redis.hget(RedisKeys.client_metadata("ch-1", "c1"), probation.DEVICE_ID_FIELD), "tv1"
-        )
-        self.assertIsNone(redis.hgetall(RedisKeys.client_metadata("ch-1", "c2")).get("device_id"))
-        self.assertEqual(
             redis.smembers(probation.CHANNEL_VIEWERS_KEY.format(channel_uuid="ch-1")),
-            {"10.0.0.2|0|tv1", "10.0.0.3|0|"},
+            {"10.0.0.2|0|TiviMate", "10.0.0.3|0|"},
         )
         # Recordings are not viewers
         self.assertEqual(redis.smembers(probation.CHANNEL_VIEWERS_KEY.format(channel_uuid="ch-2")), set())
@@ -1513,7 +1714,7 @@ class ViewerIdentityTests(SimpleTestCase):
     @patch.object(probation, "in_use", return_value=False)
     def test_record_client_viewer_does_nothing_while_not_in_use(self, _in_use):
         redis = FakeRedis()
-        probation.record_client_viewer(redis, "ch-1", "c1", probation.Viewer("10.0.0.2", device_id="tv1"))
+        probation.record_client_viewer(redis, "ch-1", "c1", probation.Viewer("10.0.0.2", app="TiviMate"))
         self.assertEqual((redis.strings, redis.hashes, redis.sets), ({}, {}, {}))
 
 
@@ -1550,6 +1751,11 @@ class AccountProbationSettingsTests(TestCase):
         self.assertFalse(probation.account_allows_probation(account))
         self.assertEqual(probation.account_probation_seconds(account), 10)
 
+        self.assertEqual(probation.account_surf_delay_seconds(account), 0.5)
+        for stored, seconds in ((0, 0), (1200, 1.2), (99999, 2.0), (-5, 0), ("bad", 0.5)):
+            account.custom_properties = {"probation_surf_delay_ms": stored}
+            self.assertEqual(probation.account_surf_delay_seconds(account), seconds)
+
     def test_serializer_round_trips_settings_in_custom_properties(self):
         account, _profile = _make_account("serializer-account")
         account.custom_properties = {**account.custom_properties, "enable_vod": True}
@@ -1562,6 +1768,7 @@ class AccountProbationSettingsTests(TestCase):
                 "probation_seconds": 30,
                 "probation_allow_anonymous": True,
                 "probation_stop_skipped": True,
+                "probation_surf_delay_ms": 800,
                 "probation_account_preference": "alternate",
             },
             partial=True,
@@ -1580,6 +1787,7 @@ class AccountProbationSettingsTests(TestCase):
         self.assertEqual(data["probation_seconds"], 30)
         self.assertTrue(data["probation_allow_anonymous"])
         self.assertTrue(data["probation_stop_skipped"])
+        self.assertEqual(data["probation_surf_delay_ms"], 800)
         self.assertEqual(data["probation_account_preference"], "alternate")
 
     def test_any_account_allows_probation(self):
@@ -1631,7 +1839,7 @@ class AccountProbationSettingsTests(TestCase):
             self.assertFalse(serializer.is_valid())
 
 
-class StreamTsDeviceIdTests(SimpleTestCase):
+class StreamTsViewerTests(SimpleTestCase):
     @patch("apps.proxy.live_proxy.views.close_old_connections")
     @patch("apps.proxy.live_proxy.views.create_stream_generator", return_value=lambda: iter([b""]))
     @patch("apps.proxy.live_proxy.views._resolve_output_format", return_value="mpegts")
@@ -1644,7 +1852,7 @@ class StreamTsDeviceIdTests(SimpleTestCase):
     @patch("apps.proxy.live_proxy.views.network_access_allowed", return_value=True)
     @patch("apps.proxy.live_proxy.views.ProxyServer")
     @patch.object(probation, "in_use", return_value=True)
-    def test_joining_client_records_device_id(self, _in_use, mock_proxy_cls, _network, mock_get_object, *_mocks):
+    def test_joining_client_is_recorded_as_a_viewer(self, _in_use, mock_proxy_cls, _network, mock_get_object, *_mocks):
         channel_id = "channel-uuid"
         channel = MagicMock(id=1, uuid=channel_id)
         channel.name = "Test Channel"
@@ -1664,14 +1872,16 @@ class StreamTsDeviceIdTests(SimpleTestCase):
 
         from apps.proxy.live_proxy.views import stream_ts
 
-        request = RequestFactory().get(f"/proxy/ts/stream/{channel_id}", {"device_id": "tv1"})
+        request = RequestFactory().get(
+            f"/proxy/ts/stream/{channel_id}", HTTP_USER_AGENT="TiviMate/5.1.6 (Android 12)"
+        )
         request.user = MagicMock(is_authenticated=False)
         stream_ts(request, channel_id)
 
-        client_id = client_manager.add_client.call_args.args[0]
+        # The viewer is remembered for the channel (see CHANNEL_VIEWERS_KEY)
         self.assertEqual(
-            redis.hget(RedisKeys.client_metadata(channel_id, client_id), probation.DEVICE_ID_FIELD),
-            "tv1",
+            redis.smembers(probation.CHANNEL_VIEWERS_KEY.format(channel_uuid=channel_id)),
+            {f"127.0.0.1|0|{probation.app_name('TiviMate/5.1.6 (Android 12)')}"},
         )
 
 
@@ -1682,7 +1892,7 @@ class StreamTsSkippedChannelOrderTests(SimpleTestCase):
     OK = ("http://example/stream", "ua", False, "None", True, None, 42)
     FULL = (None, None, False, None, False, "All active M3U profiles have reached maximum connection limits", None)
 
-    def _run(self, generate_results):
+    def _run(self, generate_results, expect_stream=True):
         from django.http import StreamingHttpResponse
         import gevent.lock
 
@@ -1741,14 +1951,25 @@ class StreamTsSkippedChannelOrderTests(SimpleTestCase):
 
         from apps.proxy.live_proxy.views import stream_ts
 
-        request = RequestFactory().get(f"/proxy/ts/stream/{self.CHANNEL_ID}", {"device_id": "tv1"})
+        request = RequestFactory().get(
+            f"/proxy/ts/stream/{self.CHANNEL_ID}", HTTP_USER_AGENT="TiviMate/5.1.6 (Android 12)"
+        )
         request.user = MagicMock(is_authenticated=False)
         response = stream_ts(request, self.CHANNEL_ID)
+        if not expect_stream:
+            return response
         self.assertIsInstance(response, StreamingHttpResponse)
         return calls
 
     def test_skipped_channels_are_stopped_after_the_slot_is_taken(self):
         self.assertEqual(self._run([self.OK]), ["get slot", "stop skipped (hold=False)"])
+
+    def test_channel_passed_while_surfing_is_never_requested(self):
+        with patch.object(probation, "skipped_while_surfing", return_value=True):
+            response = self._run([self.OK], expect_stream=False)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.calls, [])
 
     def test_waits_for_a_skipped_channel_to_stop_before_looking_at_it(self):
         with patch.object(
@@ -1781,6 +2002,53 @@ class WaitForStopTests(SimpleTestCase):
 
     def _stopping(self):
         self.redis.setex(probation._skipped_stopping_key(self.UUID), 30, "1")
+
+    @patch("apps.proxy.live_proxy.probation.gevent.sleep")
+    def test_leftover_stopping_marker_is_removed(self, mock_sleep, _in_use, _teardown):
+        # A second stop set the marker again after the channel was already cleaned up
+        self.redis.setex(RedisKeys.channel_stopping(self.UUID), 60, "true")
+
+        with self.assertLogs("live_proxy", level="INFO"):
+            self.assertTrue(probation.wait_for_stop_to_finish(self.redis, self.UUID))
+
+        self.assertFalse(self.redis.exists(RedisKeys.channel_stopping(self.UUID)))
+        mock_sleep.assert_not_called()
+
+    @patch("apps.proxy.live_proxy.probation.gevent.sleep")
+    def test_marker_of_a_stop_that_is_still_running_is_kept(self, mock_sleep, _in_use, _teardown):
+        self.redis.setex(RedisKeys.channel_stopping(self.UUID), 60, "true")
+        self.redis.hset(RedisKeys.channel_metadata(self.UUID), ChannelMetadataField.STATE, ChannelState.STOPPING)
+
+        self.assertFalse(probation.wait_for_stop_to_finish(self.redis, self.UUID))
+        self.assertTrue(self.redis.exists(RedisKeys.channel_stopping(self.UUID)))
+
+    @patch("apps.proxy.live_proxy.probation.gevent.sleep")
+    def test_leftover_marker_is_not_touched_while_not_in_use(self, mock_sleep, in_use, _teardown):
+        in_use.return_value = False
+        self.redis.setex(RedisKeys.channel_stopping(self.UUID), 60, "true")
+
+        self.assertFalse(probation.wait_for_stop_to_finish(self.redis, self.UUID))
+        self.assertTrue(self.redis.exists(RedisKeys.channel_stopping(self.UUID)))
+
+    def test_marker_left_behind_while_waiting_is_removed(self, _in_use, teardown):
+        self._stopping()
+        polls = []
+        teardown.side_effect = lambda uuid: self.redis.exists(RedisKeys.channel_stopping(uuid)) > 0
+
+        def sleep(_seconds):
+            polls.append(1)
+            if len(polls) == 1:
+                # Our stop finished, but Dispatcharr's second stop left its marker behind
+                self.redis.delete(probation._skipped_stopping_key(self.UUID))
+                self.redis.setex(RedisKeys.channel_stopping(self.UUID), 60, "true")
+
+        with patch("apps.proxy.live_proxy.probation.gevent.sleep", side_effect=sleep), self.assertLogs(
+            "live_proxy", level="INFO"
+        ):
+            self.assertTrue(probation.wait_for_stop_to_finish(self.redis, self.UUID))
+
+        self.assertEqual(len(polls), 1)
+        self.assertFalse(self.redis.exists(RedisKeys.channel_stopping(self.UUID)))
 
     @patch("apps.proxy.live_proxy.probation.gevent.sleep")
     def test_does_nothing_for_other_channels(self, mock_sleep, _in_use, _teardown):
@@ -1825,9 +2093,11 @@ class WaitForStopTests(SimpleTestCase):
             self.assertTrue(probation.wait_for_stop_to_finish(self.redis, self.UUID))
         mock_sleep.assert_called_once()
 
+    @patch("apps.proxy.live_proxy.server.ProxyServer.get_instance", return_value=MagicMock(_stopping_channels=set()))
     @patch("apps.proxy.live_proxy.services.channel_service.ChannelService.stop_channel")
-    def test_background_stop_clears_the_marker(self, mock_stop, _in_use, _teardown):
+    def test_background_stop_clears_the_marker(self, mock_stop, _proxy, _in_use, _teardown):
         self._stopping()
+        self.redis.hset(RedisKeys.channel_metadata(self.UUID), ChannelMetadataField.STATE, "active")
         with patch("core.utils.RedisClient.get_client", return_value=self.redis), patch(
             "django.db.close_old_connections"
         ):
@@ -1844,4 +2114,605 @@ class WaitForStopTests(SimpleTestCase):
         ), self.assertLogs("live_proxy", level="ERROR"):
             probation._stop_channel(self.UUID)
         self.assertFalse(self.redis.exists(probation._skipped_stopping_key(self.UUID)))
+
+
+@patch("apps.proxy.live_proxy.probation.gevent.sleep")
+class SurfingDelayTests(TestCase):
+    """A channel a player passes while surfing is never requested from the provider."""
+
+    IP = "192.168.1.20"
+
+    def setUp(self):
+        _reset_in_use_cache(self)
+        self.redis = FakeRedis()
+        self.account, _profile = _make_account("surf-delay", probation_enabled=True, probation_seconds=10)
+        self.channels = {}
+        for number, name in ((1, "CNN"), (2, "Sky Sports"), (3, "Discovery")):
+            stream = Stream.objects.create(
+                name=name, url=f"http://a.example/live/u/p/{number}.ts", m3u_account=self.account
+            )
+            channel = Channel.objects.create(channel_number=800 + number, name=name)
+            ChannelStream.objects.create(channel=channel, stream=stream, order=0)
+            self.channels[name] = str(channel.uuid)
+        self.proxy_server = MagicMock(redis_client=self.redis)
+        self.proxy_server.check_if_channel_exists.return_value = False
+        self.viewer = probation.Viewer(self.IP, app="TiviMate")
+
+    def _key(self, viewer=None):
+        return probation.LAST_REQUEST_KEY.format(viewer=probation._viewer_key(viewer or self.viewer))
+
+    def _requested(self, name, seconds_ago):
+        self.redis.set(self._key(), f"{time.time() - seconds_ago}|earlier|{self.channels[name]}")
+
+    def _request(self, name, viewer=None):
+        return probation.skipped_while_surfing(self.proxy_server, viewer or self.viewer, self.channels[name])
+
+    def test_first_channel_and_first_switch_start_at_once(self, mock_sleep):
+        self.assertFalse(self._request("CNN"))
+        # Watched CNN for a minute, then switched
+        self._requested("CNN", seconds_ago=60)
+        self.assertFalse(self._request("Sky Sports"))
+        mock_sleep.assert_not_called()
+
+    def test_switching_again_right_after_a_switch_waits(self, mock_sleep):
+        self._requested("Sky Sports", seconds_ago=2)
+
+        with self.assertLogs("live_proxy", level="INFO"):
+            self.assertFalse(self._request("Discovery"))
+
+        mock_sleep.assert_called_once_with(0.5)
+
+    def test_channel_passed_during_the_delay_is_skipped(self, mock_sleep):
+        self._requested("Sky Sports", seconds_ago=2)
+        # The player moves on to CNN while the Discovery request waits
+        mock_sleep.side_effect = lambda _s: self.redis.set(
+            self._key(), f"{time.time()}|newer|{self.channels['CNN']}"
+        )
+
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            self.assertTrue(self._request("Discovery"))
+
+        self.assertTrue(any("not requesting it from the provider" in line for line in logs.output))
+
+    def test_no_delay_for_reconnects_running_channels_and_other_viewers(self, mock_sleep):
+        self._requested("Discovery", seconds_ago=1)
+        self.assertFalse(self._request("Discovery"))  # the player reconnecting
+
+        self._requested("Sky Sports", seconds_ago=1)
+        self.proxy_server.check_if_channel_exists.return_value = True
+        self.assertFalse(self._request("Discovery"))  # already running
+        self.proxy_server.check_if_channel_exists.return_value = False
+
+        for viewer in (probation.Viewer(self.IP), probation.Viewer("127.0.0.1", recording=True)):
+            self.redis.set(self._key(viewer), f"{time.time() - 1}|earlier|{self.channels['CNN']}")
+            self.assertFalse(self._request("Discovery", viewer=viewer))
+        mock_sleep.assert_not_called()
+
+    def test_no_delay_when_the_account_does_not_ask_for_one(self, mock_sleep):
+        self.account.custom_properties = {**self.account.custom_properties, "probation_surf_delay_ms": 0}
+        self.account.save()
+        self._requested("Sky Sports", seconds_ago=1)
+        self.assertFalse(self._request("Discovery"))
+
+        self.account.custom_properties = {"probation_enabled": False}
+        self.account.save()
+        self._requested("Sky Sports", seconds_ago=1)
+        self.assertFalse(self._request("Discovery"))
+        mock_sleep.assert_not_called()
+
+    def test_nothing_is_stored_while_not_in_use(self, mock_sleep):
+        with patch.object(probation, "in_use", return_value=False):
+            self.assertFalse(self._request("CNN"))
+        self.assertEqual((self.redis.strings, self.redis.hashes), ({}, {}))
+        mock_sleep.assert_not_called()
+
+
+class RefusalRetryDelayTests(TestCase):
+    """A provider that closes new connections before sending data is not asked again at once."""
+
+    def setUp(self):
+        _reset_in_use_cache(self)
+        self.redis = FakeRedis()
+        self.account, self.profile = _make_account("refusing", probation_enabled=True)
+        self.stream = Stream.objects.create(
+            name="Refused", url="http://a.example/live/u/p/7.ts", m3u_account=self.account
+        )
+        patcher = patch("core.utils.RedisClient.get_client", return_value=self.redis)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_waits_longer_after_each_refusal(self):
+        self.redis.set(f"stream_profile:{self.stream.id}", self.profile.id)
+
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            self.assertEqual(probation.refusal_retry_delay(self.stream.id, 1, True), 1.5)
+            self.assertEqual(probation.refusal_retry_delay(self.stream.id, 2, True), 3.0)
+
+        self.assertTrue(any("before sending any data" in line for line in logs.output))
+
+    def test_uses_the_stream_account_without_a_profile_assignment(self):
+        with self.assertLogs("live_proxy", level="INFO"):
+            self.assertEqual(probation.refusal_retry_delay(self.stream.id, 1, True), 1.5)
+
+    def test_normal_timing_otherwise(self):
+        # Data arrived before the connection ended: not a refusal
+        self.assertEqual(probation.refusal_retry_delay(self.stream.id, 1, False), 0)
+        # Stream previews have no stream ID here
+        self.assertEqual(probation.refusal_retry_delay(None, 1, True), 0)
+        # Account without the overlap, while another account uses it
+        _make_account("other-overlap-account", probation_enabled=True)
+        self.account.custom_properties = {"probation_enabled": False}
+        self.account.save()
+        self.assertTrue(probation.in_use())
+        self.assertEqual(probation.refusal_retry_delay(self.stream.id, 1, True), 0)
+        # Overlap not used anywhere
+        with patch.object(probation, "in_use", return_value=False):
+            self.assertEqual(probation.refusal_retry_delay(self.stream.id, 1, True), 0)
+
+
+class StreamManagerRefusalRetryTests(TestCase):
+    """Dispatcharr's retry loop uses the longer wait only for refused connections."""
+
+    def _run(self, sends_data):
+        from apps.proxy.live_proxy.input.manager import StreamManager
+        from apps.proxy.live_proxy.tests.test_health_reconnect import _make_manager
+
+        sm = _make_manager(max_retries=3)
+        sleeps = []
+
+        def fake_establish():
+            sm.connected = True
+            return True
+
+        def fake_process():
+            if sends_data:
+                sm.last_data_time += 1
+            sm.connected = False
+
+        def fake_try_next():
+            sm.running = False
+            return False
+
+        def delay(stream_id, failures, refused):
+            return 1.5 * failures if refused else 0
+
+        with patch.object(StreamManager, "_monitor_health"), \
+                patch.object(StreamManager, "_ensure_owner_or_stop", return_value=True), \
+                patch.object(StreamManager, "_close_all_connections"), \
+                patch.object(StreamManager, "_try_next_stream", side_effect=fake_try_next), \
+                patch("apps.proxy.live_proxy.input.manager.close_old_connections"), \
+                patch.object(sm, "_establish_http_connection", side_effect=fake_establish), \
+                patch.object(sm, "_process_stream_data", side_effect=fake_process), \
+                patch.object(sm, "_sleep_interruptible", side_effect=lambda s: sleeps.append(("long", s)) or True), \
+                patch("apps.proxy.live_proxy.input.manager.gevent.sleep", side_effect=lambda s: sleeps.append(("short", s))), \
+                patch("apps.proxy.live_proxy.input.manager.log_system_event"), \
+                patch.object(probation, "refusal_retry_delay", side_effect=delay) as mock_delay:
+            sm.run()
+        return sleeps, mock_delay
+
+    def test_refused_connections_wait_longer_between_attempts(self):
+        sleeps, mock_delay = self._run(sends_data=False)
+
+        self.assertEqual(sleeps, [("long", 1.5), ("long", 3.0)])
+        self.assertEqual([c.args for c in mock_delay.call_args_list], [(100, 1, True), (100, 2, True)])
+
+    def test_connections_that_sent_data_keep_the_normal_timing(self):
+        sleeps, _mock_delay = self._run(sends_data=True)
+
+        self.assertEqual([kind for kind, _seconds in sleeps], ["short", "short"])
+
+
+class LanDeviceTrackingSettingsTests(TestCase):
+    def setUp(self):
+        _reset_in_use_cache(self)
+
+    def test_app_name_ignores_versions(self):
+        self.assertEqual(
+            probation.app_name("TiviMate/5.1.6 (Android 12)"),
+            probation.app_name("TiviMate/5.2.0 (Android 13)"),
+        )
+        self.assertNotEqual(probation.app_name("TiviMate/5.1.6"), probation.app_name("Kodi/21.0"))
+        for no_app in (None, "", "Jellyfin-Server/10.10.7", "Dispatcharr-DVR/recording-4"):
+            self.assertIsNone(probation.app_name(no_app))
+
+    def test_parse_lan_subnets(self):
+        self.assertEqual(
+            probation.parse_lan_subnets("192.168.2.10/24, 10.0.0.0/8 192.168.2.0/24"),
+            ["192.168.2.0/24", "10.0.0.0/8"],
+        )
+        self.assertEqual(probation.parse_lan_subnets(["192.168.1.5"]), ["192.168.1.5/32"])
+        for bad in (["not-an-ip"], ["8.8.8.0/24"]):
+            with self.assertRaises(ValueError):
+                probation.parse_lan_subnets(bad)
+
+    def test_lan_device_key(self):
+        account = MagicMock(custom_properties={
+            "probation_enabled": True,
+            "probation_lan_tracking": True,
+            "probation_lan_subnets": ["192.168.2.0/24", "public-junk", "8.8.8.0/24"],
+        })
+        tv = probation.Viewer("192.168.2.232", app="TiviMate/")
+        self.assertEqual(probation._lan_device_key(tv, account), "lan|192.168.2.232|0|TiviMate/")
+        self.assertEqual(
+            probation._lan_device_key(probation.Viewer("::ffff:192.168.2.232", app="TiviMate/"), account)
+            is not None,
+            True,
+        )
+        for no_key in (
+            probation.Viewer("192.168.3.4", app="TiviMate/"),  # outside subnets
+            probation.Viewer("8.8.8.8", app="TiviMate/"),  # public entry ignored
+            probation.Viewer("192.168.2.232"),  # no app (media server)
+            probation.Viewer("192.168.2.232", recording=True),
+        ):
+            self.assertIsNone(probation._lan_device_key(no_key, account))
+        account.custom_properties["probation_lan_tracking"] = False
+        self.assertIsNone(probation._lan_device_key(tv, account))
+
+    def test_suggested_lan_subnet(self):
+        def suggestion(address):
+            probation.suggested_lan_subnet.cache_clear()
+            sock = MagicMock()
+            sock.__enter__.return_value.getsockname.return_value = (address, 5000)
+            with patch("apps.proxy.live_proxy.probation.socket.socket", return_value=sock):
+                return probation.suggested_lan_subnet()
+
+        self.addCleanup(probation.suggested_lan_subnet.cache_clear)
+        self.assertEqual(suggestion("192.168.2.10"), "192.168.2.0/24")
+        self.assertIsNone(suggestion("172.17.0.3"))  # Docker network
+        self.assertIsNone(suggestion("81.2.3.4"))
+
+    def test_serializer_stores_lan_settings(self):
+        account, _profile = _make_account("lan-serializer", probation_enabled=True)
+        serializer = M3UAccountSerializer(
+            account,
+            data={"probation_lan_tracking": True, "probation_lan_subnets": "192.168.2.0/24,10.1.0.0/16"},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+        account.refresh_from_db()
+        self.assertTrue(account.custom_properties["probation_lan_tracking"])
+        self.assertEqual(account.custom_properties["probation_lan_subnets"], ["192.168.2.0/24", "10.1.0.0/16"])
+
+        data = M3UAccountSerializer(account).data
+        self.assertTrue(data["probation_lan_tracking"])
+        self.assertEqual(data["probation_lan_subnets"], ["192.168.2.0/24", "10.1.0.0/16"])
+        self.assertIn("probation_lan_subnet_suggestion", data)
+
+        invalid = M3UAccountSerializer(account, data={"probation_lan_subnets": ["8.8.8.0/24"]}, partial=True)
+        self.assertFalse(invalid.is_valid())
+        self.assertIn("probation_lan_subnets", invalid.errors)
+
+    def test_lan_tracking_in_use_follows_account_changes(self):
+        account, _profile = _make_account("lan-cache", probation_enabled=True, lan=False)
+        self.assertFalse(probation.lan_tracking_in_use())
+        account.custom_properties = {**account.custom_properties, "probation_lan_tracking": True}
+        account.save()
+        self.assertTrue(probation.lan_tracking_in_use())
+
+
+class AbandonedSlotTests(TestCase):
+    """Slots left behind by a restart, reboot or crash are released again."""
+
+    NOW = 50_000.0
+
+    def setUp(self):
+        _reset_in_use_cache(self)
+        self.redis = FakeRedis()
+        self.account, self.profile = _make_account("abandoned", probation_enabled=True)
+        self.stream = Stream.objects.create(
+            name="Left behind", url="http://a.example/live/u/p/473082.ts", m3u_account=self.account
+        )
+        self.channel = Channel.objects.create(channel_number=870, name="Left behind")
+        ChannelStream.objects.create(channel=self.channel, stream=self.stream, order=0)
+
+    def _assigned(self, channel=None, stream=None):
+        channel = channel or self.channel
+        stream = stream or self.stream
+        self.redis.set(f"channel_stream:{channel.id}", stream.id)
+        self.redis.set(f"stream_profile:{stream.id}", self.profile.id)
+        self.redis.incr(profile_connections_key(self.profile.id))
+
+    def _sweep(self, now):
+        # The lock would keep a second sweep within SWEEP_INTERVAL from running
+        self.redis.delete(probation.SWEEP_LOCK_KEY)
+        return probation.release_abandoned_slots(self.redis, now=now)
+
+    def test_slot_of_a_channel_that_stopped_without_cleanup_is_released(self):
+        # State after the restart: assignment and counter left, no live metadata
+        self._assigned()
+        key = f"channel_stream:{self.channel.id}"
+
+        self.assertEqual(self._sweep(self.NOW), [])  # first seen
+        self.assertEqual(self._sweep(self.NOW + probation.ABANDONED_SLOT_GRACE - 1), [])
+        with self.assertLogs("live_proxy", level="WARNING"):
+            self.assertEqual(self._sweep(self.NOW + probation.ABANDONED_SLOT_GRACE), [key])
+
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "0")
+        self.assertIsNone(self.redis.get(key))
+        self.assertIsNone(self.redis.get(f"stream_profile:{self.stream.id}"))
+        self.assertEqual(self.redis.hgetall(probation.ABANDONED_SLOTS_KEY), {})
+
+    def test_running_channels_keep_their_slot(self):
+        self._assigned()
+        metadata_key = RedisKeys.channel_metadata(str(self.channel.uuid))
+        self.redis.hset(metadata_key, mapping={"state": "active"})
+        self.redis.expire(metadata_key, 30)
+
+        for offset in (0, 120, 600):
+            self.assertEqual(self._sweep(self.NOW + offset), [])
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "1")
+
+    def test_channel_that_starts_running_again_is_forgotten(self):
+        # Between reserving a slot and creating its metadata, a starting channel looks stopped
+        self._assigned()
+        self._sweep(self.NOW)
+        self.redis.hset(RedisKeys.channel_metadata(str(self.channel.uuid)), mapping={"state": "active"})
+        self.redis.expire(RedisKeys.channel_metadata(str(self.channel.uuid)), 30)
+        self._sweep(self.NOW + 30)
+        self.redis.delete(RedisKeys.channel_metadata(str(self.channel.uuid)))
+
+        # The grace period starts over
+        self.assertEqual(self._sweep(self.NOW + 70), [])
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "1")
+
+    def test_stream_preview_leftovers(self):
+        Stream.objects.filter(id=self.stream.id).update(stream_hash="a83d7d20" * 8)
+        # An ended preview keeps an empty assignment: removed, nothing released
+        self.redis.set(f"channel_stream:{self.stream.id}", self.stream.id)
+        self._sweep(self.NOW)
+        with self.assertLogs("live_proxy", level="INFO"):
+            self.assertEqual(self._sweep(self.NOW + 61), [])
+        self.assertIsNone(self.redis.get(f"channel_stream:{self.stream.id}"))
+
+        # A preview that is still playing keeps its slot
+        self.redis.set(f"channel_stream:{self.stream.id}", self.stream.id)
+        self.redis.set(f"stream_profile:{self.stream.id}", self.profile.id)
+        self.redis.set(profile_connections_key(self.profile.id), 1)
+        self.redis.hset(RedisKeys.channel_metadata("a83d7d20" * 8), mapping={"state": "active"})
+        self.redis.expire(RedisKeys.channel_metadata("a83d7d20" * 8), 30)
+        self._sweep(self.NOW + 100)
+        self.assertEqual(self._sweep(self.NOW + 200), [])
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "1")
+
+    def test_stream_shared_with_a_running_channel_keeps_its_record(self):
+        running = Channel.objects.create(channel_number=871, name="Same stream, running")
+        ChannelStream.objects.create(channel=running, stream=self.stream, order=0)
+        self._assigned()
+        self._assigned(channel=running)
+        metadata_key = RedisKeys.channel_metadata(str(running.uuid))
+        self.redis.hset(metadata_key, mapping={"state": "active"})
+        self.redis.expire(metadata_key, 30)
+
+        self._sweep(self.NOW)
+        with self.assertLogs("live_proxy", level="INFO"):
+            self.assertEqual(self._sweep(self.NOW + 61), [])
+
+        # Only the stopped channel's assignment goes; the running channel keeps the record
+        self.assertIsNone(self.redis.get(f"channel_stream:{self.channel.id}"))
+        self.assertEqual(self.redis.get(f"stream_profile:{self.stream.id}"), str(self.profile.id))
+        self.assertEqual(self.redis.get(f"channel_stream:{running.id}"), str(self.stream.id))
+
+    def test_only_one_worker_sweeps_per_interval(self):
+        self._assigned()
+        probation.release_abandoned_slots(self.redis, now=self.NOW)
+        # Within the interval the lock is held: nothing is recorded or released
+        self.redis.hdel(probation.ABANDONED_SLOTS_KEY, f"channel_stream:{self.channel.id}")
+        self.assertEqual(probation.release_abandoned_slots(self.redis, now=self.NOW + 500), [])
+        self.assertEqual(self.redis.hgetall(probation.ABANDONED_SLOTS_KEY), {})
+
+    def test_works_without_the_overlap(self):
+        self._assigned()
+        self.account.custom_properties = {"probation_enabled": False}
+        self.account.save()
+        self.assertFalse(probation.in_use())
+        self._sweep(self.NOW)
+        with self.assertLogs("live_proxy", level="WARNING"):
+            self.assertEqual(len(self._sweep(self.NOW + 61)), 1)
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "0")
+
+    def test_any_live_key_keeps_the_slot(self):
+        # Metadata lost (for example a stalled owner) while the stream still writes its buffer
+        self._assigned()
+        uuid = str(self.channel.uuid)
+        for live_key in (
+            RedisKeys.buffer_chunk(uuid, 12),
+            RedisKeys.clients(uuid),
+            RedisKeys.channel_stopping(uuid),
+            RedisKeys.last_client_disconnect(uuid),
+        ):
+            self.redis = FakeRedis()
+            self._assigned()
+            self.redis.setex(live_key, 60, "1")
+            for offset in (0, 120, 600):
+                self.assertEqual(self._sweep(self.NOW + offset), [], live_key)
+            self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "1")
+
+    def test_keys_without_an_expiry_do_not_keep_the_slot(self):
+        # After an unclean stop the buffer index (it never expires) and metadata written
+        # without TTL stay behind; they do not prove the channel still runs
+        self._assigned()
+        uuid = str(self.channel.uuid)
+        self.redis.set(RedisKeys.buffer_index(uuid), 4812)
+        self._sweep(self.NOW)
+        with self.assertLogs("live_proxy", level="WARNING"):
+            self.assertEqual(len(self._sweep(self.NOW + 61)), 1)
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "0")
+
+    def test_nothing_to_do_without_assignments(self):
+        with patch.object(probation, "_live_channel_ids") as live_ids:
+            self.assertEqual(self._sweep(self.NOW), [])
+        live_ids.assert_not_called()
+
+
+class RecentSwitchesTests(TestCase):
+    """What the Channel Switch Overlap page shows: the last switches and their result."""
+
+    IP = "192.168.1.20"
+
+    def setUp(self):
+        _reset_in_use_cache(self)
+        self.redis = FakeRedis()
+        self.account, self.profile = _make_account("events", probation_enabled=True)
+        self.viewer = probation.Viewer(self.IP, app="TiviMate")
+
+    def test_an_event_is_recorded_and_its_result_filled_in(self):
+        event_id = probation.record_event(
+            self.redis,
+            self.viewer,
+            "overlap slot",
+            channel="channel-b",
+            from_channel="channel-a",
+            account=self.account.name,
+            result="waiting",
+        )
+        probation.update_event(self.redis, event_id, result="confirmed after 1.3s")
+
+        (event,) = probation.recent_events(self.redis)
+        self.assertEqual(event["action"], "overlap slot")
+        self.assertEqual(event["ip"], self.IP)
+        self.assertEqual(event["app"], "TiviMate")
+        self.assertEqual(event["from_channel"], "channel-a")
+        self.assertEqual(event["channel"], "channel-b")
+        self.assertEqual(event["result"], "confirmed after 1.3s")
+
+    def test_only_the_last_switches_are_kept(self):
+        for number in range(probation.EVENTS_KEPT + 5):
+            probation.record_event(self.redis, self.viewer, "not used", channel=f"channel-{number}")
+
+        events = probation.recent_events(self.redis)
+        self.assertEqual(len(events), probation.EVENTS_KEPT)
+        # Newest first, and older ones are dropped instead of piling up
+        self.assertEqual(events[0]["channel"], f"channel-{probation.EVENTS_KEPT + 4}")
+        self.assertEqual(len(self.redis.zsets[probation.EVENTS_KEY]), probation.EVENTS_KEPT)
+
+    def test_events_without_a_viewer_and_missing_ones_are_handled(self):
+        probation.record_event(self.redis, None, "provider refused", account=self.account.name)
+        (event,) = probation.recent_events(self.redis)
+        self.assertEqual(event["ip"], "")
+
+        # An event that expired is skipped instead of breaking the list
+        self.redis.delete(probation._event_key(self.redis.zrevrange(probation.EVENTS_KEY, 0, 0)[0]))
+        self.assertEqual(probation.recent_events(self.redis), [])
+
+    def test_a_switch_with_the_overlap_shows_up_with_its_result(self):
+        # A real switch: the viewer watches channel A, every account is full, it starts B
+        stream = Stream.objects.create(
+            name="A", url="http://a.example/live/u/p/1.ts", m3u_account=self.account
+        )
+        channel_a = Channel.objects.create(channel_number=940, name="Channel A")
+        channel_b = Channel.objects.create(channel_number=941, name="Channel B")
+        ChannelStream.objects.create(channel=channel_b, stream=stream, order=0)
+        self.redis.set(profile_connections_key(self.profile.id), 1)
+        self.redis.hset(
+            RedisKeys.channel_metadata(str(channel_a.uuid)),
+            mapping={ChannelMetadataField.M3U_PROFILE: self.profile.id},
+        )
+        self.redis.sadd(RedisKeys.clients(str(channel_a.uuid)), "c1")
+        self.redis.hset(
+            RedisKeys.client_metadata(str(channel_a.uuid), "c1"),
+            mapping={"ip_address": self.IP, "user_id": "0", "user_agent": "TiviMate"},
+        )
+        stream_profile = MagicMock()
+        stream_profile.is_redirect.return_value = False
+
+        with patch("apps.channels.models.RedisClient.get_client", return_value=self.redis), patch(
+            "core.utils.RedisClient.get_client", return_value=self.redis
+        ), patch.object(Channel, "get_stream_profile", return_value=stream_profile), patch(
+            "apps.channels.models.Channel._pick_channel_to_preempt", return_value=None
+        ):
+            channel_b.get_stream(viewer=self.viewer)
+
+        (event,) = probation.recent_events(self.redis)
+        self.assertEqual(event["action"], "overlap slot")
+        self.assertEqual(event["from_channel"], str(channel_a.uuid))
+        self.assertEqual(event["channel"], str(channel_b.uuid))
+        self.assertEqual(event["account"], self.account.name)
+        self.assertEqual(event["result"], "waiting")
+
+
+class OverlapActivityViewTests(TestCase):
+    """The page's data: accounts and readable switches, for admins only."""
+
+    def setUp(self):
+        _reset_in_use_cache(self)
+        self.redis = FakeRedis()
+        self.account, self.profile = _make_account("activity", probation_enabled=True)
+        patcher = patch("core.utils.RedisClient.get_client", return_value=self.redis)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _get(self, admin=True):
+        from apps.accounts.models import User
+        from rest_framework.test import APIClient
+
+        client = APIClient()
+        user = User.objects.create_user(
+            username=f"user-{'admin' if admin else 'viewer'}",
+            password="x",
+            user_level=10 if admin else 0,
+        )
+        client.force_authenticate(user=user)
+        return client.get("/proxy/overlap/")
+
+    def test_admins_see_accounts_and_switches(self):
+        channel = Channel.objects.create(channel_number=942, name="Sky Sports")
+        previous = Channel.objects.create(channel_number=943, name="CNN")
+        self.redis.set(profile_connections_key(self.profile.id), 1)
+        probation.record_event(
+            self.redis,
+            probation.Viewer("192.168.1.20", app="TiviMate"),
+            "overlap slot",
+            channel=channel.uuid,
+            from_channel=previous.uuid,
+            account=self.account.name,
+            result="confirmed after 1.2s",
+        )
+
+        data = self._get().json()
+
+        self.assertTrue(data["enabled"])
+        self.assertEqual(
+            data["accounts"],
+            [{
+                "account": self.account.name,
+                "profile": self.profile.name,
+                "in_use": 1,
+                "max_streams": 1,
+                "held_slots": 0,
+                "lan_subnets": ["192.168.0.0/16"],
+                "stop_skipped": False,
+                "switch_preference": "order",
+            }],
+        )
+        (event,) = data["events"]
+        self.assertEqual(event["viewer"], "192.168.1.20 · TiviMate")
+        self.assertEqual(event["from_channel"], "CNN")
+        self.assertEqual(event["channel"], "Sky Sports")
+        self.assertEqual(event["action"], "overlap slot")
+        self.assertEqual(event["result"], "confirmed after 1.2s")
+
+    def test_a_login_is_shown_by_name(self):
+        from apps.accounts.models import User
+
+        viewer_user = User.objects.create_user(username="chris", password="x")
+        probation.record_event(
+            self.redis, probation.Viewer("10.0.0.5", user_id=viewer_user.id), "held slot"
+        )
+
+        (event,) = self._get().json()["events"]
+        self.assertEqual(event["viewer"], "chris")
+
+    def test_nothing_is_shown_while_the_overlap_is_off(self):
+        self.account.custom_properties = {"probation_enabled": False}
+        self.account.save()
+        probation.record_event(self.redis, probation.Viewer("10.0.0.5"), "held slot")
+
+        data = self._get().json()
+        self.assertFalse(data["enabled"])
+        self.assertEqual(data["events"], [])
+        self.assertEqual(data["accounts"], [])
+
+    def test_only_admins(self):
+        self.assertEqual(self._get(admin=False).status_code, 403)
 

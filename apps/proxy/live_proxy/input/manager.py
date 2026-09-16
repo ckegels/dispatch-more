@@ -14,6 +14,7 @@ from core.utils import log_system_event
 from .buffer import StreamBuffer
 from ..utils import detect_stream_type, get_logger
 from ..redis_keys import RedisKeys
+from .. import probation
 from ..constants import ChannelState, EventType, StreamType, ChannelMetadataField, TS_PACKET_SIZE
 from ..config_helper import ConfigHelper
 from ..url_utils import get_alternate_streams, get_stream_info_for_switch, get_stream_object
@@ -518,6 +519,8 @@ class StreamManager:
 
                     # Handle connection based on whether we transcode or not
                     connection_result = False
+                    # No data at all on a new connection (see Channel Switch Overlap below)
+                    connection_refused = False
                     try:
                         if self.transcode:
                             connection_result = self._establish_transcode_connection()
@@ -543,7 +546,9 @@ class StreamManager:
                                     logger.error(f"Could not log reconnection event: {e}")
 
                             # Successfully connected - read stream data until disconnect/error
+                            data_time_before = self.last_data_time
                             self._process_stream_data()
+                            connection_refused = self.last_data_time == data_time_before
                             # If we get here, the connection was closed/failed
 
                             connection_duration = time.time() - connection_start_time
@@ -602,6 +607,14 @@ class StreamManager:
                         else:
                             # Wait with exponential backoff before retrying
                             timeout = min(.25 * failures, 3)  # Cap at 3 seconds
+                            # Channel Switch Overlap: a provider that refused the connection
+                            # is not asked again right away
+                            refusal_delay = probation.refusal_retry_delay(
+                                self.current_stream_id, failures, connection_refused
+                            )
+                            if refusal_delay > timeout:
+                                self._sleep_interruptible(refusal_delay)
+                                continue
                             logger.info(
                                 f"Reconnecting in {timeout} seconds... "
                                 f"(attempt {failures}/{self.max_retries}) "

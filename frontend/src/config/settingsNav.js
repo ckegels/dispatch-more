@@ -20,6 +20,7 @@ const StreamSettingsForm = lazy(() => import('../components/forms/settings/Strea
 const ProxySettingsForm = lazy(() => import('../components/forms/settings/ProxySettingsForm.jsx'));
 const StreamProfilesTable = lazy(() => import('../components/tables/StreamProfilesTable.jsx'));
 const OutputProfilesTable = lazy(() => import('../components/tables/OutputProfilesTable.jsx'));
+const OverlapActivity = lazy(() => import('../components/overlap/OverlapActivity.jsx'));
 const DvrSettingsForm = lazy(() => import('../components/forms/settings/DvrSettingsForm.jsx'));
 const UserAgentsTable = lazy(() => import('../components/tables/UserAgentsTable.jsx'));
 const NetworkAccessForm = lazy(() => import('../components/forms/settings/NetworkAccessForm.jsx'));
@@ -49,6 +50,7 @@ export const SETTINGS_GROUPS = [
       { id: 'proxy-settings', label: 'Proxy Settings', icon: ArrowLeftRight, Component: ProxySettingsForm },
       { id: 'stream-profiles', label: 'Stream Profiles', icon: SlidersHorizontal, Component: StreamProfilesTable },
       { id: 'output-profiles', label: 'Output Profiles', icon: FileOutput, Component: OutputProfilesTable },
+      { id: 'overlap-activity', label: 'Channel Switch Overlap', icon: ArrowLeftRight, Component: OverlapActivity },
     ],
   },
   {

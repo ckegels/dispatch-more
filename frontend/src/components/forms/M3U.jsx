@@ -19,6 +19,7 @@ import {
   Select,
   Stack,
   Switch,
+  TagsInput,
   TextInput,
 } from '@mantine/core';
 import M3UGroupFilter from './M3UGroupFilter';
@@ -47,8 +48,8 @@ const OVERLAP_EXPLANATION = (
     {`Only use this if your provider tolerates one extra connection for a few seconds. Some providers block accounts that go over their limit.
 
 Warnings:
-• Every device that logs in with a Dispatcharr username and password (for example an Xtream app) needs its own user. A login shared by several devices does not work with this feature: the overlap can go to the wrong device, and "Stop Skipped Channels" can stop a channel another device is watching.
-• Stream links in M3U playlists change every time a player downloads the playlist. Players that remember favourites by stream link can lose them. Adding a fixed name to the playlist URL (?device_id=livingroom) keeps the links the same for that device.
+• Players on your own network are recognised by their IP address, so each device needs its own address. Do not use this for addresses shared by several devices: a Docker network, a second router, or a reverse proxy Dispatcharr does not trust.
+• Every device outside your network needs its own Dispatcharr login. One login used by several devices at the same time is not supported: the overlap can go to the wrong device, and "Stop Skipped Channels" can stop a channel another device is watching.
 • "Stop Skipped Channels" does not support multiview or picture-in-picture: a player that opens a second channel within the Overlap Window closes the first one.
 
 What it does:
@@ -56,16 +57,19 @@ What it does:
 • If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
 • If none ends in time, the new channel moves to an account with a free slot, or to a custom fallback stream if the channel has one (such as the could-not-dispatch plugin's), or the new stream is stopped. A fallback stream at the end of a channel does not replace a channel switch.
 • With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as its next channel has started, so fast channel surfing does not fill every slot.
+• "Surfing Delay": when a player switches again shortly after its previous switch (within the Overlap Window), Dispatcharr waits this long before requesting the channel from the provider. Channels the player passes in the meantime are never requested, so fast surfing does not open a provider connection for every channel. The first switch after watching something starts at once. Not applied to Plex, Jellyfin and Emby.
+• When the provider closes a new connection before sending any video (usually a refusal because the account is full), Dispatcharr waits longer before trying again (1.5 s, then 3 s) instead of retrying within half a second.
+• "LAN Device Tracking": players with an address in the "LAN Subnets" are recognised by that address plus their app (so TiviMate and Kodi on one device stay separate, and an app update changes nothing). Without it, only players with a Dispatcharr login are recognised.
 • When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between. Failover, stream changes, VOD, catch-up and previews leave it alone too (also on a login shared through a Server Group); DVR recordings can still use it. Channels stopped from the dashboard, deleted or removed by a refresh are not kept.
 • With a Channel Shutdown Delay, a channel nobody watches any more is closed early when it keeps this account over its limit during a switch.
 • "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account with this setting enabled first (never on custom fallback streams), and only falls back to its own account when none is free.
-• While any account has this enabled, M3U playlists add a device ID to their stream links so players can be recognised. Players need to re-download their playlist. Jellyfin, Emby and Plex are recognised by their User-Agent and get no device ID (unless a custom User-Agent is set in their tuner settings), so their viewers count as anonymous.
+• Stream links and playlists stay exactly as they are: nothing is added to them, so players do not need to re-download anything. Jellyfin, Emby and Plex are recognised by their User-Agent (unless a custom one is set in their tuner settings) and count as anonymous, because they stream on behalf of all their viewers.
 
 What it does not do:
 • It changes nothing while an account still has free slots.
 • It never stops a stream that was already playing, or a channel someone else is also watching.
 • It does not give extra connections to other viewers (other users, devices or IP addresses) or to DVR recordings.
-• Viewers without a user or device ID (HDHomeRun, Plex, Jellyfin, Emby) are only included when "Allow Anonymous Connections" is also enabled, and are never affected by "Stop Skipped Channels". With "Stay on same account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
+• Viewers that are not recognised (HDHomeRun, Plex, Jellyfin, Emby, and players outside your network without a login) are only included when "Allow Anonymous Connections" is also enabled, matched by IP address only, and are never affected by "Stop Skipped Channels". With "Stay on same account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
 
 The change takes effect after you save the account.`}
   </div>
@@ -98,6 +102,7 @@ const M3U = ({
   const [overlapConfirmOpen, setOverlapConfirmOpen] = useState(false);
   const [overlapInfoOpen, setOverlapInfoOpen] = useState(false);
   const [overlapEnabled, setOverlapEnabled] = useState(false);
+  const [lanTrackingEnabled, setLanTrackingEnabled] = useState(false);
 
   // Keep expiration in sync when the default profile is edited (store refreshes).
   // Do not rebind the whole form to the live playlist or unsaved edits are wiped.
@@ -131,7 +136,10 @@ const M3U = ({
       probation_seconds: 10,
       probation_allow_anonymous: false,
       probation_stop_skipped: false,
+      probation_surf_delay_ms: 500,
       probation_account_preference: 'order',
+      probation_lan_tracking: false,
+      probation_lan_subnets: [],
     },
 
     validate: {
@@ -172,10 +180,14 @@ const M3U = ({
         probation_allow_anonymous:
           m3uAccount.probation_allow_anonymous || false,
         probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
+        probation_surf_delay_ms: m3uAccount.probation_surf_delay_ms ?? 500,
         probation_account_preference:
           m3uAccount.probation_account_preference || 'order',
+        probation_lan_tracking: m3uAccount.probation_lan_tracking || false,
+        probation_lan_subnets: m3uAccount.probation_lan_subnets || [],
       });
       setOverlapEnabled(m3uAccount.probation_enabled || false);
+      setLanTrackingEnabled(m3uAccount.probation_lan_tracking || false);
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
 
       // Determine schedule type from existing data
@@ -190,6 +202,7 @@ const M3U = ({
       setScheduleType('interval');
       setExpDate(null);
       setOverlapEnabled(false);
+      setLanTrackingEnabled(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [m3uAccount]);
@@ -243,6 +256,7 @@ const M3U = ({
       await updatePlaylist(playlist, values, file);
       form.reset();
       setOverlapEnabled(false);
+      setLanTrackingEnabled(false);
       setFile(null);
       onClose();
       return;
@@ -255,6 +269,7 @@ const M3U = ({
   const close = () => {
     form.reset();
     setOverlapEnabled(false);
+    setLanTrackingEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -265,6 +280,7 @@ const M3U = ({
     // After group filter setup for a new account, reset everything
     form.reset();
     setOverlapEnabled(false);
+    setLanTrackingEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -436,6 +452,17 @@ const M3U = ({
                       {...form.getInputProps('probation_seconds')}
                       key={form.key('probation_seconds')}
                     />
+                    <NumberInput
+                      id="probation_surf_delay_ms"
+                      name="probation_surf_delay_ms"
+                      label="Surfing Delay (ms)"
+                      description="Wait before starting a channel when switching again right after a switch. 0 = off."
+                      min={0}
+                      max={2000}
+                      step={100}
+                      {...form.getInputProps('probation_surf_delay_ms')}
+                      key={form.key('probation_surf_delay_ms')}
+                    />
                     <Switch
                       id="probation_stop_skipped"
                       name="probation_stop_skipped"
@@ -470,6 +497,45 @@ const M3U = ({
                         type: 'checkbox',
                       })}
                     />
+                    <Switch
+                      id="probation_lan_tracking"
+                      name="probation_lan_tracking"
+                      label="LAN Device Tracking"
+                      description="Recognise players on your own network by their IP address and app, so they do not need a login."
+                      key={form.key('probation_lan_tracking')}
+                      {...form.getInputProps('probation_lan_tracking', {
+                        type: 'checkbox',
+                      })}
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked;
+                        form.setFieldValue('probation_lan_tracking', checked);
+                        setLanTrackingEnabled(checked);
+                        const suggestion =
+                          m3uAccount?.probation_lan_subnet_suggestion;
+                        if (
+                          checked &&
+                          suggestion &&
+                          form.getValues().probation_lan_subnets.length === 0
+                        ) {
+                          form.setFieldValue('probation_lan_subnets', [
+                            suggestion,
+                          ]);
+                        }
+                      }}
+                    />
+                    <Collapse in={lanTrackingEnabled}>
+                      <TagsInput
+                        id="probation_lan_subnets"
+                        name="probation_lan_subnets"
+                        label="LAN Subnets"
+                        description="Only players with an IP address in these subnets. Type an address and press Enter, comma or Tab."
+                        placeholder="e.g. 192.168.1.0/24"
+                        splitChars={[',', ' ']}
+                        acceptValueOnBlur
+                        key={form.key('probation_lan_subnets')}
+                        {...form.getInputProps('probation_lan_subnets')}
+                      />
+                    </Collapse>
                   </Stack>
                 </Collapse>
               </Box>

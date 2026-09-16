@@ -184,7 +184,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         # Generate a unique client ID
         client_id = f"client_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
         client_ip = get_client_ip(request)
-        # Who is asking (IP, user, device ID), used by Channel Switch Overlap
+        # Who is asking (IP, user, app), used by Channel Switch Overlap
         viewer = probation.viewer_from_request(request, user, client_ip)
         logger.info(f"[{client_id}] Requested stream for channel {channel_id}")
 
@@ -196,6 +196,13 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     f"[{client_id}] Client connected with user agent: {client_user_agent}"
                 )
                 break
+
+        # Channel Switch Overlap: while a player surfs, wait a moment; a channel it passes in
+        # the meantime is never requested from the provider
+        if probation.skipped_while_surfing(proxy_server, viewer, channel_id):
+            return JsonResponse(
+                {"error": "A newer channel was requested by this player"}, status=409
+            )
 
         if user:
             if not check_user_stream_limits(user, client_id, media_id=channel_id):

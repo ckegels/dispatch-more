@@ -89,7 +89,7 @@ the log.
 Fast channel surfing (several channels within seconds) fills every slot: Dispatcharr
 only releases a channel once it notices the player left, and each account has a single
 overlap slot. With **Stop Skipped Channels** enabled on the account, an identified viewer's
-(user or device ID, plus IP) *skipped* channels are stopped:
+(see *Recognising the same viewer*) *skipped* channels are stopped:
 
 - After its new channel got a slot (normally the overlap slot, so switching is not delayed).
   The overlap slot is then free again for the next switch.
@@ -119,9 +119,75 @@ the overlap), `stream_ts` waits for the stop to finish (at most 5 s) and then st
 channel again. The marker is removed when the background stop is done. Stops started any
 other way (dashboard, deletes, refreshes) keep the normal 503.
 
+**Two stops at once.** A skipped channel is often stopped by this feature and, at the same
+moment, by Dispatcharr because its player disconnected. Dispatcharr's stop deletes the
+channel's Redis keys (including its `live:channel:<uuid>:stopping` marker) before it closes
+the provider connection; a second stop arriving in that moment sets the marker again and
+returns without cleanup, so the channel answered 503 for 60 seconds. Therefore:
+
+- Stop Skipped Channels leaves channels alone that Dispatcharr is already stopping, and the
+  background stop is skipped when the channel is already stopping or gone.
+- While the overlap is in use, `stream_ts` removes a stopping marker that has no channel
+  metadata (a stop that is still running has not deleted the metadata yet), also while it
+  waits for a skipped channel to stop.
+
 Not supported (warnings in the explanation popup): a single player intentionally opening two
 channels within the window (multiview / picture-in-picture) closes the first one, and two
 devices sharing one login can stop each other's channels.
+
+### Surfing Delay
+
+Fast surfing opens a provider connection for every channel on the way, for streams the player
+drops a second later, and providers may start refusing connections. With a **Surfing Delay**
+(per account, default 500 ms, 0 = off), `stream_ts` waits that long before it requests a
+channel from the provider when all of these are true:
+
+- the viewer is recognised (see *Recognising the same viewer*). Anonymous viewers such as
+  Plex share one identity between several people, and recordings are never delayed;
+- the viewer's previous channel request (`live:probation:last_request:<viewer>`) was a
+  different channel, within the Overlap Window. The first channel, and the first switch
+  after watching something, start at once;
+- the channel is not running yet (joining a running channel costs the provider nothing);
+- one of the channel's accounts with the overlap enabled has a delay above 0 (the longest
+  delay and window of those accounts apply).
+
+If the same viewer requests another channel during the delay, the waiting request answers
+`409` and never reaches the provider. Surfing CNN → Sky Sports → Discovery → BBC with presses
+under half a second apart starts Sky Sports at once and only requests BBC from the provider
+after that.
+
+### Slots left behind after a restart (independent of the overlap)
+
+A channel holds its slot through `channel_stream:<channel id>`, `stream_profile:<stream id>` and
+the profile's `profile_connections` counter. None of those expire, while every
+`live:channel:<uuid>:*` key with an expiry (metadata, buffer chunks, clients, owner, stop and
+disconnect markers) does. When Dispatcharr stops without cleaning up (a reboot, a service
+restart, a crash), the live keys expire but the slot stays counted. Redis keeps its data
+across restarts and Dispatcharr does not reset the counters, so the account looked full
+until Redis was fixed by hand (seen as Plex "tuner not available": every request got a 503).
+
+`release_abandoned_slots()` runs from every worker's proxy cleanup loop; a Redis lock
+(`live:probation:sweep_lock`, 30 s) makes one worker check every 30 seconds. An assignment
+whose channel (or stream preview) has no expiring live key on every check for 60 seconds is
+released: its keys are deleted and the counter goes down. Keys without an expiry, such as the
+buffer index, do not count as running because they survive an unclean stop. When a running
+channel shares the stream, only the stopped channel's assignment is removed. This applies with
+the overlap disabled too: it only acts on slots whose channel no longer exists in the proxy.
+
+The install script also clears those keys while the services are stopped.
+
+### Refused provider connections
+
+A provider that closes a new connection before sending any data is almost always refusing it:
+the account is full (it may still count connections that were just closed) or it blocks for
+too many connection attempts. Dispatcharr's stream manager retries such a connection after
+0.25 s and 0.5 s before it fails over, which while surfing adds up to a burst of attempts.
+
+On accounts with the overlap enabled, `StreamManager.run()` asks
+`probation.refusal_retry_delay()` before each retry. When the last connection received no
+data at all, it waits 1.5 s × the attempt number instead (1.5 s, then 3 s), in slices so a stop
+is not held up. Connections that did deliver data, and accounts without the overlap, keep
+Dispatcharr's normal timing. The number of attempts and the failover afterwards are unchanged.
 
 ### Held slots
 
@@ -180,8 +246,7 @@ channels do not use the overlap.
 `probation.in_use()` answers whether any active account has the overlap enabled. It is cached
 in Django's (Redis) cache for 60 seconds and cleared whenever an M3U account is saved or
 deleted. Every entry point checks it first, so with the overlap off on every account no
-device IDs are added, nothing is stored in Redis, no slot is held and no extra database
-queries run. A database error during this check counts as "not in use".
+nothing is stored in Redis, no slot is held and no extra database queries run. A database error during this check counts as "not in use".
 
 ### When Switching Channels (account preference)
 
@@ -208,8 +273,8 @@ builds stored "Stay On Same Account" as `probation_sticky: true`, which still re
 
 ## Recognising the same viewer
 
-A stream request carries a client IP, a User-Agent and whatever is in the URL. Players
-do not send device IDs or keep cookies, so identity has to come from the URL.
+A stream request carries a client IP address, a User-Agent and the login it used. Nothing is
+added to playlists or stream links: they stay exactly as stock Dispatcharr writes them.
 
 For every request Dispatcharr determines a viewer identity:
 
@@ -217,49 +282,51 @@ For every request Dispatcharr determines a viewer identity:
 |---|---|
 | IP | `get_client_ip()` (honours trusted reverse proxies) |
 | User | Xtream login (`/live/<user>/<pass>/…`), Xtream-style M3U (`get.php`), web player session |
-| Device ID | `device_id` query parameter on stream links, written by Dispatcharr's M3U output |
+| App | User-Agent without version numbers (`app_name()`), only used on the account's LAN subnets |
 
-A requesting viewer matches an existing client when **IP, user and device ID are all
-equal** (a missing user or device ID only matches a missing one).
+A viewer is **recognised** (`is_identified()`) when it has:
 
-- **Identified** viewers have a user and/or a device ID.
-- **Anonymous** viewers have neither (HDHomeRun, M3U without device ID). They are
-  matched on IP alone, and only on accounts that enable
-  **Allow Overlap For Anonymous Connections**.
+- a **Dispatcharr user**: an Xtream login, which is how a device outside the local network
+  identifies itself. One login per device; see the warning below; or
+- an **IP address on one of the account's LAN subnets**, with LAN Device Tracking enabled.
+  On a local network every device has its own address.
 
-### Automatic device ID
+Everything else is **anonymous**: media servers (recognised by User-Agent), and players
+outside the subnets without a login. They are matched on IP alone, and only on accounts that
+enable **Allow Overlap For Anonymous Connections**. DVR recordings never take part.
 
-When any M3U account has the overlap enabled, every M3U playlist Dispatcharr writes
-(`/output/m3u`, `/output/m3u/<channel profile>`, `get.php`) gets a random device ID
-appended to each stream link, generated per download:
+Identity is per account (`identity_key(viewer, account)`), because the subnets and the
+setting belong to the account the channel runs on.
 
-```
-/proxy/ts/stream/<channel uuid>?device_id=7f3a9c01b2d4
-/live/<user>/<pass>/<channel id>?device_id=7f3a9c01b2d4
-```
+### LAN Device Tracking
 
-- The ID is inserted after the 2-second playlist cache, so two devices never share one.
-- A fixed ID can be requested with `?device_id=<name>` on the playlist URL
-  (letters, digits, `-`, `_`, up to 64 characters). Useful for players that key
-  favourites on stream URLs, or to avoid a new ID on every playlist refresh.
-- **Warning (shown in the explanation popup):** stream links change on every playlist
-  download, so players that remember favourites by stream link can lose them. This is
-  accepted; a fixed `?device_id=<name>` avoids it.
-- HDHomeRun lineups get no device ID: they are always read by one media server
-  (Plex, Jellyfin, Emby) on behalf of all its viewers.
-- For the same reason, M3U playlists requested by a media server get no device ID. They
-  are recognised by User-Agent (`jellyfin`, `emby` or `plex`, case-insensitive; defaults
-  are `Jellyfin-Server/<version>`, `Emby/<version>`, `PlexMediaServer/<version>`). Stream
-  requests from such a User-Agent also ignore any device ID. A custom User-Agent configured
-  in the media server's tuner settings is not recognised.
-- Native Xtream players (`player_api.php`) build stream links themselves, so they
-  are identified by user only.
-- **Warning (shown in the explanation popup):** every device that logs in with a
-  Dispatcharr username and password needs its own user. A login shared by several devices
-  is not supported: a request can be taken for the other device's switch, and Stop Skipped
-  Channels can stop the other device's channel. A Dispatcharr login carries no device
-  information (one Xtream password per user, no sessions or device tokens), so this cannot
-  be detected reliably.
+**LAN Device Tracking** (`probation_lan_tracking`, per account, off by default) with the
+account's **LAN Subnets** (`probation_lan_subnets`, local networks such as `192.168.2.0/24`)
+recognises a player by **IP + app** (plus its login, if it has one):
+
+- The app is the User-Agent without version numbers (`TiviMate/5.1.6 (Android 12)` and
+  `TiviMate/5.2.0 (Android 12)` are the same app; TiviMate and Kodi on one device are not),
+  so an app update changes nothing.
+- Media servers and recordings never count as LAN devices.
+- Only local (private) networks are accepted.
+- The last assigned profile is also remembered under the LAN key, so "Stay on same account"
+  and "Use another account" work for players without a login.
+
+The form suggests a /24 around Dispatcharr's own address when tracking is switched on
+(not for Docker networks in 172.16.0.0/12). Do not include addresses that several devices
+share: a Docker network, a second router, or a reverse proxy Dispatcharr does not trust.
+
+**Warning (shown in the explanation popup):** every device outside the LAN subnets needs its
+own Dispatcharr login. One login used by several devices at the same time is not supported: a
+request can be taken for the other device's switch, and Stop Skipped Channels can stop the
+other device's channel. A Dispatcharr login carries no device information (one Xtream password
+per user, no sessions or device tokens), so this cannot be detected reliably.
+
+**Why no device ID in the links:** an earlier version added a random `device_id` to every
+stream link in the M3U output. It changed on every playlist download, which broke players that
+key favourites on stream links, and a player that refreshed its playlist mid-stream looked like
+a new device (its own held slot then blocked it). Recognising devices by address on the LAN and
+by login outside needs nothing in the links, so playlists and stream links are now untouched.
 
 ## Settings
 
@@ -270,8 +337,11 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 | Allow Channel Switch Overlap | `probation_enabled` | off |
 | Overlap Window (seconds, 1–120) | `probation_seconds` | 10 |
 | Stop Skipped Channels | `probation_stop_skipped` | off |
+| Surfing Delay (ms, 0–2000) | `probation_surf_delay_ms` | 500 |
 | When Switching Channels | `probation_account_preference` | `order` |
 | Allow Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
+| LAN Device Tracking | `probation_lan_tracking` | off |
+| LAN Subnets | `probation_lan_subnets` | empty (suggested when switched on) |
 
 The form only shows the toggle until it is enabled (after confirming the explanation
 popup); the other settings then appear below it. "What does this do?" reopens the
@@ -280,22 +350,42 @@ explanation.
 Keep Max Streams at the provider's real limit and the window below how long the
 provider tolerates the extra connection.
 
+## Seeing what it does (settings page)
+
+**Settings → Streaming → Channel Switch Overlap** shows, refreshed every 5 seconds:
+
+- one line per account with the overlap enabled: slots in use, held slots, whether it stops
+  skipped channels, and its LAN subnets;
+- the last switches: time, viewer (login, or address and app), from which channel to which,
+  what the feature did (overlap slot, held slot, another account, same account, stopped
+  skipped channel, provider refused, not used) and the result (confirmed after 1.3 s, moved,
+  stopped, or the reason it was not used).
+
+`record_event()` writes one small record per decision (`live:probation:event:<id>`, listed in
+the sorted set `live:probation:events`); `update_event()` fills in the result when the overlap
+resolves. Only the last `EVENTS_KEPT` (20) switches are kept, for `EVENT_TTL` (30 minutes):
+enough to see whether the feature is doing its job, without becoming a second log.
+
+Recording runs in Dispatcharr itself, so the page does not have to be open. With the overlap
+disabled everywhere nothing is recorded and the page says so. `GET /proxy/overlap/`
+(`overlap_views.overlap_activity`, admins only) returns the accounts and the events with
+channel names and usernames resolved.
+
 ## Coverage
 
 ### Reliable
 
 - Xtream players with one user per device, at home or outside.
 - Same user on several devices at home (distinct LAN IPs), or at different locations.
-- M3U players that download their own playlist, including several devices behind one
-  public IP and several devices on the same channel profile.
+- M3U players on the LAN subnets, each with its own IP address and app.
 - A new viewer when every account is full: no match, normal limit error.
 
 ### Best effort (a wrong guess stops only the new stream after the window)
 
-- Native Xtream players sharing one user behind one public IP.
+- Several devices sharing one login behind one public IP (not supported; give each device
+  its own login).
 - Jellyfin / Plex / Emby and playlist middlemen (Threadfin, m3u4u): one IP and one
   playlist for all their viewers; requires the anonymous option.
-- A switch right after a playlist refresh (new device ID): no match, normal switch.
 - A device changing IP during a switch (Wi-Fi ↔ mobile): no match, normal switch.
 - One identity watching on two accounts: the overlap may land on the wrong one and
   is moved after the window.
@@ -333,10 +423,13 @@ overlap window.
 | `apps/proxy/live_proxy/probation.py` | Viewer identity, account settings, overlap slot, probation record, resolution (confirm/move/stop), background monitor and its recovery |
 | `apps/channels/models.py` | `Channel.get_stream(viewer=…)` calls the account preferences, and the overlap before custom streams and when every profile is full; holds a released slot |
 | `apps/proxy/live_proxy/server.py` | The cleanup loop resumes overlap checks whose worker restarted |
+| `apps/proxy/live_proxy/input/manager.py` | Longer wait before retrying a connection the provider refused |
+| `apps/proxy/live_proxy/overlap_views.py` | Read-only data for the settings page |
+| `apps/proxy/urls.py`, `frontend/src/config/settingsNav.js`, `frontend/src/api.js` | One line each: the endpoint, the settings entry and the API call |
+| `frontend/src/components/overlap/OverlapActivity.jsx` | The settings page itself |
 | `apps/m3u/connection_pool.py` | `reserve_profile_slot(..., extra_capacity=0, viewer=None)`; held slots count as taken in reservations and capacity checks |
 | `apps/proxy/live_proxy/url_utils.py` | Pass the viewer to `get_stream` |
-| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record the client's viewer and device ID, stop skipped channels, start the monitor |
-| `apps/output/views.py` | Automatic device ID in M3U stream links |
+| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record it for the channel, wait for a skipped channel that is still stopping, stop skipped channels, start the monitor |
 | `apps/m3u/serializers.py`, `frontend/src/components/forms/M3U.jsx` | Per-account settings |
 
 Redis keys: `live:probation:<channel uuid>` (probation record, TTL window + 120 s);
@@ -344,7 +437,7 @@ Redis keys: `live:probation:<channel uuid>` (probation record, TTL window + 120 
 `live:probation:held:<profile id>` and `live:probation:held_login:<login counter key>`
 (held slots); `live:probation:viewers:<channel uuid>` (viewers that joined, TTL 24 h,
 removed on release); `live:probation:last_profile:<viewer>`, `live:probation:stopping:<uuid>`,
-`live:probation:no_hold:<uuid>`; `device_id` field on `live:channel:<uuid>:clients:<client id>`.
+`live:probation:no_hold:<uuid>`; 
 Django cache: `live:probation:in_use`.
 
 Logging: every decision logs a line starting with `Probation:`. "Not used" reasons are
@@ -356,5 +449,5 @@ selection several times per second while all profiles are full.
 1. How much of today's switch delay is the slot wait versus provider start-up
    (measure: new request → old client `Disconnected after` → `Successfully obtained stream`).
 2. How long common providers tolerate the extra connection.
-3. Whether any popular players key favourites or EPG on stream URLs (affects the
-   random per-download device ID).
+3. How often a LAN device changes its IP address in practice (a new address counts as a
+   new device once).
