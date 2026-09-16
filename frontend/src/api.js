@@ -2590,6 +2590,19 @@ export default class API {
     }
   }
 
+  static async setOverlapRetention(keepSeconds) {
+    // How long the page keeps switches; answers with the page itself, like a GET
+    try {
+      return await request(`${host}/proxy/overlap/`, {
+        method: 'POST',
+        body: { keep_seconds: keepSeconds },
+      });
+    } catch (e) {
+      errorNotification('Failed to change how long switches are kept', e);
+      throw e;
+    }
+  }
+
   static async getCatchupPrograms(sessions) {
     try {
       const response = await request(`${host}/proxy/catchup/programs/`, {

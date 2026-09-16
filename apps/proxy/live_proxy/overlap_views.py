@@ -80,13 +80,23 @@ def _usernames(user_ids):
     }
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAdmin])
 def overlap_activity(request):
-    """Accounts and recent switches for the Channel Switch Overlap page."""
+    """Accounts and recent switches for the Channel Switch Overlap page.
+
+    POST {"keep_seconds": ...} changes how long switches are kept, and returns the page as a
+    GET does, so the page shows the new setting straight away.
+    """
     redis_client = RedisClient.get_client()
     if not redis_client:
         return JsonResponse({"error": "Redis not available"}, status=500)
+
+    if request.method == "POST":
+        try:
+            probation.set_event_ttl(redis_client, request.data.get("keep_seconds"))
+        except (TypeError, ValueError) as e:
+            return JsonResponse({"error": str(e)}, status=400)
 
     enabled = probation.in_use()
     events = probation.recent_events(redis_client) if enabled else []
@@ -110,6 +120,7 @@ def overlap_activity(request):
             }
             for event in events
         ],
-        "kept_minutes": probation.EVENT_TTL // 60,
+        "keep_seconds": probation.event_ttl(redis_client),
+        "keep_choices": list(probation.EVENT_TTL_CHOICES),
         "timestamp": time.time(),
     })

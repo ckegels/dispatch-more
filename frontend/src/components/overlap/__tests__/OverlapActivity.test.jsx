@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import OverlapActivity from '../OverlapActivity.jsx';
 
 vi.mock('../../../api', () => ({
-  default: { getOverlapActivity: vi.fn() },
+  default: { getOverlapActivity: vi.fn(), setOverlapRetention: vi.fn() },
 }));
 
 // Mantine components are rendered as plain elements, like the other settings tests
@@ -17,8 +17,31 @@ vi.mock('@mantine/core', () => {
   return {
     Alert: ({ children }) => <div role="alert">{children}</div>,
     Badge: ({ children }) => <span>{children}</span>,
+    Button: ({ children, onClick }) => (
+      <button onClick={onClick}>{children}</button>
+    ),
     Group: ({ children }) => <div>{children}</div>,
     Loader: () => <div>loading</div>,
+    Modal: ({ opened, title, children }) =>
+      opened ? (
+        <div role="dialog">
+          <span>{title}</span>
+          {children}
+        </div>
+      ) : null,
+    Select: ({ label, value, onChange, data, ...rest }) => (
+      <select
+        aria-label={rest['aria-label'] || label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {data.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    ),
     Stack: ({ children }) => <div>{children}</div>,
     Table,
     Text: ({ children }) => <span>{children}</span>,
@@ -29,7 +52,8 @@ import API from '../../../api';
 
 const activity = {
   enabled: true,
-  kept_minutes: 30,
+  keep_seconds: 1800,
+  keep_choices: [1800, 7200, 21600, 86400],
   accounts: [
     {
       account: 'TiviBridge A',
@@ -102,7 +126,8 @@ describe('OverlapActivity', () => {
       enabled: false,
       accounts: [],
       events: [],
-      kept_minutes: 30,
+      keep_seconds: 1800,
+      keep_choices: [1800, 7200, 21600, 86400],
     });
 
     render(<OverlapActivity active={true} />);
@@ -120,6 +145,43 @@ describe('OverlapActivity', () => {
     expect(
       await screen.findByText('No channel switches in the last 30 minutes.')
     ).toBeInTheDocument();
+  });
+
+  it('changes how long switches are kept', async () => {
+    API.setOverlapRetention.mockResolvedValue({
+      ...activity,
+      keep_seconds: 7200,
+    });
+    render(<OverlapActivity active={true} />);
+    await screen.findByText('TiviBridge A');
+
+    fireEvent.change(screen.getByLabelText('Keep switches for'), {
+      target: { value: '7200' },
+    });
+
+    await waitFor(() =>
+      expect(API.setOverlapRetention).toHaveBeenCalledWith(7200)
+    );
+    expect(await screen.findByLabelText('Keep switches for')).toHaveValue(
+      '7200'
+    );
+  });
+
+  it('explains the labels in a popup', async () => {
+    render(<OverlapActivity active={true} />);
+    await screen.findByText('TiviBridge A');
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: /what do these mean/i })
+    );
+
+    const legend = await screen.findByRole('dialog');
+    expect(legend).toHaveTextContent('What this page shows');
+    expect(legend).toHaveTextContent('skipped while surfing');
+    expect(legend).toHaveTextContent(
+      'moved on to another channel during the Surfing Delay'
+    );
   });
 
   it('shows an error when the activity cannot be loaded', async () => {

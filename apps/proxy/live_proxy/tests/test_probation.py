@@ -30,8 +30,9 @@ class FakeRedis:
         self.hashes = {}
         self.sets = {}
         self.zsets = {}
-        # Keys with an expiry (values are not tracked: nothing expires by itself here)
+        # Keys with an expiry, and the seconds they were given (nothing expires by itself here)
         self.expiring = set()
+        self.ttls = {}
 
     def get(self, key):
         value = self.strings.get(key)
@@ -43,13 +44,16 @@ class FakeRedis:
         self.strings[key] = str(value)
         if ex is None:
             self.expiring.discard(key)
+            self.ttls.pop(key, None)
         else:
             self.expiring.add(key)
+            self.ttls[key] = ex
         return True
 
     def setex(self, key, ttl, value):
         self.strings[key] = str(value)
         self.expiring.add(key)
+        self.ttls[key] = ttl
 
     def delete(self, *keys):
         removed = 0
@@ -67,12 +71,13 @@ class FakeRedis:
     def expire(self, key, ttl):
         if self.exists(key):
             self.expiring.add(key)
+            self.ttls[key] = ttl
         return True
 
     def ttl(self, key):
         if not self.exists(key):
             return -2
-        return 30 if key in self.expiring else -1
+        return self.ttls.get(key, 30) if key in self.expiring else -1
 
     def pipeline(self, transaction=True):
         return _FakePipeline(self)
@@ -2648,18 +2653,21 @@ class OverlapActivityViewTests(TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _get(self, admin=True):
+    def _client(self, admin=True):
         from apps.accounts.models import User
         from rest_framework.test import APIClient
 
         client = APIClient()
         user = User.objects.create_user(
-            username=f"user-{'admin' if admin else 'viewer'}",
+            username=f"user-{'admin' if admin else 'viewer'}-{User.objects.count()}",
             password="x",
             user_level=10 if admin else 0,
         )
         client.force_authenticate(user=user)
-        return client.get("/proxy/overlap/")
+        return client
+
+    def _get(self, admin=True):
+        return self._client(admin).get("/proxy/overlap/")
 
     def test_admins_see_accounts_and_switches(self):
         channel = Channel.objects.create(channel_number=942, name="Sky Sports")
@@ -2721,4 +2729,35 @@ class OverlapActivityViewTests(TestCase):
 
     def test_only_admins(self):
         self.assertEqual(self._get(admin=False).status_code, 403)
+        self.assertEqual(
+            self._client(admin=False)
+            .post("/proxy/overlap/", {"keep_seconds": 7200}, format="json")
+            .status_code,
+            403,
+        )
+
+    def test_how_long_switches_are_kept_can_be_changed(self):
+        self.assertEqual(self._get().json()["keep_seconds"], probation.EVENT_TTL)
+
+        response = self._client().post(
+            "/proxy/overlap/", {"keep_seconds": 7200}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        # The answer is the page itself, with the new setting
+        self.assertEqual(response.json()["keep_seconds"], 7200)
+        self.assertEqual(self._get().json()["keep_seconds"], 7200)
+        self.assertEqual(self._get().json()["keep_choices"], list(probation.EVENT_TTL_CHOICES))
+
+        # A switch recorded now lives that long
+        probation.record_event(self.redis, probation.Viewer("10.0.0.5"), "held slot")
+        event_id = probation._as_str(self.redis.zrevrange(probation.EVENTS_KEY, 0, 0)[0])
+        self.assertEqual(self.redis.ttl(probation._event_key(event_id)), 7200)
+
+    def test_an_unknown_retention_is_refused(self):
+        for bad in (99, "soon", None):
+            response = self._client().post(
+                "/proxy/overlap/", {"keep_seconds": bad}, format="json"
+            )
+            self.assertEqual(response.status_code, 400, bad)
+        self.assertEqual(self._get().json()["keep_seconds"], probation.EVENT_TTL)
 

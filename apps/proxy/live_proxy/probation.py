@@ -106,9 +106,13 @@ MAX_RESOLVE_ATTEMPTS = 3
 # ids by time, and one short-lived hash per event (see record_event).
 EVENTS_KEY = "live:probation:events"
 EVENT_KEY = "live:probation:event:{event_id}"
-# Small and short-lived on purpose: enough to see whether the feature is doing its job
-EVENTS_KEPT = 20
+# Short-lived on purpose: enough to see whether the feature is doing its job, never a log.
+# How long switches are kept can be changed on the page itself (see event_ttl); the number of
+# switches is capped so a long window cannot fill Redis.
+EVENTS_KEPT = 200
 EVENT_TTL = 30 * 60
+EVENT_TTL_CHOICES = (30 * 60, 2 * 3600, 6 * 3600, 24 * 3600)
+EVENT_TTL_KEY = "live:probation:events_keep"
 
 # Slot assignments (channel_stream:<id>) whose channel has no live proxy keys at all: hash of
 # assignment key -> first time it was seen that way. Released after ABANDONED_SLOT_GRACE
@@ -211,13 +215,32 @@ def _event_key(event_id) -> str:
     return EVENT_KEY.format(event_id=event_id)
 
 
+def event_ttl(redis_client) -> int:
+    """How long switches are kept, as chosen on the page (EVENT_TTL when not set)."""
+    try:
+        chosen = int(_as_str(redis_client.get(EVENT_TTL_KEY)) or 0)
+    except (TypeError, ValueError):
+        chosen = 0
+    return chosen if chosen in EVENT_TTL_CHOICES else EVENT_TTL
+
+
+def set_event_ttl(redis_client, seconds) -> int:
+    """Remember how long switches are kept; anything but a known choice is refused."""
+    seconds = int(seconds)
+    if seconds not in EVENT_TTL_CHOICES:
+        raise ValueError(f"{seconds} is not one of {EVENT_TTL_CHOICES}")
+    redis_client.set(EVENT_TTL_KEY, seconds)
+    return seconds
+
+
 def record_event(redis_client, viewer, action, **fields):
     """
     Remember one decision for the Channel Switch Overlap page: who switched, from and to
     which channel, and what happened. Returns the event id, which update_event() uses to fill
     in the result once it is known.
 
-    Kept deliberately small: only the last EVENTS_KEPT switches, and only for EVENT_TTL.
+    Kept deliberately small: only the last EVENTS_KEPT switches, and only for as long as the
+    page is set to keep them (see event_ttl).
     Never lets a failure reach the stream request.
     """
     if not redis_client:
@@ -234,11 +257,12 @@ def record_event(redis_client, viewer, action, **fields):
         }
         event.update({key: str(value) for key, value in fields.items() if value is not None})
         redis_client.hset(_event_key(event_id), mapping=event)
-        redis_client.expire(_event_key(event_id), EVENT_TTL)
+        ttl = event_ttl(redis_client)
+        redis_client.expire(_event_key(event_id), ttl)
         redis_client.zadd(EVENTS_KEY, {event_id: now})
         redis_client.zremrangebyrank(EVENTS_KEY, 0, -(EVENTS_KEPT + 1))
-        redis_client.zremrangebyscore(EVENTS_KEY, "-inf", now - EVENT_TTL)
-        redis_client.expire(EVENTS_KEY, EVENT_TTL)
+        redis_client.zremrangebyscore(EVENTS_KEY, "-inf", now - ttl)
+        redis_client.expire(EVENTS_KEY, ttl)
         return event_id
     except Exception as e:
         logger.debug(f"Could not record an overlap event: {e}")
