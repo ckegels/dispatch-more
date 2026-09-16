@@ -11,6 +11,33 @@ export const PHASE_COLORS = {
   'first byte to player': '#748ffc',
 };
 
+// What the media server itself did, after Dispatcharr handed the video over
+export const SERVER_PHASE_COLORS = {
+  'session opened': '#4dabf7',
+  'transcode started': '#ffa94d',
+  'first video ready': '#38d9a9',
+  playing: '#748ffc',
+};
+
+export const SERVER_PHASE_MEANINGS = [
+  [
+    'session opened',
+    'The server noticed the channel and made a session for it. A long wait here is the server deciding what to do, before it even looks at the video.',
+  ],
+  [
+    'transcode started',
+    'It started converting the stream. Live TV in a browser is almost always converted; a native player usually plays it as it is.',
+  ],
+  [
+    'first video ready',
+    'The first converted video existed. The gap before this is the server analysing the stream and starting its encoder.',
+  ],
+  [
+    'playing',
+    'The player actually showed video. Everything before this is what a viewer sees as a black screen.',
+  ],
+];
+
 export const PHASE_MEANINGS = [
   ['slot', 'Dispatcharr picked a stream and took a connection slot for it.'],
   [
@@ -41,12 +68,12 @@ const shortTime = (seconds) =>
   });
 
 // One bar per start, split into the phases, each as wide as it took
-const PhaseBar = ({ phases, total }) => (
+const PhaseBar = ({ phases, total, colors = PHASE_COLORS }) => (
   <Group gap={2} wrap="nowrap" style={{ width: '100%' }}>
     {phases.map((phase) => (
       <Tooltip
         key={phase.label}
-        label={`${phase.label}: ${phase.took.toFixed(2)}s (at ${phase.at.toFixed(2)}s)`}
+        label={`${phase.label}: ${phase.took.toFixed(1)}s (at ${phase.at.toFixed(1)}s)`}
         withArrow
       >
         <Box
@@ -55,7 +82,7 @@ const PhaseBar = ({ phases, total }) => (
             minWidth: 2,
             height: 10,
             borderRadius: 2,
-            background: PHASE_COLORS[phase.label] || '#868e96',
+            background: colors[phase.label] || '#868e96',
           }}
         />
       </Tooltip>
@@ -109,7 +136,7 @@ const ChannelStarts = ({ starts }) => {
               <Table.Th w={60}>Took</Table.Th>
               {/* The bar gets what is left: it is the reason for this table */}
               <Table.Th>Where the time went</Table.Th>
-              <Table.Th w="20%">After the handover</Table.Th>
+              <Table.Th w="28%">After the handover</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -145,28 +172,57 @@ const ChannelStarts = ({ starts }) => {
                 </Table.Td>
                 {/* Only filled in for a media server that is configured (Media Servers) */}
                 <Table.Td>
-                  {start.server_buffering > 0 ? (
+                  {start.server_phases.length > 0 ? (
                     <Stack gap={2}>
-                      <Text
-                        size="sm"
-                        c={start.server_buffering >= 3 ? 'orange' : 'dimmed'}
-                      >
-                        playing after {start.server_buffering.toFixed(1)}s
-                      </Text>
-                      {start.server_decision && (
-                        <Badge
+                      <Group gap={6} wrap="nowrap" justify="space-between">
+                        <Text
                           size="sm"
-                          variant="light"
-                          color={
-                            start.server_decision === 'direct play'
-                              ? 'teal'
-                              : 'orange'
+                          fw={600}
+                          c={
+                            start.server_gave_up
+                              ? 'red'
+                              : start.server_buffering >= 3
+                                ? 'orange'
+                                : undefined
                           }
                         >
-                          {start.server_decision}
-                          {start.server_speed ? ` ${start.server_speed}×` : ''}
-                        </Badge>
-                      )}
+                          {start.server_gave_up
+                            ? 'never played'
+                            : `${start.server_buffering.toFixed(1)}s`}
+                        </Text>
+                        {start.server_decision && (
+                          <Text
+                            size="xs"
+                            c={
+                              start.server_decision === 'direct play'
+                                ? 'teal'
+                                : 'orange'
+                            }
+                            style={{ whiteSpace: 'nowrap' }}
+                          >
+                            {start.server_decision === 'direct play'
+                              ? 'direct play'
+                              : 'transcode'}
+                            {start.server_speed
+                              ? ` ${start.server_speed}×`
+                              : ''}
+                          </Text>
+                        )}
+                      </Group>
+                      <PhaseBar
+                        phases={start.server_phases}
+                        total={
+                          start.server_phases[start.server_phases.length - 1].at
+                        }
+                        colors={SERVER_PHASE_COLORS}
+                      />
+                      <Text size="xs" c="dimmed">
+                        {start.server_phases
+                          .map(
+                            (phase) => `${phase.label} ${phase.at.toFixed(1)}s`
+                          )
+                          .join(' · ')}
+                      </Text>
                     </Stack>
                   ) : (
                     <Text size="sm" c="dimmed">

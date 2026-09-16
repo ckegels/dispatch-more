@@ -235,6 +235,39 @@ class StartWatchingTests(TestCase):
         self.assertEqual(record["server_decision"], "transcode (video + audio)")
         self.assertEqual(record["server_speed"], "0.9")
         self.assertIn("server_buffering", record)
+        # Every stage the server went through, so a slow start can be blamed on one of them
+        self.assertIn("session opened=", record["server_phases"])
+        self.assertIn("transcode started=", record["server_phases"])
+        self.assertIn("playing=", record["server_phases"])
+
+    def test_a_session_that_never_plays_is_recorded_as_such(self, _close):
+        start_id = self._start()
+        media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
+        buffering = {
+            "MediaContainer": {
+                "Metadata": [
+                    {
+                        **SESSION["MediaContainer"]["Metadata"][0],
+                        "Player": {
+                            **SESSION["MediaContainer"]["Metadata"][0]["Player"],
+                            "state": "buffering",
+                        },
+                    }
+                ]
+            }
+        }
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ), patch("apps.proxy.live_proxy.media_servers.time") as fake_time:
+            get.return_value = fake_response(buffering)
+            # deadline, then (loop check, "now") twice, then a check past the deadline
+            fake_time.time.side_effect = [0, 1, 2, 3, 4, 999]
+            media_servers._watch(self.redis, start_id, started_at=1789580681.0)
+
+        record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
+        self.assertEqual(record["server_gave_up"], "1")
+        self.assertIn("session opened=", record["server_phases"])
+        self.assertNotIn("playing=", record["server_phases"])
 
     def test_a_session_of_another_stream_is_not_used(self, _close):
         start_id = self._start()

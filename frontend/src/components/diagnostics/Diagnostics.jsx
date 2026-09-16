@@ -14,7 +14,12 @@ import {
   Text,
 } from '@mantine/core';
 import API from '../../api';
-import ChannelStarts, { PHASE_COLORS, PHASE_MEANINGS } from './ChannelStarts';
+import ChannelStarts, {
+  PHASE_COLORS,
+  PHASE_MEANINGS,
+  SERVER_PHASE_COLORS,
+  SERVER_PHASE_MEANINGS,
+} from './ChannelStarts';
 import ChannelSwitches, {
   ACTION_COLORS,
   ACTION_MEANINGS,
@@ -146,6 +151,37 @@ const Diagnostics = ({ active }) => {
                           height: 10,
                           borderRadius: 2,
                           background: PHASE_COLORS[label],
+                        }}
+                      />
+                      <Text size="sm">{label}</Text>
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>{meaning}</Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+
+          <Text size="sm" fw={600} mt="sm">
+            After the handover
+          </Text>
+          <Text size="sm">
+            For a media server configured under Media Servers, what the server
+            itself did once Dispatcharr handed the video over. The number is how
+            long it took before the viewer saw anything.
+          </Text>
+          <Table verticalSpacing={4} fz="sm">
+            <Table.Tbody>
+              {SERVER_PHASE_MEANINGS.map(([label, meaning]) => (
+                <Table.Tr key={label}>
+                  <Table.Td style={{ whiteSpace: 'nowrap' }}>
+                    <Group gap={6} wrap="nowrap">
+                      <Box
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 2,
+                          background: SERVER_PHASE_COLORS[label],
                         }}
                       />
                       <Text size="sm">{label}</Text>

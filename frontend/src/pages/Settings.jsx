@@ -26,8 +26,11 @@ const SettingsPage = () => {
     : null;
   const ActiveComponent = activeSectionConfig?.Component ?? null;
 
+  // Most settings read better narrow; a page with a wide table asks for the room
+  const maxWidth = activeSectionConfig?.wide ? 1600 : 900;
+
   return (
-    <Box p={10} maw={900} mx="auto">
+    <Box p={10} maw={maxWidth} mx="auto">
       {ActiveComponent ? (
         <Paper withBorder p="md" radius="md">
           <Text size="lg" fw={600} mb={6}>

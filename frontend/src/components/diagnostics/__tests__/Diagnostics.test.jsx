@@ -79,6 +79,16 @@ const activity = {
       client: 'Plex',
       total: 4.31,
       slowest: 'first keyframe',
+      server_buffering: 19.3,
+      server_decision: 'transcode (video + audio)',
+      server_speed: '0.9',
+      server_gave_up: false,
+      server_phases: [
+        { label: 'session opened', at: 2.1, took: 2.1 },
+        { label: 'transcode started', at: 3.4, took: 1.3 },
+        { label: 'first video ready', at: 8.0, took: 4.6 },
+        { label: 'playing', at: 19.3, took: 11.3 },
+      ],
       phases: [
         { label: 'slot', at: 0.04, took: 0.04 },
         { label: 'provider connected', at: 0.31, took: 0.27 },
@@ -135,9 +145,44 @@ describe('Diagnostics', () => {
     // The slowest step is named, and every phase has its own bar
     expect(screen.getAllByText('first keyframe').length).toBeGreaterThan(0);
     expect(
-      screen.getByTitle('first keyframe: 3.76s (at 4.28s)')
+      screen.getByTitle('first keyframe: 3.8s (at 4.3s)')
     ).toBeInTheDocument();
-    expect(screen.getByTitle('slot: 0.04s (at 0.04s)')).toBeInTheDocument();
+    expect(screen.getByTitle('slot: 0.0s (at 0.0s)')).toBeInTheDocument();
+  });
+
+  it('shows what the media server did after the handover', async () => {
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+
+    expect(screen.getByText('19.3s')).toBeInTheDocument();
+    expect(screen.getByText('transcode 0.9×')).toBeInTheDocument();
+    // Every stage on the server side, with when it happened
+    expect(
+      screen.getByText(
+        'session opened 2.1s · transcode started 3.4s · first video ready 8.0s · playing 19.3s'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTitle('first video ready: 4.6s (at 8.0s)')
+    ).toBeInTheDocument();
+  });
+
+  it('says when the media server never played anything', async () => {
+    API.getDiagnostics.mockResolvedValue({
+      ...activity,
+      starts: [
+        {
+          ...activity.starts[0],
+          server_gave_up: true,
+          server_buffering: 0,
+          server_phases: [{ label: 'session opened', at: 2.1, took: 2.1 }],
+        },
+      ],
+    });
+
+    render(<Diagnostics active={true} />);
+
+    expect(await screen.findByText('never played')).toBeInTheDocument();
   });
 
   it('says so when no channel has started recently', async () => {

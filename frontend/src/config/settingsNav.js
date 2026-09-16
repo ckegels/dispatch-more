@@ -52,8 +52,8 @@ export const SETTINGS_GROUPS = [
       { id: 'proxy-settings', label: 'Proxy Settings', icon: ArrowLeftRight, Component: ProxySettingsForm },
       { id: 'stream-profiles', label: 'Stream Profiles', icon: SlidersHorizontal, Component: StreamProfilesTable },
       { id: 'output-profiles', label: 'Output Profiles', icon: FileOutput, Component: OutputProfilesTable },
-      { id: 'diagnostics', label: 'Diagnostics', icon: Activity, Component: Diagnostics },
-      { id: 'media-servers', label: 'Media Servers', icon: Monitor, Component: MediaServers },
+      { id: 'diagnostics', label: 'Diagnostics', icon: Activity, Component: Diagnostics, wide: true },
+      { id: 'media-servers', label: 'Media Servers', icon: Monitor, Component: MediaServers, wide: true },
     ],
   },
   {

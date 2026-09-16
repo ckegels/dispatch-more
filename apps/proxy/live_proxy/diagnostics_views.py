@@ -84,18 +84,27 @@ def _usernames(user_ids):
     }
 
 
+def _phases(value):
+    """"label=seconds|..." as a list, with how long each step took on its own."""
+    phases, previous = [], 0.0
+    for phase in (value or "").split("|"):
+        label, _sep, seconds = phase.partition("=")
+        if not seconds:
+            continue
+        try:
+            at = float(seconds)
+        except ValueError:
+            continue
+        phases.append({"label": label, "at": at, "took": max(at - previous, 0.0)})
+        previous = at
+    return phases
+
+
 def _starts(redis_client):
     """Recent channel starts with each phase: how far in it was reached, and how long it took."""
     starts = []
     for record in timing.recent_starts(redis_client):
-        phases, previous = [], 0.0
-        for phase in record.get("phases", "").split("|"):
-            label, _sep, seconds = phase.partition("=")
-            if not seconds:
-                continue
-            at = float(seconds)
-            phases.append({"label": label, "at": at, "took": max(at - previous, 0.0)})
-            previous = at
+        phases = _phases(record.get("phases"))
         starts.append({
             "time": float(record.get("time", 0)),
             "channel": record.get("channel", ""),
@@ -111,6 +120,9 @@ def _starts(redis_client):
             "server_decision": record.get("server_decision", ""),
             "server_speed": record.get("server_speed", ""),
             "server_buffering": float(record.get("server_buffering", 0) or 0),
+            # What the server itself did, stage by stage, once it has a session
+            "server_phases": _phases(record.get("server_phases")),
+            "server_gave_up": record.get("server_gave_up") == "1",
         })
     return starts
 

@@ -197,6 +197,9 @@ def sessions(server):
             "live": item.get("live") == "1",
             "decision": _decision(transcode),
             "speed": float(transcode.get("speed") or 0) if transcode else 0.0,
+            "transcoding": bool(transcode),
+            # How much video the server has ready: while this is 0 it has produced nothing yet
+            "ready": float(transcode.get("maxOffsetAvailable") or 0) if transcode else 0.0,
         })
     return playing
 
@@ -242,20 +245,26 @@ def _watch(redis_client, start_id, started_at):
     try:
         servers = load_servers()
         deadline = time.time() + WATCH_SECONDS
-        buffering_since = None
+        # When each stage was first seen, measured from the moment the channel was requested
+        seen = {}
+        session = None
         while time.time() < deadline:
             gevent.sleep(WATCH_INTERVAL)
-            session = None
             for server in servers:
                 session = _session_for(server, started_at)
                 if session:
                     break
             if not session:
                 continue
-            if session["state"] == "buffering":
-                buffering_since = buffering_since or time.time()
-                continue
+
+            now = round(max(time.time() - started_at, 0), 1)
+            seen.setdefault("session opened", now)
+            if session["transcoding"]:
+                seen.setdefault("transcode started", now)
+            if session["ready"] > 0:
+                seen.setdefault("first video ready", now)
             if session["state"] == "playing":
+                seen.setdefault("playing", now)
                 timing.update_start(
                     redis_client,
                     start_id,
@@ -263,10 +272,22 @@ def _watch(redis_client, start_id, started_at):
                     server_player=session["player"],
                     server_decision=session["decision"],
                     server_speed=f"{session['speed']:.1f}" if session["speed"] else "",
-                    # How long the player spent buffering before it played anything
-                    server_buffering=f"{max(time.time() - started_at, 0):.1f}",
+                    # How long until the player actually played something
+                    server_buffering=f"{seen['playing']:.1f}",
+                    server_phases="|".join(f"{stage}={at}" for stage, at in seen.items()),
                 )
                 return
+        if session:
+            # It never started playing within the window: say how far it got
+            timing.update_start(
+                redis_client,
+                start_id,
+                server_user=session["user"],
+                server_player=session["player"],
+                server_decision=session["decision"],
+                server_phases="|".join(f"{stage}={at}" for stage, at in seen.items()),
+                server_gave_up="1",
+            )
         logger.debug(f"No media server session became playable for start {start_id}")
     except Exception as e:
         logger.debug(f"Could not follow a media server session for start {start_id}: {e}")
