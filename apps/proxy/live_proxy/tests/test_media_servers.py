@@ -26,10 +26,12 @@ SESSION = {
                     "machineIdentifier": "mkk9dgqsm9p8",
                     "state": "playing",
                 },
+                "viewOffset": 4000,
                 "TranscodeSession": {
                     "videoDecision": "transcode",
                     "audioDecision": "transcode",
                     "speed": 0.9,
+                    "maxOffsetAvailable": 30.0,
                 },
             }
         ],
@@ -224,10 +226,17 @@ class StartWatchingTests(TestCase):
         media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
         started_at = 1789580681.0
 
+        def advancing(_url, **_kwargs):
+            """Each poll, the player is a little further into the stream: it is really playing."""
+            advancing.offset += 1000
+            item = {**SESSION["MediaContainer"]["Metadata"][0], "viewOffset": advancing.offset}
+            return fake_response({"MediaContainer": {"Metadata": [item]}})
+
+        advancing.offset = 0
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
             media_servers.gevent, "sleep"
         ):
-            get.return_value = fake_response(SESSION)
+            get.side_effect = advancing
             media_servers._watch(self.redis, start_id, started_at)
 
         record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
@@ -267,6 +276,46 @@ class StartWatchingTests(TestCase):
         record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
         self.assertEqual(record["server_gave_up"], "1")
         self.assertIn("session opened=", record["server_phases"])
+        self.assertNotIn("playing=", record["server_phases"])
+
+    def test_a_session_that_was_already_playing_is_not_used(self, _close):
+        """A session from before the request is someone else's stream, not this start."""
+        start_id = self._start()
+        media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ), patch("apps.proxy.live_proxy.media_servers.time") as fake_time:
+            get.return_value = fake_response(SESSION)
+            fake_time.time.side_effect = [0, 1, 999]
+            # The session started a minute before this channel was requested
+            media_servers._watch(self.redis, start_id, started_at=1789580681.0 + 60)
+
+        record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
+        self.assertNotIn("server_user", record)
+        self.assertNotIn("server_gave_up", record)
+
+    def test_the_position_has_to_move_before_it_counts_as_playing(self, _close):
+        """Plex says "playing" before anything is on screen; the position moving does not."""
+        start_id = self._start()
+        media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
+        still = {
+            "MediaContainer": {
+                "Metadata": [
+                    {**SESSION["MediaContainer"]["Metadata"][0], "viewOffset": 4000}
+                ]
+            }
+        }
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ), patch("apps.proxy.live_proxy.media_servers.time") as fake_time:
+            # The same position every time: the player is stuck, not playing
+            get.return_value = fake_response(still)
+            fake_time.time.side_effect = [0, 1, 2, 3, 4, 999]
+            media_servers._watch(self.redis, start_id, started_at=1789580681.0)
+
+        record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
+        self.assertEqual(record["server_gave_up"], "1")
         self.assertNotIn("playing=", record["server_phases"])
 
     def test_a_session_of_another_stream_is_not_used(self, _close):

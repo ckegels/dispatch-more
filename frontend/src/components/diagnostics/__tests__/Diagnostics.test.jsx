@@ -212,10 +212,27 @@ describe('Diagnostics', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
   });
 
+  it('copies over plain http, where the clipboard API does not exist', async () => {
+    // Dispatcharr is usually opened over http, where navigator.clipboard is missing
+    Object.assign(navigator, { clipboard: undefined });
+    document.execCommand = vi.fn().mockReturnValue(true);
+
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+
+    fireEvent.click(screen.getByLabelText('Copy the start of ZIB'));
+
+    await waitFor(() =>
+      expect(document.execCommand).toHaveBeenCalledWith('copy')
+    );
+    expect(await screen.findByText('Copied')).toBeInTheDocument();
+  });
+
   it('says when copying did not work', async () => {
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockRejectedValue(new Error('no')) },
     });
+    document.execCommand = vi.fn().mockReturnValue(false);
 
     render(<Diagnostics active={true} />);
     await screen.findByText('ZIB');

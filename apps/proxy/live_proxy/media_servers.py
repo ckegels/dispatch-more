@@ -29,7 +29,10 @@ REQUEST_TIMEOUT = 5
 # create the session, and the buffering we are measuring is a handful of seconds.
 WATCH_SECONDS = 25
 WATCH_INTERVAL = 1.0
-# A session belongs to this start when it appeared around the same time
+# A session belongs to this start when it appeared after the channel was requested (a little
+# before is allowed: the server's clock is not ours), and not too long after. Matching a
+# session that was already running would measure someone else's stream.
+MATCH_BEFORE = 5
 MATCH_WINDOW = 15
 
 
@@ -200,6 +203,8 @@ def sessions(server):
             "transcoding": bool(transcode),
             # How much video the server has ready: while this is 0 it has produced nothing yet
             "ready": float(transcode.get("maxOffsetAvailable") or 0) if transcode else 0.0,
+            # Where the player is in the stream. When this moves, video is really being shown.
+            "position": float(item.get("viewOffset") or 0),
         })
     return playing
 
@@ -248,6 +253,7 @@ def _watch(redis_client, start_id, started_at):
         # When each stage was first seen, measured from the moment the channel was requested
         seen = {}
         session = None
+        position = None
         while time.time() < deadline:
             gevent.sleep(WATCH_INTERVAL)
             for server in servers:
@@ -263,13 +269,20 @@ def _watch(redis_client, start_id, started_at):
                 seen.setdefault("transcode started", now)
             if session["ready"] > 0:
                 seen.setdefault("first video ready", now)
-            if session["state"] == "playing":
+
+            # "state: playing" is set before anything is on screen, so the position moving is
+            # what says a viewer is really watching.
+            moving = position is not None and session["position"] > position
+            position = session["position"]
+            if moving:
                 seen.setdefault("playing", now)
                 timing.update_start(
                     redis_client,
                     start_id,
                     server_user=session["user"],
                     server_player=session["player"],
+                    # What the server thinks it is playing, so a wrong match can be spotted
+                    server_title=session["title"],
                     server_decision=session["decision"],
                     server_speed=f"{session['speed']:.1f}" if session["speed"] else "",
                     # How long until the player actually played something
@@ -284,6 +297,7 @@ def _watch(redis_client, start_id, started_at):
                 start_id,
                 server_user=session["user"],
                 server_player=session["player"],
+                server_title=session["title"],
                 server_decision=session["decision"],
                 server_phases="|".join(f"{stage}={at}" for stage, at in seen.items()),
                 server_gave_up="1",
@@ -299,10 +313,18 @@ def _watch(redis_client, start_id, started_at):
 
 
 def _session_for(server, started_at):
-    """The live session that started around the same moment as this channel start."""
+    """
+    The live session this channel start belongs to: one that began when we handed the video
+    over, not one that was already playing.
+
+    The times come from two clocks, so a few seconds early is allowed. If they are further
+    apart than that, nothing is matched and the start simply shows no server information,
+    which is better than showing another stream's numbers.
+    """
     for session in sessions(server):
         if not session["live"]:
             continue
-        if abs(session["started_at"] - started_at) <= MATCH_WINDOW:
+        age = session["started_at"] - started_at
+        if -MATCH_BEFORE <= age <= MATCH_WINDOW:
             return session
     return None

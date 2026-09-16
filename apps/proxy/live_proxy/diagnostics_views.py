@@ -117,6 +117,7 @@ def _starts(redis_client):
             # What the media server did with it afterwards, when one is configured
             "server_user": record.get("server_user", ""),
             "server_player": record.get("server_player", ""),
+            "server_title": record.get("server_title", ""),
             "server_decision": record.get("server_decision", ""),
             "server_speed": record.get("server_speed", ""),
             "server_buffering": float(record.get("server_buffering", 0) or 0),

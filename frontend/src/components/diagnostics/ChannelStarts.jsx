@@ -235,6 +235,13 @@ const ChannelStarts = ({ starts, onCopy }) => {
                           )
                           .join(' · ')}
                       </Text>
+                      {start.server_title && (
+                        // Which session this was matched to, so a wrong match is visible
+                        <Text size="xs" c="dimmed" fs="italic">
+                          {start.server_title}
+                          {start.server_user ? ` · ${start.server_user}` : ''}
+                        </Text>
+                      )}
                     </Stack>
                   ) : (
                     <Text size="sm" c="dimmed">
