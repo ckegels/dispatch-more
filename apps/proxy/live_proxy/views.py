@@ -186,7 +186,9 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         client_id = f"client_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
         client_ip = get_client_ip(request)
         # Who is asking (IP, user, app), used by Channel Switch Overlap
-        viewer = probation.viewer_from_request(request, user, client_ip)
+        viewer = probation.viewer_from_request(
+            request, user, client_ip, proxy_server.redis_client
+        )
         logger.info(f"[{client_id}] Requested stream for channel {channel_id}")
         # Where the time goes while this channel starts (see timing.py); measuring only
         timing.start(

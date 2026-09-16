@@ -1716,7 +1716,7 @@ class ViewerIdentityTests(SimpleTestCase):
 
         self.assertEqual(
             redis.smembers(probation.CHANNEL_VIEWERS_KEY.format(channel_uuid="ch-1")),
-            {"10.0.0.2|0|TiviMate", "10.0.0.3|0|"},
+            {"10.0.0.2|0|TiviMate|", "10.0.0.3|0||"},
         )
         # Recordings are not viewers
         self.assertEqual(redis.smembers(probation.CHANNEL_VIEWERS_KEY.format(channel_uuid="ch-2")), set())
@@ -1891,7 +1891,7 @@ class StreamTsViewerTests(SimpleTestCase):
         # The viewer is remembered for the channel (see CHANNEL_VIEWERS_KEY)
         self.assertEqual(
             redis.smembers(probation.CHANNEL_VIEWERS_KEY.format(channel_uuid=channel_id)),
-            {f"127.0.0.1|0|{probation.app_name('TiviMate/5.1.6 (Android 12)')}"},
+            {f"127.0.0.1|0|{probation.app_name('TiviMate/5.1.6 (Android 12)')}|"},
         )
 
 

@@ -11,6 +11,7 @@ a server that is unreachable simply adds nothing. The token is stored like an M3
 write-only in the API, never sent back to the browser.
 """
 
+import json
 import logging
 import secrets
 import socket
@@ -29,6 +30,13 @@ REQUEST_TIMEOUT = 5
 # create the session, and the buffering we are measuring is a handful of seconds.
 WATCH_SECONDS = 25
 WATCH_INTERVAL = 0.5
+# What is playing on the media servers right now, kept for the moment it takes a viewer to
+# switch channels. Refreshed in the background (see refresh_sessions), never in a request.
+SESSIONS_KEY = "live:media_servers:sessions"
+SESSIONS_TTL = 20
+SESSIONS_REFRESH = 2.0
+SESSIONS_REFRESH_KEY = "live:media_servers:sessions_refreshed"
+
 # A session belongs to this start when it appeared after the channel was requested (a little
 # before is allowed: the server's clock is not ours), and not too long after. Matching a
 # session that was already running would measure someone else's stream.
@@ -368,6 +376,53 @@ def sync_tuner(server, device_id, dvr_id=None):
     scanned = _post(server, f"/media/grabbers/devices/{device_id}/scan")
     reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else False
     return scanned or reloaded
+
+
+def refresh_sessions(redis_client):
+    """
+    Keep a fresh list of what the media servers are playing, so a stream request never has to
+    wait for one. Called from the proxy's cleanup loop; does nothing most times it is called.
+    """
+    if not redis_client:
+        return
+    try:
+        if not redis_client.set(SESSIONS_REFRESH_KEY, "1", nx=True, ex=int(SESSIONS_REFRESH)):
+            return
+        servers = [server for server in load_servers() if is_enabled(server)]
+        if not servers:
+            return
+        playing = []
+        for server in servers:
+            playing.extend(sessions(server))
+        redis_client.setex(SESSIONS_KEY, SESSIONS_TTL, json.dumps(playing))
+    except Exception as e:
+        logger.debug(f"Could not refresh the media server sessions: {e}")
+
+
+def cached_sessions(redis_client):
+    """What the media servers were playing a moment ago (see refresh_sessions)."""
+    try:
+        raw = redis_client.get(SESSIONS_KEY)
+        return json.loads(raw) if raw else []
+    except Exception:
+        return []
+
+
+def sole_device(redis_client):
+    """
+    The one device streaming from a media server right now, or None when there are several.
+
+    A media server asks for a channel on behalf of whoever is watching, and the request says
+    nothing about which of them it is. When only one of its devices is streaming, there is no
+    doubt; with more than one there is, and a viewer that cannot be told apart takes no part
+    in the overlap (which is what a media server did before this).
+    """
+    devices = {
+        session.get("device_id")
+        for session in cached_sessions(redis_client)
+        if session.get("live") and session.get("device_id")
+    }
+    return next(iter(devices)) if len(devices) == 1 else None
 
 
 def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None):

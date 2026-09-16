@@ -445,7 +445,7 @@ overlap window.
 | `apps/proxy/live_proxy/input/manager.py` | Longer wait before retrying a connection the provider refused |
 | `apps/proxy/live_proxy/diagnostics_views.py` | Read-only data for the Diagnostics page |
 | `apps/proxy/live_proxy/timing.py` | Times each phase of a channel start, finds the first keyframe, logs one line per start |
-| `apps/proxy/live_proxy/media_servers.py`, `media_server_views.py` | Media servers (Plex): stored in `CoreSettings["media-servers"]`, read-only, token never returned; watches sessions after a start on a media server |
+| `apps/proxy/live_proxy/media_servers.py`, `media_server_views.py` | Media servers (Plex): stored in `CoreSettings["media-servers"]`, token never returned; watches sessions after a start on a media server; keeps a background list of what is playing so a request can be told which device is watching |
 | `apps/proxy/live_proxy/media_server_tuner_views.py` | Tuners on a media server: list, add (into a chosen DVR or a new one with Dispatcharr's EPG), remove, rescan + reload guide; builds a channel profile from channel groups |
 | `apps/proxy/live_proxy/hdhr_tuner_views.py` | The same HDHomeRun at `/proxy/hdhr/<profile>/tuners/<n>/`, advertising the tuner count from the address instead of counting custom streams |
 | `frontend/src/components/mediaservers/*.jsx` | The Media Servers tab and its tuners |

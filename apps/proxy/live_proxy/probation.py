@@ -175,6 +175,10 @@ class Viewer:
     recording: bool = False
     # The player app without version numbers (see app_name), used on an account's LAN subnets
     app: Optional[str] = field(default=None, compare=False)
+    # The device behind a media server, when its server could say which one (see
+    # media_servers.sole_device). A media server asks on behalf of its viewers, so without
+    # this it is one anonymous viewer for all of them.
+    server_device: Optional[str] = None
 
 
 def is_viewer_request(viewer) -> bool:
@@ -552,7 +556,7 @@ def app_name(user_agent, ip=None):
     return re.sub(r"\s+", " ", _VERSION_RE.sub("", user_agent)).strip() or None
 
 
-def viewer_from_request(request, user, client_ip):
+def viewer_from_request(request, user, client_ip, redis_client=None):
     """Viewer identity for a live stream request, or None without a client IP."""
     if not client_ip:
         return None
@@ -564,7 +568,22 @@ def viewer_from_request(request, user, client_ip):
         user_id=user.id if user is not None else None,
         # None for media servers, so their viewers stay anonymous (see app_name)
         app=app_name(user_agent, client_ip),
+        server_device=_server_device(user_agent, client_ip, redis_client),
     )
+
+
+def _server_device(user_agent, client_ip, redis_client):
+    """The device a media server is asking for, when there is only one it could be."""
+    if not redis_client or not is_media_server(user_agent, client_ip):
+        return None
+    try:
+        from . import media_servers
+
+        device = media_servers.sole_device(redis_client)
+        return f"server|{device}" if device else None
+    except Exception as e:
+        logger.debug(f"Could not ask the media server who is watching: {e}")
+        return None
 
 
 def _channel_viewers_key(channel_uuid) -> str:
@@ -586,6 +605,14 @@ def record_client_viewer(redis_client, channel_uuid, client_id, viewer):
         viewers_key = _channel_viewers_key(channel_uuid)
         redis_client.sadd(viewers_key, _viewer_member(viewer))
         redis_client.expire(viewers_key, CHANNEL_VIEWERS_TTL)
+        if viewer.server_device:
+            # Kept with the client, so the channel's clients are the same viewer as the
+            # request that started it (ClientManager writes the rest of this hash)
+            redis_client.hset(
+                RedisKeys.client_metadata(channel_uuid, str(client_id)),
+                "server_device",
+                viewer.server_device,
+            )
     except Exception as e:
         logger.debug(f"Could not record viewer for client {client_id}: {e}")
 
@@ -636,6 +663,8 @@ def _client_viewer(client) -> Viewer:
         _client_user_id(client.get("user_id")),
         recording=is_recording(client.get("user_agent")),
         app=app_name(client.get("user_agent"), client.get("ip_address")),
+        # Written when the viewer was recognised (see record_client_viewer)
+        server_device=client.get("server_device") or None,
     )
 
 
@@ -670,10 +699,13 @@ def _lan_device_key(viewer, m3u_account):
 def identity_key(viewer, m3u_account=None) -> str:
     """
     How a viewer is told apart on an account: IP + user, or IP + user + app when the account
-    tracks LAN devices and the viewer is on one of its subnets.
+    tracks LAN devices and the viewer is on one of its subnets, or the device a media server
+    named for us.
     """
     if viewer.recording:
         return f"recording|{viewer.ip}"
+    if viewer.server_device:
+        return viewer.server_device
     return _lan_device_key(viewer, m3u_account) or _viewer_key(viewer)
 
 
@@ -686,14 +718,18 @@ def is_identified(viewer, m3u_account=None) -> bool:
     login, which cannot be told apart from other devices behind the same address.
     """
     return is_viewer_request(viewer) and (
-        viewer.user_id is not None or _lan_device_key(viewer, m3u_account) is not None
+        viewer.user_id is not None
+        or viewer.server_device is not None
+        or _lan_device_key(viewer, m3u_account) is not None
     )
 
 
 def may_be_identified(viewer) -> bool:
     """Cheap pre-check without an account: could this viewer be identified anywhere?"""
     return is_viewer_request(viewer) and (
-        viewer.user_id is not None or (bool(viewer.app) and lan_tracking_in_use())
+        viewer.user_id is not None
+        or viewer.server_device is not None
+        or (bool(viewer.app) and lan_tracking_in_use())
     )
 
 
@@ -720,17 +756,24 @@ def _accounts_for_profiles(profile_ids):
 
 
 def _viewer_member(viewer) -> str:
-    """A viewer as stored in CHANNEL_VIEWERS_KEY: IP, user and app."""
-    return f"{viewer.ip}|{viewer.user_id or 0}|{viewer.app or ''}"
+    """A viewer as stored in CHANNEL_VIEWERS_KEY: IP, user, app and media server device."""
+    return f"{viewer.ip}|{viewer.user_id or 0}|{viewer.app or ''}|{viewer.server_device or ''}"
 
 
 def _viewer_from_member(member):
-    parts = _as_str(member).split("|", 2)
+    parts = _as_str(member).split("|")
     if len(parts) < 2:
         return None
     ip, user_id = parts[:2]
     app = parts[2] if len(parts) > 2 else ""
-    return Viewer(ip, _client_user_id(user_id), app=app or None)
+    # "server|<device>" is itself split by the separator, so it is put back together
+    server_device = "|".join(parts[3:]) if len(parts) > 3 else ""
+    return Viewer(
+        ip,
+        _client_user_id(user_id),
+        app=app or None,
+        server_device=server_device or None,
+    )
 
 
 def _being_stopped(redis_client, channel_uuid) -> bool:

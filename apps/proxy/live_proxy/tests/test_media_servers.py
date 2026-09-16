@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import User
 from apps.proxy.live_proxy import media_servers, timing
 
-from .test_probation import FakeRedis
+from .test_probation import FakeRedis, _make_account, _reset_in_use_cache
 
 IDENTITY = {"MediaContainer": {"friendlyName": "Home Plex", "version": "1.41.0"}}
 SESSION = {
@@ -867,3 +867,129 @@ class TunerTests(TestCase):
             user=User.objects.create_user(username="viewer2", password="x", user_level=0)
         )
         self.assertEqual(viewer.get("/proxy/media-servers/tuners/?server=a1").status_code, 403)
+
+
+class SoleDeviceTests(TestCase):
+    """A media server asks on behalf of its viewers; sometimes it can say which one."""
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        media_servers.save_servers(
+            [{"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"}]
+        )
+
+    def _sessions(self, *devices):
+        import json
+
+        self.redis.setex(
+            media_servers.SESSIONS_KEY,
+            10,
+            json.dumps([{"device_id": d, "live": True} for d in devices]),
+        )
+
+    def test_one_device_streaming_is_that_device(self):
+        self._sessions("apple-tv")
+        self.assertEqual(media_servers.sole_device(self.redis), "apple-tv")
+
+    def test_several_devices_cannot_be_told_apart(self):
+        self._sessions("apple-tv", "living-room")
+        self.assertIsNone(media_servers.sole_device(self.redis))
+
+    def test_nothing_playing_and_no_cache_at_all(self):
+        self._sessions()
+        self.assertIsNone(media_servers.sole_device(self.redis))
+        self.redis.delete(media_servers.SESSIONS_KEY)
+        self.assertIsNone(media_servers.sole_device(self.redis))
+
+    def test_the_sessions_are_refreshed_in_the_background_and_not_too_often(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = plex
+            media_servers.refresh_sessions(self.redis)
+            first = get.call_count
+            self.assertGreater(first, 0)
+            # Called again straight away it does nothing: the cleanup loop runs every second
+            media_servers.refresh_sessions(self.redis)
+            self.assertEqual(get.call_count, first)
+
+        self.assertEqual(
+            [s["user"] for s in media_servers.cached_sessions(self.redis)], ["Ckegels"]
+        )
+
+    def test_a_media_server_that_is_off_is_not_asked(self):
+        media_servers.save_servers(
+            [{"id": "a1", "url": "http://plex:32400", "token": "t", "enabled": False}]
+        )
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            media_servers.refresh_sessions(self.redis)
+            get.assert_not_called()
+
+
+class MediaServerViewerTests(TestCase):
+    """What a media server tells us makes its viewer one Dispatcharr can tell apart."""
+
+    def setUp(self):
+        _reset_in_use_cache(self)
+        self.redis = FakeRedis()
+        self.account, _profile = _make_account("plex", probation_enabled=True)
+        media_servers.forget_hosts()
+        self.addCleanup(media_servers.forget_hosts)
+        media_servers.save_servers(
+            [{"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}]
+        )
+
+    def _request(self, user_agent="Lavf/61.7.100", ip="192.168.2.141"):
+        from django.test import RequestFactory
+
+        from apps.proxy.live_proxy import probation
+
+        request = RequestFactory().get("/proxy/ts/stream/x", HTTP_USER_AGENT=user_agent)
+        return probation.viewer_from_request(request, None, ip, self.redis)
+
+    def _sessions(self, *devices):
+        import json
+
+        self.redis.setex(
+            media_servers.SESSIONS_KEY,
+            10,
+            json.dumps([{"device_id": d, "live": True} for d in devices]),
+        )
+
+    def test_the_only_device_watching_is_recognised(self):
+        from apps.proxy.live_proxy import probation
+
+        self._sessions("apple-tv")
+        viewer = self._request()
+
+        self.assertEqual(viewer.server_device, "server|apple-tv")
+        self.assertTrue(probation.is_identified(viewer, self.account))
+        self.assertEqual(probation.identity_key(viewer, self.account), "server|apple-tv")
+
+    def test_several_devices_stay_anonymous(self):
+        from apps.proxy.live_proxy import probation
+
+        self._sessions("apple-tv", "living-room")
+        viewer = self._request()
+
+        self.assertIsNone(viewer.server_device)
+        self.assertFalse(probation.is_identified(viewer, self.account))
+
+    def test_an_ordinary_player_is_never_given_a_device(self):
+        viewer = self._request(user_agent="TiviMate/5.1.6", ip="192.168.2.50")
+        self.assertIsNone(viewer.server_device)
+
+    def test_the_device_survives_as_the_channel_s_viewer(self):
+        from apps.proxy.live_proxy import probation
+
+        self._sessions("apple-tv")
+        viewer = self._request()
+        probation.record_client_viewer(self.redis, "channel-1", "c1", viewer)
+
+        (member,) = self.redis.smembers(
+            probation.CHANNEL_VIEWERS_KEY.format(channel_uuid="channel-1")
+        )
+        back = probation._viewer_from_member(member)
+        self.assertEqual(back.server_device, "server|apple-tv")
+        self.assertEqual(
+            probation.identity_key(back, self.account),
+            probation.identity_key(viewer, self.account),
+        )
