@@ -198,8 +198,10 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         one, which keeps the tuners it already has and gains this one. Either
         way its guide is Dispatcharr&apos;s own EPG for that channel profile.
         Its channels are then scanned and the guide loaded, so it is ready to
-        watch. Sync does that again later. Removing a tuner only removes it from
-        the media server.
+        watch: its channels are scanned, switched on and mapped to the guide,
+        because a channel the server found but left switched off never appears.
+        Sync does that again later. Removing a tuner only removes it from the
+        media server.
       </Text>
 
       {(data.dvrs || []).length > 0 && (

@@ -397,11 +397,46 @@ def delete_tuner(server, device_id):
     return _delete(server, f"/media/grabbers/devices/{device_id}")
 
 
+def device_channels(server, device_id):
+    """The channels a tuner found when it was scanned."""
+    container = (
+        _get(server, f"/media/grabbers/devices/{device_id}/channels") or {}
+    ).get("MediaContainer") or {}
+    return [
+        channel.get("identifier")
+        for channel in container.get("DeviceChannel") or ()
+        if channel.get("identifier")
+    ]
+
+
+def enable_channels(server, device_id, channels=None):
+    """
+    Switch a tuner's channels on, and map each to the guide channel with the same number.
+
+    A scan only finds channels; until they are enabled the media server shows the tuner with
+    "0 enabled" and none of them appear, which looks like the tuner is not working at all.
+    Dispatcharr's own EPG uses the same numbers on both sides, so each channel maps to itself.
+    """
+    channels = channels or device_channels(server, device_id)
+    if not channels:
+        return False
+    params = {"channelsEnabled": channels}
+    for channel in channels:
+        params[f"channelMapping[{channel}]"] = channel
+    return _put(server, f"/media/grabbers/devices/{device_id}/channelmap", params)
+
+
 def sync_tuner(server, device_id, dvr_id=None):
-    """Rescan the tuner's channels, and reload the guide of the DVR it belongs to."""
+    """
+    Rescan the tuner's channels, switch them on, and reload the guide of its DVR.
+
+    The scan is what finds channels, enabling them is what makes them appear, and the guide
+    reload is what puts programmes against them: all three, or the tuner looks broken.
+    """
     scanned = _post(server, f"/media/grabbers/devices/{device_id}/scan")
+    enabled = enable_channels(server, device_id)
     reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else False
-    return scanned or reloaded
+    return scanned or enabled or reloaded
 
 
 def refresh_sessions(redis_client):

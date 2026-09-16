@@ -1155,3 +1155,62 @@ class WhoIsWatchingTests(TestCase):
             "server|living-room",
         )
         self.assertIsNone(media_servers.switching_device(self.redis))
+
+
+CHANNELS = {
+    "MediaContainer": {
+        "DeviceChannel": [
+            {"identifier": "6420", "name": "ORF 1"},
+            {"identifier": "6422", "name": "ATV"},
+        ]
+    }
+}
+
+
+class ChannelMapTests(TestCase):
+    """A scan finds channels; they also have to be switched on before they appear."""
+
+    def setUp(self):
+        self.server = {"id": "a1", "url": "http://plex:32400", "token": "t"}
+
+    def _plex(self, url, **_kwargs):
+        if "/channels" in url:
+            return fake_response(CHANNELS)
+        return plex_with_tuners(url)
+
+    def test_the_channels_are_switched_on_and_mapped_to_the_same_numbers(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.side_effect = self._plex
+            put.return_value = fake_response({})
+            self.assertTrue(media_servers.enable_channels(self.server, "22"))
+
+        params = put.call_args.kwargs["params"]
+        self.assertEqual(params["channelsEnabled"], ["6420", "6422"])
+        # Dispatcharr's EPG uses the same numbers, so each channel maps to itself
+        self.assertEqual(params["channelMapping[6420]"], "6420")
+        self.assertEqual(params["channelMapping[6422]"], "6422")
+        self.assertIn("/media/grabbers/devices/22/channelmap", put.call_args.args[0])
+
+    def test_a_tuner_without_channels_is_left_alone(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.return_value = fake_response({"MediaContainer": {}})
+            self.assertFalse(media_servers.enable_channels(self.server, "22"))
+            put.assert_not_called()
+
+    def test_syncing_scans_enables_and_reloads(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put:
+            get.side_effect = self._plex
+            post.return_value = fake_response({})
+            put.return_value = fake_response({})
+            self.assertTrue(media_servers.sync_tuner(self.server, "22", "32"))
+
+        posted = [call.args[0] for call in post.call_args_list]
+        self.assertIn("http://plex:32400/media/grabbers/devices/22/scan", posted)
+        self.assertIn("http://plex:32400/livetv/dvrs/32/reloadGuide", posted)
+        self.assertIn("/channelmap", put.call_args.args[0])
