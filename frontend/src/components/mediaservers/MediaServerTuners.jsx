@@ -152,8 +152,8 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                         <Select
                           size="xs"
                           w={130}
-                          aria-label={`Put ${tuner.title} in a DVR`}
-                          placeholder="Put in DVR"
+                          aria-label={`Add ${tuner.title} to a DVR`}
+                          placeholder="Add to a DVR"
                           value={null}
                           onChange={(value) =>
                             value &&
@@ -194,8 +194,9 @@ const MediaServerTuners = ({ serverId, enabled }) => {
       )}
 
       <Text size="xs" c="dimmed">
-        Adding a tuner puts it straight into a DVR: the one you choose, or a new
-        one whose guide is Dispatcharr&apos;s own EPG for that channel profile.
+        Adding a tuner puts it straight into a DVR: a new one, or an existing
+        one, which keeps the tuners it already has and gains this one. Either
+        way its guide is Dispatcharr&apos;s own EPG for that channel profile.
         Its channels are then scanned and the guide loaded, so it is ready to
         watch. Sync does that again later. Removing a tuner only removes it from
         the media server.
@@ -287,7 +288,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
           size="xs"
           w={190}
           label="DVR"
-          description="Or a new one with the EPG"
+          description="Added to it, next to its other tuners"
           placeholder="Make a new DVR"
           clearable
           value={form.dvr_id}

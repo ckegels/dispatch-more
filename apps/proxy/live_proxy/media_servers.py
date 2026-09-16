@@ -285,11 +285,12 @@ def dvr_list(server):
     ]
 
 
-def _put(server, path):
+def _put(server, path, params=None):
     url = f"{clean_url(server.get('url'))}{path}"
     try:
         response = requests.put(
             url,
+            params=params or {},
             headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
             timeout=REQUEST_TIMEOUT,
         )
@@ -300,6 +301,21 @@ def _put(server, path):
         return False
 
 
+def xmltv_lineup(xmltv_url, title) -> str:
+    """The lineup a media server stores for an XMLTV guide: the address, escaped, then a #title."""
+    return f"lineup://tv.plex.providers.epg.xmltv/{quote(xmltv_url, safe='')}#{title}"
+
+
+def add_lineup(server, dvr_id, xmltv_url, title):
+    """
+    Give a DVR another guide. A DVR holds several tuners, each with its own lineup, so a tuner
+    put into a DVR that was already there needs its guide added as well or it has no programmes.
+    """
+    return _put(
+        server, f"/livetv/dvrs/{dvr_id}/lineups", {"lineup": xmltv_lineup(xmltv_url, title)}
+    )
+
+
 def create_dvr(server, device_uuid, xmltv_url, title, language="eng"):
     """
     Make a DVR for this tuner, with Dispatcharr's own EPG as its guide.
@@ -308,11 +324,14 @@ def create_dvr(server, device_uuid, xmltv_url, title, language="eng"):
     the guide with everything escaped, and the title after a #. Nothing else about the DVR is
     set, so the server's own defaults apply.
     """
-    lineup = f"lineup://tv.plex.providers.epg.xmltv/{quote(xmltv_url, safe='')}#{title}"
     return _post(
         server,
         "/livetv/dvrs",
-        {"device": device_uuid, "lineup": lineup, "language": language or "eng"},
+        {
+            "device": device_uuid,
+            "lineup": xmltv_lineup(xmltv_url, title),
+            "language": language or "eng",
+        },
     )
 
 

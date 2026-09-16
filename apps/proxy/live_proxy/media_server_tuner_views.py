@@ -12,7 +12,7 @@ the guide. Creating the DVR itself stays where it is, in the server's own settin
 
 import logging
 import re
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
@@ -64,6 +64,19 @@ def _tuner_url(base_url, channel_profile, output_profile_id=None, tuner_count=No
     if tuner_count:
         url = f"{url}/tuners/{int(tuner_count)}"
     return url
+
+
+def _epg_url(base_url, channel_profile) -> str:
+    """Dispatcharr's own EPG for a channel profile, which is what a DVR uses as its guide."""
+    return f"{media_servers.clean_url(base_url)}/output/epg/{quote(channel_profile, safe='')}"
+
+
+def _profile_from_uri(uri) -> str:
+    """The channel profile a tuner of ours serves, from its address."""
+    parts = [part for part in str(uri).split("/") if part]
+    if "hdhr" not in parts:
+        return ""
+    return unquote(parts[parts.index("hdhr") + 1]) if len(parts) > parts.index("hdhr") + 1 else ""
 
 
 def _choices():
@@ -147,6 +160,17 @@ def media_server_tuners(request):
                 return JsonResponse(
                     {"error": "The server would not put this tuner in that DVR"}, status=400
                 )
+            # A DVR holds several tuners, each with its own guide: without this the tuner is
+            # in the DVR with no programmes against its channels.
+            tuner = next(
+                (t for t in media_servers.tuners(server, hosts) if t["id"] == str(device_id)),
+                None,
+            )
+            profile = _profile_from_uri(tuner["uri"]) if tuner else ""
+            if profile:
+                media_servers.add_lineup(
+                    server, dvr_id, _epg_url(base_url, profile), profile
+                )
         elif not dvr_id:
             # Nothing to rescan: a tuner outside a DVR is not used by the server at all
             return JsonResponse(
@@ -225,14 +249,18 @@ def media_server_tuners(request):
     if device is None:
         warning = "The tuner was added, but the server did not list it afterwards."
     elif dvr_id:
-        if not media_servers.attach_tuner(server, dvr_id, device["id"]):
+        if media_servers.attach_tuner(server, dvr_id, device["id"]):
+            # The DVR gains this tuner's guide next to the ones it already has
+            media_servers.add_lineup(
+                server, dvr_id, _epg_url(base_url, channel_profile), channel_profile
+            )
+        else:
             warning = "The tuner was added, but the server would not put it in that DVR."
     else:
-        xmltv_url = f"{base_url}/output/epg/{quote(channel_profile, safe='')}"
         if media_servers.create_dvr(
             server,
             device["uuid"],
-            xmltv_url,
+            _epg_url(base_url, channel_profile),
             channel_profile,
             request.data.get("language"),
         ):

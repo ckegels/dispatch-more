@@ -773,7 +773,16 @@ class TunerTests(TestCase):
             "http://192.168.2.141:32400/livetv/dvrs",
             [call.args[0] for call in post.call_args_list],
         )
-        self.assertIn("/livetv/dvrs/32/devices/", put.call_args.args[0])
+        puts = {call.args[0]: call.kwargs.get("params", {}) for call in put.call_args_list}
+        self.assertTrue(
+            any("/livetv/dvrs/32/devices/" in url for url in puts), puts
+        )
+        # A DVR holds a guide per tuner, so this tuner's guide is added next to the others
+        self.assertEqual(
+            puts["http://192.168.2.141:32400/livetv/dvrs/32/lineups"]["lineup"],
+            "lineup://tv.plex.providers.epg.xmltv/"
+            "http%3A%2F%2F192.168.2.142%3A9191%2Foutput%2Fepg%2Faustria#austria",
+        )
 
     def test_a_dvr_that_could_not_be_made_is_said_so_without_losing_the_tuner(self):
         from apps.channels.models import ChannelProfile
@@ -829,9 +838,29 @@ class TunerTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("/livetv/dvrs/32/devices/1", put.call_args.args[0])
+        called = [call.args[0] for call in put.call_args_list]
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/1", called)
         # The DVRs are offered by name, so there is something to choose
         self.assertEqual(response.json()["dvrs"], [{"id": "32", "title": "Belgium"}])
+
+    def test_a_tuner_of_ours_put_into_a_dvr_takes_its_guide_with_it(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.side_effect = plex_with_tuners
+            put.return_value = fake_response({})
+            # Tuner 22 is ours: http://192.168.2.142:9191/hdhr/austria
+            self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "action": "attach", "id": "22", "dvr_id": "32"},
+                format="json",
+            )
+
+        puts = {call.args[0]: call.kwargs.get("params", {}) for call in put.call_args_list}
+        self.assertIn(
+            "austria",
+            puts["http://192.168.2.141:32400/livetv/dvrs/32/lineups"]["lineup"],
+        )
 
     def test_putting_a_tuner_in_a_dvr_needs_a_dvr(self):
         response = self.client_api.post(

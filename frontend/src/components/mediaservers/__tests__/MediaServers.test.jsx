@@ -310,13 +310,13 @@ describe('MediaServers', () => {
     );
   });
 
-  it('puts a tuner that is in no DVR into one', async () => {
+  it('adds a tuner that is in no DVR to one', async () => {
     API.attachMediaServerTuner.mockResolvedValue(tuners);
 
     render(<MediaServers active={true} />);
     await screen.findByText('A1 TV');
 
-    fireEvent.change(screen.getByLabelText('Put A1 TV in a DVR'), {
+    fireEvent.change(screen.getByLabelText('Add A1 TV to a DVR'), {
       target: { value: '32' },
     });
 
