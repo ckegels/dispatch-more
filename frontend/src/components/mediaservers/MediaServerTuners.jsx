@@ -6,6 +6,7 @@ import {
   Group,
   Loader,
   MultiSelect,
+  NumberInput,
   Select,
   Stack,
   Table,
@@ -19,6 +20,7 @@ const emptyTuner = {
   new_profile_name: '',
   group_ids: [],
   output_profile_id: '',
+  tuner_count: '',
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -221,6 +223,17 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             />
           </>
         )}
+        <NumberInput
+          size="xs"
+          w={130}
+          label="Tuners"
+          description={`Dispatcharr says ${data.calculated_tuners}`}
+          placeholder="as calculated"
+          min={1}
+          max={data.max_tuners}
+          value={form.tuner_count}
+          onChange={(value) => setForm({ ...form, tuner_count: value })}
+        />
         <Select
           size="xs"
           w={200}
@@ -249,6 +262,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                 new_profile_name: form.new_profile_name,
                 group_ids: form.group_ids.map(Number),
                 output_profile_id: form.output_profile_id || null,
+                tuner_count: form.tuner_count || 0,
               })
             )
           }
@@ -260,7 +274,10 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         A new profile holds only the channels of the groups you pick, and
         nothing is added to your other profiles. It is saved as{' '}
         {data.profile_prefix}-… with spaces as dashes, because the name becomes
-        part of the tuner&apos;s address.
+        part of the tuner&apos;s address. Tuners is how many streams the media
+        server may start at once: set it to what your providers really allow,
+        because Dispatcharr&apos;s own number counts a custom stream per channel
+        as a tuner.
       </Text>
     </Stack>
   );

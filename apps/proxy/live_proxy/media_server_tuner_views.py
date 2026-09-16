@@ -20,6 +20,7 @@ from rest_framework.decorators import api_view, permission_classes
 from apps.accounts.permissions import IsAdmin
 
 from . import media_servers
+from .hdhr_tuner_views import MAX_TUNERS
 
 logger = logging.getLogger("live_proxy")
 
@@ -47,12 +48,21 @@ def default_base_url(request) -> str:
     return base
 
 
-def _tuner_url(base_url, channel_profile, output_profile_id=None):
-    """This Dispatcharr as an HDHomeRun for that channel profile."""
+def _tuner_url(base_url, channel_profile, output_profile_id=None, tuner_count=None):
+    """
+    This Dispatcharr as an HDHomeRun for that channel profile.
+
+    With a tuner count it goes to /proxy/hdhr/..., which says how many streams the media
+    server may start at once instead of counting custom streams (see hdhr_tuner_views).
+    """
     # A profile name may contain spaces and other characters that cannot go in an address
-    url = f"{media_servers.clean_url(base_url)}/hdhr/{quote(channel_profile, safe='')}"
+    base = media_servers.clean_url(base_url)
+    profile = quote(channel_profile, safe="")
+    url = f"{base}/proxy/hdhr/{profile}" if tuner_count else f"{base}/hdhr/{profile}"
     if output_profile_id:
         url = f"{url}/output_profile/{int(output_profile_id)}"
+    if tuner_count:
+        url = f"{url}/tuners/{int(tuner_count)}"
     return url
 
 
@@ -82,7 +92,19 @@ def _choices():
             for profile in OutputProfile.objects.filter(is_active=True).order_by("name")
         ],
         "profile_prefix": PROFILE_PREFIX,
+        "max_tuners": MAX_TUNERS,
+        # What Dispatcharr would advertise on its own, so the field can be compared to it
+        "calculated_tuners": _calculated_tuners(),
     }
+
+
+def _calculated_tuners() -> int:
+    from apps.m3u.utils import calculate_tuner_count
+
+    try:
+        return calculate_tuner_count(minimum=1, unlimited_default=10)
+    except Exception:
+        return 0
 
 
 @api_view(["GET", "POST", "DELETE"])
@@ -148,7 +170,18 @@ def media_server_tuners(request):
                 stored["dispatcharr_url"] = base_url
         media_servers.save_servers(servers)
 
-    uri = _tuner_url(base_url, channel_profile, request.data.get("output_profile_id"))
+    try:
+        tuner_count = int(request.data.get("tuner_count") or 0)
+    except (TypeError, ValueError):
+        tuner_count = 0
+    if tuner_count < 0 or tuner_count > MAX_TUNERS:
+        return JsonResponse(
+            {"error": f"Give a number of tuners between 1 and {MAX_TUNERS}"}, status=400
+        )
+
+    uri = _tuner_url(
+        base_url, channel_profile, request.data.get("output_profile_id"), tuner_count
+    )
     if not media_servers.add_tuner(server, uri):
         return JsonResponse(
             {"error": f"The server could not add a tuner at {uri}"}, status=400

@@ -50,6 +50,17 @@ vi.mock('@mantine/core', () => {
   return {
     Alert: ({ children }) => <div role="alert">{children}</div>,
     // A multi select takes and gives a list, so the test types the ids as "5,7"
+    NumberInput: ({ label, description, value, onChange, ...rest }) => (
+      <label>
+        {label}
+        <span>{description}</span>
+        <input
+          aria-label={rest['aria-label'] || label}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
+    ),
     MultiSelect: ({ label, value, onChange, ...rest }) => (
       <label>
         {label}
@@ -132,6 +143,8 @@ const tuners = {
     },
   ],
   base_url: 'http://192.168.2.142:9191',
+  max_tuners: 64,
+  calculated_tuners: 1362,
   channel_profiles: [{ id: 1, name: 'austria' }],
   channel_groups: [{ id: 5, name: 'Austria', channels: 25 }],
   output_profiles: [{ id: 3, name: 'Remux' }],
@@ -273,6 +286,11 @@ describe('MediaServers', () => {
     fireEvent.change(screen.getByLabelText('Output profile'), {
       target: { value: '3' },
     });
+    // What Dispatcharr would say is shown, so a sane number can be chosen instead
+    expect(screen.getByText('Dispatcharr says 1362')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Tuners'), {
+      target: { value: '2' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Add to server' }));
 
     await waitFor(() =>
@@ -283,6 +301,7 @@ describe('MediaServers', () => {
         new_profile_name: 'austria',
         group_ids: [5],
         output_profile_id: '3',
+        tuner_count: '2',
       })
     );
   });

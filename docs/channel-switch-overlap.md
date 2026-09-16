@@ -447,6 +447,7 @@ overlap window.
 | `apps/proxy/live_proxy/timing.py` | Times each phase of a channel start, finds the first keyframe, logs one line per start |
 | `apps/proxy/live_proxy/media_servers.py`, `media_server_views.py` | Media servers (Plex): stored in `CoreSettings["media-servers"]`, read-only, token never returned; watches sessions after a start on a media server |
 | `apps/proxy/live_proxy/media_server_tuner_views.py` | Tuners on a media server: list, add, remove, rescan + reload guide; builds a channel profile from channel groups |
+| `apps/proxy/live_proxy/hdhr_tuner_views.py` | The same HDHomeRun at `/proxy/hdhr/<profile>/tuners/<n>/`, advertising the tuner count from the address instead of counting custom streams |
 | `frontend/src/components/mediaservers/*.jsx` | The Media Servers tab and its tuners |
 | `apps/proxy/urls.py`, `frontend/src/config/settingsNav.js`, `frontend/src/api.js` | One line each: the endpoint, the settings entry and the API call |
 | `frontend/src/components/diagnostics/*.jsx` | The Diagnostics page itself (starts, switches, legend) |

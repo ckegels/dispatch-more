@@ -568,6 +568,57 @@ class TunerTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("http://", response.json()["error"])
 
+    def test_a_tuner_count_puts_the_tuner_on_our_own_hdhomerun(self):
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="austria")
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "channel_profile": "austria",
+                    "base_url": "http://192.168.2.142:9191",
+                    "tuner_count": 2,
+                },
+                format="json",
+            )
+
+        self.assertEqual(
+            post.call_args.kwargs["params"]["uri"],
+            "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/2",
+        )
+
+        # Without a number it stays on Dispatcharr's own endpoint, which counts for itself
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "channel_profile": "austria",
+                 "base_url": "http://192.168.2.142:9191"},
+                format="json",
+            )
+        self.assertEqual(
+            post.call_args.kwargs["params"]["uri"],
+            "http://192.168.2.142:9191/hdhr/austria",
+        )
+
+    def test_a_silly_tuner_count_is_refused(self):
+        response = self.client_api.post(
+            "/proxy/media-servers/tuners/",
+            {"server": "a1", "channel_profile": "austria", "tuner_count": 500},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("between 1 and", response.json()["error"])
+
     def test_building_a_profile_needs_a_group_and_a_free_name(self):
         from apps.channels.models import ChannelProfile
 
