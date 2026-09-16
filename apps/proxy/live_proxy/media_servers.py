@@ -117,7 +117,13 @@ def public(server):
         "kind": server.get("kind", "plex"),
         "url": server.get("url", ""),
         "has_token": bool(server.get("token")),
+        "enabled": is_enabled(server),
     }
+
+
+def is_enabled(server) -> bool:
+    """Switched off means Dispatcharr stops talking to it; it stays configured."""
+    return server.get("enabled", True) is not False
 
 
 def new_id() -> str:
@@ -222,6 +228,88 @@ def _decision(transcode) -> str:
     return f"transcode ({' + '.join(parts)})" if parts else "direct play"
 
 
+def _post(server, path, params=None):
+    """One change on a media server. Returns True when it was accepted."""
+    url = f"{clean_url(server.get('url'))}{path}"
+    try:
+        response = requests.post(
+            url,
+            params=params or {},
+            headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"Media server refused {path}: {e}")
+        return False
+
+
+def _delete(server, path):
+    url = f"{clean_url(server.get('url'))}{path}"
+    try:
+        response = requests.delete(
+            url,
+            headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"Media server refused to delete {path}: {e}")
+        return False
+
+
+def dvrs(server):
+    """The DVRs on the server, with the devices that belong to each."""
+    container = (_get(server, "/livetv/dvrs") or {}).get("MediaContainer") or {}
+    return container.get("Dvr") or container.get("DVR") or []
+
+
+def tuners(server, our_hosts=()):
+    """
+    Every tuner device the server knows, with what is worth acting on: whether it answers,
+    whether it belongs to a DVR (a tuner outside one does nothing), and whether it is ours.
+    """
+    container = (_get(server, "/media/grabbers/devices") or {}).get("MediaContainer") or {}
+    in_dvr = {}
+    for dvr in dvrs(server):
+        for device in dvr.get("Device") or ():
+            in_dvr[str(device.get("key"))] = str(dvr.get("key"))
+
+    found = []
+    for device in container.get("Device") or ():
+        uri = device.get("uri", "")
+        host = (urlparse(uri).hostname or "").lower()
+        key = str(device.get("key"))
+        found.append({
+            "id": key,
+            "title": device.get("title") or device.get("model") or "tuner",
+            "uri": uri,
+            "model": device.get("model", ""),
+            "state": device.get("status", ""),
+            "tuners": int(device.get("tuners") or 0),
+            "dvr_id": in_dvr.get(key, ""),
+            "ours": host in set(our_hosts) if host else False,
+        })
+    return found
+
+
+def add_tuner(server, uri):
+    return _post(server, "/media/grabbers/devices", {"uri": uri})
+
+
+def delete_tuner(server, device_id):
+    return _delete(server, f"/media/grabbers/devices/{device_id}")
+
+
+def sync_tuner(server, device_id, dvr_id=None):
+    """Rescan the tuner's channels, and reload the guide of the DVR it belongs to."""
+    scanned = _post(server, f"/media/grabbers/devices/{device_id}/scan")
+    reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else False
+    return scanned or reloaded
+
+
 def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None):
     """
     After a channel start on a media server, watch its sessions for a moment and add what the
@@ -229,7 +317,9 @@ def watch_start(redis_client, start_id, user_agent, started_at=None, ip=None):
     background and never touches the stream.
     """
     try:
-        if not start_id or not _is_media_server(user_agent, ip) or not load_servers():
+        if not start_id or not _is_media_server(user_agent, ip):
+            return
+        if not [server for server in load_servers() if is_enabled(server)]:
             return
         gevent.spawn(_watch, redis_client, start_id, started_at or time.time())
     except Exception as e:
@@ -249,7 +339,7 @@ def _watch(redis_client, start_id, started_at):
     from . import timing
 
     try:
-        servers = load_servers()
+        servers = [server for server in load_servers() if is_enabled(server)]
         deadline = time.time() + WATCH_SECONDS
         # When each stage was first seen, measured from the moment the channel was requested
         seen = {}

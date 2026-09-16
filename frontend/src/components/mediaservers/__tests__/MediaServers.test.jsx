@@ -7,6 +7,11 @@ vi.mock('../../../api', () => ({
     getMediaServers: vi.fn(),
     saveMediaServer: vi.fn(),
     deleteMediaServer: vi.fn(),
+    setMediaServerEnabled: vi.fn(),
+    getMediaServerTuners: vi.fn(),
+    addMediaServerTuner: vi.fn(),
+    syncMediaServerTuner: vi.fn(),
+    deleteMediaServerTuner: vi.fn(),
   },
 }));
 
@@ -24,8 +29,47 @@ vi.mock('@mantine/core', () => {
       <input value={value} onChange={onChange} />
     </label>
   );
+  Table.ScrollContainer = ({ children }) => <div>{children}</div>;
+  const select = ({ label, value, onChange, data, ...rest }) => (
+    <label>
+      {label}
+      <select
+        aria-label={rest['aria-label'] || label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="" />
+        {(data || []).map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   return {
     Alert: ({ children }) => <div role="alert">{children}</div>,
+    // A multi select takes and gives a list, so the test types the ids as "5,7"
+    MultiSelect: ({ label, value, onChange, ...rest }) => (
+      <label>
+        {label}
+        <input
+          aria-label={rest['aria-label'] || label}
+          value={(value || []).join(',')}
+          onChange={(e) => onChange(e.target.value.split(',').filter(Boolean))}
+        />
+      </label>
+    ),
+    Select: select,
+    Switch: ({ checked, onChange, ...rest }) => (
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={rest['aria-label']}
+        checked={checked}
+        onChange={onChange}
+      />
+    ),
     Badge: ({ children }) => <span>{children}</span>,
     Button: ({ children, onClick }) => (
       <button onClick={onClick}>{children}</button>
@@ -50,6 +94,7 @@ const servers = [
     url: 'http://192.168.2.141:32400',
     has_token: true,
     online: true,
+    enabled: true,
     version: '1.41.0',
     error: '',
     sessions: [
@@ -65,9 +110,37 @@ const servers = [
   },
 ];
 
+const tuners = {
+  tuners: [
+    {
+      id: '22',
+      title: 'Austria',
+      uri: 'http://192.168.2.142:9191/hdhr/austria',
+      state: 'alive',
+      tuners: 2,
+      dvr_id: '32',
+      ours: true,
+    },
+    {
+      id: '1',
+      title: 'A1 TV',
+      uri: 'http://192.168.2.141:34400',
+      state: 'dead',
+      tuners: 2,
+      dvr_id: '',
+      ours: false,
+    },
+  ],
+  channel_profiles: [{ id: 1, name: 'austria' }],
+  channel_groups: [{ id: 5, name: 'Austria', channels: 25 }],
+  output_profiles: [{ id: 3, name: 'Remux' }],
+  profile_prefix: 'plexmedia',
+};
+
 describe('MediaServers', () => {
   beforeEach(() => {
     API.getMediaServers.mockResolvedValue({ servers });
+    API.getMediaServerTuners.mockResolvedValue(tuners);
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -152,13 +225,85 @@ describe('MediaServers', () => {
     );
   });
 
+  it('lists the tuners and flags a leftover', async () => {
+    render(<MediaServers active={true} />);
+
+    expect(await screen.findByText('Austria')).toBeInTheDocument();
+    expect(screen.getByText('Dispatcharr')).toBeInTheDocument();
+    expect(screen.getByText('dead')).toBeInTheDocument();
+    // A tuner in no DVR does nothing, which is worth saying
+    expect(screen.getByText('not in a DVR')).toBeInTheDocument();
+  });
+
+  it('syncs and removes a tuner', async () => {
+    API.syncMediaServerTuner.mockResolvedValue(tuners);
+    API.deleteMediaServerTuner.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    await screen.findByText('Austria');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sync' })[0]);
+    await waitFor(() =>
+      expect(API.syncMediaServerTuner).toHaveBeenCalledWith('a1', '22', '32')
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1]);
+    await waitFor(() =>
+      expect(API.deleteMediaServerTuner).toHaveBeenCalledWith('a1', '22')
+    );
+  });
+
+  it('adds a tuner built from channel groups', async () => {
+    API.addMediaServerTuner.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    await screen.findByText('Austria');
+
+    fireEvent.change(screen.getByLabelText(/New profile name/), {
+      target: { value: 'austria' },
+    });
+    fireEvent.change(screen.getByLabelText('Channel groups'), {
+      target: { value: '5' },
+    });
+    fireEvent.change(screen.getByLabelText('Output profile'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to server' }));
+
+    await waitFor(() =>
+      expect(API.addMediaServerTuner).toHaveBeenCalledWith({
+        server: 'a1',
+        channel_profile: '',
+        new_profile_name: 'austria',
+        group_ids: [5],
+        output_profile_id: '3',
+      })
+    );
+  });
+
+  it('switches a server off', async () => {
+    API.setMediaServerEnabled.mockResolvedValue({
+      servers: [{ ...servers[0], enabled: false, online: false }],
+    });
+
+    render(<MediaServers active={true} />);
+    await screen.findByText('Home Plex');
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Home Plex' }));
+
+    await waitFor(() =>
+      expect(API.setMediaServerEnabled).toHaveBeenCalledWith('a1', false)
+    );
+    expect(await screen.findByText('switched off')).toBeInTheDocument();
+  });
+
   it('removes a server', async () => {
     API.deleteMediaServer.mockResolvedValue({ servers: [] });
 
     render(<MediaServers active={true} />);
     await screen.findByText('Home Plex');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
 
     await waitFor(() =>
       expect(API.deleteMediaServer).toHaveBeenCalledWith('a1')

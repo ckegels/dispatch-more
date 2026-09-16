@@ -377,3 +377,181 @@ class StartWatchingTests(TestCase):
         self.assertNotIn(
             "server_user", self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
         )
+
+
+DEVICES = {
+    "MediaContainer": {
+        "Device": [
+            {
+                "key": "22",
+                "uri": "http://192.168.2.142:9191/hdhr/austria",
+                "title": "Austria",
+                "model": "Dispatcharr HDHomeRun - austria",
+                "status": "alive",
+                "tuners": "2",
+            },
+            {
+                "key": "1",
+                "uri": "http://192.168.2.141:34400",
+                "title": "A1 TV",
+                "model": "Threadfin",
+                "status": "dead",
+                "tuners": "2",
+            },
+        ]
+    }
+}
+DVRS = {"MediaContainer": {"Dvr": [{"key": "32", "Device": [{"key": "22"}]}]}}
+
+
+def plex_with_tuners(url, **_kwargs):
+    if "/media/grabbers/devices" in url:
+        return fake_response(DEVICES)
+    if "/livetv/dvrs" in url:
+        return fake_response(DVRS)
+    return plex(url)
+
+
+class TunerTests(TestCase):
+    """Seeing, adding, syncing and removing the tuners on a media server."""
+
+    def setUp(self):
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+        media_servers.forget_hosts()
+        self.addCleanup(media_servers.forget_hosts)
+        media_servers.save_servers(
+            [{"id": "a1", "name": "Plex", "url": "http://192.168.2.141:32400", "token": "t"}]
+        )
+
+    def test_the_tuners_are_listed_with_what_is_wrong_with_them(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = plex_with_tuners
+            tuners = self.client_api.get("/proxy/media-servers/tuners/?server=a1").json()["tuners"]
+
+        austria, threadfin = tuners
+        self.assertEqual(austria["title"], "Austria")
+        self.assertEqual(austria["dvr_id"], "32")
+        self.assertEqual(austria["state"], "alive")
+        # A leftover: dead, and in no DVR at all
+        self.assertEqual(threadfin["state"], "dead")
+        self.assertEqual(threadfin["dvr_id"], "")
+
+    def test_a_tuner_is_added_for_a_channel_profile(self):
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="austria")
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "channel_profile": "austria", "output_profile_id": 3},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        uri = post.call_args.kwargs["params"]["uri"]
+        self.assertTrue(uri.endswith("/hdhr/austria/output_profile/3"), uri)
+
+    def test_a_profile_is_built_from_groups_without_touching_the_others(self):
+        from apps.channels.models import (
+            Channel,
+            ChannelGroup,
+            ChannelProfile,
+            ChannelProfileMembership,
+        )
+
+        wanted = ChannelGroup.objects.create(name="Austria")
+        other = ChannelGroup.objects.create(name="Belgium")
+        Channel.objects.create(channel_number=1, name="ORF 1", channel_group=wanted)
+        Channel.objects.create(channel_number=2, name="Een", channel_group=other)
+        existing = ChannelProfile.objects.create(name="Everything")
+        before = ChannelProfileMembership.objects.filter(channel_profile=existing).count()
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "new_profile_name": "austria",
+                    "group_ids": [wanted.id],
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        profile = ChannelProfile.objects.get(name="plexmedia-austria")
+        channels = ChannelProfileMembership.objects.filter(channel_profile=profile)
+        self.assertEqual([m.channel.name for m in channels], ["ORF 1"])
+        # The profile that was already there is untouched
+        self.assertEqual(
+            ChannelProfileMembership.objects.filter(channel_profile=existing).count(), before
+        )
+        self.assertTrue(post.call_args.kwargs["params"]["uri"].endswith("/hdhr/plexmedia-austria"))
+
+    def test_building_a_profile_needs_a_group_and_a_free_name(self):
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="plexmedia-taken")
+        for body, expected in (
+            ({"new_profile_name": "austria", "group_ids": []}, "channel group"),
+            ({"new_profile_name": "taken", "group_ids": [1]}, "already exists"),
+            ({}, "Choose a channel profile"),
+        ):
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/", {"server": "a1", **body}, format="json"
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(expected, response.json()["error"])
+
+    def test_sync_rescans_and_reloads_the_guide(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "action": "sync", "id": "22", "dvr_id": "32"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        called = [call.args[0] for call in post.call_args_list]
+        self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/22/scan", called)
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/reloadGuide", called)
+
+    def test_a_tuner_is_removed(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.delete"
+        ) as delete:
+            get.side_effect = plex_with_tuners
+            delete.return_value = fake_response({})
+            response = self.client_api.delete("/proxy/media-servers/tuners/?server=a1&id=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/media/grabbers/devices/1", delete.call_args.args[0])
+
+    def test_a_server_that_is_switched_off_is_left_alone(self):
+        media_servers.save_servers(
+            [{"id": "a1", "name": "Plex", "url": "http://p:32400", "token": "t", "enabled": False}]
+        )
+        response = self.client_api.get("/proxy/media-servers/tuners/?server=a1")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("switched off", response.json()["error"])
+
+    def test_only_admins(self):
+        viewer = APIClient()
+        viewer.force_authenticate(
+            user=User.objects.create_user(username="viewer2", password="x", user_level=0)
+        )
+        self.assertEqual(viewer.get("/proxy/media-servers/tuners/?server=a1").status_code, 403)

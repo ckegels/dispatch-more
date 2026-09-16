@@ -2609,6 +2609,44 @@ export default class API {
     }
   }
 
+  static async setMediaServerEnabled(id, enabled) {
+    return await request(`${host}/proxy/media-servers/`, {
+      method: 'POST',
+      body: { id, enabled },
+    });
+  }
+
+  static async getMediaServerTuners(serverId) {
+    // What the media server has as tuners, plus what a new one can be built from
+    try {
+      return await request(`${host}/proxy/media-servers/tuners/?server=${serverId}`);
+    } catch (e) {
+      errorNotification('Failed to retrieve the tuners', e);
+      throw e;
+    }
+  }
+
+  static async addMediaServerTuner(body) {
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  static async syncMediaServerTuner(server, id, dvrId) {
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body: { server, id, dvr_id: dvrId, action: 'sync' },
+    });
+  }
+
+  static async deleteMediaServerTuner(server, id) {
+    return await request(
+      `${host}/proxy/media-servers/tuners/?server=${server}&id=${id}`,
+      { method: 'DELETE' }
+    );
+  }
+
   static async getDiagnostics() {
     // Channel starts and Channel Switch Overlap activity for the Diagnostics page
     try {

@@ -1,7 +1,11 @@
 from django.urls import path, include
 
 from apps.proxy import stats_views
-from apps.proxy.live_proxy import diagnostics_views, media_server_views
+from apps.proxy.live_proxy import (
+    diagnostics_views,
+    media_server_tuner_views,
+    media_server_views,
+)
 
 app_name = 'proxy'
 
@@ -11,6 +15,11 @@ urlpatterns = [
     path('diagnostics/', diagnostics_views.diagnostics, name='live_diagnostics'),
     # Media Servers: the servers themselves, for the settings tab
     path('media-servers/', media_server_views.media_server_list, name='media_servers'),
+    path(
+        'media-servers/tuners/',
+        media_server_tuner_views.media_server_tuners,
+        name='media_server_tuners',
+    ),
     path('ts/', include('apps.proxy.live_proxy.urls')),
     path('catchup/', include('apps.timeshift.urls')),
     path('vod/', include('apps.proxy.vod_proxy.urls')),

@@ -21,6 +21,12 @@ def _server_rows():
     rows = []
     for server in media_servers.load_servers():
         row = media_servers.public(server)
+        if not media_servers.is_enabled(server):
+            # Switched off: nothing is asked of it, so there is nothing to report
+            row.update({"online": False, "error": "", "server_name": "", "version": "",
+                        "sessions": []})
+            rows.append(row)
+            continue
         status = media_servers.check(server)
         row["online"] = status["ok"]
         row["error"] = status.get("error", "")
@@ -44,13 +50,27 @@ def media_server_list(request):
         media_servers.save_servers(servers)
         return JsonResponse({"servers": _server_rows()})
 
+    servers = media_servers.load_servers()
+    # Switching one off (or on) changes nothing else about it, and never needs the server
+    if "enabled" in request.data and len(request.data) <= 2:
+        server_id = request.data.get("id")
+        existing = next((s for s in servers if s.get("id") == server_id), None)
+        if existing is None:
+            return JsonResponse({"error": "No such media server"}, status=404)
+        existing["enabled"] = bool(request.data.get("enabled"))
+        media_servers.save_servers(servers)
+        logger.info(
+            f"Media server {existing.get('name')} "
+            f"{'enabled' if existing['enabled'] else 'switched off'}"
+        )
+        return JsonResponse({"servers": _server_rows()})
+
     url = media_servers.clean_url(request.data.get("url"))
     if not url.startswith(("http://", "https://")):
         return JsonResponse(
             {"error": "Enter the address as http://… or https://…"}, status=400
         )
 
-    servers = media_servers.load_servers()
     server_id = request.data.get("id")
     existing = next((s for s in servers if s.get("id") == server_id), None)
     token = (request.data.get("token") or "").strip()
@@ -66,6 +86,7 @@ def media_server_list(request):
         "name": (request.data.get("name") or "").strip() or "Plex",
         "url": url,
         "token": token,
+        "enabled": True,
     }
     status = media_servers.check(server)
     if not status["ok"]:

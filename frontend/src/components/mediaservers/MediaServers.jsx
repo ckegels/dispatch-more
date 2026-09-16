@@ -8,11 +8,13 @@ import {
   Loader,
   PasswordInput,
   Stack,
+  Switch,
   Table,
   Text,
   TextInput,
 } from '@mantine/core';
 import API from '../../api';
+import MediaServerTuners from './MediaServerTuners';
 
 const REFRESH_MS = 10000;
 
@@ -57,6 +59,15 @@ const MediaServers = ({ active }) => {
     }
   };
 
+  const setEnabled = async (id, enabled) => {
+    try {
+      const data = await API.setMediaServerEnabled(id, enabled);
+      setServers(data.servers);
+    } catch {
+      setError('Could not change that server.');
+    }
+  };
+
   const remove = async (id) => {
     try {
       const data = await API.deleteMediaServer(id);
@@ -89,7 +100,11 @@ const MediaServers = ({ active }) => {
               <Text size="sm" c="dimmed">
                 {server.url}
               </Text>
-              {server.online ? (
+              {!server.enabled ? (
+                <Badge size="sm" color="gray" variant="light">
+                  switched off
+                </Badge>
+              ) : server.online ? (
                 <Badge size="sm" color="teal" variant="light">
                   connected{server.version ? ` · ${server.version}` : ''}
                 </Badge>
@@ -100,6 +115,14 @@ const MediaServers = ({ active }) => {
               )}
             </Group>
             <Group gap="xs">
+              <Switch
+                size="sm"
+                checked={server.enabled}
+                aria-label={`Use ${server.name}`}
+                onChange={(event) =>
+                  setEnabled(server.id, event.currentTarget.checked)
+                }
+              />
               <Button
                 size="compact-sm"
                 variant="subtle"
@@ -175,6 +198,8 @@ const MediaServers = ({ active }) => {
                 </Table.Tbody>
               </Table>
             ))}
+
+          <MediaServerTuners serverId={server.id} enabled={server.enabled} />
         </Card>
       ))}
 
