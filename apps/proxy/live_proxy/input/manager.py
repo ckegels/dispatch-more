@@ -15,6 +15,7 @@ from .buffer import StreamBuffer
 from ..utils import detect_stream_type, get_logger
 from ..redis_keys import RedisKeys
 from .. import probation
+from .. import timing
 from ..constants import ChannelState, EventType, StreamType, ChannelMetadataField, TS_PACKET_SIZE
 from ..config_helper import ConfigHelper
 from ..url_utils import get_alternate_streams, get_stream_info_for_switch, get_stream_object
@@ -47,6 +48,8 @@ class StreamManager:
         self.buffer = buffer
         self.running = True
         self.connected = False
+        # Set once the first keyframe of this channel has been timed (see timing.py)
+        self._timed_start_done = False
         self.retry_count = 0
         self.max_retries = ConfigHelper.max_retries()
         self._retry_window_seconds = ConfigHelper.retry_window_seconds()
@@ -946,6 +949,11 @@ class StreamManager:
             self.transcode_process_active = True
 
             self.connected = True
+            timing.mark(
+                getattr(self.buffer, "redis_client", None),
+                self.channel_id,
+                "provider_connected",
+            )
 
             # Set connection start time for stability tracking
             self.connection_start_time = time.time()
@@ -1330,6 +1338,11 @@ class StreamManager:
             self.socket = os.fdopen(pipe_fd, 'rb', buffering=0)
             self.connected = True
             self.healthy = True
+            timing.mark(
+                getattr(self.buffer, "redis_client", None),
+                self.channel_id,
+                "provider_connected",
+            )
 
             logger.info(f"Successfully started HTTP streamer thread for channel {self.channel_id}")
 
@@ -1902,6 +1915,15 @@ class StreamManager:
             # Track chunk size before adding to buffer
             chunk_size = len(chunk)
             self._update_bytes_processed(chunk_size)
+
+            # Where the time goes while the channel starts (see timing.py). Measuring only,
+            # and the keyframe scan stops as soon as one is found.
+            if not self._timed_start_done:
+                redis_client = getattr(self.buffer, "redis_client", None)
+                timing.mark(redis_client, self.channel_id, "first_byte")
+                self._timed_start_done = timing.mark_keyframe(
+                    redis_client, self.channel_id, chunk
+                )
 
             # Add directly to buffer without TS-specific processing
             success = self.buffer.add_chunk(chunk)

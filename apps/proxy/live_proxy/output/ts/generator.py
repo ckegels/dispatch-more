@@ -14,6 +14,7 @@ from ...utils import create_ts_packet, get_logger, resolve_channel_display_name
 from ...redis_keys import RedisKeys
 from ...constants import ChannelMetadataField
 from ...config_helper import ConfigHelper
+from ... import timing
 
 logger = get_logger()
 
@@ -469,6 +470,18 @@ class StreamGenerator:
         for chunk in chunks:
             try:
                 yield chunk
+                if not self.chunks_sent:
+                    # The first video the player gets: log where the start time went
+                    timing.mark(
+                        getattr(proxy_server, "redis_client", None),
+                        self.channel_id,
+                        "first_byte_out",
+                    )
+                    timing.finish(
+                        getattr(proxy_server, "redis_client", None),
+                        self.channel_id,
+                        self.channel_name,
+                    )
                 self.bytes_sent += len(chunk)
                 self.chunks_sent += 1
                 logger.debug(f"[{self.client_id}] Sent chunk {self.chunks_sent} ({len(chunk)} bytes) for channel {self.channel_id} to client")

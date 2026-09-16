@@ -2580,25 +2580,25 @@ export default class API {
     }
   }
 
-  static async getOverlapActivity() {
-    // Channel Switch Overlap: accounts and recent switches for its settings page
+  static async getDiagnostics() {
+    // Channel starts and Channel Switch Overlap activity for the Diagnostics page
     try {
-      return await request(`${host}/proxy/overlap/`);
+      return await request(`${host}/proxy/diagnostics/`);
     } catch (e) {
-      errorNotification('Failed to retrieve channel switch overlap activity', e);
+      errorNotification('Failed to retrieve streaming diagnostics', e);
       throw e;
     }
   }
 
-  static async setOverlapRetention(keepSeconds) {
-    // How long the page keeps switches; answers with the page itself, like a GET
+  static async setDiagnosticsRetention(keepSeconds) {
+    // How long the page keeps starts and switches; answers with the page, like a GET
     try {
-      return await request(`${host}/proxy/overlap/`, {
+      return await request(`${host}/proxy/diagnostics/`, {
         method: 'POST',
         body: { keep_seconds: keepSeconds },
       });
     } catch (e) {
-      errorNotification('Failed to change how long switches are kept', e);
+      errorNotification('Failed to change how long activity is kept', e);
       throw e;
     }
   }

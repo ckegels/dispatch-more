@@ -353,9 +353,17 @@ explanation.
 Keep Max Streams at the provider's real limit and the window below how long the
 provider tolerates the extra connection.
 
-## Seeing what it does (settings page)
+## Seeing what it does (Diagnostics page)
 
-**Settings → Streaming → Channel Switch Overlap** shows, refreshed every 5 seconds:
+**Settings → Streaming → Diagnostics** shows, refreshed every 5 seconds, in two tabs.
+
+**Channel starts** (see `apps/proxy/live_proxy/timing.py`, which works on its own and does not
+need the overlap): every channel start with the phases it went through — slot, provider
+connected, first byte, first keyframe, first byte to player — as a bar per start, the total,
+and the step that took longest on its own. A long "first keyframe" means the channel started
+in the middle of a group of pictures, which is what usually makes Plex look slow to start.
+
+**Channel switches**:
 
 - one line per account with the overlap enabled: slots in use, held slots, whether it stops
   skipped channels, and its LAN subnets;
@@ -366,13 +374,15 @@ provider tolerates the extra connection.
 
 `record_event()` writes one small record per decision (`live:probation:event:<id>`, listed in
 the sorted set `live:probation:events`); `update_event()` fills in the result when the overlap
-resolves. Only the last `EVENTS_KEPT` (20) switches are kept, for `EVENT_TTL` (30 minutes):
-enough to see whether the feature is doing its job, without becoming a second log.
+resolves. Only the last `EVENTS_KEPT` (200) switches are kept, and how long they are kept is
+chosen on the page (30 minutes, 2, 6 or 24 hours, in `live:probation:events_keep`): enough to
+see whether the feature is doing its job, without becoming a second log.
 
 Recording runs in Dispatcharr itself, so the page does not have to be open. With the overlap
-disabled everywhere nothing is recorded and the page says so. `GET /proxy/overlap/`
-(`overlap_views.overlap_activity`, admins only) returns the accounts and the events with
-channel names and usernames resolved.
+disabled everywhere nothing is recorded and the switches tab says so; channel starts are
+measured either way. `GET /proxy/diagnostics/` (`diagnostics_views.diagnostics`, admins only)
+returns the starts, the accounts and the events with channel names and usernames resolved; a
+`POST` with `keep_seconds` changes the retention and answers like a `GET`.
 
 ## Coverage
 
@@ -427,12 +437,14 @@ overlap window.
 | `apps/channels/models.py` | `Channel.get_stream(viewer=…)` calls the account preferences, and the overlap before custom streams and when every profile is full; holds a released slot |
 | `apps/proxy/live_proxy/server.py` | The cleanup loop resumes overlap checks whose worker restarted |
 | `apps/proxy/live_proxy/input/manager.py` | Longer wait before retrying a connection the provider refused |
-| `apps/proxy/live_proxy/overlap_views.py` | Read-only data for the settings page |
+| `apps/proxy/live_proxy/diagnostics_views.py` | Read-only data for the Diagnostics page |
+| `apps/proxy/live_proxy/timing.py` | Times each phase of a channel start, finds the first keyframe, logs one line per start |
 | `apps/proxy/urls.py`, `frontend/src/config/settingsNav.js`, `frontend/src/api.js` | One line each: the endpoint, the settings entry and the API call |
-| `frontend/src/components/overlap/OverlapActivity.jsx` | The settings page itself |
+| `frontend/src/components/diagnostics/*.jsx` | The Diagnostics page itself (starts, switches, legend) |
 | `apps/m3u/connection_pool.py` | `reserve_profile_slot(..., extra_capacity=0, viewer=None)`; held slots count as taken in reservations and capacity checks |
 | `apps/proxy/live_proxy/url_utils.py` | Pass the viewer to `get_stream` |
-| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record it for the channel, wait for a skipped channel that is still stopping, stop skipped channels, start the monitor |
+| `apps/proxy/live_proxy/views.py` | Build the viewer from the request, record it for the channel, wait for a skipped channel that is still stopping, stop skipped channels, start the monitor, start the start timing |
+| `apps/proxy/live_proxy/output/ts/generator.py` | Marks the first video sent to the player and logs the start |
 | `apps/m3u/serializers.py`, `frontend/src/components/forms/M3U.jsx` | Per-account settings |
 
 Redis keys: `live:probation:<channel uuid>` (probation record, TTL window + 120 s);

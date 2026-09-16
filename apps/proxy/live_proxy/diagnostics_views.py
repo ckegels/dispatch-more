@@ -1,8 +1,11 @@
-"""What Channel Switch Overlap is doing, for its page in the settings.
+"""What the live proxy is doing, for the Diagnostics page in the settings.
 
-Read-only: the accounts with their slots, and the last switches (see
-apps.proxy.live_proxy.probation.record_event). Everything is short-lived in Redis, so this
-only ever shows recent activity.
+Read-only, and everything it reads is short-lived in Redis, so it only ever shows recent
+activity:
+
+- channel starts, with where the time went (see apps.proxy.live_proxy.timing);
+- Channel Switch Overlap: the accounts with their slots, and the last switches (see
+  apps.proxy.live_proxy.probation.record_event).
 """
 
 import logging
@@ -15,6 +18,7 @@ from apps.accounts.permissions import IsAdmin
 from core.utils import RedisClient
 
 from . import probation
+from . import timing
 
 logger = logging.getLogger("live_proxy")
 
@@ -80,10 +84,33 @@ def _usernames(user_ids):
     }
 
 
+def _starts(redis_client):
+    """Recent channel starts with each phase: how far in it was reached, and how long it took."""
+    starts = []
+    for record in timing.recent_starts(redis_client):
+        phases, previous = [], 0.0
+        for phase in record.get("phases", "").split("|"):
+            label, _sep, seconds = phase.partition("=")
+            if not seconds:
+                continue
+            at = float(seconds)
+            phases.append({"label": label, "at": at, "took": max(at - previous, 0.0)})
+            previous = at
+        starts.append({
+            "time": float(record.get("time", 0)),
+            "channel": record.get("channel", ""),
+            "client": probation.app_name(record.get("client")) or "unknown",
+            "total": float(record.get("total", 0)),
+            "slowest": record.get("slowest", ""),
+            "phases": phases,
+        })
+    return starts
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAdmin])
-def overlap_activity(request):
-    """Accounts and recent switches for the Channel Switch Overlap page.
+def diagnostics(request):
+    """Channel starts, accounts and recent switches for the Diagnostics page.
 
     POST {"keep_seconds": ...} changes how long switches are kept, and returns the page as a
     GET does, so the page shows the new setting straight away.
@@ -106,6 +133,7 @@ def overlap_activity(request):
     usernames = _usernames([event.get("user_id") for event in events])
 
     return JsonResponse({
+        "starts": _starts(redis_client),
         "enabled": enabled,
         "accounts": _account_rows(redis_client) if enabled else [],
         "events": [

@@ -20,6 +20,7 @@ from .output.fmp4.generator import create_fmp4_stream_generator
 from dispatcharr.utils import get_client_ip, network_access_allowed
 from .redis_keys import RedisKeys
 from . import probation
+from . import timing
 from apps.channels.models import Channel
 from apps.accounts.models import User
 from core.models import CoreSettings, PROXY_PROFILE_NAME
@@ -187,6 +188,12 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         # Who is asking (IP, user, app), used by Channel Switch Overlap
         viewer = probation.viewer_from_request(request, user, client_ip)
         logger.info(f"[{client_id}] Requested stream for channel {channel_id}")
+        # Where the time goes while this channel starts (see timing.py); measuring only
+        timing.start(
+            proxy_server.redis_client,
+            channel_id,
+            client=request.META.get("HTTP_USER_AGENT"),
+        )
 
         # Extract client user agent early
         for header in ["HTTP_USER_AGENT", "User-Agent", "user-agent"]:
@@ -430,6 +437,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     # slot (INCR'd profile_connections) - track this for cleanup on error
                     if needs_initialization and slot_reserved:
                         connection_allocated = True
+                    timing.mark(proxy_server.redis_client, channel_id, "slot")
 
                     # Read stream assignment from Redis (already set by generate_stream_url → get_stream).
                     # Avoid calling get_stream() again (INCR profile counter)

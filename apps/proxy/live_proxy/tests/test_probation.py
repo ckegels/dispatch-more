@@ -102,6 +102,13 @@ class FakeRedis:
         for f, v in (mapping or {}).items():
             bucket[f] = str(v)
 
+    def hsetnx(self, key, field, value):
+        fields = self.hashes.setdefault(key, {})
+        if field in fields:
+            return 0
+        fields[field] = str(value)
+        return 1
+
     def hgetall(self, key):
         return dict(self.hashes.get(key, {}))
 
@@ -2642,8 +2649,8 @@ class RecentSwitchesTests(TestCase):
         self.assertEqual(event["result"], "waiting")
 
 
-class OverlapActivityViewTests(TestCase):
-    """The page's data: accounts and readable switches, for admins only."""
+class DiagnosticsViewTests(TestCase):
+    """The Diagnostics page's data: accounts and readable switches, for admins only."""
 
     def setUp(self):
         _reset_in_use_cache(self)
@@ -2667,7 +2674,7 @@ class OverlapActivityViewTests(TestCase):
         return client
 
     def _get(self, admin=True):
-        return self._client(admin).get("/proxy/overlap/")
+        return self._client(admin).get("/proxy/diagnostics/")
 
     def test_admins_see_accounts_and_switches(self):
         channel = Channel.objects.create(channel_number=942, name="Sky Sports")
@@ -2706,6 +2713,28 @@ class OverlapActivityViewTests(TestCase):
         self.assertEqual(event["action"], "overlap slot")
         self.assertEqual(event["result"], "confirmed after 1.2s")
 
+    def test_channel_starts_are_shown_with_their_phases(self):
+        from apps.proxy.live_proxy import timing
+
+        timing.start(self.redis, "channel-1", client="TiviMate/5.1.6 (Android 12)")
+        now = time.time()
+        self.redis.hset(timing._key("channel-1"), "requested", str(now))
+        for phase, offset in (("slot", 0.1), ("first_keyframe", 3.9), ("first_byte_out", 4.0)):
+            self.redis.hset(timing._key("channel-1"), phase, str(now + offset))
+        timing.finish(self.redis, "channel-1", "CNN")
+
+        (start,) = self._get().json()["starts"]
+
+        self.assertEqual(start["channel"], "CNN")
+        # The app, without its version numbers, like everywhere else
+        self.assertEqual(start["client"], "TiviMate/ (Android )")
+        self.assertAlmostEqual(start["total"], 4.0, places=2)
+        self.assertEqual(start["slowest"], "first keyframe")
+        # Each phase says how far in it was reached and how long it took on its own
+        keyframe = next(p for p in start["phases"] if p["label"] == "first keyframe")
+        self.assertAlmostEqual(keyframe["at"], 3.9, places=2)
+        self.assertAlmostEqual(keyframe["took"], 3.8, places=2)
+
     def test_a_login_is_shown_by_name(self):
         from apps.accounts.models import User
 
@@ -2731,7 +2760,7 @@ class OverlapActivityViewTests(TestCase):
         self.assertEqual(self._get(admin=False).status_code, 403)
         self.assertEqual(
             self._client(admin=False)
-            .post("/proxy/overlap/", {"keep_seconds": 7200}, format="json")
+            .post("/proxy/diagnostics/", {"keep_seconds": 7200}, format="json")
             .status_code,
             403,
         )
@@ -2740,7 +2769,7 @@ class OverlapActivityViewTests(TestCase):
         self.assertEqual(self._get().json()["keep_seconds"], probation.EVENT_TTL)
 
         response = self._client().post(
-            "/proxy/overlap/", {"keep_seconds": 7200}, format="json"
+            "/proxy/diagnostics/", {"keep_seconds": 7200}, format="json"
         )
         self.assertEqual(response.status_code, 200)
         # The answer is the page itself, with the new setting
@@ -2756,7 +2785,7 @@ class OverlapActivityViewTests(TestCase):
     def test_an_unknown_retention_is_refused(self):
         for bad in (99, "soon", None):
             response = self._client().post(
-                "/proxy/overlap/", {"keep_seconds": bad}, format="json"
+                "/proxy/diagnostics/", {"keep_seconds": bad}, format="json"
             )
             self.assertEqual(response.status_code, 400, bad)
         self.assertEqual(self._get().json()["keep_seconds"], probation.EVENT_TTL)
