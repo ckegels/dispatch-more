@@ -131,6 +131,7 @@ const tuners = {
       ours: false,
     },
   ],
+  base_url: 'http://192.168.2.142:9191',
   channel_profiles: [{ id: 1, name: 'austria' }],
   channel_groups: [{ id: 5, name: 'Austria', channels: 25 }],
   output_profiles: [{ id: 3, name: 'Remux' }],
@@ -259,6 +260,10 @@ describe('MediaServers', () => {
     render(<MediaServers active={true} />);
     await screen.findByText('Austria');
 
+    // The guessed address can be corrected before it is used
+    expect(screen.getByLabelText(/Dispatcharr address/)).toHaveValue(
+      'http://192.168.2.142:9191'
+    );
     fireEvent.change(screen.getByLabelText(/New profile name/), {
       target: { value: 'austria' },
     });
@@ -273,6 +278,7 @@ describe('MediaServers', () => {
     await waitFor(() =>
       expect(API.addMediaServerTuner).toHaveBeenCalledWith({
         server: 'a1',
+        base_url: 'http://192.168.2.142:9191',
         channel_profile: '',
         new_profile_name: 'austria',
         group_ids: [5],

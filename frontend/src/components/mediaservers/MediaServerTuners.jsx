@@ -27,10 +27,15 @@ const MediaServerTuners = ({ serverId, enabled }) => {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const [baseUrl, setBaseUrl] = useState('');
+
   const load = useCallback(async () => {
     if (!enabled) return;
     try {
-      setData(await API.getMediaServerTuners(serverId));
+      const result = await API.getMediaServerTuners(serverId);
+      setData(result);
+      // Only until it has been edited: after that the field is what the user typed
+      setBaseUrl((current) => current || result.base_url || '');
     } catch {
       setError('Could not read the tuners from this server.');
     }
@@ -165,6 +170,14 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         Add a tuner
       </Text>
       <Group align="flex-end" gap="xs" wrap="wrap">
+        <TextInput
+          size="xs"
+          w={260}
+          label="Dispatcharr address"
+          description="How this server reaches Dispatcharr"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.currentTarget.value)}
+        />
         <Select
           size="xs"
           w={220}
@@ -231,6 +244,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             run(() =>
               API.addMediaServerTuner({
                 server: serverId,
+                base_url: baseUrl,
                 channel_profile: form.channel_profile,
                 new_profile_name: form.new_profile_name,
                 group_ids: form.group_ids.map(Number),
@@ -244,7 +258,9 @@ const MediaServerTuners = ({ serverId, enabled }) => {
       </Group>
       <Text size="xs" c="dimmed">
         A new profile holds only the channels of the groups you pick, and
-        nothing is added to your other profiles.
+        nothing is added to your other profiles. It is saved as{' '}
+        {data.profile_prefix}-… with spaces as dashes, because the name becomes
+        part of the tuner&apos;s address.
       </Text>
     </Stack>
   );

@@ -498,6 +498,76 @@ class TunerTests(TestCase):
         )
         self.assertTrue(post.call_args.kwargs["params"]["uri"].endswith("/hdhr/plexmedia-austria"))
 
+    def test_the_address_is_remembered_and_the_name_fits_in_a_url(self):
+        """The guessed address can be wrong (a missing port), and names have spaces in them."""
+        from apps.channels.models import Channel, ChannelGroup, ChannelProfile
+
+        group = ChannelGroup.objects.create(name="France")
+        Channel.objects.create(channel_number=7, name="TF1", channel_group=group)
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "base_url": "http://192.168.2.142:9191/",
+                    # The prefix is not repeated, and the space cannot go in an address
+                    "new_profile_name": "PlexMedia France",
+                    "group_ids": [group.id],
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(ChannelProfile.objects.filter(name="plexmedia-France").exists())
+        self.assertEqual(
+            post.call_args.kwargs["params"]["uri"],
+            "http://192.168.2.142:9191/hdhr/plexmedia-France",
+        )
+
+        # The address is kept, so the next tuner does not need it typed again
+        (stored,) = media_servers.load_servers()
+        self.assertEqual(stored["dispatcharr_url"], "http://192.168.2.142:9191")
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = plex_with_tuners
+            listed = self.client_api.get("/proxy/media-servers/tuners/?server=a1").json()
+        self.assertEqual(listed["base_url"], "http://192.168.2.142:9191")
+
+    def test_a_profile_name_that_is_not_a_url_is_still_usable(self):
+        """A profile that already exists keeps its name, so the address is escaped instead."""
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="My Channels")
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "channel_profile": "My Channels",
+                 "base_url": "http://192.168.2.142:9191"},
+                format="json",
+            )
+
+        self.assertEqual(
+            post.call_args.kwargs["params"]["uri"],
+            "http://192.168.2.142:9191/hdhr/My%20Channels",
+        )
+
+    def test_an_address_that_is_not_a_url_is_refused(self):
+        response = self.client_api.post(
+            "/proxy/media-servers/tuners/",
+            {"server": "a1", "channel_profile": "austria", "base_url": "192.168.2.142:9191"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("http://", response.json()["error"])
+
     def test_building_a_profile_needs_a_group_and_a_free_name(self):
         from apps.channels.models import ChannelProfile
 

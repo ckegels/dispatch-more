@@ -11,6 +11,8 @@ the guide. Creating the DVR itself stays where it is, in the server's own settin
 """
 
 import logging
+import re
+from urllib.parse import quote
 
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
@@ -31,15 +33,24 @@ def _server(server_id):
     )
 
 
-def _tuner_url(request, channel_profile, output_profile_id=None):
+def default_base_url(request) -> str:
     """
-    The address of this Dispatcharr as an HDHomeRun for that channel profile.
-
-    Built from the address the browser is talking to, which is the one the media server can
-    reach as well in a normal setup; it is shown before it is used so it can be corrected.
+    A first guess at the address a media server can reach this Dispatcharr on: the one the
+    browser is using. Behind a proxy the port is often missing from the Host header, so it is
+    taken from the forwarded port when there is one. It is only a guess, and the tab shows it
+    as a field that can be corrected.
     """
     base = request.build_absolute_uri("/").rstrip("/")
-    url = f"{base}/hdhr/{channel_profile}"
+    forwarded_port = request.META.get("HTTP_X_FORWARDED_PORT")
+    if forwarded_port and ":" not in base.split("//", 1)[-1]:
+        base = f"{base}:{forwarded_port}"
+    return base
+
+
+def _tuner_url(base_url, channel_profile, output_profile_id=None):
+    """This Dispatcharr as an HDHomeRun for that channel profile."""
+    # A profile name may contain spaces and other characters that cannot go in an address
+    url = f"{media_servers.clean_url(base_url)}/hdhr/{quote(channel_profile, safe='')}"
     if output_profile_id:
         url = f"{url}/output_profile/{int(output_profile_id)}"
     return url
@@ -86,9 +97,11 @@ def media_server_tuners(request):
         return JsonResponse({"error": "This media server is switched off"}, status=400)
 
     hosts = media_servers.server_hosts()
+    base_url = server.get("dispatcharr_url") or default_base_url(request)
     if request.method == "GET":
         return JsonResponse({
             "tuners": media_servers.tuners(server, hosts),
+            "base_url": base_url,
             **_choices(),
         })
 
@@ -121,7 +134,21 @@ def media_server_tuners(request):
     if not channel_profile:
         return JsonResponse({"error": "Choose a channel profile, or build one"}, status=400)
 
-    uri = _tuner_url(request, channel_profile, request.data.get("output_profile_id"))
+    # The address the media server will use. Remembered on the server it was added to, so it
+    # does not have to be corrected again for the next tuner.
+    base_url = media_servers.clean_url(request.data.get("base_url")) or base_url
+    if not base_url.startswith(("http://", "https://")):
+        return JsonResponse(
+            {"error": "The Dispatcharr address must start with http:// or https://"}, status=400
+        )
+    if base_url != server.get("dispatcharr_url"):
+        servers = media_servers.load_servers()
+        for stored in servers:
+            if stored.get("id") == server.get("id"):
+                stored["dispatcharr_url"] = base_url
+        media_servers.save_servers(servers)
+
+    uri = _tuner_url(base_url, channel_profile, request.data.get("output_profile_id"))
     if not media_servers.add_tuner(server, uri):
         return JsonResponse(
             {"error": f"The server could not add a tuner at {uri}"}, status=400
@@ -142,7 +169,12 @@ def _build_profile(name, group_ids) -> str:
 
     if not group_ids:
         raise ValueError("Choose at least one channel group")
-    name = name if name.startswith(f"{PROFILE_PREFIX}-") else f"{PROFILE_PREFIX}-{name}"
+    # "PlexMedia France" must not become "plexmedia-PlexMedia France", and the name ends up in
+    # the tuner's address, so spaces become dashes: "plexmedia-France".
+    if name.lower().startswith(PROFILE_PREFIX):
+        name = name[len(PROFILE_PREFIX) :].lstrip(" -")
+    name = re.sub(r"[^\w.-]+", "-", name, flags=re.UNICODE).strip("-")
+    name = f"{PROFILE_PREFIX}-{name}".rstrip("-")
     if ChannelProfile.objects.filter(name=name).exists():
         raise ValueError(f"A channel profile called {name} already exists")
 
