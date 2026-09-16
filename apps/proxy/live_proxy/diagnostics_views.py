@@ -99,10 +99,16 @@ def _starts(redis_client):
         starts.append({
             "time": float(record.get("time", 0)),
             "channel": record.get("channel", ""),
-            "client": probation.app_name(record.get("client")) or "unknown",
+            "client": probation.app_name(record.get("client")) or "media server",
             "total": float(record.get("total", 0)),
             "slowest": record.get("slowest", ""),
             "phases": phases,
+            # What the media server did with it afterwards, when one is configured
+            "server_user": record.get("server_user", ""),
+            "server_player": record.get("server_player", ""),
+            "server_decision": record.get("server_decision", ""),
+            "server_speed": record.get("server_speed", ""),
+            "server_buffering": float(record.get("server_buffering", 0) or 0),
         })
     return starts
 

@@ -1,0 +1,81 @@
+"""The Media Servers settings tab: add a server, see whether it answers, and what it is playing.
+
+Read-only towards the media server: nothing here changes anything on Plex. The token is never
+sent back to the browser (see media_servers.public).
+"""
+
+import logging
+
+from django.http import JsonResponse
+from rest_framework.decorators import api_view, permission_classes
+
+from apps.accounts.permissions import IsAdmin
+
+from . import media_servers
+
+logger = logging.getLogger("live_proxy")
+
+
+def _server_rows():
+    """Every server, with whether it answers and what it is playing right now."""
+    rows = []
+    for server in media_servers.load_servers():
+        row = media_servers.public(server)
+        status = media_servers.check(server)
+        row["online"] = status["ok"]
+        row["error"] = status.get("error", "")
+        row["server_name"] = status.get("name", "")
+        row["version"] = status.get("version", "")
+        row["sessions"] = media_servers.sessions(server) if status["ok"] else []
+        rows.append(row)
+    return rows
+
+
+@api_view(["GET", "POST", "DELETE"])
+@permission_classes([IsAdmin])
+def media_server_list(request):
+    """List the media servers, add or change one, or remove one."""
+    if request.method == "GET":
+        return JsonResponse({"servers": _server_rows()})
+
+    if request.method == "DELETE":
+        server_id = request.query_params.get("id")
+        servers = [s for s in media_servers.load_servers() if s.get("id") != server_id]
+        media_servers.save_servers(servers)
+        return JsonResponse({"servers": _server_rows()})
+
+    url = media_servers.clean_url(request.data.get("url"))
+    if not url.startswith(("http://", "https://")):
+        return JsonResponse(
+            {"error": "Enter the address as http://… or https://…"}, status=400
+        )
+
+    servers = media_servers.load_servers()
+    server_id = request.data.get("id")
+    existing = next((s for s in servers if s.get("id") == server_id), None)
+    token = (request.data.get("token") or "").strip()
+    if not token and existing:
+        # Editing without retyping the token keeps the one that is stored
+        token = existing.get("token", "")
+    if not token:
+        return JsonResponse({"error": "A token is needed to read from Plex"}, status=400)
+
+    server = {
+        "id": server_id or media_servers.new_id(),
+        "kind": "plex",
+        "name": (request.data.get("name") or "").strip() or "Plex",
+        "url": url,
+        "token": token,
+    }
+    status = media_servers.check(server)
+    if not status["ok"]:
+        # Nothing is saved when it cannot be reached, so a wrong address cannot be stored
+        return JsonResponse({"error": status["error"]}, status=400)
+
+    if existing:
+        servers[servers.index(existing)] = server
+    else:
+        servers.append(server)
+    media_servers.save_servers(servers)
+    logger.info(f"Media server {server['name']} ({server['url']}) saved")
+    return JsonResponse({"servers": _server_rows()})

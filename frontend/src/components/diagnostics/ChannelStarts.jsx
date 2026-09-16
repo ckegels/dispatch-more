@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core';
+import { Badge, Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core';
 
 // Each phase of a channel start keeps its colour everywhere, so the bars can be compared
 // between rows at a glance.
@@ -107,6 +107,7 @@ const ChannelStarts = ({ starts }) => {
             <Table.Th w={70}>Took</Table.Th>
             <Table.Th>Where the time went</Table.Th>
             <Table.Th w={170}>Slowest step</Table.Th>
+            <Table.Th w={200}>After the handover</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -129,6 +130,37 @@ const ChannelStarts = ({ starts }) => {
               </Table.Td>
               <Table.Td c="dimmed" style={{ whiteSpace: 'nowrap' }}>
                 {start.slowest}
+              </Table.Td>
+              {/* Only filled in for a media server that is configured (see Media Servers) */}
+              <Table.Td>
+                {start.server_buffering > 0 ? (
+                  <Group gap={6} wrap="wrap">
+                    <Text
+                      size="sm"
+                      c={start.server_buffering >= 3 ? 'orange' : 'dimmed'}
+                    >
+                      playing after {start.server_buffering.toFixed(1)}s
+                    </Text>
+                    {start.server_decision && (
+                      <Badge
+                        size="sm"
+                        variant="light"
+                        color={
+                          start.server_decision === 'direct play'
+                            ? 'teal'
+                            : 'orange'
+                        }
+                      >
+                        {start.server_decision}
+                        {start.server_speed ? ` ${start.server_speed}×` : ''}
+                      </Badge>
+                    )}
+                  </Group>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    —
+                  </Text>
+                )}
               </Table.Td>
             </Table.Tr>
           ))}

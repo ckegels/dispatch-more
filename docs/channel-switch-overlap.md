@@ -363,6 +363,12 @@ connected, first byte, first keyframe, first byte to player — as a bar per sta
 and the step that took longest on its own. A long "first keyframe" means the channel started
 in the middle of a group of pictures, which is what usually makes Plex look slow to start.
 
+When a media server is configured (**Settings → Streaming → Media Servers**), a start on that
+server also shows what happened **after** the handover: how long the player stayed buffering
+before it played, and whether the server direct-plays or transcodes (and how fast). Dispatcharr
+watches the server's sessions for up to 25 seconds after the start, in the background; a server
+that is unreachable simply adds nothing.
+
 **Channel switches**:
 
 - one line per account with the overlap enabled: slots in use, held slots, whether it stops
@@ -439,6 +445,8 @@ overlap window.
 | `apps/proxy/live_proxy/input/manager.py` | Longer wait before retrying a connection the provider refused |
 | `apps/proxy/live_proxy/diagnostics_views.py` | Read-only data for the Diagnostics page |
 | `apps/proxy/live_proxy/timing.py` | Times each phase of a channel start, finds the first keyframe, logs one line per start |
+| `apps/proxy/live_proxy/media_servers.py`, `media_server_views.py` | Media servers (Plex): stored in `CoreSettings["media-servers"]`, read-only, token never returned; watches sessions after a start on a media server |
+| `frontend/src/components/mediaservers/MediaServers.jsx` | The Media Servers tab |
 | `apps/proxy/urls.py`, `frontend/src/config/settingsNav.js`, `frontend/src/api.js` | One line each: the endpoint, the settings entry and the API call |
 | `frontend/src/components/diagnostics/*.jsx` | The Diagnostics page itself (starts, switches, legend) |
 | `apps/m3u/connection_pool.py` | `reserve_profile_slot(..., extra_capacity=0, viewer=None)`; held slots count as taken in reservations and capacity checks |

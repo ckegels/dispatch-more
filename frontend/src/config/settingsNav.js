@@ -22,6 +22,7 @@ const ProxySettingsForm = lazy(() => import('../components/forms/settings/ProxyS
 const StreamProfilesTable = lazy(() => import('../components/tables/StreamProfilesTable.jsx'));
 const OutputProfilesTable = lazy(() => import('../components/tables/OutputProfilesTable.jsx'));
 const Diagnostics = lazy(() => import('../components/diagnostics/Diagnostics.jsx'));
+const MediaServers = lazy(() => import('../components/mediaservers/MediaServers.jsx'));
 const DvrSettingsForm = lazy(() => import('../components/forms/settings/DvrSettingsForm.jsx'));
 const UserAgentsTable = lazy(() => import('../components/tables/UserAgentsTable.jsx'));
 const NetworkAccessForm = lazy(() => import('../components/forms/settings/NetworkAccessForm.jsx'));
@@ -52,6 +53,7 @@ export const SETTINGS_GROUPS = [
       { id: 'stream-profiles', label: 'Stream Profiles', icon: SlidersHorizontal, Component: StreamProfilesTable },
       { id: 'output-profiles', label: 'Output Profiles', icon: FileOutput, Component: OutputProfilesTable },
       { id: 'diagnostics', label: 'Diagnostics', icon: Activity, Component: Diagnostics },
+      { id: 'media-servers', label: 'Media Servers', icon: Monitor, Component: MediaServers },
     ],
   },
   {

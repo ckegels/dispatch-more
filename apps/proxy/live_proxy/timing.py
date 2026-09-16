@@ -164,7 +164,13 @@ def finish(redis_client, channel_uuid, channel_name=None):
             + ", ".join(f"{label} {seconds:.2f}s" for label, seconds in phases)
             + f" (total {total:.2f}s, slowest: {slowest})"
         )
-        _record_start(redis_client, marks, phases, total, slowest, name)
+        start_id = _record_start(redis_client, marks, phases, total, slowest, name)
+        # What the media server does with the video afterwards, added when it is known
+        from . import media_servers
+
+        media_servers.watch_start(
+            redis_client, start_id, marks.get("client"), float(marks["requested"])
+        )
         redis_client.expire(key, 10)
     except Exception as e:
         logger.debug(f"Could not log the start of channel {channel_uuid}: {e}")
@@ -203,6 +209,22 @@ def _record_start(redis_client, marks, phases, total, slowest, channel_name):
     redis_client.zremrangebyrank(STARTS_KEY, 0, -(STARTS_KEPT + 1))
     redis_client.zremrangebyscore(STARTS_KEY, "-inf", now - ttl)
     redis_client.expire(STARTS_KEY, ttl)
+    return start_id
+
+
+def update_start(redis_client, start_id, **fields):
+    """Add to a start that was already recorded, once a media server tells us more."""
+    if not redis_client or not start_id:
+        return
+    try:
+        key = START_KEY.format(start_id=start_id)
+        if redis_client.exists(key):
+            redis_client.hset(
+                key,
+                mapping={k: str(v) for k, v in fields.items() if v not in (None, "")},
+            )
+    except Exception as e:
+        logger.debug(f"Could not add to channel start {start_id}: {e}")
 
 
 def recent_starts(redis_client):

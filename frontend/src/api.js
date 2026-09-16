@@ -2580,6 +2580,35 @@ export default class API {
     }
   }
 
+  static async getMediaServers() {
+    // Media Servers tab: the servers, whether they answer, and what they are playing
+    try {
+      return await request(`${host}/proxy/media-servers/`);
+    } catch (e) {
+      errorNotification('Failed to retrieve media servers', e);
+      throw e;
+    }
+  }
+
+  static async saveMediaServer(server) {
+    // Saved only when the server answers and accepts the token
+    return await request(`${host}/proxy/media-servers/`, {
+      method: 'POST',
+      body: server,
+    });
+  }
+
+  static async deleteMediaServer(id) {
+    try {
+      return await request(`${host}/proxy/media-servers/?id=${id}`, {
+        method: 'DELETE',
+      });
+    } catch (e) {
+      errorNotification('Failed to remove the media server', e);
+      throw e;
+    }
+  }
+
   static async getDiagnostics() {
     // Channel starts and Channel Switch Overlap activity for the Diagnostics page
     try {
