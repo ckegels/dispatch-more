@@ -169,8 +169,7 @@ def _reset_in_use_cache(test):
 def _make_account(name, max_streams=1, probation_enabled=False, probation_seconds=None, lan=True):
     custom_properties = {"probation_enabled": probation_enabled}
     if probation_enabled and lan:
-        # Test players are on 192.168.x: recognised by IP address and app (LAN Device Tracking)
-        custom_properties["probation_lan_tracking"] = True
+        # Test players are on 192.168.x: recognised by IP address and app (LAN Subnets)
         custom_properties["probation_lan_subnets"] = ["192.168.0.0/16"]
     if probation_seconds is not None:
         custom_properties["probation_seconds"] = probation_seconds
@@ -790,7 +789,7 @@ class GetStreamProbationTests(TestCase):
     # ── How a device is recognised ──────────────────────────────────────────
 
     def _track_lan(self, account, subnets=("192.168.1.0/24",)):
-        self._set_props(account, probation_lan_tracking=True, probation_lan_subnets=list(subnets))
+        self._set_props(account, probation_lan_subnets=list(subnets))
 
     def _player(self, user_agent="TiviMate/5.1.6 (Android 12)", ip=IP, user_id=None):
         return probation.Viewer(ip, user_id=user_id, app=probation.app_name(user_agent))
@@ -801,7 +800,7 @@ class GetStreamProbationTests(TestCase):
 
     def test_lan_player_is_recognised_without_a_login(self, _preempt):
         for account in (self.account_a, self.account_b):
-            self._set_props(account, probation_lan_tracking=False)
+            self._set_props(account, probation_lan_subnets=[])
         self._fill_both()
         self._watching_player(self.profile_a)
         player = self._player()
@@ -1236,7 +1235,6 @@ class ServerGroupHeldSlotTests(TestCase):
                 max_streams=1,
                 custom_properties={
                     "probation_enabled": True,
-                    "probation_lan_tracking": True,
                     "probation_lan_subnets": ["192.168.0.0/16"],
                 },
             )
@@ -1500,10 +1498,10 @@ class StopSkippedChannelsTests(TestCase):
         self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate/5.1.6 (Android 12)", 2)])
 
         # Without LAN Device Tracking a player without a login is anonymous
-        self._set_props(self.account, probation_lan_tracking=False)
+        self._set_props(self.account, probation_lan_subnets=[])
         self.assertEqual(self._stop(viewer=player), [])
 
-        self._set_props(self.account, probation_lan_tracking=True, probation_lan_subnets=["192.168.1.0/24"])
+        self._set_props(self.account, probation_lan_subnets=["192.168.1.0/24"])
         with self.assertLogs("live_proxy", level="INFO"):
             self.assertEqual(self._stop(viewer=player), ["skipped"])
 
@@ -2174,6 +2172,13 @@ class SurfingDelayTests(TestCase):
 
         self.assertTrue(any("not requesting it from the provider" in line for line in logs.output))
 
+        # And it says so on the settings page, so a skipped channel is not a silent one
+        ((event,),) = (probation.recent_events(self.redis),)
+        self.assertEqual(event["action"], "skipped while surfing")
+        self.assertEqual(event["channel"], self.channels["Discovery"])
+        self.assertEqual(event["from_channel"], self.channels["Sky Sports"])
+        self.assertEqual(event["result"], "moved on during the 0.5s delay")
+
     def test_no_delay_for_reconnects_running_channels_and_other_viewers(self, mock_sleep):
         self._requested("Discovery", seconds_ago=1)
         self.assertFalse(self._request("Discovery"))  # the player reconnecting
@@ -2328,7 +2333,6 @@ class LanDeviceTrackingSettingsTests(TestCase):
     def test_lan_device_key(self):
         account = MagicMock(custom_properties={
             "probation_enabled": True,
-            "probation_lan_tracking": True,
             "probation_lan_subnets": ["192.168.2.0/24", "public-junk", "8.8.8.0/24"],
         })
         tv = probation.Viewer("192.168.2.232", app="TiviMate/")
@@ -2345,7 +2349,8 @@ class LanDeviceTrackingSettingsTests(TestCase):
             probation.Viewer("192.168.2.232", recording=True),
         ):
             self.assertIsNone(probation._lan_device_key(no_key, account))
-        account.custom_properties["probation_lan_tracking"] = False
+        # No subnets means no LAN tracking at all
+        account.custom_properties["probation_lan_subnets"] = []
         self.assertIsNone(probation._lan_device_key(tv, account))
 
     def test_suggested_lan_subnet(self):
@@ -2365,17 +2370,15 @@ class LanDeviceTrackingSettingsTests(TestCase):
         account, _profile = _make_account("lan-serializer", probation_enabled=True)
         serializer = M3UAccountSerializer(
             account,
-            data={"probation_lan_tracking": True, "probation_lan_subnets": "192.168.2.0/24,10.1.0.0/16"},
+            data={"probation_lan_subnets": "192.168.2.0/24,10.1.0.0/16"},
             partial=True,
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
         serializer.save()
         account.refresh_from_db()
-        self.assertTrue(account.custom_properties["probation_lan_tracking"])
         self.assertEqual(account.custom_properties["probation_lan_subnets"], ["192.168.2.0/24", "10.1.0.0/16"])
 
         data = M3UAccountSerializer(account).data
-        self.assertTrue(data["probation_lan_tracking"])
         self.assertEqual(data["probation_lan_subnets"], ["192.168.2.0/24", "10.1.0.0/16"])
         self.assertIn("probation_lan_subnet_suggestion", data)
 
@@ -2386,7 +2389,10 @@ class LanDeviceTrackingSettingsTests(TestCase):
     def test_lan_tracking_in_use_follows_account_changes(self):
         account, _profile = _make_account("lan-cache", probation_enabled=True, lan=False)
         self.assertFalse(probation.lan_tracking_in_use())
-        account.custom_properties = {**account.custom_properties, "probation_lan_tracking": True}
+        account.custom_properties = {
+            **account.custom_properties,
+            "probation_lan_subnets": ["192.168.0.0/16"],
+        }
         account.save()
         self.assertTrue(probation.lan_tracking_in_use())
 

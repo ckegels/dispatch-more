@@ -288,7 +288,7 @@ A viewer is **recognised** (`is_identified()`) when it has:
 
 - a **Dispatcharr user**: an Xtream login, which is how a device outside the local network
   identifies itself. One login per device; see the warning below; or
-- an **IP address on one of the account's LAN subnets**, with LAN Device Tracking enabled.
+- an **IP address on one of the account's LAN subnets**.
   On a local network every device has its own address.
 
 Everything else is **anonymous**: media servers (recognised by User-Agent), and players
@@ -300,9 +300,9 @@ setting belong to the account the channel runs on.
 
 ### LAN Device Tracking
 
-**LAN Device Tracking** (`probation_lan_tracking`, per account, off by default) with the
-account's **LAN Subnets** (`probation_lan_subnets`, local networks such as `192.168.2.0/24`)
-recognises a player by **IP + app** (plus its login, if it has one):
+The account's **LAN Subnets** (`probation_lan_subnets`, local networks such as
+`192.168.2.0/24`) recognise a player by **IP + app** (plus its login, if it has one).
+There is no separate switch: subnets means tracking, an empty list means none.
 
 - The app is the User-Agent without version numbers (`TiviMate/5.1.6 (Android 12)` and
   `TiviMate/5.2.0 (Android 12)` are the same app; TiviMate and Kodi on one device are not),
@@ -312,9 +312,13 @@ recognises a player by **IP + app** (plus its login, if it has one):
 - The last assigned profile is also remembered under the LAN key, so "Stay on same account"
   and "Use another account" work for players without a login.
 
-The form suggests a /24 around Dispatcharr's own address when tracking is switched on
-(not for Docker networks in 172.16.0.0/12). Do not include addresses that several devices
+When the overlap is switched on, the form fills the field with a /24 around Dispatcharr's own
+address, so it works on a normal LAN without further setup. Nothing is filled in for Docker
+networks (172.16.0.0/12), where that address is the bridge and not the LAN the players are on;
+LAN tracking is then off until a subnet is entered. The suggestion is visible in the form
+before saving, so it can be changed or cleared. Do not include addresses that several devices
 share: a Docker network, a second router, or a reverse proxy Dispatcharr does not trust.
+Dispatcharr resolves the real client address behind a proxy it trusts (`get_client_ip`).
 
 **Warning (shown in the explanation popup):** every device outside the LAN subnets needs its
 own Dispatcharr login. One login used by several devices at the same time is not supported: a
@@ -340,8 +344,7 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 | Surfing Delay (ms, 0–2000) | `probation_surf_delay_ms` | 500 |
 | When Switching Channels | `probation_account_preference` | `order` |
 | Allow Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
-| LAN Device Tracking | `probation_lan_tracking` | off |
-| LAN Subnets | `probation_lan_subnets` | empty (suggested when switched on) |
+| LAN Subnets | `probation_lan_subnets` | the detected /24 when the overlap is switched on |
 
 The form only shows the toggle until it is enabled (after confirming the explanation
 popup); the other settings then appear below it. "What does this do?" reopens the
@@ -358,7 +361,7 @@ provider tolerates the extra connection.
   skipped channels, and its LAN subnets;
 - the last switches: time, viewer (login, or address and app), from which channel to which,
   what the feature did (overlap slot, held slot, another account, same account, stopped
-  skipped channel, provider refused, not used) and the result (confirmed after 1.3 s, moved,
+  skipped channel, skipped while surfing, provider refused, not used) and the result (confirmed after 1.3 s, moved,
   stopped, or the reason it was not used).
 
 `record_event()` writes one small record per decision (`live:probation:event:<id>`, listed in

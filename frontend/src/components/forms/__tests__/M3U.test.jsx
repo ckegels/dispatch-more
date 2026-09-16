@@ -366,6 +366,8 @@ const makeM3uAccount = (overrides = {}) => ({
   auto_refresh: false,
   is_active: true,
   custom_properties: {},
+  // What the backend detected as the network Dispatcharr is on
+  probation_lan_subnet_suggestion: '192.168.9.0/24',
   ...overrides,
 });
 
@@ -781,9 +783,8 @@ describe('M3U', () => {
       expect(
         screen.getByRole('switch', { name: /anonymous connections/i })
       ).toBeInTheDocument();
-      expect(
-        screen.getByRole('switch', { name: /lan device tracking/i })
-      ).not.toBeChecked();
+      // The network Dispatcharr is on is filled in, so LAN players are recognised
+      expect(screen.getByText('192.168.9.0/24')).toBeInTheDocument();
     });
 
     it('shows the overlap settings for an account that has it enabled', () => {
@@ -811,25 +812,42 @@ describe('M3U', () => {
       ).not.toBeChecked();
     });
 
-    it('shows the LAN subnets of an account that tracks LAN devices', () => {
+    it('shows the LAN subnets of an account that has them', () => {
       setupStores();
       render(
         <M3U
           {...defaultProps({
             m3uAccount: makeM3uAccount({
               probation_enabled: true,
-              probation_lan_tracking: true,
               probation_lan_subnets: ['192.168.2.0/24', '10.0.0.0/8'],
             }),
           })}
         />
       );
 
-      expect(
-        screen.getByRole('switch', { name: /lan device tracking/i })
-      ).toBeChecked();
       expect(screen.getByText('192.168.2.0/24')).toBeInTheDocument();
       expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument();
+      // The suggestion does not overwrite what the account already has
+      expect(screen.queryByText('192.168.9.0/24')).not.toBeInTheDocument();
+    });
+
+    it('does not fill in a subnet when none could be detected', () => {
+      setupStores();
+      render(
+        <M3U
+          {...defaultProps({
+            m3uAccount: makeM3uAccount({
+              probation_lan_subnet_suggestion: null,
+            }),
+          })}
+        />
+      );
+
+      fireEvent.click(overlapSwitch());
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm dialog' }));
+
+      expect(screen.getByText('LAN Subnets')).toBeInTheDocument();
+      expect(screen.queryByText(/\/24/)).not.toBeInTheDocument();
     });
 
     it('opens the explanation from the help link', () => {

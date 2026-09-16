@@ -11,6 +11,7 @@ const ACTION_COLORS = {
   'another account': 'grape',
   'same account': 'grape',
   'stopped skipped channel': 'orange',
+  'skipped while surfing': 'yellow',
   'provider refused': 'red',
   'not used': 'gray',
 };

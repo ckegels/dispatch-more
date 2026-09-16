@@ -15,7 +15,7 @@ account has "probation_enabled":
   with a free slot first, "order" (default) follows the channel's stream order.
 
 A viewer is recognised by its Dispatcharr user (Xtream login), or, on the account's LAN
-Subnets, by its IP address plus its player app ("probation_lan_tracking"): on a local network
+Subnets, by its IP address plus its player app ("probation_lan_subnets"): on a local network
 every device has its own address. A device outside those subnets therefore needs its own
 login. Viewers with neither (HDHomeRun, media servers, a shared login) are anonymous: matched
 on IP only, and only where "probation_allow_anonymous" is set. Streams that were already
@@ -133,7 +133,7 @@ _RECORDING_USER_AGENT_PREFIX = "Dispatcharr-DVR"
 # extra work while the feature is not used.
 IN_USE_CACHE_KEY = "live:probation:in_use"
 IN_USE_CACHE_TTL = 60
-# The same for LAN Device Tracking ("probation_lan_tracking"), cleared together with it.
+# The same for LAN Device Tracking ("probation_lan_subnets"), cleared together with it.
 LAN_TRACKING_CACHE_KEY = "live:probation:lan_tracking"
 
 # Version numbers in a User-Agent, removed to recognise the app across updates
@@ -306,10 +306,8 @@ def account_stops_skipped_channels(m3u_account) -> bool:
 
 
 def account_tracks_lan_devices(m3u_account) -> bool:
-    return (
-        account_allows_probation(m3u_account)
-        and _account_props(m3u_account).get("probation_lan_tracking") is True
-    )
+    """LAN Device Tracking is on when the account has LAN Subnets; an empty list is off."""
+    return account_allows_probation(m3u_account) and bool(account_lan_subnets(m3u_account))
 
 
 @lru_cache(maxsize=256)
@@ -438,11 +436,12 @@ def any_account_allows_probation() -> bool:
 def any_account_tracks_lan_devices() -> bool:
     from apps.m3u.models import M3UAccount
 
-    return M3UAccount.objects.filter(
-        is_active=True,
-        custom_properties__probation_enabled=True,
-        custom_properties__probation_lan_tracking=True,
-    ).exists()
+    return any(
+        account_lan_subnets(account)
+        for account in M3UAccount.objects.filter(
+            is_active=True, custom_properties__probation_enabled=True
+        )
+    )
 
 
 def _cached_flag(cache_key, compute, description) -> bool:
@@ -1070,6 +1069,14 @@ def skipped_while_surfing(proxy_server, viewer, channel_uuid) -> bool:
             logger.info(
                 f"Probation: {viewer} moved on before channel {channel_uuid} started; not "
                 f"requesting it from the provider"
+            )
+            record_event(
+                redis_client,
+                viewer,
+                "skipped while surfing",
+                from_channel=previous_channel,
+                channel=channel_uuid,
+                result=f"moved on during the {delay:.1f}s delay",
             )
             return True
         return False

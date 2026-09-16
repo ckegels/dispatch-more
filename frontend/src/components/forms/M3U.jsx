@@ -59,7 +59,7 @@ What it does:
 • With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as its next channel has started, so fast channel surfing does not fill every slot.
 • "Surfing Delay": when a player switches again shortly after its previous switch (within the Overlap Window), Dispatcharr waits this long before requesting the channel from the provider. Channels the player passes in the meantime are never requested, so fast surfing does not open a provider connection for every channel. The first switch after watching something starts at once. Not applied to Plex, Jellyfin and Emby.
 • When the provider closes a new connection before sending any video (usually a refusal because the account is full), Dispatcharr waits longer before trying again (1.5 s, then 3 s) instead of retrying within half a second.
-• "LAN Device Tracking": players with an address in the "LAN Subnets" are recognised by that address plus their app (so TiviMate and Kodi on one device stay separate, and an app update changes nothing). Without it, only players with a Dispatcharr login are recognised.
+• "LAN Subnets": players with an address in these subnets are recognised by that address plus their app (so TiviMate and Kodi on one device stay separate, and an app update changes nothing). The network Dispatcharr is on is filled in for you; clear the field and only players with a Dispatcharr login are recognised.
 • When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between. Failover, stream changes, VOD, catch-up and previews leave it alone too (also on a login shared through a Server Group); DVR recordings can still use it. Channels stopped from the dashboard, deleted or removed by a refresh are not kept.
 • With a Channel Shutdown Delay, a channel nobody watches any more is closed early when it keeps this account over its limit during a switch.
 • "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account with this setting enabled first (never on custom fallback streams), and only falls back to its own account when none is free.
@@ -102,7 +102,6 @@ const M3U = ({
   const [overlapConfirmOpen, setOverlapConfirmOpen] = useState(false);
   const [overlapInfoOpen, setOverlapInfoOpen] = useState(false);
   const [overlapEnabled, setOverlapEnabled] = useState(false);
-  const [lanTrackingEnabled, setLanTrackingEnabled] = useState(false);
 
   // Keep expiration in sync when the default profile is edited (store refreshes).
   // Do not rebind the whole form to the live playlist or unsaved edits are wiped.
@@ -138,7 +137,6 @@ const M3U = ({
       probation_stop_skipped: false,
       probation_surf_delay_ms: 500,
       probation_account_preference: 'order',
-      probation_lan_tracking: false,
       probation_lan_subnets: [],
     },
 
@@ -183,11 +181,9 @@ const M3U = ({
         probation_surf_delay_ms: m3uAccount.probation_surf_delay_ms ?? 500,
         probation_account_preference:
           m3uAccount.probation_account_preference || 'order',
-        probation_lan_tracking: m3uAccount.probation_lan_tracking || false,
         probation_lan_subnets: m3uAccount.probation_lan_subnets || [],
       });
       setOverlapEnabled(m3uAccount.probation_enabled || false);
-      setLanTrackingEnabled(m3uAccount.probation_lan_tracking || false);
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
 
       // Determine schedule type from existing data
@@ -202,7 +198,6 @@ const M3U = ({
       setScheduleType('interval');
       setExpDate(null);
       setOverlapEnabled(false);
-      setLanTrackingEnabled(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [m3uAccount]);
@@ -256,7 +251,6 @@ const M3U = ({
       await updatePlaylist(playlist, values, file);
       form.reset();
       setOverlapEnabled(false);
-      setLanTrackingEnabled(false);
       setFile(null);
       onClose();
       return;
@@ -269,7 +263,6 @@ const M3U = ({
   const close = () => {
     form.reset();
     setOverlapEnabled(false);
-    setLanTrackingEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -280,7 +273,6 @@ const M3U = ({
     // After group filter setup for a new account, reset everything
     form.reset();
     setOverlapEnabled(false);
-    setLanTrackingEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -497,45 +489,17 @@ const M3U = ({
                         type: 'checkbox',
                       })}
                     />
-                    <Switch
-                      id="probation_lan_tracking"
-                      name="probation_lan_tracking"
-                      label="LAN Device Tracking"
-                      description="Recognise players on your own network by their IP address and app, so they do not need a login."
-                      key={form.key('probation_lan_tracking')}
-                      {...form.getInputProps('probation_lan_tracking', {
-                        type: 'checkbox',
-                      })}
-                      onChange={(event) => {
-                        const checked = event.currentTarget.checked;
-                        form.setFieldValue('probation_lan_tracking', checked);
-                        setLanTrackingEnabled(checked);
-                        const suggestion =
-                          m3uAccount?.probation_lan_subnet_suggestion;
-                        if (
-                          checked &&
-                          suggestion &&
-                          form.getValues().probation_lan_subnets.length === 0
-                        ) {
-                          form.setFieldValue('probation_lan_subnets', [
-                            suggestion,
-                          ]);
-                        }
-                      }}
+                    <TagsInput
+                      id="probation_lan_subnets"
+                      name="probation_lan_subnets"
+                      label="LAN Subnets"
+                      description="Players with an IP address in these subnets are recognised by their address and app, so they need no login. Leave empty to recognise nobody without a login. Type an address and press Enter, comma or Tab."
+                      placeholder="e.g. 192.168.1.0/24"
+                      splitChars={[',', ' ']}
+                      acceptValueOnBlur
+                      key={form.key('probation_lan_subnets')}
+                      {...form.getInputProps('probation_lan_subnets')}
                     />
-                    <Collapse in={lanTrackingEnabled}>
-                      <TagsInput
-                        id="probation_lan_subnets"
-                        name="probation_lan_subnets"
-                        label="LAN Subnets"
-                        description="Only players with an IP address in these subnets. Type an address and press Enter, comma or Tab."
-                        placeholder="e.g. 192.168.1.0/24"
-                        splitChars={[',', ' ']}
-                        acceptValueOnBlur
-                        key={form.key('probation_lan_subnets')}
-                        {...form.getInputProps('probation_lan_subnets')}
-                      />
-                    </Collapse>
                   </Stack>
                 </Collapse>
               </Box>
@@ -758,6 +722,12 @@ const M3U = ({
         onClose={() => setOverlapConfirmOpen(false)}
         onConfirm={() => {
           form.setFieldValue('probation_enabled', true);
+          // Start with the network Dispatcharr is on, so players on the LAN are recognised
+          // without a login. Visible in the form, so it can be changed or cleared before saving.
+          const suggestion = m3uAccount?.probation_lan_subnet_suggestion;
+          if (suggestion && form.getValues().probation_lan_subnets.length === 0) {
+            form.setFieldValue('probation_lan_subnets', [suggestion]);
+          }
           setOverlapEnabled(true);
           setOverlapConfirmOpen(false);
         }}
