@@ -148,9 +148,10 @@ def media_server_tuners(request):
     channel_profile = (request.data.get("channel_profile") or "").strip()
     group_ids = request.data.get("group_ids") or []
     new_profile_name = (request.data.get("new_profile_name") or "").strip()
+    built = None
     if not channel_profile and new_profile_name:
         try:
-            channel_profile = _build_profile(new_profile_name, group_ids)
+            channel_profile = built = _build_profile(new_profile_name, group_ids)
         except ValueError as e:
             return JsonResponse({"error": str(e)}, status=400)
     if not channel_profile:
@@ -183,11 +184,22 @@ def media_server_tuners(request):
         base_url, channel_profile, request.data.get("output_profile_id"), tuner_count
     )
     if not media_servers.add_tuner(server, uri):
+        # A profile built for a tuner that was refused would be left behind with no way
+        # to reach it, so it goes again and the next try starts clean.
+        if built:
+            _delete_profile(built)
         return JsonResponse(
             {"error": f"The server could not add a tuner at {uri}"}, status=400
         )
     logger.info(f"Added tuner {uri} to media server {server.get('name')}")
     return JsonResponse({"tuners": media_servers.tuners(server, hosts), **_choices()})
+
+
+def _delete_profile(name):
+    """Remove a channel profile this built (its memberships go with it)."""
+    from apps.channels.models import ChannelProfile
+
+    ChannelProfile.objects.filter(name=name).delete()
 
 
 def _build_profile(name, group_ids) -> str:
@@ -209,7 +221,9 @@ def _build_profile(name, group_ids) -> str:
     name = re.sub(r"[^\w.-]+", "-", name, flags=re.UNICODE).strip("-")
     name = f"{PROFILE_PREFIX}-{name}".rstrip("-")
     if ChannelProfile.objects.filter(name=name).exists():
-        raise ValueError(f"A channel profile called {name} already exists")
+        raise ValueError(
+            f"A channel profile called {name} already exists: choose it above, or remove it"
+        )
 
     profile = ChannelProfile(name=name)
     profile._start_empty = True

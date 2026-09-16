@@ -610,6 +610,28 @@ class TunerTests(TestCase):
             "http://192.168.2.142:9191/hdhr/austria",
         )
 
+    def test_a_profile_built_for_a_refused_tuner_does_not_stay_behind(self):
+        from apps.channels.models import Channel, ChannelGroup, ChannelProfile
+
+        group = ChannelGroup.objects.create(name="France")
+        Channel.objects.create(channel_number=8, name="TF1", channel_group=group)
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            # The media server refuses the address
+            post.side_effect = Exception("nope")
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "new_profile_name": "france", "group_ids": [group.id]},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        # Otherwise the next try fails with "already exists" over a profile nobody asked for
+        self.assertFalse(ChannelProfile.objects.filter(name="plexmedia-france").exists())
+
     def test_a_silly_tuner_count_is_refused(self):
         response = self.client_api.post(
             "/proxy/media-servers/tuners/",
