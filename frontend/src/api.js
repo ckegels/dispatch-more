@@ -1911,9 +1911,7 @@ export default class API {
   static async getGrid(params = new URLSearchParams()) {
     try {
       const qs = params.toString();
-      const url = qs
-        ? `${host}/api/epg/grid/?${qs}`
-        : `${host}/api/epg/grid/`;
+      const url = qs ? `${host}/api/epg/grid/?${qs}` : `${host}/api/epg/grid/`;
       const response = await request(url);
 
       return response.data;
@@ -2619,7 +2617,9 @@ export default class API {
   static async getMediaServerTuners(serverId) {
     // What the media server has as tuners, plus what a new one can be built from
     try {
-      return await request(`${host}/proxy/media-servers/tuners/?server=${serverId}`);
+      return await request(
+        `${host}/proxy/media-servers/tuners/?server=${serverId}`
+      );
     } catch (e) {
       errorNotification('Failed to retrieve the tuners', e);
       throw e;
@@ -2637,6 +2637,14 @@ export default class API {
     return await request(`${host}/proxy/media-servers/tuners/`, {
       method: 'POST',
       body: { server, id, dvr_id: dvrId, action: 'sync' },
+    });
+  }
+
+  static async attachMediaServerTuner(server, id, dvrId) {
+    // A tuner that is in no DVR is registered but unused by the server
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body: { server, id, dvr_id: dvrId, action: 'attach' },
     });
   }
 

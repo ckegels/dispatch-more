@@ -15,7 +15,7 @@ import logging
 import secrets
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import gevent
 import requests
@@ -266,6 +266,65 @@ def dvrs(server):
     return container.get("Dvr") or container.get("DVR") or []
 
 
+def dvr_list(server):
+    """The DVRs as the page offers them: which one to put a new tuner in."""
+    return [
+        {
+            "id": str(dvr.get("key")),
+            "title": dvr.get("lineupTitle") or dvr.get("language") or f"DVR {dvr.get('key')}",
+        }
+        for dvr in dvrs(server)
+    ]
+
+
+def _put(server, path):
+    url = f"{clean_url(server.get('url'))}{path}"
+    try:
+        response = requests.put(
+            url,
+            headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"Media server refused {path}: {e}")
+        return False
+
+
+def create_dvr(server, device_uuid, xmltv_url, title, language="eng"):
+    """
+    Make a DVR for this tuner, with Dispatcharr's own EPG as its guide.
+
+    The lineup is the format the server stores for an XMLTV guide: the scheme, the address of
+    the guide with everything escaped, and the title after a #. Nothing else about the DVR is
+    set, so the server's own defaults apply.
+    """
+    lineup = f"lineup://tv.plex.providers.epg.xmltv/{quote(xmltv_url, safe='')}#{title}"
+    return _post(
+        server,
+        "/livetv/dvrs",
+        {"device": device_uuid, "lineup": lineup, "language": language or "eng"},
+    )
+
+
+def dvr_for_device(server, device_id):
+    """The DVR a tuner ended up in, once the server has made one."""
+    for dvr in dvrs(server):
+        for device in dvr.get("Device") or ():
+            if str(device.get("key")) == str(device_id):
+                return str(dvr.get("key"))
+    return None
+
+
+def attach_tuner(server, dvr_id, device_id):
+    """
+    Put a tuner into a DVR. A tuner that is in no DVR is registered but unused: the server
+    does not scan it, does not put its channels in the guide, and cannot play from it.
+    """
+    return _put(server, f"/livetv/dvrs/{dvr_id}/devices/{device_id}")
+
+
 def tuners(server, our_hosts=()):
     """
     Every tuner device the server knows, with what is worth acting on: whether it answers,
@@ -284,6 +343,7 @@ def tuners(server, our_hosts=()):
         key = str(device.get("key"))
         found.append({
             "id": key,
+            "uuid": device.get("uuid", ""),
             "title": device.get("title") or device.get("model") or "tuner",
             "uri": uri,
             "model": device.get("model", ""),

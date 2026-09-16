@@ -12,6 +12,7 @@ vi.mock('../../../api', () => ({
     addMediaServerTuner: vi.fn(),
     syncMediaServerTuner: vi.fn(),
     deleteMediaServerTuner: vi.fn(),
+    attachMediaServerTuner: vi.fn(),
   },
 }));
 
@@ -145,6 +146,7 @@ const tuners = {
   base_url: 'http://192.168.2.142:9191',
   max_tuners: 64,
   calculated_tuners: 1362,
+  dvrs: [{ id: '32', title: 'Belgium' }],
   channel_profiles: [{ id: 1, name: 'austria' }],
   channel_groups: [{ id: 5, name: 'Austria', channels: 25 }],
   output_profiles: [{ id: 3, name: 'Remux' }],
@@ -302,7 +304,44 @@ describe('MediaServers', () => {
         group_ids: [5],
         output_profile_id: '3',
         tuner_count: '2',
+        dvr_id: '',
+        language: 'eng',
       })
+    );
+  });
+
+  it('puts a tuner that is in no DVR into one', async () => {
+    API.attachMediaServerTuner.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    await screen.findByText('A1 TV');
+
+    fireEvent.change(screen.getByLabelText('Put A1 TV in a DVR'), {
+      target: { value: '32' },
+    });
+
+    await waitFor(() =>
+      expect(API.attachMediaServerTuner).toHaveBeenCalledWith('a1', '1', '32')
+    );
+  });
+
+  it('says when the tuner was added but the DVR was not made', async () => {
+    API.addMediaServerTuner.mockResolvedValue({
+      ...tuners,
+      warning:
+        'The tuner was added, but the server would not make a DVR for it.',
+    });
+
+    render(<MediaServers active={true} />);
+    await screen.findByText('Austria');
+
+    fireEvent.change(screen.getByLabelText(/New profile name/), {
+      target: { value: 'france' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to server' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'would not make a DVR'
     );
   });
 

@@ -21,6 +21,8 @@ const emptyTuner = {
   group_ids: [],
   output_profile_id: '',
   tuner_count: '',
+  dvr_id: '',
+  language: 'eng',
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -51,8 +53,11 @@ const MediaServerTuners = ({ serverId, enabled }) => {
     setBusy(true);
     setError(null);
     try {
-      setData(await call());
+      const result = await call();
+      setData(result);
       setForm(emptyTuner);
+      // Something worked but not everything: worth saying, without looking like a failure
+      if (result.warning) setError(result.warning);
     } catch (e) {
       setError(e?.body?.error || 'The media server refused that.');
     } finally {
@@ -111,7 +116,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                         {tuner.state || 'unknown'}
                       </Badge>
                       {!tuner.dvr_id && (
-                        // A tuner outside a DVR does nothing: usually a leftover
+                        // A tuner outside a DVR is registered but not used at all
                         <Badge size="xs" color="yellow" variant="light">
                           not in a DVR
                         </Badge>
@@ -125,22 +130,47 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4} wrap="nowrap">
-                      <Button
-                        size="compact-xs"
-                        variant="subtle"
-                        disabled={busy}
-                        onClick={() =>
-                          run(() =>
-                            API.syncMediaServerTuner(
-                              serverId,
-                              tuner.id,
-                              tuner.dvr_id
+                      {tuner.dvr_id ? (
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          disabled={busy}
+                          onClick={() =>
+                            run(() =>
+                              API.syncMediaServerTuner(
+                                serverId,
+                                tuner.id,
+                                tuner.dvr_id
+                              )
                             )
-                          )
-                        }
-                      >
-                        Sync
-                      </Button>
+                          }
+                        >
+                          Sync
+                        </Button>
+                      ) : (
+                        // Nothing can be done with it until it is in a DVR
+                        <Select
+                          size="xs"
+                          w={130}
+                          aria-label={`Put ${tuner.title} in a DVR`}
+                          placeholder="Put in DVR"
+                          value={null}
+                          onChange={(value) =>
+                            value &&
+                            run(() =>
+                              API.attachMediaServerTuner(
+                                serverId,
+                                tuner.id,
+                                value
+                              )
+                            )
+                          }
+                          data={(data.dvrs || []).map((dvr) => ({
+                            value: dvr.id,
+                            label: dvr.title,
+                          }))}
+                        />
+                      )}
                       <Button
                         size="compact-xs"
                         variant="subtle"
@@ -164,8 +194,11 @@ const MediaServerTuners = ({ serverId, enabled }) => {
       )}
 
       <Text size="xs" c="dimmed">
-        Sync rescans the tuner&apos;s channels and reloads the guide of its DVR.
-        Removing a tuner only removes it from the media server.
+        Adding a tuner puts it straight into a DVR: the one you choose, or a new
+        one whose guide is Dispatcharr&apos;s own EPG for that channel profile.
+        Its channels are then scanned and the guide loaded, so it is ready to
+        watch. Sync does that again later. Removing a tuner only removes it from
+        the media server.
       </Text>
 
       <Text size="sm" fw={600} mt="xs">
@@ -250,6 +283,32 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             label: profile.name,
           }))}
         />
+        <Select
+          size="xs"
+          w={190}
+          label="DVR"
+          description="Or a new one with the EPG"
+          placeholder="Make a new DVR"
+          clearable
+          value={form.dvr_id}
+          onChange={(value) => setForm({ ...form, dvr_id: value || '' })}
+          data={(data.dvrs || []).map((dvr) => ({
+            value: dvr.id,
+            label: dvr.title,
+          }))}
+        />
+        {!form.dvr_id && (
+          <TextInput
+            size="xs"
+            w={90}
+            label="Language"
+            description="For the guide"
+            value={form.language}
+            onChange={(e) =>
+              setForm({ ...form, language: e.currentTarget.value })
+            }
+          />
+        )}
         <Button
           size="compact-sm"
           loading={busy}
@@ -263,6 +322,8 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                 group_ids: form.group_ids.map(Number),
                 output_profile_id: form.output_profile_id || null,
                 tuner_count: form.tuner_count || 0,
+                dvr_id: form.dvr_id,
+                language: form.language,
               })
             )
           }

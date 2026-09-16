@@ -401,7 +401,19 @@ DEVICES = {
         ]
     }
 }
-DVRS = {"MediaContainer": {"Dvr": [{"key": "32", "Device": [{"key": "22"}]}]}}
+DVRS = {
+    "MediaContainer": {
+        "Dvr": [{"key": "32", "lineupTitle": "Belgium", "Device": [{"key": "22"}]}]
+    }
+}
+
+
+def _added_uri(post):
+    """The address a tuner was registered with (adding one also makes a DVR for it)."""
+    for call in post.call_args_list:
+        if call.args[0].endswith("/media/grabbers/devices"):
+            return call.kwargs["params"]["uri"]
+    raise AssertionError("No tuner was added")
 
 
 def plex_with_tuners(url, **_kwargs):
@@ -455,7 +467,7 @@ class TunerTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        uri = post.call_args.kwargs["params"]["uri"]
+        uri = _added_uri(post)
         self.assertTrue(uri.endswith("/hdhr/austria/output_profile/3"), uri)
 
     def test_a_profile_is_built_from_groups_without_touching_the_others(self):
@@ -496,7 +508,7 @@ class TunerTests(TestCase):
         self.assertEqual(
             ChannelProfileMembership.objects.filter(channel_profile=existing).count(), before
         )
-        self.assertTrue(post.call_args.kwargs["params"]["uri"].endswith("/hdhr/plexmedia-austria"))
+        self.assertTrue(_added_uri(post).endswith("/hdhr/plexmedia-austria"))
 
     def test_the_address_is_remembered_and_the_name_fits_in_a_url(self):
         """The guessed address can be wrong (a missing port), and names have spaces in them."""
@@ -525,8 +537,7 @@ class TunerTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(ChannelProfile.objects.filter(name="plexmedia-France").exists())
         self.assertEqual(
-            post.call_args.kwargs["params"]["uri"],
-            "http://192.168.2.142:9191/hdhr/plexmedia-France",
+            _added_uri(post), "http://192.168.2.142:9191/hdhr/plexmedia-France"
         )
 
         # The address is kept, so the next tuner does not need it typed again
@@ -554,10 +565,7 @@ class TunerTests(TestCase):
                 format="json",
             )
 
-        self.assertEqual(
-            post.call_args.kwargs["params"]["uri"],
-            "http://192.168.2.142:9191/hdhr/My%20Channels",
-        )
+        self.assertEqual(_added_uri(post), "http://192.168.2.142:9191/hdhr/My%20Channels")
 
     def test_an_address_that_is_not_a_url_is_refused(self):
         response = self.client_api.post(
@@ -589,8 +597,7 @@ class TunerTests(TestCase):
             )
 
         self.assertEqual(
-            post.call_args.kwargs["params"]["uri"],
-            "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/2",
+            _added_uri(post), "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/2"
         )
 
         # Without a number it stays on Dispatcharr's own endpoint, which counts for itself
@@ -605,10 +612,7 @@ class TunerTests(TestCase):
                  "base_url": "http://192.168.2.142:9191"},
                 format="json",
             )
-        self.assertEqual(
-            post.call_args.kwargs["params"]["uri"],
-            "http://192.168.2.142:9191/hdhr/austria",
-        )
+        self.assertEqual(_added_uri(post), "http://192.168.2.142:9191/hdhr/austria")
 
     def test_a_profile_built_for_a_refused_tuner_does_not_stay_behind(self):
         from apps.channels.models import Channel, ChannelGroup, ChannelProfile
@@ -672,6 +676,171 @@ class TunerTests(TestCase):
         called = [call.args[0] for call in post.call_args_list]
         self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/22/scan", called)
         self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/reloadGuide", called)
+
+    def test_adding_a_tuner_makes_a_dvr_with_dispatcharrs_own_guide(self):
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="austria")
+        added = {
+            "MediaContainer": {
+                "Device": DEVICES["MediaContainer"]["Device"]
+                + [
+                    {
+                        "key": "40",
+                        "uuid": "device://tv.plex.grabbers.hdhomerun/dispatcharr-hdhr-austria-t2",
+                        "uri": "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/2",
+                        "title": "Austria",
+                        "status": "alive",
+                        "tuners": "2",
+                    }
+                ]
+            }
+        }
+
+        in_a_dvr = {
+            "MediaContainer": {
+                "Dvr": [
+                    {"key": "33", "lineupTitle": "austria", "Device": [{"key": "40"}]}
+                ]
+            }
+        }
+
+        def after_adding(url, **_kwargs):
+            if "/media/grabbers/devices" in url:
+                return fake_response(added)
+            if "/livetv/dvrs" in url:
+                return fake_response(in_a_dvr)
+            return plex(url)
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = after_adding
+            post.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "channel_profile": "austria",
+                    "base_url": "http://192.168.2.142:9191",
+                    "tuner_count": 2,
+                    "language": "nld",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        calls = {call.args[0]: call.kwargs.get("params", {}) for call in post.call_args_list}
+        dvr_call = calls["http://192.168.2.141:32400/livetv/dvrs"]
+        self.assertEqual(
+            dvr_call["device"],
+            "device://tv.plex.grabbers.hdhomerun/dispatcharr-hdhr-austria-t2",
+        )
+        # The guide is Dispatcharr's own EPG for that channel profile
+        self.assertEqual(
+            dvr_call["lineup"],
+            "lineup://tv.plex.providers.epg.xmltv/"
+            "http%3A%2F%2F192.168.2.142%3A9191%2Foutput%2Fepg%2Faustria#austria",
+        )
+        self.assertEqual(dvr_call["language"], "nld")
+        # And it is scanned and its guide loaded, so it is ready to watch
+        self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/40/scan", calls)
+
+    def test_a_tuner_can_be_added_into_a_dvr_that_is_already_there(self):
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="austria")
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            put.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "channel_profile": "austria",
+                    "base_url": "http://192.168.2.142:9191",
+                    "dvr_id": "32",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        # No DVR is made: it goes into the one that was chosen
+        self.assertNotIn(
+            "http://192.168.2.141:32400/livetv/dvrs",
+            [call.args[0] for call in post.call_args_list],
+        )
+        self.assertIn("/livetv/dvrs/32/devices/", put.call_args.args[0])
+
+    def test_a_dvr_that_could_not_be_made_is_said_so_without_losing_the_tuner(self):
+        from apps.channels.models import ChannelProfile
+
+        ChannelProfile.objects.create(name="austria")
+
+        def refuse_the_dvr(url, **kwargs):
+            if url.endswith("/livetv/dvrs"):
+                raise Exception("no")
+            return fake_response({})
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.side_effect = refuse_the_dvr
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "channel_profile": "austria",
+                 "base_url": "http://192.168.2.142:9191"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("would not make a DVR", response.json()["warning"])
+
+    def test_a_tuner_outside_a_dvr_says_what_to_do_instead_of_failing(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "action": "sync", "id": "1", "dvr_id": ""},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not in a DVR yet", response.json()["error"])
+        # And nothing was asked of the server, because there was nothing to ask
+        post.assert_not_called()
+
+    def test_a_tuner_can_be_put_into_a_dvr(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.side_effect = plex_with_tuners
+            put.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "action": "attach", "id": "1", "dvr_id": "32"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/livetv/dvrs/32/devices/1", put.call_args.args[0])
+        # The DVRs are offered by name, so there is something to choose
+        self.assertEqual(response.json()["dvrs"], [{"id": "32", "title": "Belgium"}])
+
+    def test_putting_a_tuner_in_a_dvr_needs_a_dvr(self):
+        response = self.client_api.post(
+            "/proxy/media-servers/tuners/",
+            {"server": "a1", "action": "attach", "id": "1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Choose a DVR", response.json()["error"])
 
     def test_a_tuner_is_removed(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(

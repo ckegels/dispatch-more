@@ -123,6 +123,7 @@ def media_server_tuners(request):
     if request.method == "GET":
         return JsonResponse({
             "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
             "base_url": base_url,
             **_choices(),
         })
@@ -135,14 +136,35 @@ def media_server_tuners(request):
         return JsonResponse({"tuners": media_servers.tuners(server, hosts), **_choices()})
 
     action = request.data.get("action") or "add"
-    if action == "sync":
+    if action in ("sync", "attach"):
         device_id = request.data.get("id")
         dvr_id = request.data.get("dvr_id") or None
-        if not media_servers.sync_tuner(server, device_id, dvr_id):
+
+        if action == "attach":
+            if not dvr_id:
+                return JsonResponse({"error": "Choose a DVR to put it in"}, status=400)
+            if not media_servers.attach_tuner(server, dvr_id, device_id):
+                return JsonResponse(
+                    {"error": "The server would not put this tuner in that DVR"}, status=400
+                )
+        elif not dvr_id:
+            # Nothing to rescan: a tuner outside a DVR is not used by the server at all
+            return JsonResponse(
+                {
+                    "error": "This tuner is not in a DVR yet, so there is nothing to rescan. "
+                    "Put it in a DVR first."
+                },
+                status=400,
+            )
+        elif not media_servers.sync_tuner(server, device_id, dvr_id):
             return JsonResponse(
                 {"error": "The server refused to rescan this tuner"}, status=400
             )
-        return JsonResponse({"tuners": media_servers.tuners(server, hosts), **_choices()})
+        return JsonResponse({
+            "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
+            **_choices(),
+        })
 
     # Adding a tuner: an existing channel profile, or one built from channel groups
     channel_profile = (request.data.get("channel_profile") or "").strip()
@@ -192,7 +214,45 @@ def media_server_tuners(request):
             {"error": f"The server could not add a tuner at {uri}"}, status=400
         )
     logger.info(f"Added tuner {uri} to media server {server.get('name')}")
-    return JsonResponse({"tuners": media_servers.tuners(server, hosts), **_choices()})
+
+    # A tuner on its own is registered and unused. Put it where it can be watched: in the DVR
+    # that was chosen, or in a new one with Dispatcharr's own EPG as its guide.
+    warning = ""
+    device = next(
+        (t for t in media_servers.tuners(server, hosts) if t["uri"] == uri), None
+    )
+    dvr_id = request.data.get("dvr_id") or None
+    if device is None:
+        warning = "The tuner was added, but the server did not list it afterwards."
+    elif dvr_id:
+        if not media_servers.attach_tuner(server, dvr_id, device["id"]):
+            warning = "The tuner was added, but the server would not put it in that DVR."
+    else:
+        xmltv_url = f"{base_url}/output/epg/{quote(channel_profile, safe='')}"
+        if media_servers.create_dvr(
+            server,
+            device["uuid"],
+            xmltv_url,
+            channel_profile,
+            request.data.get("language"),
+        ):
+            dvr_id = media_servers.dvr_for_device(server, device["id"])
+        else:
+            warning = (
+                "The tuner was added, but the server would not make a DVR for it. "
+                "Put it in a DVR yourself, or choose an existing one."
+            )
+
+    if device is not None and dvr_id:
+        # Scan its channels and load the guide, so it is ready to watch
+        media_servers.sync_tuner(server, device["id"], dvr_id)
+
+    return JsonResponse({
+        "tuners": media_servers.tuners(server, hosts),
+        "dvrs": media_servers.dvr_list(server),
+        "warning": warning,
+        **_choices(),
+    })
 
 
 def _delete_profile(name):
