@@ -27,6 +27,7 @@ export const SERVER_PHASE_COLORS = {
   'session opened': '#4dabf7',
   'transcode started': '#ffa94d',
   'first video ready': '#38d9a9',
+  buffering: '#ffd43b',
   playing: '#748ffc',
 };
 
@@ -43,9 +44,10 @@ export const SERVER_PHASE_MEANINGS = [
     'first video ready',
     'The first converted video existed. The gap before this is the server analysing the stream and starting its encoder.',
   ],
+  ['buffering', 'The player told the server it was waiting for video.'],
   [
     'playing',
-    'The player actually showed video. Everything before this is what a viewer sees as a black screen.',
+    'The player showed video. For live TV the server has no playback position, so this is the server\u2019s own word, and it says "playing" before the first picture appears: read it as the earliest it could have started, not as what the viewer saw.',
   ],
 ];
 
@@ -200,7 +202,9 @@ const ChannelStarts = ({ starts, onCopy }) => {
                         >
                           {start.server_gave_up
                             ? 'never played'
-                            : `${start.server_buffering.toFixed(1)}s`}
+                            : `${start.server_buffering.toFixed(1)}s${
+                                start.server_playing_is_certain ? '' : '+'
+                              }`}
                         </Text>
                         {start.server_decision && (
                           <Text

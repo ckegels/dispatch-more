@@ -90,6 +90,7 @@ const activity = {
       server_decision: 'transcode (video + audio)',
       server_speed: '0.9',
       server_gave_up: false,
+      server_playing_is_certain: false,
       server_phases: [
         { label: 'session opened', at: 2.1, took: 2.1 },
         { label: 'transcode started', at: 3.4, took: 1.3 },
@@ -161,7 +162,8 @@ describe('Diagnostics', () => {
     render(<Diagnostics active={true} />);
     await screen.findByText('ZIB');
 
-    expect(screen.getByText('19.3s')).toBeInTheDocument();
+    // Live TV has no playback position, so the server's word is marked as a "+" number
+    expect(screen.getByText('19.3s+')).toBeInTheDocument();
     expect(screen.getByText('transcode 0.9×')).toBeInTheDocument();
     // Every stage on the server side, with when it happened
     expect(

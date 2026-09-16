@@ -124,6 +124,7 @@ def _starts(redis_client):
             # What the server itself did, stage by stage, once it has a session
             "server_phases": _phases(record.get("server_phases")),
             "server_gave_up": record.get("server_gave_up") == "1",
+            "server_playing_is_certain": record.get("server_playing_is_certain") == "1",
         })
     return starts
 

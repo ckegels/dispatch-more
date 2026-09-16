@@ -295,8 +295,35 @@ class StartWatchingTests(TestCase):
         self.assertNotIn("server_user", record)
         self.assertNotIn("server_gave_up", record)
 
+    def test_a_live_session_has_no_position_so_the_server_is_believed(self, _close):
+        """Live sessions carry no viewOffset at all: without it, "playing" is all there is."""
+        start_id = self._start()
+        media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
+        live = {
+            "MediaContainer": {
+                "Metadata": [
+                    {
+                        k: v
+                        for k, v in SESSION["MediaContainer"]["Metadata"][0].items()
+                        if k != "viewOffset"
+                    }
+                ]
+            }
+        }
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ):
+            get.return_value = fake_response(live)
+            media_servers._watch(self.redis, start_id, started_at=1789580681.0)
+
+        record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
+        self.assertIn("playing=", record["server_phases"])
+        self.assertNotIn("server_gave_up", record)
+        # And the page is told this is the server's word, not the player's position
+        self.assertEqual(record.get("server_playing_is_certain", ""), "")
+
     def test_the_position_has_to_move_before_it_counts_as_playing(self, _close):
-        """Plex says "playing" before anything is on screen; the position moving does not."""
+        """With a position (recorded media), Plex saying "playing" is not enough."""
         start_id = self._start()
         media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
         still = {
@@ -317,6 +344,7 @@ class StartWatchingTests(TestCase):
         record = self.redis.hgetall(timing.START_KEY.format(start_id=start_id))
         self.assertEqual(record["server_gave_up"], "1")
         self.assertNotIn("playing=", record["server_phases"])
+
 
     def test_a_session_of_another_stream_is_not_used(self, _close):
         start_id = self._start()

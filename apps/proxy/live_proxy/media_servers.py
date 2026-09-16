@@ -28,7 +28,7 @@ REQUEST_TIMEOUT = 5
 # How long, and how often, sessions are watched after a channel start. Plex needs a moment to
 # create the session, and the buffering we are measuring is a handful of seconds.
 WATCH_SECONDS = 25
-WATCH_INTERVAL = 1.0
+WATCH_INTERVAL = 0.5
 # A session belongs to this start when it appeared after the channel was requested (a little
 # before is allowed: the server's clock is not ours), and not too long after. Matching a
 # session that was already running would measure someone else's stream.
@@ -204,7 +204,8 @@ def sessions(server):
             # How much video the server has ready: while this is 0 it has produced nothing yet
             "ready": float(transcode.get("maxOffsetAvailable") or 0) if transcode else 0.0,
             # Where the player is in the stream. When this moves, video is really being shown.
-            "position": float(item.get("viewOffset") or 0),
+            # Live sessions do not have it at all, so it is None there rather than 0.
+            "position": float(item["viewOffset"]) if "viewOffset" in item else None,
         })
     return playing
 
@@ -255,12 +256,12 @@ def _watch(redis_client, start_id, started_at):
         session = None
         position = None
         while time.time() < deadline:
-            gevent.sleep(WATCH_INTERVAL)
             for server in servers:
                 session = _session_for(server, started_at)
                 if session:
                     break
             if not session:
+                gevent.sleep(WATCH_INTERVAL)
                 continue
 
             now = round(max(time.time() - started_at, 0), 1)
@@ -270,11 +271,20 @@ def _watch(redis_client, start_id, started_at):
             if session["ready"] > 0:
                 seen.setdefault("first video ready", now)
 
-            # "state: playing" is set before anything is on screen, so the position moving is
-            # what says a viewer is really watching.
-            moving = position is not None and session["position"] > position
-            position = session["position"]
-            if moving:
+            if session["state"] == "buffering":
+                seen.setdefault("buffering", now)
+
+            # A player that is further into the stream than a moment ago is really showing
+            # video. Live sessions do not report a position, and then the server's own word
+            # is all there is: it says "playing" before the first picture, so that number is
+            # the earliest it could have been, not when the viewer saw something.
+            if session["position"] is None:
+                playing = session["state"] == "playing"
+            else:
+                playing = position is not None and session["position"] > position
+                position = session["position"]
+
+            if playing:
                 seen.setdefault("playing", now)
                 timing.update_start(
                     redis_client,
@@ -288,8 +298,12 @@ def _watch(redis_client, start_id, started_at):
                     # How long until the player actually played something
                     server_buffering=f"{seen['playing']:.1f}",
                     server_phases="|".join(f"{stage}={at}" for stage, at in seen.items()),
+                    # Whether "playing" is the player's own position moving, or only the
+                    # server saying so (all a live session offers)
+                    server_playing_is_certain="1" if session["position"] is not None else "",
                 )
                 return
+            gevent.sleep(WATCH_INTERVAL)
         if session:
             # It never started playing within the window: say how far it got
             timing.update_start(
