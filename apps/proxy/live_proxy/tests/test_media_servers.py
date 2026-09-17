@@ -1,5 +1,6 @@
 """Media servers: storing one, reading what it plays, and adding that to a channel start."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
@@ -1417,6 +1418,81 @@ class SoleDeviceTests(TestCase):
     def test_several_devices_cannot_be_told_apart(self):
         self._sessions("apple-tv", "living-room")
         self.assertIsNone(media_servers.sole_device(self.redis))
+
+    def test_it_waits_a_moment_for_the_server_to_say_who_is_asking(self):
+        """
+        The server registers what it is playing after it has asked for the stream.
+
+        Serving a viewer that cannot be told apart is worse than being a little slower: the
+        overlap does not apply and the channel they just left keeps its slot.
+        """
+        answers = [[], [], [{"device_id": "shield-1", "live": True}]]
+
+        def answering_late(_url, **_kwargs):
+            return fake_response(answers.pop(0) if answers else [])
+
+        media_servers.save_servers(
+            [{"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+              "kind": "jellyfin"}]
+        )
+        with patch(
+            "apps.proxy.live_proxy.media_servers._jellyfin_sessions"
+        ) as jellyfin_sessions, patch(
+            "apps.proxy.live_proxy.media_servers.gevent.sleep"
+        ) as sleep:
+            jellyfin_sessions.side_effect = lambda _server: (
+                answers.pop(0) if answers else []
+            )
+            self.assertEqual(media_servers.wait_for_device(self.redis), "shield-1")
+        # It waited rather than answering at once, and did not wait long
+        self.assertLessEqual(sleep.call_count, 3)
+
+    def test_it_gives_up_rather_than_holding_the_stream(self):
+        """A server that is never going to answer must not hold a stream open forever."""
+        media_servers.save_servers(
+            [{"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+              "kind": "jellyfin"}]
+        )
+        with patch(
+            "apps.proxy.live_proxy.media_servers._jellyfin_sessions"
+        ) as jellyfin_sessions, patch(
+            "apps.proxy.live_proxy.media_servers.gevent.sleep"
+        ):
+            jellyfin_sessions.return_value = []
+            self.assertIsNone(media_servers.wait_for_device(self.redis, seconds=0))
+
+    def test_whoever_was_watching_a_moment_ago_when_nobody_is_now(self):
+        """
+        The moment a channel starts, the server has no session to report yet.
+
+        It is asked for the stream first and registers what it is playing after, so there is
+        a window where it can say nothing about who is asking. Treating that as an unknown
+        viewer costs them the overlap and leaves their old channel running, which is the
+        "it works most of the time" this is for.
+        """
+        self.redis.hset(
+            media_servers.RECENT_DEVICES_KEY, "shield-1", str(time.time() - 5)
+        )
+        self._sessions()  # nothing playing this instant
+
+        self.assertIsNone(media_servers.sole_device(self.redis))
+        self.assertEqual(media_servers.device_a_moment_ago(self.redis), "shield-1")
+
+    def test_two_watching_a_moment_ago_is_still_no_answer(self):
+        """Same rule as sole_device: with two there is no telling which of them this is."""
+        for device in ("shield-1", "living-room"):
+            self.redis.hset(
+                media_servers.RECENT_DEVICES_KEY, device, str(time.time() - 5)
+            )
+        self.assertIsNone(media_servers.device_a_moment_ago(self.redis))
+
+    def test_watching_long_enough_ago_does_not_count(self):
+        self.redis.hset(
+            media_servers.RECENT_DEVICES_KEY,
+            "shield-1",
+            str(time.time() - media_servers.RECENT_DEVICE_SECONDS - 60),
+        )
+        self.assertIsNone(media_servers.device_a_moment_ago(self.redis))
 
     def test_nothing_playing_and_no_cache_at_all(self):
         self._sessions()

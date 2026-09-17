@@ -691,11 +691,30 @@ def _server_device(user_agent, client_ip, redis_client):
     try:
         from . import media_servers
 
+        # Four ways to place the request, cheapest first. A media server asks for the stream
+        # before it registers what it is playing, so at the instant the request arrives it
+        # can often say nothing, and none of these is reliable on its own.
         device = media_servers.sole_device(redis_client)
         if device:
             return f"server|{device}"
+
         # Several are watching: the one whose channel has just stopped is the one switching
-        return media_servers.switching_device(redis_client)
+        switching = media_servers.switching_device(redis_client)
+        if switching:
+            return switching
+
+        # Nobody is watching anything yet, which is what the start of a channel looks like.
+        # Wait a moment for the server to catch up rather than serving a viewer we cannot
+        # tell apart, which would leave the channel they just left running.
+        device = media_servers.wait_for_device(redis_client)
+        if device:
+            return f"server|{device}"
+
+        # It never answered. Whoever was watching a moment ago is the only one this can be,
+        # and is better than nobody: worst case the overlap is applied to the wrong player
+        # on the same server, which is where it would have gone anyway.
+        device = media_servers.device_a_moment_ago(redis_client)
+        return f"server|{device}" if device else None
     except Exception as e:
         logger.debug(f"Could not ask the media server who is watching: {e}")
         return None

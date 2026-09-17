@@ -865,15 +865,20 @@ def sync_tuner(server, device_id, dvr_id=None):
     return scanned or enabled or reloaded
 
 
-def refresh_sessions(redis_client):
+def refresh_sessions(redis_client, force=False):
     """
     Keep a fresh list of what the media servers are playing, so a stream request never has to
     wait for one. Called from the proxy's cleanup loop; does nothing most times it is called.
+
+    force skips that rate limit, for the one case that cannot wait for the next sweep: a
+    request whose viewer is not known yet (see wait_for_device).
     """
     if not redis_client:
         return
     try:
-        if not redis_client.set(SESSIONS_REFRESH_KEY, "1", nx=True, ex=int(SESSIONS_REFRESH)):
+        if not force and not redis_client.set(
+            SESSIONS_REFRESH_KEY, "1", nx=True, ex=int(SESSIONS_REFRESH)
+        ):
             return
         servers = [server for server in load_servers() if is_enabled(server)]
         if not servers:
@@ -882,8 +887,90 @@ def refresh_sessions(redis_client):
         for server in servers:
             playing.extend(sessions(server))
         redis_client.setex(SESSIONS_KEY, SESSIONS_TTL, json.dumps(playing))
+        _remember_who_was_watching(redis_client, playing)
     except Exception as e:
         logger.debug(f"Could not refresh the media server sessions: {e}")
+
+
+# When each device was last seen watching live TV, so a request that arrives before its
+# server has registered the session can still be placed (see device_a_moment_ago).
+RECENT_DEVICES_KEY = "live:media_servers:recent_devices"
+RECENT_DEVICE_SECONDS = 120
+
+
+def _remember_who_was_watching(redis_client, playing):
+    """Note the time against every device on a live channel. Never raises."""
+    try:
+        now = time.time()
+        for session in playing:
+            device = session.get("device_id")
+            if device and session.get("live"):
+                redis_client.hset(RECENT_DEVICES_KEY, device, str(now))
+        redis_client.expire(RECENT_DEVICES_KEY, RECENT_DEVICE_SECONDS * 4)
+    except Exception as e:
+        logger.debug(f"Could not note who was watching: {e}")
+
+
+# How long to wait for a media server to say who is asking, before giving up and treating
+# the request as one from nobody in particular.
+DEVICE_WAIT_SECONDS = 2.0
+DEVICE_WAIT_STEP = 0.25
+
+
+def wait_for_device(redis_client, seconds=DEVICE_WAIT_SECONDS):
+    """
+    Give the media server a moment to say which of its players this request is for.
+
+    A server asks Dispatcharr for the stream and only then registers what it is playing, so
+    at the instant the request arrives it can say nothing. Serving it as a viewer we cannot
+    tell apart is worse than being a little slower: the overlap does not apply, and the
+    channel the viewer just left is not stopped, so its slot stays taken. On a media server,
+    where every channel is held open for hours, that is how the slots run out.
+
+    Only waits when nothing else has answered, so it costs nothing on the usual path, and
+    gives up after a couple of seconds rather than holding a stream on a server that is
+    never going to answer.
+    """
+    if not redis_client:
+        return None
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        refresh_sessions(redis_client, force=True)
+        device = sole_device(redis_client)
+        if device:
+            return device
+        if time.monotonic() >= deadline:
+            return None
+        gevent.sleep(DEVICE_WAIT_STEP)
+
+
+def device_a_moment_ago(redis_client):
+    """
+    The one device that was watching live TV just now, when none is watching this instant.
+
+    A media server asks Dispatcharr for the stream before it has a session to report, so
+    there is a moment at the start of every channel where it can say nothing about who is
+    asking. Waiting for it would hold up the stream, and treating the viewer as unknown
+    costs them the overlap and leaves their old channel running.
+
+    Only answers when exactly one device has been watching, which is the same rule
+    sole_device uses: with two there is no way to tell which of them this is.
+    """
+    try:
+        seen = redis_client.hgetall(RECENT_DEVICES_KEY) or {}
+        cutoff = time.time() - RECENT_DEVICE_SECONDS
+        recent = set()
+        for device, when in seen.items():
+            device = _as_str(device)
+            try:
+                if float(_as_str(when)) >= cutoff:
+                    recent.add(device)
+            except (TypeError, ValueError):
+                continue
+        return next(iter(recent)) if len(recent) == 1 else None
+    except Exception as e:
+        logger.debug(f"Could not tell who was watching a moment ago: {e}")
+        return None
 
 
 def cached_sessions(redis_client):
