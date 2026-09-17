@@ -222,16 +222,16 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                                       tuner.dvr_id,
                                       value
                                     )
-                                  : API.makeMediaServerDvr(
+                                  : // Not in the DVR yet: put it there with this guide
+                                    API.placeMediaServerTuner(
                                       serverId,
                                       tuner.id,
-                                      value,
-                                      form.language
+                                      value
                                     )
                               );
                             }}
                           >
-                            {tuner.dvr_id ? 'Save' : 'Make DVR'}
+                            Save
                           </Button>
                           <Button
                             size="compact-xs"
@@ -264,7 +264,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                               })
                             }
                           >
-                            {tuner.dvr_id ? 'Change guide' : 'Make a DVR'}
+                            Change guide
                           </Button>
                         </Group>
                       )}
@@ -315,28 +315,20 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                           Sync
                         </Button>
                       ) : (
-                        // Nothing can be done with it until it is in a DVR
-                        <Select
-                          size="xs"
-                          w={130}
-                          aria-label={`Add ${tuner.title} to a DVR`}
-                          placeholder="Add to a DVR"
-                          value={null}
-                          onChange={(value) =>
-                            value &&
+                        // Nothing can be done with it until it is in the DVR, and there is
+                        // nothing to choose: the server has one, or it is given one
+                        <Button
+                          size="compact-xs"
+                          variant="light"
+                          disabled={busy}
+                          onClick={() =>
                             run(() =>
-                              API.attachMediaServerTuner(
-                                serverId,
-                                tuner.id,
-                                value
-                              )
+                              API.placeMediaServerTuner(serverId, tuner.id)
                             )
                           }
-                          data={(data.dvrs || []).map((dvr) => ({
-                            value: dvr.id,
-                            label: dvr.title,
-                          }))}
-                        />
+                        >
+                          Put in the DVR
+                        </Button>
                       )}
                       <Button
                         size="compact-xs"
@@ -524,21 +516,9 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             label: profile.name,
           }))}
         />
-        <Select
-          size="xs"
-          w={190}
-          label="DVR"
-          description="Added to it, next to its other tuners"
-          placeholder="Make a new DVR"
-          clearable
-          value={form.dvr_id}
-          onChange={(value) => setForm({ ...form, dvr_id: value || '' })}
-          data={(data.dvrs || []).map((dvr) => ({
-            value: dvr.id,
-            label: dvr.title,
-          }))}
-        />
-        {!form.dvr_id && (
+        {/* No DVR to choose: the tuner goes into the one the server has, and one is made
+            only when it has none. Its language only matters when one is being made. */}
+        {(data.dvrs || []).length === 0 && (
           <Select
             size="xs"
             w={160}

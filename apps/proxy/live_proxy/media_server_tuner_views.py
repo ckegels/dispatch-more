@@ -283,6 +283,65 @@ def media_server_tuners(request):
             **_choices(),
         })
 
+    if action == "place":
+        # Put a tuner where it can be watched. There is nothing to choose: it goes into the
+        # DVR the server has, and one is made only when it has none.
+        device_id = str(request.data.get("id") or "")
+        device = next(
+            (t for t in media_servers.tuners(server, hosts) if t["id"] == device_id), None
+        )
+        if device is None:
+            return JsonResponse({"error": "That tuner is not on this server"}, status=400)
+
+        profile = _profile_from_uri(device["uri"])
+        guide = (request.data.get("guide_url") or "").strip() or (
+            _epg_url(base_url, profile, skip_cached_logos) if profile else ""
+        )
+        if not guide:
+            return JsonResponse(
+                {
+                    "error": "This tuner is not one of Dispatcharr's, so there is no guide "
+                    "to go with it. Put it in the DVR from the server's own settings."
+                },
+                status=400,
+            )
+
+        dvr_id = media_servers.the_dvr(server)
+        if dvr_id:
+            # The guide first, then the tuner, which is the order the server's settings use
+            if not media_servers.add_lineup(server, dvr_id, guide, profile):
+                return JsonResponse(
+                    {"error": "The server would not add this tuner's guide to its DVR"},
+                    status=400,
+                )
+            media_servers.name_device(server, device_id, device.get("title") or profile)
+            if not media_servers.attach_tuner(server, dvr_id, device_id):
+                return JsonResponse(
+                    {"error": "The server would not put this tuner in its DVR"}, status=400
+                )
+        else:
+            media_servers.name_device(server, device_id, device.get("title") or profile)
+            if not media_servers.create_dvr(
+                server,
+                device["uuid"],
+                guide,
+                profile,
+                language_code(request.data.get("language")),
+            ):
+                return JsonResponse(
+                    {"error": "The server would not make a DVR for this tuner"}, status=400
+                )
+            dvr_id = media_servers.the_dvr(server)
+
+        if dvr_id:
+            media_servers.sync_tuner(server, device_id, dvr_id)
+        logger.info(f"Put tuner {device_id} in the DVR on {server.get('name')}")
+        return JsonResponse({
+            "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
+            **_choices(),
+        })
+
     if action in ("make_dvr", "set_guide"):
         # The guide belongs with the tuner: a DVR is a tuner plus the guide its channels are
         # listed in. Both are given here so neither can be left behind, which is what made a
@@ -471,7 +530,9 @@ def media_server_tuners(request):
     device = next(
         (t for t in media_servers.tuners(server, hosts) if t["uri"] == uri), None
     )
-    dvr_id = request.data.get("dvr_id") or None
+    # Nothing to choose: the tuner goes into the DVR the server has, and one is made only
+    # when it has none. A second DVR is accepted by the server and then never shown.
+    dvr_id = media_servers.the_dvr(server) or None
     if device is None:
         warning = "The tuner was added, but the server did not list it afterwards."
     else:

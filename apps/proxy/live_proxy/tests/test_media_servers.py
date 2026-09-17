@@ -729,18 +729,26 @@ class TunerTests(TestCase):
             }
         }
 
+        # The server has no DVR until one is made for this tuner, and has it afterwards
+        made = []
+
         def after_adding(url, **_kwargs):
             if "/media/grabbers/devices" in url:
                 return fake_response(added)
             if "/livetv/dvrs" in url:
-                return fake_response(in_a_dvr)
+                return fake_response(in_a_dvr if made else {"MediaContainer": {"size": 0}})
             return plex(url)
+
+        def making_one(url, **_kwargs):
+            if url.endswith("/livetv/dvrs"):
+                made.append(True)
+            return fake_response({})
 
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post:
             get.side_effect = after_adding
-            post.return_value = fake_response({})
+            post.side_effect = making_one
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
                 {
@@ -791,7 +799,7 @@ class TunerTests(TestCase):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post:
-            get.side_effect = plex_with_tuners
+            get.side_effect = plex_without_a_dvr
             post.return_value = fake_response({})
             self.client_api.post(
                 "/proxy/media-servers/tuners/",
@@ -863,7 +871,8 @@ class TunerTests(TestCase):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post:
-            get.side_effect = plex_with_tuners
+            # No DVR to fall into, so one has to be made and this server will not
+            get.side_effect = plex_without_a_dvr
             post.side_effect = refuse_the_dvr
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
@@ -1051,7 +1060,7 @@ class TunerTests(TestCase):
         # The DVRs are offered by name, so there is something to choose
         (dvr,) = response.json()["dvrs"]
         self.assertEqual(dvr["id"], "32")
-        self.assertEqual(dvr["title"], "Belgium")
+        self.assertEqual(dvr["title"], "DVR")
         self.assertEqual(dvr["tuners"], ["Austria"])
 
     def test_a_tuner_of_ours_put_into_a_dvr_takes_its_guide_with_it(self):
@@ -1227,7 +1236,7 @@ class TunerTests(TestCase):
             data = self.client_api.get("/proxy/media-servers/tuners/?server=a1").json()
 
         (dvr,) = data["dvrs"]
-        self.assertEqual(dvr["title"], "Belgium")
+        self.assertEqual(dvr["title"], "DVR")
         self.assertEqual(dvr["tuners"], ["Austria"])
 
     def test_a_tuner_is_removed(self):

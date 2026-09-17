@@ -2656,6 +2656,14 @@ export default class API {
     });
   }
 
+  static async placeMediaServerTuner(server, id, guideUrl) {
+    // Into the DVR the server has, or a new one if it has none: there is nothing to choose
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body: { server, id, guide_url: guideUrl, action: 'place' },
+    });
+  }
+
   static async makeMediaServerDvr(server, id, guideUrl, language) {
     // A DVR is a tuner plus the guide its channels are listed in: both at once
     return await request(`${host}/proxy/media-servers/tuners/`, {

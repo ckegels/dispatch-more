@@ -20,6 +20,7 @@ vi.mock('../../../api', () => ({
     deleteMediaServerTuner: vi.fn(),
     attachMediaServerTuner: vi.fn(),
     makeMediaServerDvr: vi.fn(),
+    placeMediaServerTuner: vi.fn(),
     setMediaServerTunerUri: vi.fn(),
     setMediaServerGuide: vi.fn(),
     deleteMediaServerDvr: vi.fn(),
@@ -362,7 +363,8 @@ describe('MediaServers', () => {
     render(<MediaServers active={true} />);
     await openServer();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Change guide' }));
+    // Every tuner has one; this is Austria's, the first
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change guide' })[0]);
     fireEvent.change(screen.getByLabelText('Guide for Austria'), {
       target: { value: 'http://192.168.2.142:9191/output/epg/france' },
     });
@@ -377,16 +379,17 @@ describe('MediaServers', () => {
     );
   });
 
-  it('makes a DVR for a tuner that is in none', async () => {
-    API.makeMediaServerDvr.mockResolvedValue(tuners);
+  it('puts a tuner that is in no DVR into one, with nothing to choose', async () => {
+    API.placeMediaServerTuner.mockResolvedValue(tuners);
 
     render(<MediaServers active={true} />);
     await openServer();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Make a DVR' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Make DVR' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Put in the DVR' }));
 
-    await waitFor(() => expect(API.makeMediaServerDvr).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(API.placeMediaServerTuner).toHaveBeenCalledWith('a1', '1')
+    );
   });
 
   it('syncs and removes a tuner', async () => {
@@ -480,19 +483,12 @@ describe('MediaServers', () => {
     );
   });
 
-  it('adds a tuner that is in no DVR to one', async () => {
-    API.attachMediaServerTuner.mockResolvedValue(tuners);
-
+  it('offers no DVR to choose between, because there is only ever the one', async () => {
     render(<MediaServers active={true} />);
     await openServer();
 
-    fireEvent.change(screen.getByLabelText('Add A1 TV to a DVR'), {
-      target: { value: '32' },
-    });
-
-    await waitFor(() =>
-      expect(API.attachMediaServerTuner).toHaveBeenCalledWith('a1', '1', '32')
-    );
+    expect(screen.queryByLabelText(/to a DVR/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('DVR')).not.toBeInTheDocument();
   });
 
   it('says when the tuner was added but the DVR was not made', async () => {

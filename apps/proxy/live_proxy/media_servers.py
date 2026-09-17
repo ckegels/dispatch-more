@@ -462,14 +462,28 @@ def dvrs(server):
     return container.get("Dvr") or container.get("DVR") or []
 
 
+def the_dvr(server):
+    """
+    The DVR a tuner belongs in, or nothing if the server has none yet.
+
+    A server takes more DVRs through its API than its settings show: the extra ones are
+    invisible and their tuners unusable. So there is no choosing between them; a tuner goes
+    into the one that is there, and one is made only when there is none.
+    """
+    existing = dvr_list(server)
+    return existing[0]["id"] if existing else ""
+
+
 def dvr_list(server):
-    """The DVRs as the page offers them: which one to put a new tuner in, and what is in it."""
+    """The DVRs as the page shows them: what is in each, and the guides they hold."""
     if kind(server) == "jellyfin":
         return _jellyfin_guides(server)
     return [
         {
             "id": str(dvr.get("key")),
-            "title": dvr.get("lineupTitle") or dvr.get("language") or f"DVR {dvr.get('key')}",
+            # Not lineupTitle: that is the name of whichever guide went in first, so the DVR
+            # ends up called after one of its tuners, which says nothing about the DVR
+            "title": "DVR",
             "tuners": [device.get("title") or "tuner" for device in dvr.get("Device") or ()],
             "lineups": [lineup.get("title") or "" for lineup in dvr.get("Lineup") or ()],
             # The one guide this DVR uses, so the page can show it against each of its tuners
