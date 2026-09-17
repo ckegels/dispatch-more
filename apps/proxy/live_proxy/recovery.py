@@ -168,11 +168,9 @@ def record_event(redis_client, channel_id, action, detail=""):
     if not redis_client:
         return
     try:
-        from .utils import resolve_channel_display_name
-
         event = {
             "time": time.time(),
-            "channel": resolve_channel_display_name(channel_id) or str(channel_id),
+            "channel": _channel_name(channel_id),
             "action": action,
             "detail": detail,
         }
@@ -181,6 +179,16 @@ def record_event(redis_client, channel_id, action, detail=""):
         redis_client.expire(EVENTS_KEY, EVENT_TTL)
     except Exception as e:
         logger.debug(f"Could not record a stream health event: {e}")
+
+
+def _channel_name(channel_id) -> str:
+    """The channel's name, or its id: what happened to it matters more than what it is called."""
+    try:
+        from .utils import resolve_channel_display_name
+
+        return resolve_channel_display_name(channel_id) or str(channel_id)
+    except Exception:
+        return str(channel_id)
 
 
 def recent_events(redis_client):

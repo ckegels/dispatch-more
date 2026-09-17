@@ -163,3 +163,37 @@ class SettingsViewTests(TestCase):
         self.assertEqual(
             viewer.post("/proxy/stream-recovery/", {}, format="json").status_code, 403
         )
+
+
+class FailoverEventsTests(TestCase):
+    """The other half of the story: what happened when a stream could not be kept."""
+
+    def setUp(self):
+        self.redis = FakeRedis()
+
+    def test_giving_up_on_a_stream_switching_and_running_out_are_all_reported(self):
+        recovery.record_event(self.redis, "channel-1", "stream given up", "3 failed connections")
+        recovery.record_event(self.redis, "channel-1", "stream switched", "now on stream 42")
+        recovery.record_event(self.redis, "channel-1", "nothing left", "none of them worked")
+
+        actions = [event["action"] for event in recovery.recent_events(self.redis)]
+        # Newest first, so the page reads as the story ran
+        self.assertEqual(actions, ["nothing left", "stream switched", "stream given up"])
+
+    def test_only_the_last_events_are_kept(self):
+        for number in range(recovery.EVENTS_KEPT + 10):
+            recovery.record_event(self.redis, f"channel-{number}", "stream switched")
+
+        self.assertEqual(len(recovery.recent_events(self.redis)), recovery.EVENTS_KEPT)
+
+    def test_a_channel_name_that_cannot_be_looked_up_does_not_lose_the_event(self):
+        with patch(
+            "apps.proxy.live_proxy.utils.resolve_channel_display_name",
+            side_effect=RuntimeError("no database"),
+        ):
+            recovery.record_event(self.redis, "channel-1", "stream switched")
+
+        # What happened to the channel is worth more than what it is called
+        (event,) = recovery.recent_events(self.redis)
+        self.assertEqual(event["channel"], "channel-1")
+        self.assertEqual(event["action"], "stream switched")

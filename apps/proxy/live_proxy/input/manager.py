@@ -694,6 +694,13 @@ class StreamManager:
                 # If URL failed and we're still running, try switching to another stream
                 if url_failed and self.running:
                     logger.info(f"URL {self.url} failed after {self.retry_count} attempts, trying next stream for channel: {self.channel_id}")
+                    recovery.record_event(
+                        getattr(getattr(self, "buffer", None), "redis_client", None),
+                        self.channel_id,
+                        "stream given up",
+                        f"{self.retry_count} failed connections in a row, so this stream is "
+                        f"left for the next one in the channel",
+                    )
 
                     # Try to switch to next stream (wait out wrap cooldown in this thread)
                     switch_result = self._try_next_stream_with_cooldown()
@@ -2230,10 +2237,23 @@ class StreamManager:
                     logger.info(f"Stream metadata updated for channel {self.channel_id} to stream ID {stream_id} with M3U profile {profile_id}")
 
                 logger.info(f"Successfully switched to stream ID {stream_id} with URL {new_url} for channel {self.channel_id}")
+                recovery.record_event(
+                    getattr(getattr(self, "buffer", None), "redis_client", None),
+                    self.channel_id,
+                    "stream switched",
+                    f"now on stream {stream_id}, because the one before it could not be kept",
+                )
                 return True
 
             # If we get here, we tried all streams but none worked
             logger.error(f"Tried {len(untried_streams)} alternate streams but none were suitable for channel {self.channel_id}")
+            recovery.record_event(
+                getattr(getattr(self, "buffer", None), "redis_client", None),
+                self.channel_id,
+                "nothing left",
+                f"all {len(untried_streams)} other streams on this channel were tried and "
+                f"none of them worked",
+            )
             return False
 
         except Exception as e:

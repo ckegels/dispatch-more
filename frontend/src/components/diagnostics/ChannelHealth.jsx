@@ -4,7 +4,10 @@ import { Badge, Stack, Table, Text } from '@mantine/core';
 // What happened to a channel, coloured by whether it helped or gave up.
 export const HEALTH_COLORS = {
   'kept alive': 'teal',
-  'gave up': 'red',
+  'gave up': 'orange',
+  'stream given up': 'orange',
+  'stream switched': 'blue',
+  'nothing left': 'red',
 };
 
 export const HEALTH_MEANINGS = [
@@ -15,6 +18,18 @@ export const HEALTH_MEANINGS = [
   [
     'gave up',
     'The same channel has been kept alive too often in an hour: a stream that drops this much is not rotating, it is failing, so Dispatcharr goes back to trying the next stream.',
+  ],
+  [
+    'stream given up',
+    'A stream failed to connect too many times in a row, so Dispatcharr left it for the next one on the channel. This is what Stream Recovery is meant to prevent when the stream was actually working.',
+  ],
+  [
+    'stream switched',
+    'The channel is now playing from another of its streams. Whoever was watching saw a moment of nothing while it changed over.',
+  ],
+  [
+    'nothing left',
+    'Every other stream on the channel was tried and none worked, so the channel stops. Either the provider is down, or the channel has only one stream that is failing.',
   ],
 ];
 
