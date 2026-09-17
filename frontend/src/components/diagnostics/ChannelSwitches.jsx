@@ -15,6 +15,7 @@ import { switchAsText } from './copyText';
 // A switch is coloured by what Channel Switch Overlap did with it, so the table reads at a
 // glance. Also used by the legend.
 export const ACTION_COLORS = {
+  switched: 'gray',
   'overlap slot': 'blue',
   'held slot': 'teal',
   'another account': 'grape',
@@ -26,6 +27,10 @@ export const ACTION_COLORS = {
 };
 
 export const ACTION_MEANINGS = [
+  [
+    'switched',
+    'An ordinary switch: a slot was free, so the new channel simply started and the overlap had nothing to do.',
+  ],
   [
     'overlap slot',
     'Every account was at its limit, so this viewer got one extra connection for a few seconds. The result says how it ended.',

@@ -646,6 +646,9 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                         probation.record_client_viewer(
                             proxy_server.redis_client, channel_id, client_id, viewer
                         )
+                        probation.record_switch(
+                            proxy_server.redis_client, viewer, channel_id
+                        )
                         logger.info(
                             f"[{client_id}] Client registered with channel {channel_id} "
                             f"(output: {resolved_format}, profile: {resolved_output_profile.id if resolved_output_profile else None})"
@@ -769,6 +772,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             probation.record_client_viewer(
                 proxy_server.redis_client, channel_id, client_id, viewer
             )
+            probation.record_switch(proxy_server.redis_client, viewer, channel_id)
             _client_pre_registered = True
             logger.info(
                 f"[{client_id}] Client registered with channel {channel_id} "

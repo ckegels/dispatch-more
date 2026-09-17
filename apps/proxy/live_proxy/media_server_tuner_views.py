@@ -27,6 +27,49 @@ logger = logging.getLogger("live_proxy")
 # A channel profile built here is named so it is obvious where it came from and what it is for
 PROFILE_PREFIX = "plexmedia"
 
+# A media server wants a three letter language code, and not always the obvious one ("fre" for
+# French, not "fra"). These are the ones a guide is likely to be in, by what people type.
+LANGUAGES = [
+    ("eng", "English", ("en", "eng")),
+    ("fre", "French", ("fr", "fra", "fre", "fr-fr")),
+    ("ger", "German", ("de", "deu", "ger")),
+    ("dut", "Dutch", ("nl", "nld", "dut")),
+    ("spa", "Spanish", ("es", "spa")),
+    ("ita", "Italian", ("it", "ita")),
+    ("por", "Portuguese", ("pt", "por")),
+    ("pol", "Polish", ("pl", "pol")),
+    ("tur", "Turkish", ("tr", "tur")),
+    ("ara", "Arabic", ("ar", "ara")),
+    ("rus", "Russian", ("ru", "rus")),
+    ("swe", "Swedish", ("sv", "swe")),
+    ("nor", "Norwegian", ("no", "nor")),
+    ("dan", "Danish", ("da", "dan")),
+    ("fin", "Finnish", ("fi", "fin")),
+    ("cze", "Czech", ("cs", "ces", "cze")),
+    ("gre", "Greek", ("el", "ell", "gre")),
+    ("heb", "Hebrew", ("he", "heb")),
+    ("hin", "Hindi", ("hi", "hin")),
+    ("chi", "Chinese", ("zh", "zho", "chi")),
+    ("jpn", "Japanese", ("ja", "jpn")),
+]
+
+
+def language_code(typed) -> str:
+    """
+    What the media server should be given for a language someone typed.
+
+    "fr", "fra" and "French" all mean the same thing to a person and only one of them means
+    it to the server, so anything recognisable is turned into the server's code and anything
+    else is passed on as it was typed.
+    """
+    typed = (typed or "").strip().lower()
+    if not typed:
+        return "eng"
+    for code, name, aliases in LANGUAGES:
+        if typed == code or typed == name.lower() or typed in aliases:
+            return code
+    return typed
+
 
 def _server(server_id):
     return next(
@@ -106,6 +149,9 @@ def _choices():
         ],
         "profile_prefix": PROFILE_PREFIX,
         "max_tuners": MAX_TUNERS,
+        "languages": [
+            {"value": code, "label": f"{name} ({code})"} for code, name, _aliases in LANGUAGES
+        ],
         # What Dispatcharr would advertise on its own, so the field can be compared to it
         "calculated_tuners": _calculated_tuners(),
     }
@@ -277,7 +323,7 @@ def media_server_tuners(request):
             device["uuid"],
             _epg_url(base_url, channel_profile),
             channel_profile,
-            request.data.get("language"),
+            language_code(request.data.get("language")),
         ):
             dvr_id = media_servers.dvr_for_device(server, device["id"])
         else:

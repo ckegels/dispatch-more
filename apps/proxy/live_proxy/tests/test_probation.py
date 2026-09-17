@@ -2616,6 +2616,46 @@ class RecentSwitchesTests(TestCase):
         self.assertEqual(event["channel"], "channel-b")
         self.assertEqual(event["result"], "confirmed after 1.3s")
 
+    def test_an_ordinary_switch_is_reported_too(self):
+        viewer = probation.Viewer(self.IP, app="TiviMate")
+
+        # The first channel is not a switch
+        probation.record_switch(self.redis, viewer, "channel-a")
+        self.assertEqual(probation.recent_events(self.redis), [])
+
+        probation.record_switch(self.redis, viewer, "channel-b")
+        (event,) = probation.recent_events(self.redis)
+        self.assertEqual(event["action"], "switched")
+        self.assertEqual(event["from_channel"], "channel-a")
+        self.assertEqual(event["channel"], "channel-b")
+        self.assertEqual(event["result"], "a slot was free")
+
+        # The same channel again is not a switch either
+        probation.record_switch(self.redis, viewer, "channel-b")
+        self.assertEqual(len(probation.recent_events(self.redis)), 1)
+
+    def test_a_switch_the_overlap_reported_is_not_reported_twice(self):
+        viewer = probation.Viewer(self.IP, app="TiviMate")
+        probation.record_switch(self.redis, viewer, "channel-a")
+        # The overlap has already said what it did with this one
+        probation.record_event(
+            self.redis, viewer, "overlap slot", channel="channel-b", result="waiting"
+        )
+
+        probation.record_switch(self.redis, viewer, "channel-b")
+
+        actions = [event["action"] for event in probation.recent_events(self.redis)]
+        self.assertEqual(actions, ["overlap slot"])
+
+    def test_a_switch_by_a_viewer_it_cannot_tell_apart_says_so(self):
+        viewer = probation.Viewer(self.IP)  # no login, no app, no media server device
+        probation.record_switch(self.redis, viewer, "channel-a")
+        probation.record_switch(self.redis, viewer, "channel-b")
+
+        (event,) = probation.recent_events(self.redis)
+        self.assertEqual(event["action"], "not used")
+        self.assertEqual(event["result"], "not a viewer Dispatcharr can tell apart")
+
     def test_only_the_last_switches_are_kept(self):
         for number in range(probation.EVENTS_KEPT + 5):
             probation.record_event(self.redis, self.viewer, "not used", channel=f"channel-{number}")

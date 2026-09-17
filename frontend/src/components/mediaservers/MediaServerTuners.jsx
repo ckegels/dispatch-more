@@ -336,15 +336,16 @@ const MediaServerTuners = ({ serverId, enabled }) => {
           }))}
         />
         {!form.dvr_id && (
-          <TextInput
+          <Select
             size="xs"
-            w={90}
+            w={160}
             label="Language"
             description="For the guide"
+            searchable
+            // "fr" and "French" both find French, which the server wants as "fre"
             value={form.language}
-            onChange={(e) =>
-              setForm({ ...form, language: e.currentTarget.value })
-            }
+            onChange={(value) => setForm({ ...form, language: value || 'eng' })}
+            data={data.languages || []}
           />
         )}
         <Button

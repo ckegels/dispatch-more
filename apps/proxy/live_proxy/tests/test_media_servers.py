@@ -731,7 +731,7 @@ class TunerTests(TestCase):
                     "channel_profile": "austria",
                     "base_url": "http://192.168.2.142:9191",
                     "tuner_count": 2,
-                    "language": "nld",
+                    "language": "nl",
                 },
                 format="json",
             )
@@ -749,9 +749,21 @@ class TunerTests(TestCase):
             "lineup://tv.plex.providers.epg.xmltv/"
             "http%3A%2F%2F192.168.2.142%3A9191%2Foutput%2Fepg%2Faustria#austria",
         )
-        self.assertEqual(dvr_call["language"], "nld")
+        # "nl" is what a person types; "dut" is what the server wants
+        self.assertEqual(dvr_call["language"], "dut")
         # And it is scanned and its guide loaded, so it is ready to watch
         self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/40/scan", calls)
+
+    def test_a_language_someone_typed_becomes_the_one_the_server_wants(self):
+        from apps.proxy.live_proxy.media_server_tuner_views import language_code
+
+        # French is "fre" to a media server, which nobody would guess
+        for typed in ("fr", "fra", "French", "FRE", " fr "):
+            self.assertEqual(language_code(typed), "fre")
+        self.assertEqual(language_code("nl"), "dut")
+        self.assertEqual(language_code(""), "eng")
+        # Anything unrecognised is passed on as it was typed rather than replaced
+        self.assertEqual(language_code("zzz"), "zzz")
 
     def test_a_tuner_can_be_added_into_a_dvr_that_is_already_there(self):
         from apps.channels.models import ChannelProfile

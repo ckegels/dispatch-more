@@ -242,6 +242,68 @@ def set_event_ttl(redis_client, seconds) -> int:
     return seconds
 
 
+# A viewer's previous channel, so an ordinary switch can be reported like any other
+PREVIOUS_CHANNEL_KEY = "live:probation:previous:{viewer}"
+PREVIOUS_CHANNEL_TTL = 30 * 60
+
+
+def record_switch(redis_client, viewer, channel_uuid):
+    """
+    Report a switch the overlap did not have to do anything about.
+
+    Most switches are uneventful: a slot was free, so the new channel simply started. Without
+    this the page only ever shows the switches that went wrong, which makes a working setup
+    look like a page that is broken.
+
+    Called once the channel has its stream. Never raises, and does nothing while the overlap
+    is switched off everywhere.
+    """
+    if not redis_client or not is_viewer_request(viewer) or not channel_uuid:
+        return
+    try:
+        if not in_use():
+            return
+        channel_uuid = str(channel_uuid)
+        key = PREVIOUS_CHANNEL_KEY.format(viewer=_viewer_key(viewer))
+        previous = _as_str(redis_client.get(key))
+        redis_client.setex(key, PREVIOUS_CHANNEL_TTL, channel_uuid)
+        if not previous or previous == channel_uuid:
+            # Its first channel, or the same one again: nothing was switched
+            return
+        if redis_client.exists(_event_key_for_channel(redis_client, channel_uuid)):
+            # The overlap already reported this one, with more to say about it
+            return
+
+        if not may_be_identified(viewer):
+            record_event(
+                redis_client,
+                viewer,
+                "not used",
+                from_channel=previous,
+                channel=channel_uuid,
+                result="not a viewer Dispatcharr can tell apart",
+            )
+            return
+        record_event(
+            redis_client,
+            viewer,
+            "switched",
+            from_channel=previous,
+            channel=channel_uuid,
+            result="a slot was free",
+        )
+    except Exception as e:
+        logger.debug(f"Could not record the switch to {channel_uuid}: {e}")
+
+
+def _event_key_for_channel(redis_client, channel_uuid) -> str:
+    """
+    A marker saying the overlap already reported this channel, so a switch is not reported
+    twice: once by whatever the overlap did and once as an ordinary one.
+    """
+    return f"live:probation:reported:{channel_uuid}"
+
+
 def record_event(redis_client, viewer, action, **fields):
     """
     Remember one decision for the Channel Switch Overlap page: who switched, from and to
@@ -270,6 +332,11 @@ def record_event(redis_client, viewer, action, **fields):
         redis_client.hset(_event_key(event_id), mapping=event)
         ttl = event_ttl(redis_client)
         redis_client.expire(_event_key(event_id), ttl)
+        if fields.get("channel") and action != "switched":
+            # So an ordinary switch is not also reported for a channel the overlap acted on
+            redis_client.setex(
+                _event_key_for_channel(redis_client, fields["channel"]), 60, "1"
+            )
         redis_client.zadd(EVENTS_KEY, {event_id: now})
         redis_client.zremrangebyrank(EVENTS_KEY, 0, -(EVENTS_KEPT + 1))
         redis_client.zremrangebyscore(EVENTS_KEY, "-inf", now - ttl)
