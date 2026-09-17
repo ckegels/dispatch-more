@@ -290,7 +290,7 @@ def media_server_tuners(request):
     uri = _tuner_url(
         base_url, channel_profile, request.data.get("output_profile_id"), tuner_count
     )
-    if not media_servers.add_tuner(server, uri):
+    if not media_servers.add_tuner(server, uri, channel_profile, tuner_count):
         # A profile built for a tuner that was refused would be left behind with no way
         # to reach it, so it goes again and the next try starts clean.
         if built:

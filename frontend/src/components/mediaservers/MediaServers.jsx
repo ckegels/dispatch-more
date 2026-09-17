@@ -8,6 +8,7 @@ import {
   Group,
   Loader,
   PasswordInput,
+  Select,
   Stack,
   Switch,
   Table,
@@ -19,7 +20,7 @@ import MediaServerTuners from './MediaServerTuners';
 
 const REFRESH_MS = 10000;
 
-const emptyForm = { id: null, name: '', url: '', token: '' };
+const emptyForm = { id: null, kind: 'plex', name: '', url: '', token: '' };
 
 const MediaServers = ({ active }) => {
   const [servers, setServers] = useState(null);
@@ -114,6 +115,9 @@ const MediaServers = ({ active }) => {
                 {openServers[server.id] ? '▾' : '▸'}
               </Button>
               <Text fw={600}>{server.name}</Text>
+              <Badge size="sm" variant="light" color="gray">
+                {server.kind === 'jellyfin' ? 'Jellyfin' : 'Plex'}
+              </Badge>
               <Text size="sm" c="dimmed">
                 {server.url}
               </Text>
@@ -146,6 +150,7 @@ const MediaServers = ({ active }) => {
                 onClick={() =>
                   setForm({
                     id: server.id,
+                    kind: server.kind || 'plex',
                     name: server.name,
                     url: server.url,
                     token: '',
@@ -234,25 +239,45 @@ const MediaServers = ({ active }) => {
           <Text fw={600} size="sm">
             {form.id ? 'Edit media server' : 'Add a media server'}
           </Text>
+          <Select
+            label="Kind"
+            description="How Dispatcharr talks to it"
+            value={form.kind}
+            onChange={(value) => setForm({ ...form, kind: value || 'plex' })}
+            data={[
+              { value: 'plex', label: 'Plex' },
+              { value: 'jellyfin', label: 'Jellyfin' },
+            ]}
+          />
           <TextInput
             label="Name"
-            placeholder="Plex"
+            placeholder={form.kind === 'jellyfin' ? 'Jellyfin' : 'Plex'}
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.currentTarget.value })}
           />
           <TextInput
             label="Address"
-            description="The local address of the server, for example http://192.168.2.141:32400"
-            placeholder="http://192.168.2.141:32400"
+            description={
+              form.kind === 'jellyfin'
+                ? 'The local address of the server, for example http://192.168.2.141:8096'
+                : 'The local address of the server, for example http://192.168.2.141:32400'
+            }
+            placeholder={
+              form.kind === 'jellyfin'
+                ? 'http://192.168.2.141:8096'
+                : 'http://192.168.2.141:32400'
+            }
             value={form.url}
             onChange={(e) => setForm({ ...form, url: e.currentTarget.value })}
           />
           <PasswordInput
-            label="Token"
+            label={form.kind === 'jellyfin' ? 'API key' : 'Token'}
             description={
               form.id
-                ? 'Leave empty to keep the token that is stored'
-                : 'The X-Plex-Token of your server. It is stored on the server and never shown again.'
+                ? 'Leave empty to keep the one that is stored'
+                : form.kind === 'jellyfin'
+                  ? 'Dashboard → API Keys → add one. Stored on the server, never shown again.'
+                  : 'The X-Plex-Token of your server. Stored on the server, never shown again.'
             }
             value={form.token}
             onChange={(e) => setForm({ ...form, token: e.currentTarget.value })}

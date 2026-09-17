@@ -78,11 +78,13 @@ def media_server_list(request):
         # Editing without retyping the token keeps the one that is stored
         token = existing.get("token", "")
     if not token:
-        return JsonResponse({"error": "A token is needed to read from Plex"}, status=400)
+        return JsonResponse(
+            {"error": "A token (Plex) or API key (Jellyfin) is needed"}, status=400
+        )
 
     server = {
         "id": server_id or media_servers.new_id(),
-        "kind": "plex",
+        "kind": (request.data.get("kind") or "plex").lower(),
         "name": (request.data.get("name") or "").strip() or "Plex",
         "url": url,
         "token": token,

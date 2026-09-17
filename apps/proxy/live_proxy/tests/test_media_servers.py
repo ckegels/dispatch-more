@@ -1130,7 +1130,8 @@ class WhoIsWatchingTests(TestCase):
         self.assertEqual(client["server_device"], "server|mkk9dgqsm9p8")
         # And the page can say who that is, instead of the media server's address
         self.assertEqual(
-            media_servers.device_name(self.redis, "server|mkk9dgqsm9p8"), "Ckegels · Chrome"
+            media_servers.device_name(self.redis, "server|mkk9dgqsm9p8"),
+            "Ckegels · Chrome (Plex)",
         )
         viewer = probation._client_viewer(client)
         self.assertEqual(viewer.server_device, "server|mkk9dgqsm9p8")
@@ -1231,3 +1232,173 @@ class ChannelMapTests(TestCase):
         self.assertIn("http://plex:32400/media/grabbers/devices/22/scan", posted)
         self.assertIn("http://plex:32400/livetv/dvrs/32/reloadGuide", posted)
         self.assertIn("/channelmap", put.call_args.args[0])
+
+
+JELLYFIN_INFO = {"ServerName": "Home Jellyfin", "Version": "10.10.3"}
+JELLYFIN_SESSIONS = [
+    {
+        "Id": "s1",
+        "UserName": "Chris",
+        "DeviceId": "shield-1",
+        "DeviceName": "Shield",
+        "Client": "Jellyfin Android TV",
+        "LastActivityDate": "2026-09-17T20:15:00.0000000Z",
+        "NowPlayingItem": {"Name": "ORF 1", "Type": "TvChannel"},
+        "PlayState": {"IsPaused": False, "PositionTicks": 30000000},
+        "TranscodingInfo": {"IsVideoDirect": False, "IsAudioDirect": True},
+    },
+    {
+        "Id": "s2",
+        "UserName": "Someone",
+        "DeviceId": "laptop",
+        "NowPlayingItem": {"Name": "A Film", "Type": "Movie"},
+        "PlayState": {},
+    },
+]
+JELLYFIN_CONFIG = {
+    "TunerHosts": [
+        {
+            "Id": "abc123",
+            "Url": "http://192.168.2.142:9191/hdhr/austria",
+            "Type": "hdhomerun",
+            "FriendlyName": "Austria",
+            "TunerCount": 2,
+        }
+    ],
+    "ListingProviders": [
+        {
+            "Id": "guide1",
+            "Type": "xmltv",
+            "Path": "http://192.168.2.142:9191/output/epg/austria",
+            "EnableAllTuners": True,
+        }
+    ],
+}
+
+
+def jellyfin(url, **_kwargs):
+    if "/System/Info" in url:
+        return fake_response(JELLYFIN_INFO)
+    if "/Sessions" in url:
+        return fake_response(JELLYFIN_SESSIONS)
+    if "/System/Configuration/livetv" in url:
+        return fake_response(JELLYFIN_CONFIG)
+    if "/ScheduledTasks" in url:
+        return fake_response([{"Id": "task-1", "Key": "RefreshGuide"}])
+    return fake_response({})
+
+
+class JellyfinTests(TestCase):
+    """Jellyfin, said in the same words as Plex: tuners, guides and who is watching."""
+
+    def setUp(self):
+        self.server = {
+            "id": "j1",
+            "kind": "jellyfin",
+            "name": "Jellyfin",
+            "url": "http://jf:8096",
+            "token": "key",
+        }
+
+    def test_the_api_key_goes_in_the_headers_jellyfin_expects(self):
+        headers = media_servers._headers(self.server)
+        self.assertEqual(headers["X-Emby-Token"], "key")
+        self.assertIn('MediaBrowser Token="key"', headers["Authorization"])
+        # And a Plex server is unchanged
+        self.assertEqual(
+            media_servers._headers({"kind": "plex", "token": "t"})["X-Plex-Token"], "t"
+        )
+
+    def test_it_says_whether_it_answers_and_what_it_is(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = jellyfin
+            self.assertEqual(
+                media_servers.check(self.server),
+                {"ok": True, "name": "Home Jellyfin", "version": "10.10.3"},
+            )
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.return_value = fake_response({}, status=401)
+            self.assertIn("API key", media_servers.check(self.server)["error"])
+
+    def test_only_live_channels_count_as_watching(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = jellyfin
+            sessions = media_servers.sessions(self.server)
+
+        live = [session for session in sessions if session["live"]]
+        (channel,) = live
+        self.assertEqual(channel["user"], "Chris")
+        self.assertEqual(channel["player"], "Shield")
+        self.assertEqual(channel["device_id"], "shield-1")
+        self.assertEqual(channel["decision"], "transcode (video)")
+        self.assertEqual(channel["position"], 3.0)
+        # The film is still a session, but not one the overlap cares about
+        self.assertFalse(sessions[1]["live"])
+
+    def test_its_tuners_and_guides_read_like_plex_s(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = jellyfin
+            (tuner,) = media_servers.tuners(self.server, {"192.168.2.142"})
+            (guide,) = media_servers.dvr_list(self.server)
+
+        self.assertEqual(tuner["title"], "Austria")
+        self.assertEqual(tuner["tuners"], 2)
+        self.assertTrue(tuner["ours"])
+        # A Jellyfin guide covers every tuner, so a tuner is never "in no DVR"
+        self.assertEqual(tuner["dvr_id"], "guide")
+        self.assertEqual(guide["tuners"], ["all tuners"])
+
+    def test_a_tuner_is_added_as_an_hdhomerun_with_our_guide(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = jellyfin
+            post.return_value = fake_response({})
+            media_servers.add_tuner(
+                self.server, "http://192.168.2.142:9191/hdhr/france", "france", 4
+            )
+            media_servers.create_dvr(
+                self.server, "", "http://192.168.2.142:9191/output/epg/france", "france"
+            )
+
+        tuner_call, guide_call = post.call_args_list
+        self.assertEqual(tuner_call.args[0], "http://jf:8096/LiveTv/TunerHosts")
+        self.assertEqual(
+            tuner_call.kwargs["json"],
+            {
+                "Type": "hdhomerun",
+                "Url": "http://192.168.2.142:9191/hdhr/france",
+                "FriendlyName": "france",
+                "AllowHWTranscoding": True,
+                "EnableStreamLooping": False,
+                "TunerCount": 4,
+            },
+        )
+        self.assertEqual(guide_call.args[0], "http://jf:8096/LiveTv/ListingProviders")
+        self.assertEqual(guide_call.kwargs["json"]["Type"], "xmltv")
+        self.assertEqual(
+            guide_call.kwargs["json"]["Path"], "http://192.168.2.142:9191/output/epg/france"
+        )
+        self.assertTrue(guide_call.kwargs["json"]["EnableAllTuners"])
+
+    def test_removing_a_tuner_and_a_guide(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.delete") as delete:
+            delete.return_value = fake_response({})
+            media_servers.delete_tuner(self.server, "abc123")
+            self.assertEqual(delete.call_args.args[0], "http://jf:8096/LiveTv/TunerHosts")
+            self.assertEqual(delete.call_args.kwargs["params"], {"id": "abc123"})
+
+            media_servers.delete_dvr(self.server, "guide1")
+            self.assertEqual(delete.call_args.args[0], "http://jf:8096/LiveTv/ListingProviders")
+
+    def test_syncing_runs_the_guide_refresh_task(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = jellyfin
+            post.return_value = fake_response({})
+            self.assertTrue(media_servers.sync_tuner(self.server, "abc123", "guide"))
+
+        # Jellyfin rescans while refreshing, and has no channel map to set
+        self.assertEqual(post.call_args.args[0], "http://jf:8096/ScheduledTasks/Running/task-1")

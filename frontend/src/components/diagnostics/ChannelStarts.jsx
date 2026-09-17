@@ -244,6 +244,10 @@ const ChannelStarts = ({ starts, onCopy }) => {
                         <Text size="xs" c="dimmed" fs="italic">
                           {start.server_title}
                           {start.server_user ? ` · ${start.server_user}` : ''}
+                          {start.server_player
+                            ? ` · ${start.server_player}`
+                            : ''}
+                          {start.server_name ? ` (${start.server_name})` : ''}
                         </Text>
                       )}
                     </Stack>

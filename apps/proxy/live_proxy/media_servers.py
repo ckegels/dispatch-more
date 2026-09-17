@@ -1,4 +1,4 @@
-"""Media servers (Plex for now), and what they can tell us about a channel start.
+"""Media servers (Plex and Jellyfin), and what they can tell us about a channel start.
 
 Dispatcharr can see how long it took to hand the first video to a media server, but not what
 the server did with it afterwards. Plex can: every playing stream says whether it is being
@@ -143,6 +143,24 @@ def clean_url(url) -> str:
     return str(url or "").strip().rstrip("/")
 
 
+def kind(server) -> str:
+    """Which kind of media server this is. Plex unless it says otherwise."""
+    return (server.get("kind") or "plex").lower()
+
+
+def _headers(server):
+    """How each kind of server wants its token."""
+    token = server.get("token") or ""
+    if kind(server) == "jellyfin":
+        # Both are accepted; the header is the older one and the simplest to get right
+        return {
+            "Accept": "application/json",
+            "X-Emby-Token": token,
+            "Authorization": f'MediaBrowser Token="{token}"',
+        }
+    return {"Accept": "application/json", "X-Plex-Token": token}
+
+
 def _get(server, path, params=None):
     """One read from a media server. Returns the parsed body, or None when it cannot be read."""
     url = f"{clean_url(server.get('url'))}{path}"
@@ -150,10 +168,7 @@ def _get(server, path, params=None):
         response = requests.get(
             url,
             params=params or {},
-            headers={
-                "Accept": "application/json",
-                "X-Plex-Token": server.get("token") or "",
-            },
+            headers=_headers(server),
             timeout=REQUEST_TIMEOUT,
         )
         if response.status_code == 401:
@@ -171,6 +186,8 @@ def check(server):
     Whether the server answers and the token works, and what it is.
     Returns {"ok": bool, "name": ..., "version": ..., "error": ...}.
     """
+    if kind(server) == "jellyfin":
+        return _check_jellyfin(server)
     url = f"{clean_url(server.get('url'))}/identity"
     try:
         response = requests.get(
@@ -197,8 +214,87 @@ def check(server):
     }
 
 
+def _check_jellyfin(server):
+    """/System/Info needs the key, so it answers both questions at once."""
+    try:
+        response = requests.get(
+            f"{clean_url(server.get('url'))}/System/Info",
+            headers=_headers(server),
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        return {"ok": False, "error": f"Could not reach the server: {e.__class__.__name__}"}
+    if response.status_code in (401, 403):
+        return {"ok": False, "error": "The server did not accept this API key"}
+    if not response.ok:
+        return {"ok": False, "error": f"The server answered with HTTP {response.status_code}"}
+    info = response.json() or {}
+    return {
+        "ok": True,
+        "name": info.get("ServerName") or "Jellyfin",
+        "version": info.get("Version", ""),
+    }
+
+
+def _jellyfin_sessions(server):
+    """
+    What Jellyfin is playing, in the same shape as Plex's.
+
+    A live channel is an item of type TvChannel, which is what the overlap cares about; a
+    film someone is watching is not a tuner and is left out.
+    """
+    playing = []
+    for session in _get(server, "/Sessions") or ():
+        item = session.get("NowPlayingItem") or {}
+        if not item:
+            continue
+        transcoding = session.get("TranscodingInfo") or {}
+        play_state = session.get("PlayState") or {}
+        playing.append({
+            "title": item.get("Name", ""),
+            "user": session.get("UserName", ""),
+            "player": session.get("DeviceName") or session.get("Client") or "",
+            "device_id": session.get("DeviceId", ""),
+            "state": "paused" if play_state.get("IsPaused") else "playing",
+            # Jellyfin says when the session was last active, not when it started
+            "started_at": _jellyfin_time(session.get("LastActivityDate")),
+            "live": item.get("Type") == "TvChannel",
+            "decision": _jellyfin_decision(transcoding),
+            "speed": 0.0,
+            "transcoding": bool(transcoding),
+            "ready": 0.0,
+            # PositionTicks are 100 nanoseconds each; only its movement is used
+            "position": float(play_state.get("PositionTicks") or 0) / 10_000_000,
+            "server": server.get("name") or "Jellyfin",
+        })
+    return playing
+
+
+def _jellyfin_time(value):
+    """A time Jellyfin sent, as seconds, or 0 when it cannot be read."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _jellyfin_decision(transcoding) -> str:
+    if not transcoding:
+        return "direct play"
+    parts = [
+        kind_of
+        for kind_of, field in (("video", "IsVideoDirect"), ("audio", "IsAudioDirect"))
+        if transcoding.get(field) is False
+    ]
+    return f"transcode ({' + '.join(parts)})" if parts else "direct play"
+
+
 def sessions(server):
     """What is playing right now, as the page and the start watcher need it."""
+    if kind(server) == "jellyfin":
+        return _jellyfin_sessions(server)
     container = (_get(server, "/status/sessions") or {}).get("MediaContainer") or {}
     playing = []
     for item in container.get("Metadata", []) or ():
@@ -220,6 +316,7 @@ def sessions(server):
             # Where the player is in the stream. When this moves, video is really being shown.
             # Live sessions do not have it at all, so it is None there rather than 0.
             "position": float(item["viewOffset"]) if "viewOffset" in item else None,
+            "server": server.get("name") or "Plex",
         })
     return playing
 
@@ -236,14 +333,15 @@ def _decision(transcode) -> str:
     return f"transcode ({' + '.join(parts)})" if parts else "direct play"
 
 
-def _post(server, path, params=None):
+def _post(server, path, params=None, json_body=None):
     """One change on a media server. Returns True when it was accepted."""
     url = f"{clean_url(server.get('url'))}{path}"
     try:
         response = requests.post(
             url,
             params=params or {},
-            headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
+            json=json_body,
+            headers=_headers(server),
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -253,12 +351,13 @@ def _post(server, path, params=None):
         return False
 
 
-def _delete(server, path):
+def _delete(server, path, params=None):
     url = f"{clean_url(server.get('url'))}{path}"
     try:
         response = requests.delete(
             url,
-            headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
+            params=params or {},
+            headers=_headers(server),
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -266,6 +365,45 @@ def _delete(server, path):
     except Exception as e:
         logger.warning(f"Media server refused to delete {path}: {e}")
         return False
+
+
+def _live_tv_config(server):
+    """Jellyfin keeps its tuners and guides in one settings blob."""
+    return _get(server, "/System/Configuration/livetv") or {}
+
+
+def _jellyfin_tuners(server, our_hosts=()):
+    tuners = []
+    for host in _live_tv_config(server).get("TunerHosts") or ():
+        url = host.get("Url", "")
+        host_name = (urlparse(url).hostname or "").lower()
+        tuners.append({
+            "id": str(host.get("Id") or ""),
+            "uuid": str(host.get("Id") or ""),
+            "title": host.get("FriendlyName") or host.get("Type") or "tuner",
+            "uri": url,
+            "model": host.get("Type", ""),
+            # Jellyfin does not say whether a tuner answered; it either works or it does not
+            "state": "",
+            "tuners": int(host.get("TunerCount") or 0),
+            # A guide covers all tuners, so a Jellyfin tuner is never "in no DVR"
+            "dvr_id": "guide",
+            "ours": host_name in set(our_hosts) if host_name else False,
+        })
+    return tuners
+
+
+def _jellyfin_guides(server):
+    """Jellyfin has guides instead of DVRs: a source of programmes, covering the tuners."""
+    return [
+        {
+            "id": str(provider.get("Id") or ""),
+            "title": provider.get("Path") or provider.get("Type") or "guide",
+            "tuners": ["all tuners"] if provider.get("EnableAllTuners") else [],
+            "lineups": [provider.get("Type", "")],
+        }
+        for provider in _live_tv_config(server).get("ListingProviders") or ()
+    ]
 
 
 def dvrs(server):
@@ -276,6 +414,8 @@ def dvrs(server):
 
 def dvr_list(server):
     """The DVRs as the page offers them: which one to put a new tuner in, and what is in it."""
+    if kind(server) == "jellyfin":
+        return _jellyfin_guides(server)
     return [
         {
             "id": str(dvr.get("key")),
@@ -288,7 +428,9 @@ def dvr_list(server):
 
 
 def delete_dvr(server, dvr_id):
-    """Remove a DVR. Its tuners stay registered on the server, outside any DVR."""
+    """Remove a DVR (a guide on Jellyfin). Its tuners stay registered on the server."""
+    if kind(server) == "jellyfin":
+        return delete_guide(server, dvr_id)
     return _delete(server, f"/livetv/dvrs/{dvr_id}")
 
 
@@ -298,7 +440,7 @@ def _put(server, path, params=None):
         response = requests.put(
             url,
             params=params or {},
-            headers={"Accept": "application/json", "X-Plex-Token": server.get("token") or ""},
+            headers=_headers(server),
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -318,6 +460,9 @@ def add_lineup(server, dvr_id, xmltv_url, title):
     Give a DVR another guide. A DVR holds several tuners, each with its own lineup, so a tuner
     put into a DVR that was already there needs its guide added as well or it has no programmes.
     """
+    if kind(server) == "jellyfin":
+        # Its guide already covers every tuner
+        return True
     return _put(
         server, f"/livetv/dvrs/{dvr_id}/lineups", {"lineup": xmltv_lineup(xmltv_url, title)}
     )
@@ -331,6 +476,9 @@ def create_dvr(server, device_uuid, xmltv_url, title, language="eng"):
     the guide with everything escaped, and the title after a #. Nothing else about the DVR is
     set, so the server's own defaults apply.
     """
+    if kind(server) == "jellyfin":
+        # Jellyfin has guides instead: one source of programmes, covering every tuner
+        return add_guide(server, xmltv_url, title)
     return _post(
         server,
         "/livetv/dvrs",
@@ -355,7 +503,11 @@ def attach_tuner(server, dvr_id, device_id):
     """
     Put a tuner into a DVR. A tuner that is in no DVR is registered but unused: the server
     does not scan it, does not put its channels in the guide, and cannot play from it.
+
+    Jellyfin has no DVRs: a guide covers every tuner, so there is nothing to attach.
     """
+    if kind(server) == "jellyfin":
+        return True
     return _put(server, f"/livetv/dvrs/{dvr_id}/devices/{device_id}")
 
 
@@ -364,6 +516,8 @@ def tuners(server, our_hosts=()):
     Every tuner device the server knows, with what is worth acting on: whether it answers,
     whether it belongs to a DVR (a tuner outside one does nothing), and whether it is ours.
     """
+    if kind(server) == "jellyfin":
+        return _jellyfin_tuners(server, our_hosts)
     container = (_get(server, "/media/grabbers/devices") or {}).get("MediaContainer") or {}
     in_dvr = {}
     for dvr in dvrs(server):
@@ -389,12 +543,55 @@ def tuners(server, our_hosts=()):
     return found
 
 
-def add_tuner(server, uri):
+def add_tuner(server, uri, name=None, tuner_count=None):
+    if kind(server) == "jellyfin":
+        # Dispatcharr answers as an HDHomeRun, which is a kind Jellyfin knows how to use
+        body = {
+            "Type": "hdhomerun",
+            "Url": uri,
+            "FriendlyName": name or "Dispatcharr",
+            "AllowHWTranscoding": True,
+            "EnableStreamLooping": False,
+        }
+        if tuner_count:
+            body["TunerCount"] = int(tuner_count)
+        return _post(server, "/LiveTv/TunerHosts", json_body=body)
     return _post(server, "/media/grabbers/devices", {"uri": uri})
 
 
 def delete_tuner(server, device_id):
+    if kind(server) == "jellyfin":
+        return _delete(server, "/LiveTv/TunerHosts", {"id": device_id})
     return _delete(server, f"/media/grabbers/devices/{device_id}")
+
+
+def delete_guide(server, guide_id):
+    """Jellyfin: remove a guide. Its tuners keep working, with no programmes."""
+    return _delete(server, "/LiveTv/ListingProviders", {"id": guide_id})
+
+
+def add_guide(server, xmltv_url, name=None):
+    """Jellyfin: add Dispatcharr's EPG as a guide, covering every tuner."""
+    return _post(
+        server,
+        "/LiveTv/ListingProviders",
+        {"validateListings": "false", "validateLogin": "false"},
+        json_body={
+            "Type": "xmltv",
+            "Path": xmltv_url,
+            "EnableAllTuners": True,
+            "UserAgent": name or "Dispatcharr",
+        },
+    )
+
+
+def refresh_guide(server):
+    """Jellyfin: run the guide refresh, which is a scheduled task rather than an endpoint."""
+    for task in _get(server, "/ScheduledTasks") or ():
+        if (task.get("Key") or "").lower() == "refreshguide":
+            return _post(server, f"/ScheduledTasks/Running/{task.get('Id')}")
+    logger.debug("Jellyfin has no guide refresh task")
+    return False
 
 
 def device_channels(server, device_id):
@@ -417,6 +614,9 @@ def enable_channels(server, device_id, channels=None):
     "0 enabled" and none of them appear, which looks like the tuner is not working at all.
     Dispatcharr's own EPG uses the same numbers on both sides, so each channel maps to itself.
     """
+    if kind(server) == "jellyfin":
+        # Jellyfin enables every channel a tuner reports; there is no map to set
+        return True
     channels = channels or device_channels(server, device_id)
     if not channels:
         return False
@@ -435,6 +635,9 @@ def sync_tuner(server, device_id, dvr_id=None):
     The scan is what finds channels, enabling them is what makes them appear, and the guide
     reload is what puts programmes against them: all three, or the tuner looks broken.
     """
+    if kind(server) == "jellyfin":
+        # Jellyfin rescans its tuners while refreshing the guide, and has no channel map
+        return refresh_guide(server)
     scanned = _post(server, f"/media/grabbers/devices/{device_id}/scan")
     enabled = enable_channels(server, device_id)
     reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else False
@@ -510,8 +713,12 @@ DEVICE_NAME_KEY = "live:media_servers:device:{device}"
 
 
 def remember_device_name(redis_client, device, session):
-    """What to call a device on the Diagnostics page: who is watching, on what."""
-    name = " · ".join(part for part in (session.get("user"), session.get("player")) if part)
+    """
+    What to call a device on the Diagnostics page: who is watching, on what, through which
+    server. With more than one media server, "Chris · Shield" alone says too little.
+    """
+    who = " · ".join(part for part in (session.get("user"), session.get("player")) if part)
+    name = f"{who} ({session['server']})" if who and session.get("server") else who
     if name:
         redis_client.setex(
             DEVICE_NAME_KEY.format(device=device), CHANNEL_DEVICE_TTL, name
@@ -661,6 +868,7 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
                     server_player=session["player"],
                     # What the server thinks it is playing, so a wrong match can be spotted
                     server_title=session["title"],
+                    server_name=session.get("server", ""),
                     server_decision=session["decision"],
                     server_speed=f"{session['speed']:.1f}" if session["speed"] else "",
                     # How long until the player actually played something
@@ -680,6 +888,7 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
                 server_user=session["user"],
                 server_player=session["player"],
                 server_title=session["title"],
+                server_name=session.get("server", ""),
                 server_decision=session["decision"],
                 server_phases="|".join(f"{stage}={at}" for stage, at in seen.items()),
                 server_gave_up="1",
