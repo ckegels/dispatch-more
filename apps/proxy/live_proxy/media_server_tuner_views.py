@@ -301,6 +301,19 @@ def media_server_tuners(request):
                 return JsonResponse(
                     {"error": "This tuner is already in a DVR"}, status=400
                 )
+            # A server takes more DVRs through its API than it shows: Plex lists one and
+            # leaves the rest out of its settings, so a tuner alone in a second DVR is
+            # registered, invisible and unwatchable. Channel sources belong side by side in
+            # the one DVR, each with a guide of its own.
+            if media_servers.dvr_list(server):
+                return JsonResponse(
+                    {
+                        "error": "This server already has a DVR. Put the tuner in that one: "
+                        "a DVR holds several channel sources, each with its own guide, and a "
+                        "second DVR would not show up in the server's settings."
+                    },
+                    status=400,
+                )
             if not media_servers.create_dvr(
                 server,
                 device["uuid"],
