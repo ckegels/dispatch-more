@@ -439,6 +439,15 @@ def plex_with_tuners(url, **_kwargs):
     return plex(url)
 
 
+def plex_without_a_dvr(url, **_kwargs):
+    """A server whose tuners are registered but which has no DVR: nothing plays yet."""
+    if "/media/grabbers/devices" in url:
+        return fake_response(DEVICES)
+    if "/livetv/dvrs" in url:
+        return fake_response({"MediaContainer": {"size": 0}})
+    return plex(url)
+
+
 class TunerTests(TestCase):
     """Seeing, adding, syncing and removing the tuners on a media server."""
 
@@ -928,7 +937,7 @@ class TunerTests(TestCase):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post:
-            get.side_effect = plex_with_tuners
+            get.side_effect = plex_without_a_dvr
             post.return_value = fake_response({})
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
@@ -948,6 +957,32 @@ class TunerTests(TestCase):
         self.assertIn("cachedlogos", made.kwargs["params"]["lineup"])
         # Named after the channels it lists, not the language it happens to be in
         self.assertTrue(made.kwargs["params"]["lineup"].endswith("#austria"))
+
+    def test_a_second_dvr_is_not_made(self):
+        """
+        A server shows one DVR and uses its one guide for every tuner in it.
+
+        A second can be made through the API and then sits there unused, which is easy to do
+        by accident and hard to see afterwards.
+        """
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "action": "make_dvr",
+                    "id": "1",
+                    "guide_url": "http://192.168.2.142:9191/output/epg",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already has a DVR", response.json()["error"])
+        post.assert_not_called()
 
     def test_a_dvr_already_in_one_is_not_given_another(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
@@ -1472,6 +1507,9 @@ class JellyfinTests(TestCase):
         # A Jellyfin guide covers every tuner, so a tuner is never "in no DVR"
         self.assertEqual(tuner["dvr_id"], "guide")
         self.assertEqual(guide["tuners"], ["all tuners"])
+        # And it is the address of that guide, not "none": the tuner has one, like on Plex
+        self.assertEqual(tuner["guide"], "http://192.168.2.142:9191/output/epg/austria")
+        self.assertEqual(guide["guide"], "http://192.168.2.142:9191/output/epg/austria")
 
     def test_a_tuner_is_added_as_an_hdhomerun_with_our_guide(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(

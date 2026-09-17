@@ -32,19 +32,13 @@ const emptyTuner = {
   skip_cached_logos: true,
 };
 
-// The guide that belongs with a tuner of ours: Dispatcharr's EPG for the same channel
-// profile the tuner serves. A media server keeps the two together, so a tuner offered
-// without its guide plays channels with nothing listed against them.
-export const guideForTuner = (uri, base, skipCachedLogos = true) => {
-  const parts = String(uri || '')
-    .split('/')
-    .filter(Boolean);
-  const at = parts.indexOf('hdhr');
-  if (at < 0 || at + 1 >= parts.length) return '';
+// A media server keeps one guide for all of its tuners, so the guide it is offered has to
+// cover every channel any of them serves. Dispatcharr's EPG without a channel profile is
+// exactly that: every channel. Narrowing it to one tuner's profile would leave the other
+// tuners playing channels with nothing listed against them.
+export const guideForServer = (base, skipCachedLogos = true) => {
   const root = String(base || '').replace(/\/+$/, '');
-  return `${root}/output/epg/${parts[at + 1]}${
-    skipCachedLogos ? '?cachedlogos=false' : ''
-  }`;
+  return `${root}/output/epg${skipCachedLogos ? '?cachedlogos=false' : ''}`;
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -193,8 +187,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                                 tuner: tuner.id,
                                 value:
                                   tuner.guide ||
-                                  guideForTuner(
-                                    tuner.uri,
+                                  guideForServer(
                                     baseUrl,
                                     form.skip_cached_logos
                                   ),
@@ -303,10 +296,14 @@ const MediaServerTuners = ({ serverId, enabled }) => {
 
       <Text size="xs" c="dimmed">
         A tuner is where the channels come from and the guide is what is listed
-        against them, so both are shown above and either can be changed. A DVR
-        holds one guide, shared by every tuner in it: a tuner whose channels
-        that guide does not reach plays with nothing listed against it. A tuner
-        that is in no DVR is registered and unused until you make one for it.
+        against them, so both are shown above. The media server keeps{' '}
+        <b>one guide for all of its tuners</b> — Plex and Jellyfin both work
+        that way, and neither can give a tuner a guide of its own. So the guide
+        has to cover every channel any tuner serves, which is why it is offered
+        as Dispatcharr&apos;s EPG for all channels rather than for one channel
+        profile. Narrow it and the tuners it leaves out play with nothing listed
+        against them. A tuner that is in no DVR is registered and unused until
+        you make one for it.
         Its channels are then scanned and the guide loaded, so it is ready to
         watch: its channels are scanned, switched on and mapped to the guide,
         because a channel the server found but left switched off never appears.

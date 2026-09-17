@@ -410,8 +410,18 @@ def _live_tv_config(server):
 
 
 def _jellyfin_tuners(server, our_hosts=()):
+    config = _live_tv_config(server)
+    # One guide covers every tuner here too, so each tuner shows the same address
+    guide = next(
+        (
+            provider.get("Path") or ""
+            for provider in config.get("ListingProviders") or ()
+            if provider.get("Path")
+        ),
+        "",
+    )
     tuners = []
-    for host in _live_tv_config(server).get("TunerHosts") or ():
+    for host in config.get("TunerHosts") or ():
         url = host.get("Url", "")
         host_name = (urlparse(url).hostname or "").lower()
         tuners.append({
@@ -425,6 +435,7 @@ def _jellyfin_tuners(server, our_hosts=()):
             "tuners": int(host.get("TunerCount") or 0),
             # A guide covers all tuners, so a Jellyfin tuner is never "in no DVR"
             "dvr_id": "guide",
+            "guide": guide,
             "ours": host_name in set(our_hosts) if host_name else False,
         })
     return tuners
@@ -438,6 +449,8 @@ def _jellyfin_guides(server):
             "title": provider.get("Path") or provider.get("Type") or "guide",
             "tuners": ["all tuners"] if provider.get("EnableAllTuners") else [],
             "lineups": [provider.get("Type", "")],
+            "guide": provider.get("Path") or "",
+            "devices": [],
         }
         for provider in _live_tv_config(server).get("ListingProviders") or ()
     ]

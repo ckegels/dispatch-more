@@ -276,8 +276,15 @@ def media_server_tuners(request):
             if not media_servers.set_guide(
                 server, dvr_id, guide, title, dvr.get("devices") or ()
             ):
+                # Recent Plex versions answer most DVR writes with "not found", so this is
+                # as likely to mean "this server does not allow it" as "that was wrong".
                 return JsonResponse(
-                    {"error": "The server would not change the guide on that DVR"}, status=400
+                    {
+                        "error": "The server would not change the guide. Newer Plex versions "
+                        "refuse this, and the guide then has to be changed in the server's "
+                        "own Live TV settings."
+                    },
+                    status=400,
                 )
             logger.info(f"Changed the guide on DVR {dvr_id} to {guide}")
         else:
@@ -290,6 +297,17 @@ def media_server_tuners(request):
             if device.get("dvr_id"):
                 return JsonResponse(
                     {"error": "This tuner is already in a DVR"}, status=400
+                )
+            # A server shows one DVR and uses one guide for every tuner in it. A second one
+            # can be made through the API and then sits there unused, which is easy to do by
+            # accident and hard to notice, so the tuner joins the one that is there instead.
+            if media_servers.dvr_list(server):
+                return JsonResponse(
+                    {
+                        "error": "This server already has a DVR, and it keeps one guide for "
+                        "all of its tuners. Put this tuner in that DVR instead."
+                    },
+                    status=400,
                 )
             if not media_servers.create_dvr(
                 server,
