@@ -261,8 +261,15 @@ def _jellyfin_sessions(server):
             "state": "paused" if play_state.get("IsPaused") else "playing",
             # Jellyfin says when the session was last active, not when it started
             "started_at": _jellyfin_time(session.get("LastActivityDate")),
-            "live": item.get("Type") == "TvChannel",
-            "watching": _what(item.get("Type")),
+            # A live channel is usually an item of type TvChannel, but a session that came
+            # through the guide is the programme, with the channel it is on beside it. Both
+            # are live TV; taking only the first leaves those viewers out of the overlap.
+            "live": item.get("Type") == "TvChannel" or bool(item.get("ChannelId")),
+            "watching": (
+                "live TV"
+                if item.get("Type") == "TvChannel" or item.get("ChannelId")
+                else _what(item.get("Type"))
+            ),
             "decision": _jellyfin_decision(transcoding),
             "speed": 0.0,
             "transcoding": bool(transcoding),

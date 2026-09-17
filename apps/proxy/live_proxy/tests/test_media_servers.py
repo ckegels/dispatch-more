@@ -1293,6 +1293,105 @@ class TunerTests(TestCase):
         self.assertEqual(viewer.get("/proxy/media-servers/tuners/?server=a1").status_code, 403)
 
 
+class OverlapForEitherServerTests(TestCase):
+    """
+    The whole chain from a server's sessions to a viewer the overlap can use.
+
+    The tests below work from a cache written by hand, so an asymmetry between how the two
+    kinds of server are read would not show up in them. This runs the real thing: ask the
+    server what it is playing, cache it, and see whether a request arriving from it can be
+    told apart. It has to work the same either way or the overlap is Plex-only.
+    """
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        media_servers.forget_hosts()
+        self.addCleanup(media_servers.forget_hosts)
+
+    def _cache_from(self, server, answer):
+        media_servers.save_servers([server])
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = answer
+            media_servers.refresh_sessions(self.redis)
+
+    def test_a_jellyfin_viewer_can_be_told_apart(self):
+        self._cache_from(
+            {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+             "kind": "jellyfin"},
+            jellyfin,
+        )
+
+        live = [s for s in media_servers.cached_sessions(self.redis) if s["live"]]
+        # Only the live channel counts: the film on the same server is not our business
+        self.assertEqual([s["title"] for s in live], ["ORF 1"])
+        self.assertEqual(live[0]["user"], "Chris")
+        # And with one device on a live channel, a request from it belongs to that device
+        self.assertEqual(media_servers.sole_device(self.redis), "shield-1")
+
+    def test_a_jellyfin_viewer_watching_a_programme_is_still_watching_live_tv(self):
+        """
+        Started from the guide, the session is the programme with its channel beside it.
+
+        Only counting items of type TvChannel leaves those viewers out of the overlap, which
+        is the same as not being able to tell them apart at all.
+        """
+        from_the_guide = [
+            {
+                "Id": "s3",
+                "UserName": "Chris",
+                "DeviceId": "shield-1",
+                "NowPlayingItem": {
+                    "Name": "Zeit im Bild",
+                    "Type": "Program",
+                    "ChannelId": "abc-123",
+                },
+                "PlayState": {},
+            }
+        ]
+
+        def jellyfin_from_the_guide(url, **kwargs):
+            if "/Sessions" in url:
+                return fake_response(from_the_guide)
+            return jellyfin(url, **kwargs)
+
+        self._cache_from(
+            {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+             "kind": "jellyfin"},
+            jellyfin_from_the_guide,
+        )
+
+        (session,) = media_servers.cached_sessions(self.redis)
+        self.assertTrue(session["live"])
+        self.assertEqual(session["watching"], "live TV")
+        self.assertEqual(media_servers.sole_device(self.redis), "shield-1")
+
+    def test_a_plex_viewer_can_be_told_apart(self):
+        self._cache_from(
+            {"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"},
+            plex,
+        )
+
+        live = [s for s in media_servers.cached_sessions(self.redis) if s["live"]]
+        self.assertTrue(live, media_servers.cached_sessions(self.redis))
+        self.assertIsNotNone(media_servers.sole_device(self.redis))
+
+    def test_both_kinds_say_who_is_watching(self):
+        """The page lists people from this, so a server that reports nobody shows nobody."""
+        for server, answer in (
+            ({"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"}, plex),
+            ({"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+              "kind": "jellyfin"}, jellyfin),
+        ):
+            with self.subTest(server=server["name"]):
+                self._cache_from(server, answer)
+                watching = media_servers.cached_sessions(self.redis)
+                self.assertTrue(watching, f"{server['name']} reported nobody")
+                self.assertTrue(
+                    all(session.get("user") for session in watching),
+                    f"{server['name']} did not say who: {watching}",
+                )
+
+
 class SoleDeviceTests(TestCase):
     """A media server asks on behalf of its viewers; sometimes it can say which one."""
 
