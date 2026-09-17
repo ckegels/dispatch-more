@@ -1187,7 +1187,8 @@ class ChannelMapTests(TestCase):
             self.assertTrue(media_servers.enable_channels(self.server, "22"))
 
         params = put.call_args.kwargs["params"]
-        self.assertEqual(params["channelsEnabled"], ["6420", "6422"])
+        # One value with commas: repeated, the server keeps the last and enables one channel
+        self.assertEqual(params["channelsEnabled"], "6420,6422")
         # Dispatcharr's EPG uses the same numbers, so each channel maps to itself
         self.assertEqual(params["channelMapping[6420]"], "6420")
         self.assertEqual(params["channelMapping[6422]"], "6422")

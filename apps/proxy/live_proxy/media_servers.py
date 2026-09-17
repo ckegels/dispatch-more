@@ -420,7 +420,9 @@ def enable_channels(server, device_id, channels=None):
     channels = channels or device_channels(server, device_id)
     if not channels:
         return False
-    params = {"channelsEnabled": channels}
+    # One comma separated value, not the parameter repeated: given it twice the server keeps
+    # the last one and enables a single channel.
+    params = {"channelsEnabled": ",".join(str(channel) for channel in channels)}
     for channel in channels:
         params[f"channelMapping[{channel}]"] = channel
     return _put(server, f"/media/grabbers/devices/{device_id}/channelmap", params)
