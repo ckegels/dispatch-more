@@ -82,14 +82,17 @@ def media_server_list(request):
             {"error": "A token (Plex) or API key (Jellyfin) is needed"}, status=400
         )
 
-    server = {
+    # Built from the stored one, so editing a name keeps everything that was learned or
+    # switched about it: whether it is in use, and the address its tuners were added with.
+    server = dict(existing or {})
+    server.update({
         "id": server_id or media_servers.new_id(),
-        "kind": (request.data.get("kind") or "plex").lower(),
-        "name": (request.data.get("name") or "").strip() or "Plex",
+        "kind": (request.data.get("kind") or server.get("kind") or "plex").lower(),
+        "name": (request.data.get("name") or "").strip() or server.get("name") or "Plex",
         "url": url,
         "token": token,
-        "enabled": True,
-    }
+    })
+    server.setdefault("enabled", True)
     status = media_servers.check(server)
     if not status["ok"]:
         # Nothing is saved when it cannot be reached, so a wrong address cannot be stored

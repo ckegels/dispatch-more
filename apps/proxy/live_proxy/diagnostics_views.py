@@ -43,6 +43,12 @@ def _viewer_name(event, usernames, redis_client=None):
 
 
 def _account_rows(redis_client):
+    """
+    The accounts the switches tab is about: only those with the overlap enabled.
+
+    An account without it never produces a switch, so listing it would say nothing; this is
+    also why the tab looks empty on a setup where the feature is not switched on anywhere.
+    """
     from apps.m3u.connection_pool import get_profile_connection_count
     from apps.m3u.models import M3UAccountProfile
 

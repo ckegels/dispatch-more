@@ -285,6 +285,13 @@ def _jellyfin_time(value):
 
 
 def _jellyfin_decision(transcoding) -> str:
+    """
+    What the server is doing to the stream, from Jellyfin's two "is it direct" flags.
+
+    They are read as "is exactly False", not as "is falsy": a missing flag means Jellyfin did
+    not say, which is not the same as saying it is transcoding, and treating it as transcoding
+    would make every session look expensive.
+    """
     if not transcoding:
         return "direct play"
     parts = [
@@ -296,7 +303,19 @@ def _jellyfin_decision(transcoding) -> str:
 
 
 def sessions(server):
-    """What is playing right now, as the page and the start watcher need it."""
+    """
+    What is playing right now, in one shape whatever the server is.
+
+    This is the contract the rest of the file depends on: the page shows it, _watch() follows
+    it through a start, and sole_device()/switching_device() decide who a request belongs to
+    from it. Two fields are worth knowing about:
+
+    - "live" is true only for a live channel, which is the only thing that comes through
+      Dispatcharr; a film on the same server is a session but not our business;
+    - "position" is where the player is in the stream, and is None when the server does not
+      say (Plex does not, for live TV). None means "cannot tell", not "at the beginning", and
+      _watch() treats the two differently.
+    """
     if kind(server) == "jellyfin":
         return _jellyfin_sessions(server)
     container = (_get(server, "/status/sessions") or {}).get("MediaContainer") or {}
@@ -753,14 +772,6 @@ def device_name(redis_client, device):
     """The readable name of a media server device, when one was seen (see bind_device)."""
     try:
         return _as_str(redis_client.get(DEVICE_NAME_KEY.format(device=device)))
-    except Exception:
-        return None
-
-
-def device_watching(redis_client, channel_uuid):
-    """The media server device watching a channel, when its server told us."""
-    try:
-        return _as_str(redis_client.get(CHANNEL_DEVICE_KEY.format(channel_uuid=channel_uuid)))
     except Exception:
         return None
 

@@ -1131,7 +1131,10 @@ class WhoIsWatchingTests(TestCase):
             media_servers._watch(self.redis, "s1", 1789580681.0, channel_uuid="channel-1")
 
         self.assertEqual(
-            media_servers.device_watching(self.redis, "channel-1"), "server|mkk9dgqsm9p8"
+            self.redis.get(
+                media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid="channel-1")
+            ),
+            "server|mkk9dgqsm9p8",
         )
         # And the client on that channel is that viewer, so holds and Stop Skipped apply
         client = self.redis.hgetall(RedisKeys.client_metadata("channel-1", "c1"))
@@ -1425,3 +1428,40 @@ class JellyfinTests(TestCase):
 
         # Jellyfin rescans while refreshing, and has no channel map to set
         self.assertEqual(post.call_args.args[0], "http://jf:8096/ScheduledTasks/Running/task-1")
+
+
+class EditingAServerTests(TestCase):
+    """Editing one must not quietly undo what was learned or switched about it."""
+
+    def setUp(self):
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin3", password="x", user_level=10)
+        )
+        media_servers.save_servers([{
+            "id": "a1",
+            "kind": "plex",
+            "name": "Plex",
+            "url": "http://plex:32400",
+            "token": "secret",
+            "enabled": False,
+            "dispatcharr_url": "http://192.168.2.142:9191",
+        }])
+
+    def test_renaming_keeps_the_address_it_learned_and_stays_switched_off(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = plex
+            response = self.client_api.post(
+                "/proxy/media-servers/",
+                {"id": "a1", "name": "Living room", "url": "http://plex:32400"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        (stored,) = media_servers.load_servers()
+        self.assertEqual(stored["name"], "Living room")
+        # Both were lost before: the tuner address had to be typed again, and a server
+        # switched off came back on when anyone edited its name
+        self.assertEqual(stored["dispatcharr_url"], "http://192.168.2.142:9191")
+        self.assertFalse(stored["enabled"])
+        self.assertEqual(stored["token"], "secret")

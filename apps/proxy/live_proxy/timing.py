@@ -19,6 +19,8 @@ slow to start even though data is flowing from the first moment.
 import logging
 import time
 
+import gevent
+
 from .constants import TS_SYNC_BYTE
 
 logger = logging.getLogger("live_proxy")
@@ -167,16 +169,19 @@ def finish(redis_client, channel_uuid, channel_name=None):
             + f" (total {total:.2f}s, slowest: {slowest})"
         )
         start_id = _record_start(redis_client, marks, phases, total, slowest, name)
-        # What the media server does with the video afterwards, added when it is known
+        # What the media server does with the video afterwards, added when it is known. This
+        # runs between the first two chunks a player receives, so it is spawned rather than
+        # waited for: asking which media servers are configured is a database read.
         from . import media_servers
 
-        media_servers.watch_start(
+        gevent.spawn(
+            media_servers.watch_start,
             redis_client,
             start_id,
             marks.get("client"),
             float(marks["requested"]),
-            ip=marks.get("client_ip"),
-            channel_uuid=channel_uuid,
+            marks.get("client_ip"),
+            channel_uuid,
         )
         redis_client.expire(key, 10)
     except Exception as e:
@@ -205,6 +210,8 @@ def _record_start(redis_client, marks, phases, total, slowest, channel_name):
         "time": str(now),
         "channel": channel_name,
         "client": marks.get("client", ""),
+        # So the page recognises a media server by its address too, not only its User-Agent
+        "client_ip": marks.get("client_ip", ""),
         "total": f"{total:.2f}",
         "slowest": slowest,
         "phases": "|".join(f"{label}={seconds:.2f}" for label, seconds in phases),

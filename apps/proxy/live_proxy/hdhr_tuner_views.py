@@ -96,4 +96,11 @@ def lineup_status(request, channel_profile, tuner_count, output_profile_id=None)
 
 
 def device_xml(request, channel_profile, tuner_count, output_profile_id=None):
+    """
+    Dispatcharr's own device document, unchanged.
+
+    It describes the Dispatcharr HDHomeRun rather than this particular tuner, and a media
+    server reads the tuner count from discover.json, not from here. Left alone on purpose:
+    changing it would mean rewriting XML to say something nothing reads.
+    """
     return HDHRDeviceXMLAPIView.as_view()(request)

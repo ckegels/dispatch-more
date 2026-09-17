@@ -3,6 +3,9 @@ from rest_framework import serializers, status
 from rest_framework.response import Response
 from .models import M3UAccount, M3UFilter, ServerGroup, M3UAccountProfile
 from core.models import UserAgent
+# The bounds and defaults of the overlap's settings live with the feature, so the form and the
+# feature cannot drift apart (see apps.proxy.live_proxy.probation)
+from apps.proxy.live_proxy import probation
 from apps.channels.models import ChannelGroup, ChannelGroupM3UAccount
 from apps.channels.serializers import (
     ChannelGroupM3UAccountSerializer,
@@ -170,14 +173,17 @@ class M3UAccountSerializer(serializers.ModelSerializer):
     auto_enable_new_groups_series = serializers.BooleanField(required=False, write_only=True)
     probation_enabled = serializers.BooleanField(required=False, write_only=True)
     probation_seconds = serializers.IntegerField(
-        required=False, write_only=True, min_value=1, max_value=120
+        required=False,
+        write_only=True,
+        min_value=probation.MIN_PROBATION_SECONDS,
+        max_value=probation.MAX_PROBATION_SECONDS,
     )
     probation_stop_skipped = serializers.BooleanField(required=False, write_only=True)
     probation_surf_delay_ms = serializers.IntegerField(
-        required=False, write_only=True, min_value=0, max_value=2000
+        required=False, write_only=True, min_value=0, max_value=probation.MAX_SURF_DELAY_MS
     )
     probation_account_preference = serializers.ChoiceField(
-        choices=["order", "same", "alternate"], required=False, write_only=True
+        choices=list(probation.ACCOUNT_PREFERENCES), required=False, write_only=True
     )
     probation_lan_subnets = LanSubnetsField(required=False, write_only=True)
     cron_expression = serializers.CharField(required=False, allow_blank=True, default="")
@@ -267,9 +273,13 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         data["auto_enable_new_groups_vod"] = custom_props.get("auto_enable_new_groups_vod", True)
         data["auto_enable_new_groups_series"] = custom_props.get("auto_enable_new_groups_series", True)
         data["probation_enabled"] = custom_props.get("probation_enabled", False)
-        data["probation_seconds"] = custom_props.get("probation_seconds", 10)
+        data["probation_seconds"] = custom_props.get(
+            "probation_seconds", probation.DEFAULT_PROBATION_SECONDS
+        )
         data["probation_stop_skipped"] = custom_props.get("probation_stop_skipped", False)
-        data["probation_surf_delay_ms"] = custom_props.get("probation_surf_delay_ms", 500)
+        data["probation_surf_delay_ms"] = custom_props.get(
+            "probation_surf_delay_ms", probation.DEFAULT_SURF_DELAY_MS
+        )
         from apps.proxy.live_proxy.probation import account_switch_preference, suggested_lan_subnet
 
         data["probation_account_preference"] = account_switch_preference(instance)

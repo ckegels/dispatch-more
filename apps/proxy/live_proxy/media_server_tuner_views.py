@@ -163,6 +163,12 @@ def _choices():
 
 
 def _calculated_tuners() -> int:
+    """
+    What Dispatcharr would advertise on its own, shown next to the Tuners field to compare.
+
+    Zero when it cannot be worked out, which the page reads as "nothing to compare with"
+    rather than as a real answer: it is only there to help choose a number.
+    """
     from apps.m3u.utils import calculate_tuner_count
 
     try:
