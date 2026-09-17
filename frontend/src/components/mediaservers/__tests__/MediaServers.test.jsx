@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import MediaServers from '../MediaServers.jsx';
 
@@ -15,6 +21,19 @@ vi.mock('../../../api', () => ({
     attachMediaServerTuner: vi.fn(),
     deleteMediaServerDvr: vi.fn(),
   },
+}));
+
+// The real one pulls in a store and more Mantine pieces than this file mocks
+vi.mock('../../ConfirmationDialog', () => ({
+  default: ({ opened, title, message, confirmLabel, onConfirm, onClose }) =>
+    opened ? (
+      <div role="dialog">
+        <span>{title}</span>
+        <span>{message}</span>
+        <button onClick={onConfirm}>{confirmLabel}</button>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    ) : null,
 }));
 
 vi.mock('@mantine/core', () => {
@@ -281,7 +300,12 @@ describe('MediaServers', () => {
       expect(API.syncMediaServerTuner).toHaveBeenCalledWith('a1', '22', '32')
     );
 
+    // The server's own Remove is first; the tuners follow
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1]);
+    const tunerDialog = await screen.findByRole('dialog');
+    fireEvent.click(
+      within(tunerDialog).getByRole('button', { name: 'Remove tuner' })
+    );
     await waitFor(() =>
       expect(API.deleteMediaServerTuner).toHaveBeenCalledWith('a1', '22')
     );
@@ -340,6 +364,11 @@ describe('MediaServers', () => {
       )
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove DVR' }));
+    const dvrDialog = await screen.findByRole('dialog');
+    expect(dvrDialog).toHaveTextContent('Remove this DVR?');
+    fireEvent.click(
+      within(dvrDialog).getByRole('button', { name: 'Remove DVR' })
+    );
 
     await waitFor(() =>
       expect(API.deleteMediaServerDvr).toHaveBeenCalledWith('a1', '32')
@@ -404,6 +433,10 @@ describe('MediaServers', () => {
     await screen.findByText('Home Plex');
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
+    // It asks first: a media server is easy to remove by accident
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Remove this media server?');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
 
     await waitFor(() =>
       expect(API.deleteMediaServer).toHaveBeenCalledWith('a1')

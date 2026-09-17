@@ -76,6 +76,14 @@ class MediaServerTests(TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("Could not reach", result["error"])
 
+    def test_what_is_playing_says_whether_it_is_live_tv(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.return_value = fake_response(SESSION)
+            (session,) = media_servers.sessions(self.server)
+        # Only live TV comes through Dispatcharr; a film on the same server does not
+        self.assertEqual(session["watching"], "live TV")
+        self.assertEqual(session["server"], "Plex")
+
     def test_what_is_playing_is_read(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
             get.return_value = fake_response(SESSION)
@@ -1381,6 +1389,21 @@ class JellyfinTests(TestCase):
             guide_call.kwargs["json"]["Path"], "http://192.168.2.142:9191/output/epg/france"
         )
         self.assertTrue(guide_call.kwargs["json"]["EnableAllTuners"])
+
+    def test_a_tuner_can_be_added_as_a_playlist_instead(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.post") as post:
+            post.return_value = fake_response({})
+            media_servers.add_tuner(
+                self.server, "http://d:9191/output/m3u/france", "france", None, "m3u"
+            )
+        self.assertEqual(post.call_args.kwargs["json"]["Type"], "m3u")
+
+    def test_what_each_session_is_watching_is_said_in_words(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = jellyfin
+            channel, film = media_servers.sessions(self.server)
+        self.assertEqual(channel["watching"], "live TV")
+        self.assertEqual(film["watching"], "a film")
 
     def test_removing_a_tuner_and_a_guide(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.delete") as delete:

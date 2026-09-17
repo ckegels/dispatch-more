@@ -14,6 +14,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import API from '../../api';
+import ConfirmationDialog from '../ConfirmationDialog';
 
 const emptyTuner = {
   channel_profile: '',
@@ -23,6 +24,7 @@ const emptyTuner = {
   tuner_count: '',
   dvr_id: '',
   language: 'eng',
+  tuner_type: 'hdhomerun',
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -32,6 +34,8 @@ const MediaServerTuners = ({ serverId, enabled }) => {
   const [busy, setBusy] = useState(false);
 
   const [baseUrl, setBaseUrl] = useState('');
+  // Removing a tuner or a guide cannot be undone from here, so it is asked first
+  const [confirming, setConfirming] = useState(null);
 
   const load = useCallback(async () => {
     if (!enabled) return;
@@ -108,13 +112,16 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4} wrap="wrap">
-                      <Badge
-                        size="xs"
-                        variant="light"
-                        color={tuner.state === 'alive' ? 'teal' : 'red'}
-                      >
-                        {tuner.state || 'unknown'}
-                      </Badge>
+                      {/* Jellyfin does not say whether a tuner answered, so nothing is said */}
+                      {tuner.state && (
+                        <Badge
+                          size="xs"
+                          variant="light"
+                          color={tuner.state === 'alive' ? 'teal' : 'red'}
+                        >
+                          {tuner.state}
+                        </Badge>
+                      )}
                       {!tuner.dvr_id && (
                         // A tuner outside a DVR is registered but not used at all
                         <Badge size="xs" color="yellow" variant="light">
@@ -177,9 +184,13 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                         color="red"
                         disabled={busy}
                         onClick={() =>
-                          run(() =>
-                            API.deleteMediaServerTuner(serverId, tuner.id)
-                          )
+                          setConfirming({
+                            title: 'Remove this tuner?',
+                            message: `"${tuner.title}" is removed from this media server. Dispatcharr and its channels are not touched, and it can be added again.`,
+                            confirmLabel: 'Remove tuner',
+                            action: () =>
+                              API.deleteMediaServerTuner(serverId, tuner.id),
+                          })
                         }
                       >
                         Remove
@@ -225,7 +236,12 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                 color="red"
                 disabled={busy}
                 onClick={() =>
-                  run(() => API.deleteMediaServerDvr(serverId, dvr.id))
+                  setConfirming({
+                    title: 'Remove this DVR?',
+                    message: `"${dvr.title}" is removed from this media server, with the guide it uses. Its tuners stay registered, outside any DVR, and its recordings are not touched.`,
+                    confirmLabel: 'Remove DVR',
+                    action: () => API.deleteMediaServerDvr(serverId, dvr.id),
+                  })
                 }
               >
                 Remove DVR
@@ -293,6 +309,22 @@ const MediaServerTuners = ({ serverId, enabled }) => {
               }))}
             />
           </>
+        )}
+        {data.kind === 'jellyfin' && (
+          <Select
+            size="xs"
+            w={150}
+            label="Added as"
+            description="How it reads the channels"
+            value={form.tuner_type}
+            onChange={(value) =>
+              setForm({ ...form, tuner_type: value || 'hdhomerun' })
+            }
+            data={[
+              { value: 'hdhomerun', label: 'HDHomeRun tuner' },
+              { value: 'm3u', label: 'M3U playlist' },
+            ]}
+          />
         )}
         <NumberInput
           size="xs"
@@ -379,6 +411,18 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         because Dispatcharr&apos;s own number counts a custom stream per channel
         as a tuner.
       </Text>
+      <ConfirmationDialog
+        opened={!!confirming}
+        onClose={() => setConfirming(null)}
+        onConfirm={() => {
+          const { action } = confirming;
+          setConfirming(null);
+          run(action);
+        }}
+        title={confirming?.title}
+        message={confirming?.message}
+        confirmLabel={confirming?.confirmLabel}
+      />
     </Stack>
   );
 };

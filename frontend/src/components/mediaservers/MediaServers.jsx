@@ -17,6 +17,7 @@ import {
 } from '@mantine/core';
 import API from '../../api';
 import MediaServerTuners from './MediaServerTuners';
+import ConfirmationDialog from '../ConfirmationDialog';
 
 const REFRESH_MS = 10000;
 
@@ -29,6 +30,7 @@ const MediaServers = ({ active }) => {
   const [saving, setSaving] = useState(false);
   // A server's details fold away: with several of them the page is mostly tables
   const [openServers, setOpenServers] = useState({});
+  const [confirmingRemove, setConfirmingRemove] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -163,7 +165,7 @@ const MediaServers = ({ active }) => {
                 size="compact-sm"
                 variant="subtle"
                 color="red"
-                onClick={() => remove(server.id)}
+                onClick={() => setConfirmingRemove(server)}
               >
                 Remove
               </Button>
@@ -294,6 +296,17 @@ const MediaServers = ({ active }) => {
           </Group>
         </Stack>
       </Card>
+      <ConfirmationDialog
+        opened={!!confirmingRemove}
+        onClose={() => setConfirmingRemove(null)}
+        onConfirm={() => {
+          remove(confirmingRemove.id);
+          setConfirmingRemove(null);
+        }}
+        title="Remove this media server?"
+        message={`Dispatcharr stops talking to "${confirmingRemove?.name}" and forgets its key. Nothing on the server itself is changed: its tuners, guides and recordings stay as they are.`}
+        confirmLabel="Remove"
+      />
     </Stack>
   );
 };

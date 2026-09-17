@@ -25,6 +25,9 @@ logger = logging.getLogger("live_proxy")
 
 SETTINGS_KEY = "media-servers"
 REQUEST_TIMEOUT = 5
+# Making a DVR makes the server scan the tuner and load a guide before it answers, which takes
+# much longer than reading something from it.
+SLOW_TIMEOUT = 60
 
 # How long, and how often, sessions are watched after a channel start. Plex needs a moment to
 # create the session, and the buffering we are measuring is a handful of seconds.
@@ -259,6 +262,7 @@ def _jellyfin_sessions(server):
             # Jellyfin says when the session was last active, not when it started
             "started_at": _jellyfin_time(session.get("LastActivityDate")),
             "live": item.get("Type") == "TvChannel",
+            "watching": _what(item.get("Type")),
             "decision": _jellyfin_decision(transcoding),
             "speed": 0.0,
             "transcoding": bool(transcoding),
@@ -308,6 +312,7 @@ def sessions(server):
             "state": player.get("state", ""),
             "started_at": float(item.get("addedAt") or 0),
             "live": item.get("live") == "1",
+            "watching": "live TV" if item.get("live") == "1" else _what(item.get("type")),
             "decision": _decision(transcode),
             "speed": float(transcode.get("speed") or 0) if transcode else 0.0,
             "transcoding": bool(transcode),
@@ -319,6 +324,19 @@ def sessions(server):
             "server": server.get("name") or "Plex",
         })
     return playing
+
+
+def _what(item_type) -> str:
+    """What someone is watching, in words: only live TV comes through Dispatcharr."""
+    return {
+        "TvChannel": "live TV",
+        "Movie": "a film",
+        "movie": "a film",
+        "Episode": "an episode",
+        "episode": "an episode",
+        "Audio": "music",
+        "track": "music",
+    }.get(item_type or "", item_type or "something else")
 
 
 def _decision(transcode) -> str:
@@ -333,7 +351,7 @@ def _decision(transcode) -> str:
     return f"transcode ({' + '.join(parts)})" if parts else "direct play"
 
 
-def _post(server, path, params=None, json_body=None):
+def _post(server, path, params=None, json_body=None, timeout=REQUEST_TIMEOUT):
     """One change on a media server. Returns True when it was accepted."""
     url = f"{clean_url(server.get('url'))}{path}"
     try:
@@ -342,7 +360,7 @@ def _post(server, path, params=None, json_body=None):
             params=params or {},
             json=json_body,
             headers=_headers(server),
-            timeout=REQUEST_TIMEOUT,
+            timeout=timeout,
         )
         response.raise_for_status()
         return True
@@ -487,6 +505,7 @@ def create_dvr(server, device_uuid, xmltv_url, title, language="eng"):
             "lineup": xmltv_lineup(xmltv_url, title),
             "language": language or "eng",
         },
+        timeout=SLOW_TIMEOUT,
     )
 
 
@@ -543,11 +562,16 @@ def tuners(server, our_hosts=()):
     return found
 
 
-def add_tuner(server, uri, name=None, tuner_count=None):
+def add_tuner(server, uri, name=None, tuner_count=None, tuner_type="hdhomerun"):
+    """
+    Register Dispatcharr as a tuner.
+
+    Jellyfin can take it as an HDHomeRun or as an M3U playlist; Plex only knows HDHomeRun, so
+    the kind is ignored there.
+    """
     if kind(server) == "jellyfin":
-        # Dispatcharr answers as an HDHomeRun, which is a kind Jellyfin knows how to use
         body = {
-            "Type": "hdhomerun",
+            "Type": "m3u" if tuner_type == "m3u" else "hdhomerun",
             "Url": uri,
             "FriendlyName": name or "Dispatcharr",
             "AllowHWTranscoding": True,

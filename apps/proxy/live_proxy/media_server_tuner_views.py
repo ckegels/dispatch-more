@@ -91,7 +91,9 @@ def default_base_url(request) -> str:
     return base
 
 
-def _tuner_url(base_url, channel_profile, output_profile_id=None, tuner_count=None):
+def _tuner_url(
+    base_url, channel_profile, output_profile_id=None, tuner_count=None, tuner_type="hdhomerun"
+):
     """
     This Dispatcharr as an HDHomeRun for that channel profile.
 
@@ -101,6 +103,9 @@ def _tuner_url(base_url, channel_profile, output_profile_id=None, tuner_count=No
     # A profile name may contain spaces and other characters that cannot go in an address
     base = media_servers.clean_url(base_url)
     profile = quote(channel_profile, safe="")
+    if tuner_type == "m3u":
+        # A playlist instead of a tuner: the same channels, without the tuner count
+        return f"{base}/output/m3u/{profile}"
     url = f"{base}/proxy/hdhr/{profile}" if tuner_count else f"{base}/hdhr/{profile}"
     if output_profile_id:
         url = f"{url}/output_profile/{int(output_profile_id)}"
@@ -184,6 +189,7 @@ def media_server_tuners(request):
             "tuners": media_servers.tuners(server, hosts),
             "dvrs": media_servers.dvr_list(server),
             "base_url": base_url,
+            "kind": media_servers.kind(server),
             **_choices(),
         })
 
@@ -287,10 +293,15 @@ def media_server_tuners(request):
             {"error": f"Give a number of tuners between 1 and {MAX_TUNERS}"}, status=400
         )
 
+    tuner_type = "m3u" if request.data.get("tuner_type") == "m3u" else "hdhomerun"
     uri = _tuner_url(
-        base_url, channel_profile, request.data.get("output_profile_id"), tuner_count
+        base_url,
+        channel_profile,
+        request.data.get("output_profile_id"),
+        tuner_count,
+        tuner_type,
     )
-    if not media_servers.add_tuner(server, uri, channel_profile, tuner_count):
+    if not media_servers.add_tuner(server, uri, channel_profile, tuner_count, tuner_type):
         # A profile built for a tuner that was refused would be left behind with no way
         # to reach it, so it goes again and the next try starts clean.
         if built:
