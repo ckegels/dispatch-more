@@ -2648,6 +2648,22 @@ export default class API {
     });
   }
 
+  static async makeMediaServerDvr(server, id, guideUrl, language) {
+    // A DVR is a tuner plus the guide its channels are listed in: both at once
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body: { server, id, guide_url: guideUrl, language, action: 'make_dvr' },
+    });
+  }
+
+  static async setMediaServerGuide(server, dvrId, guideUrl) {
+    // One guide per DVR, shared by every tuner in it
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body: { server, dvr_id: dvrId, guide_url: guideUrl, action: 'set_guide' },
+    });
+  }
+
   static async deleteMediaServerDvr(server, dvrId) {
     // The DVR goes; its tuners stay registered, outside any DVR
     return await request(

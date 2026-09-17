@@ -19,6 +19,8 @@ vi.mock('../../../api', () => ({
     syncMediaServerTuner: vi.fn(),
     deleteMediaServerTuner: vi.fn(),
     attachMediaServerTuner: vi.fn(),
+    makeMediaServerDvr: vi.fn(),
+    setMediaServerGuide: vi.fn(),
     deleteMediaServerDvr: vi.fn(),
   },
 }));
@@ -43,11 +45,15 @@ vi.mock('@mantine/core', () => {
   Table.Tr = ({ children }) => <tr>{children}</tr>;
   Table.Th = ({ children }) => <th>{children}</th>;
   Table.Td = ({ children }) => <td>{children}</td>;
-  const input = ({ label, value, onChange, description }) => (
+  const input = ({ label, value, onChange, description, ...rest }) => (
     <label>
       {label}
       <span>{description}</span>
-      <input value={value} onChange={onChange} />
+      <input
+        aria-label={rest['aria-label'] || label}
+        value={value}
+        onChange={onChange}
+      />
     </label>
   );
   Table.ScrollContainer = ({ children }) => <div>{children}</div>;
@@ -154,6 +160,7 @@ const tuners = {
       state: 'alive',
       tuners: 2,
       dvr_id: '32',
+      guide: 'http://192.168.2.142:9191/output/epg/austria?cachedlogos=false',
       ours: true,
     },
     {
@@ -170,7 +177,14 @@ const tuners = {
   max_tuners: 64,
   calculated_tuners: 1362,
   dvrs: [
-    { id: '32', title: 'Belgium', tuners: ['Austria'], lineups: ['Austria'] },
+    {
+      id: '32',
+      title: 'Belgium',
+      tuners: ['Austria'],
+      lineups: ['Austria'],
+      guide: 'http://192.168.2.142:9191/output/epg/austria?cachedlogos=false',
+      devices: ['device://x/austria'],
+    },
   ],
   channel_profiles: [{ id: 1, name: 'austria' }],
   channel_groups: [{ id: 5, name: 'Austria', channels: 25 }],
@@ -288,6 +302,55 @@ describe('MediaServers', () => {
     expect(screen.getByText('not in a DVR')).toBeInTheDocument();
   });
 
+  it('shows both addresses, because a tuner without its guide lists nothing', async () => {
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    expect(
+      screen.getByText(/tuner: http:\/\/192\.168\.2\.142:9191\/hdhr\/austria/)
+    ).toBeInTheDocument();
+    // Against the tuner, and again on the DVR that holds it
+    expect(
+      screen.getAllByText(/guide: http:\/\/192\.168\.2\.142:9191\/output\/epg\/austria/)
+        .length
+    ).toBeGreaterThan(0);
+    // The one in no DVR has no guide either, and says so rather than looking fine
+    expect(screen.getByText('guide: none')).toBeInTheDocument();
+  });
+
+  it('changes the guide on the DVR a tuner is in', async () => {
+    API.setMediaServerGuide.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change guide' }));
+    fireEvent.change(screen.getByLabelText('Guide for Austria'), {
+      target: { value: 'http://192.168.2.142:9191/output/epg/france' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(API.setMediaServerGuide).toHaveBeenCalledWith(
+        'a1',
+        '32',
+        'http://192.168.2.142:9191/output/epg/france'
+      )
+    );
+  });
+
+  it('makes a DVR for a tuner that is in none', async () => {
+    API.makeMediaServerDvr.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make a DVR' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make DVR' }));
+
+    await waitFor(() => expect(API.makeMediaServerDvr).toHaveBeenCalled());
+  });
+
   it('syncs and removes a tuner', async () => {
     API.syncMediaServerTuner.mockResolvedValue(tuners);
     API.deleteMediaServerTuner.mockResolvedValue(tuners);
@@ -348,7 +411,7 @@ describe('MediaServers', () => {
         tuner_count: '2',
         dvr_id: '',
         language: 'eng',
-        // On unless it is turned off: media servers cannot read the cached logos
+        // On unless it is turned off: cached logos usually do not show up on a media server
         skip_cached_logos: true,
       })
     );

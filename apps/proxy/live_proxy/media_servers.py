@@ -16,7 +16,7 @@ import logging
 import secrets
 import socket
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import gevent
 import requests
@@ -459,9 +459,33 @@ def dvr_list(server):
             "title": dvr.get("lineupTitle") or dvr.get("language") or f"DVR {dvr.get('key')}",
             "tuners": [device.get("title") or "tuner" for device in dvr.get("Device") or ()],
             "lineups": [lineup.get("title") or "" for lineup in dvr.get("Lineup") or ()],
+            # The one guide this DVR uses, so the page can show it against each of its tuners
+            "guide": guide_url(dvr.get("lineup")),
+            "devices": [device.get("uuid", "") for device in dvr.get("Device") or ()],
         }
         for dvr in dvrs(server)
     ]
+
+
+def set_guide(server, dvr_id, xmltv_url, title, device_uuids=()):
+    """
+    Change the guide a DVR uses.
+
+    A DVR is stored with its guide and its tuners together, so both go back or the server
+    takes the change as a DVR with no tuners left in it. There is no endpoint that changes
+    the guide on its own.
+    """
+    if kind(server) == "jellyfin":
+        # A Jellyfin guide is its own object: replace it rather than editing a DVR
+        return add_guide(server, xmltv_url, title)
+    params = {
+        "lineup": xmltv_lineup(xmltv_url, title),
+        "language": "eng",
+    }
+    if device_uuids:
+        # Repeated, one per tuner: this is a list of devices, not one joined value
+        params["device"] = list(device_uuids)
+    return _put(server, f"/livetv/dvrs/{dvr_id}", params, timeout=SLOW_TIMEOUT)
 
 
 def delete_dvr(server, dvr_id):
@@ -471,14 +495,14 @@ def delete_dvr(server, dvr_id):
     return _delete(server, f"/livetv/dvrs/{dvr_id}")
 
 
-def _put(server, path, params=None):
+def _put(server, path, params=None, timeout=None):
     url = f"{clean_url(server.get('url'))}{path}"
     try:
         response = requests.put(
             url,
             params=params or {},
             headers=_headers(server),
-            timeout=REQUEST_TIMEOUT,
+            timeout=timeout or REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         return True
@@ -492,17 +516,18 @@ def xmltv_lineup(xmltv_url, title) -> str:
     return f"lineup://tv.plex.providers.epg.xmltv/{quote(xmltv_url, safe='')}#{title}"
 
 
-def add_lineup(server, dvr_id, xmltv_url, title):
+def guide_url(lineup) -> str:
     """
-    Give a DVR another guide. A DVR holds several tuners, each with its own lineup, so a tuner
-    put into a DVR that was already there needs its guide added as well or it has no programmes.
+    The plain address of the guide a DVR uses, back out of the lineup it stores.
+
+    Worth showing on the page: a DVR whose guide covers other channels than its tuners serve
+    looks like a working DVR with no programmes against half of it, and the address is the
+    only place that is visible.
     """
-    if kind(server) == "jellyfin":
-        # Its guide already covers every tuner
-        return True
-    return _put(
-        server, f"/livetv/dvrs/{dvr_id}/lineups", {"lineup": xmltv_lineup(xmltv_url, title)}
-    )
+    if not lineup:
+        return ""
+    address = str(lineup).split("/", 3)[-1] if "//" in str(lineup) else str(lineup)
+    return unquote(address.split("#", 1)[0])
 
 
 def create_dvr(server, device_uuid, xmltv_url, title, language="eng"):
@@ -557,8 +582,12 @@ def tuners(server, our_hosts=()):
     if kind(server) == "jellyfin":
         return _jellyfin_tuners(server, our_hosts)
     container = (_get(server, "/media/grabbers/devices") or {}).get("MediaContainer") or {}
+    # A tuner's guide is the guide of the DVR it is in: Plex keeps one guide per DVR, shared
+    # by every tuner in it, so this is what the page shows next to the tuner's own address.
     in_dvr = {}
+    dvr_guides = {}
     for dvr in dvrs(server):
+        dvr_guides[str(dvr.get("key"))] = guide_url(dvr.get("lineup"))
         for device in dvr.get("Device") or ():
             in_dvr[str(device.get("key"))] = str(dvr.get("key"))
 
@@ -576,6 +605,7 @@ def tuners(server, our_hosts=()):
             "state": device.get("status", ""),
             "tuners": int(device.get("tuners") or 0),
             "dvr_id": in_dvr.get(key, ""),
+            "guide": dvr_guides.get(in_dvr.get(key, ""), ""),
             "ours": host in set(our_hosts) if host else False,
         })
     return found

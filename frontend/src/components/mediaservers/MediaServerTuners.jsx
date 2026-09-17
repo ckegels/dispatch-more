@@ -26,8 +26,25 @@ const emptyTuner = {
   dvr_id: '',
   language: 'eng',
   tuner_type: 'hdhomerun',
-  // Media servers fetch logos themselves and cannot read Dispatcharr's cached ones
+  // Cached logos usually do not show up on a media server, so the guide points at the
+  // original addresses instead. Why they do not is not understood: the cache endpoint
+  // needs no login and is on the same network, so the server can reach it.
   skip_cached_logos: true,
+};
+
+// The guide that belongs with a tuner of ours: Dispatcharr's EPG for the same channel
+// profile the tuner serves. A media server keeps the two together, so a tuner offered
+// without its guide plays channels with nothing listed against them.
+export const guideForTuner = (uri, base, skipCachedLogos = true) => {
+  const parts = String(uri || '')
+    .split('/')
+    .filter(Boolean);
+  const at = parts.indexOf('hdhr');
+  if (at < 0 || at + 1 >= parts.length) return '';
+  const root = String(base || '').replace(/\/+$/, '');
+  return `${root}/output/epg/${parts[at + 1]}${
+    skipCachedLogos ? '?cachedlogos=false' : ''
+  }`;
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -39,6 +56,9 @@ const MediaServerTuners = ({ serverId, enabled }) => {
   const [baseUrl, setBaseUrl] = useState('');
   // Removing a tuner or a guide cannot be undone from here, so it is asked first
   const [confirming, setConfirming] = useState(null);
+  // The guide being edited, if any: {tuner, value}. One at a time, so the address on show
+  // is always the one the server holds rather than a half typed one.
+  const [guideEdit, setGuideEdit] = useState(null);
 
   const load = useCallback(async () => {
     if (!enabled) return;
@@ -94,7 +114,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Tuner</Table.Th>
-                <Table.Th>Address</Table.Th>
+                <Table.Th>Addresses</Table.Th>
                 <Table.Th w={190}>State</Table.Th>
                 <Table.Th w={150} />
               </Table.Tr>
@@ -111,7 +131,81 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                     )}
                   </Table.Td>
                   <Table.Td c="dimmed" style={{ wordBreak: 'break-all' }}>
-                    {tuner.uri}
+                    <Stack gap={2}>
+                      <Text size="xs">tuner: {tuner.uri}</Text>
+                      {guideEdit && guideEdit.tuner === tuner.id ? (
+                        <Group gap={4} wrap="nowrap">
+                          <TextInput
+                            size="xs"
+                            style={{ flex: 1 }}
+                            aria-label={`Guide for ${tuner.title}`}
+                            value={guideEdit.value}
+                            onChange={(event) =>
+                              setGuideEdit({
+                                ...guideEdit,
+                                value: event.currentTarget.value,
+                              })
+                            }
+                          />
+                          <Button
+                            size="compact-xs"
+                            disabled={busy}
+                            onClick={() => {
+                              const { value } = guideEdit;
+                              setGuideEdit(null);
+                              run(() =>
+                                tuner.dvr_id
+                                  ? API.setMediaServerGuide(
+                                      serverId,
+                                      tuner.dvr_id,
+                                      value
+                                    )
+                                  : API.makeMediaServerDvr(
+                                      serverId,
+                                      tuner.id,
+                                      value,
+                                      form.language
+                                    )
+                              );
+                            }}
+                          >
+                            {tuner.dvr_id ? 'Save' : 'Make DVR'}
+                          </Button>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            onClick={() => setGuideEdit(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </Group>
+                      ) : (
+                        <Group gap={6} wrap="nowrap">
+                          <Text size="xs" c={tuner.guide ? 'dimmed' : 'orange'}>
+                            guide: {tuner.guide || 'none'}
+                          </Text>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            disabled={busy}
+                            onClick={() =>
+                              setGuideEdit({
+                                tuner: tuner.id,
+                                value:
+                                  tuner.guide ||
+                                  guideForTuner(
+                                    tuner.uri,
+                                    baseUrl,
+                                    form.skip_cached_logos
+                                  ),
+                              })
+                            }
+                          >
+                            {tuner.dvr_id ? 'Change guide' : 'Make a DVR'}
+                          </Button>
+                        </Group>
+                      )}
+                    </Stack>
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4} wrap="wrap">
@@ -208,9 +302,11 @@ const MediaServerTuners = ({ serverId, enabled }) => {
       )}
 
       <Text size="xs" c="dimmed">
-        Adding a tuner puts it straight into a DVR: a new one, or an existing
-        one, which keeps the tuners it already has and gains this one. Either
-        way its guide is Dispatcharr&apos;s own EPG for that channel profile.
+        A tuner is where the channels come from and the guide is what is listed
+        against them, so both are shown above and either can be changed. A DVR
+        holds one guide, shared by every tuner in it: a tuner whose channels
+        that guide does not reach plays with nothing listed against it. A tuner
+        that is in no DVR is registered and unused until you make one for it.
         Its channels are then scanned and the guide loaded, so it is ready to
         watch: its channels are scanned, switched on and mapped to the guide,
         because a channel the server found but left switched off never appears.
@@ -230,8 +326,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                 {dvr.tuners.length > 0
                   ? dvr.tuners.join(', ')
                   : 'no tuners in it'}
-                {dvr.lineups.length > 0 &&
-                  ` · guides: ${dvr.lineups.join(', ')}`}
+                {dvr.guide && ` · guide: ${dvr.guide}`}
               </Text>
               <Button
                 size="compact-xs"
@@ -386,7 +481,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         <Switch
           size="sm"
           label="Original logos"
-          description="Media servers cannot read the cached ones"
+          description="Cached logos usually do not show up on a media server"
           checked={form.skip_cached_logos}
           onChange={(event) =>
             setForm({

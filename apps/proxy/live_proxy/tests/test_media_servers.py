@@ -752,7 +752,7 @@ class TunerTests(TestCase):
             "device://tv.plex.grabbers.hdhomerun/dispatcharr-hdhr-austria-t2",
         )
         # The guide is Dispatcharr's own EPG for that channel profile
-        # The guide points at the original logos: a media server cannot read the cached ones
+        # The guide points at the original logos, which is what usually shows up on a media server
         self.assertEqual(
             dvr_call["lineup"],
             "lineup://tv.plex.providers.epg.xmltv/"
@@ -833,13 +833,9 @@ class TunerTests(TestCase):
         self.assertTrue(
             any("/livetv/dvrs/32/devices/" in url for url in puts), puts
         )
-        # A DVR holds a guide per tuner, so this tuner's guide is added next to the others
-        self.assertEqual(
-            puts["http://192.168.2.141:32400/livetv/dvrs/32/lineups"]["lineup"],
-            "lineup://tv.plex.providers.epg.xmltv/"
-            "http%3A%2F%2F192.168.2.142%3A9191%2Foutput%2Fepg%2Faustria%3Fcachedlogos%3Dfalse"
-            "#austria",
-        )
+        # The DVR keeps the one guide it already had: there is no guide per tuner, and the
+        # endpoint Dispatcharr used to call for that does not exist on the server
+        self.assertNotIn("http://192.168.2.141:32400/livetv/dvrs/32/lineups", puts)
 
     def test_a_dvr_that_could_not_be_made_is_said_so_without_losing_the_tuner(self):
         from apps.channels.models import ChannelProfile
@@ -898,12 +894,19 @@ class TunerTests(TestCase):
         called = [call.args[0] for call in put.call_args_list]
         self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/1", called)
         # The DVRs are offered by name, so there is something to choose
-        self.assertEqual(
-            response.json()["dvrs"],
-            [{"id": "32", "title": "Belgium", "tuners": ["Austria"], "lineups": ["Austria"]}],
-        )
+        (dvr,) = response.json()["dvrs"]
+        self.assertEqual(dvr["id"], "32")
+        self.assertEqual(dvr["title"], "Belgium")
+        self.assertEqual(dvr["tuners"], ["Austria"])
 
-    def test_a_tuner_of_ours_put_into_a_dvr_takes_its_guide_with_it(self):
+    def test_putting_a_tuner_in_a_dvr_leaves_the_dvrs_guide_alone(self):
+        """
+        A DVR keeps one guide, shared by every tuner in it.
+
+        Dispatcharr used to add a guide per tuner here, against an endpoint the server does
+        not have, so the call failed quietly and the tuner played channels with nothing
+        listed against them. The guide is changed on the DVR itself instead.
+        """
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.put"
         ) as put:
@@ -916,11 +919,91 @@ class TunerTests(TestCase):
                 format="json",
             )
 
-        puts = {call.args[0]: call.kwargs.get("params", {}) for call in put.call_args_list}
-        self.assertIn(
-            "austria",
-            puts["http://192.168.2.141:32400/livetv/dvrs/32/lineups"]["lineup"],
+        called = [call.args[0] for call in put.call_args_list]
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/22", called)
+        self.assertNotIn("http://192.168.2.141:32400/livetv/dvrs/32/lineups", called)
+
+    def test_a_dvr_can_be_made_for_a_tuner_that_is_in_none(self):
+        """A tuner outside a DVR is registered and unused: this is the way out of that."""
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "action": "make_dvr",
+                    "id": "1",
+                    "guide_url": "http://192.168.2.142:9191/output/epg/austria?cachedlogos=false",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        made = next(
+            call for call in post.call_args_list if call.args[0].endswith("/livetv/dvrs")
         )
+        self.assertIn("cachedlogos", made.kwargs["params"]["lineup"])
+        # Named after the channels it lists, not the language it happens to be in
+        self.assertTrue(made.kwargs["params"]["lineup"].endswith("#austria"))
+
+    def test_a_dvr_already_in_one_is_not_given_another(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = plex_with_tuners
+            # Tuner 22 is already in DVR 32
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "action": "make_dvr",
+                    "id": "22",
+                    "guide_url": "http://192.168.2.142:9191/output/epg/austria",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already in a DVR", response.json()["error"])
+        post.assert_not_called()
+
+    def test_the_guide_on_a_dvr_can_be_changed(self):
+        """Its tuners go back with it, or the server takes it as a DVR emptied of them."""
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.side_effect = plex_with_tuners
+            put.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "action": "set_guide",
+                    "dvr_id": "32",
+                    "guide_url": "http://192.168.2.142:9191/output/epg/france?cachedlogos=false",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        call = next(
+            call for call in put.call_args_list
+            if call.args[0] == "http://192.168.2.141:32400/livetv/dvrs/32"
+        )
+        self.assertIn("france", call.kwargs["params"]["lineup"])
+        self.assertIn("device", call.kwargs["params"])
+
+    def test_a_guide_address_has_to_be_one(self):
+        response = self.client_api.post(
+            "/proxy/media-servers/tuners/",
+            {"server": "a1", "action": "set_guide", "dvr_id": "32", "guide_url": "epg/france"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("http://", response.json()["error"])
 
     def test_putting_a_tuner_in_a_dvr_needs_a_dvr(self):
         response = self.client_api.post(

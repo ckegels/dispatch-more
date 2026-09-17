@@ -118,9 +118,10 @@ def _epg_url(base_url, channel_profile, skip_cached_logos=True) -> str:
     """
     Dispatcharr's own EPG for a channel profile, which is what a DVR uses as its guide.
 
-    Media servers fetch the logos themselves and cannot read Dispatcharr's cached ones, so by
-    default the guide points at the original addresses ("cachedlogos=false"). Anyone whose
-    server can read the cached ones can turn that off when adding the tuner.
+    Cached logos usually do not show up on a media server, so by default the guide points at
+    the original addresses instead ("cachedlogos=false"). Why they do not is not understood:
+    the cache endpoint needs no login and sits on the same network, so the server can reach
+    it. Anyone whose server does show them can turn this off when adding the tuner.
     """
     url = f"{media_servers.clean_url(base_url)}/output/epg/{quote(channel_profile, safe='')}"
     return f"{url}?cachedlogos=false" if skip_cached_logos else url
@@ -132,6 +133,21 @@ def _profile_from_uri(uri) -> str:
     if "hdhr" not in parts:
         return ""
     return unquote(parts[parts.index("hdhr") + 1]) if len(parts) > parts.index("hdhr") + 1 else ""
+
+
+def _profile_from_guide(url) -> str:
+    """
+    The channel profile a guide of ours covers, from its address.
+
+    Used as the name a DVR is stored under, so a DVR says which channels it lists rather
+    than being called after the language it happens to be in.
+    """
+    path = str(url).split("?", 1)[0]
+    parts = [part for part in path.split("/") if part]
+    if "epg" not in parts:
+        return ""
+    index = parts.index("epg") + 1
+    return unquote(parts[index]) if len(parts) > index else ""
 
 
 def _choices():
@@ -233,6 +249,66 @@ def media_server_tuners(request):
         })
 
     action = request.data.get("action") or "add"
+
+    if action in ("make_dvr", "set_guide"):
+        # The guide belongs with the tuner: a DVR is a tuner plus the guide its channels are
+        # listed in. Both are given here so neither can be left behind, which is what made a
+        # tuner sit in a DVR playing channels with no programmes against them.
+        guide = (request.data.get("guide_url") or "").strip()
+        if not guide.startswith(("http://", "https://")):
+            return JsonResponse(
+                {"error": "The guide address must start with http:// or https://"}, status=400
+            )
+        title = (
+            (request.data.get("title") or "").strip()
+            or _profile_from_guide(guide)
+            or "Dispatcharr"
+        )
+
+        if action == "set_guide":
+            dvr_id = request.data.get("dvr_id")
+            dvr = next(
+                (d for d in media_servers.dvr_list(server) if d["id"] == str(dvr_id)), None
+            )
+            if dvr is None:
+                return JsonResponse({"error": "That DVR is not on this server"}, status=400)
+            # Its tuners go back with the guide: a DVR is stored as both at once
+            if not media_servers.set_guide(
+                server, dvr_id, guide, title, dvr.get("devices") or ()
+            ):
+                return JsonResponse(
+                    {"error": "The server would not change the guide on that DVR"}, status=400
+                )
+            logger.info(f"Changed the guide on DVR {dvr_id} to {guide}")
+        else:
+            device_id = str(request.data.get("id") or "")
+            device = next(
+                (t for t in media_servers.tuners(server, hosts) if t["id"] == device_id), None
+            )
+            if device is None:
+                return JsonResponse({"error": "That tuner is not on this server"}, status=400)
+            if device.get("dvr_id"):
+                return JsonResponse(
+                    {"error": "This tuner is already in a DVR"}, status=400
+                )
+            if not media_servers.create_dvr(
+                server,
+                device["uuid"],
+                guide,
+                title,
+                language_code(request.data.get("language")),
+            ):
+                return JsonResponse(
+                    {"error": "The server would not make a DVR for this tuner"}, status=400
+                )
+            logger.info(f"Made a DVR for tuner {device_id} with guide {guide}")
+
+        return JsonResponse({
+            "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
+            **_choices(),
+        })
+
     if action in ("sync", "attach"):
         device_id = request.data.get("id")
         dvr_id = request.data.get("dvr_id") or None
@@ -244,20 +320,9 @@ def media_server_tuners(request):
                 return JsonResponse(
                     {"error": "The server would not put this tuner in that DVR"}, status=400
                 )
-            # A DVR holds several tuners, each with its own guide: without this the tuner is
-            # in the DVR with no programmes against its channels.
-            tuner = next(
-                (t for t in media_servers.tuners(server, hosts) if t["id"] == str(device_id)),
-                None,
-            )
-            profile = _profile_from_uri(tuner["uri"]) if tuner else ""
-            if profile:
-                media_servers.add_lineup(
-                    server,
-                    dvr_id,
-                    _epg_url(base_url, profile, skip_cached_logos),
-                    profile,
-                )
+            # Nothing else to do about the guide: a DVR keeps one guide, shared by every
+            # tuner in it. The tuner has programmes if that guide covers its channels, which
+            # is why the page shows the guide against each tuner and lets it be changed.
         elif not dvr_id:
             # Nothing to rescan: a tuner outside a DVR is not used by the server at all
             return JsonResponse(
@@ -342,13 +407,9 @@ def media_server_tuners(request):
         warning = "The tuner was added, but the server did not list it afterwards."
     elif dvr_id:
         if media_servers.attach_tuner(server, dvr_id, device["id"]):
-            # The DVR gains this tuner's guide next to the ones it already has
-            media_servers.add_lineup(
-                server,
-                dvr_id,
-                _epg_url(base_url, channel_profile, skip_cached_logos),
-                channel_profile,
-            )
+            # The DVR's own guide now covers this tuner as well. If it does not reach these
+            # channels the tuner plays with no programmes, which the page says and can fix.
+            pass
         else:
             warning = "The tuner was added, but the server would not put it in that DVR."
     else:
