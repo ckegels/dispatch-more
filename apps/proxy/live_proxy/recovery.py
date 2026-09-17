@@ -14,9 +14,10 @@ because a connection that never became stable is never forgiven.
 
 It is a setting because it is a trade-off, not a free win: a source that plays for a minute
 and drops, forever, would be kept instead of being replaced by the next stream in the channel.
-That is why forgiveness can be limited to the channels a media server is watching (where a
-long stream is the whole point and failover is most disruptive), and why there is a limit on
-how often one channel may be forgiven per hour.
+It is on for the channels a media server is watching, where a long stream is the whole point
+and changing stream is most disruptive, and it can be widened to every channel or switched off
+altogether. The limit on how often one channel may be forgiven per hour is what stops a
+failing stream from being kept for ever.
 """
 
 import json
@@ -30,8 +31,11 @@ SETTINGS_CACHE_KEY = "live:recovery:settings"
 SETTINGS_CACHE_TTL = 30
 
 DEFAULTS = {
-    # Off by default: it changes how every channel behaves, so it is switched on deliberately
-    "enabled": False,
+    # On, because a media server holds a channel open for hours and is the case this is for:
+    # without it, a provider rotating connections kills the stream a viewer is in the middle
+    # of. Limited to those channels by "scope", so everything else behaves as it always did
+    # until that is widened.
+    "enabled": True,
     # How long a connection must have been delivering data to count as "it was working"
     "stable_seconds": 30,
     # "media_servers" (channels a media server is watching) or "all" (every channel)

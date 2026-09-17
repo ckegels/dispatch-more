@@ -14,7 +14,7 @@ import API from '../../api';
 
 const EXPLANATION = `Providers close and reopen connections as normal behaviour, every few minutes on some of them. Dispatcharr counts each close as a failure, and after three inside half an hour it gives up on the stream, moves to the next one in the channel, and the channel eventually dies. That is why a stream can work and then stop after a while: the longer someone watches, the likelier it becomes.
 
-With this on, a close is forgiven when the connection had been delivering video for long enough to call it working: the count is cleared instead of increased, so a rotation is a fresh start rather than a step towards giving up.
+With this on, a close is forgiven when the connection had been delivering video for long enough to call it working: the count is cleared instead of increased, so a rotation is a fresh start rather than a step towards giving up. It is on for the channels a media server is watching, because those are held open for hours and are where losing the stream hurts most; everything else behaves as it always did until you widen it below.
 
 What it costs: a source that plays for a minute and drops, over and over, is kept instead of being replaced by the next stream in the channel. That is what the limit below is for, and why it can be applied only to the channels a media server is watching, where a long stream is the point and switching stream is most disruptive.
 

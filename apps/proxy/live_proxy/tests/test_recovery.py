@@ -23,9 +23,12 @@ class SettingsTests(TestCase):
         _forget_settings()
         self.addCleanup(_forget_settings)
 
-    def test_it_is_off_until_it_is_switched_on(self):
+    def test_it_is_on_for_media_servers_and_nothing_else(self):
         self.assertEqual(recovery.settings(), recovery.DEFAULTS)
-        self.assertFalse(recovery.settings()["enabled"])
+        # A media server holds a channel open for hours: that is the case this is for
+        self.assertTrue(recovery.settings()["enabled"])
+        # Everything else behaves as it always did until the scope is widened
+        self.assertEqual(recovery.settings()["scope"], "media_servers")
 
     def test_what_is_saved_is_what_is_read_back(self):
         recovery.save_settings({**recovery.DEFAULTS, "enabled": True, "stable_seconds": 90})
@@ -68,7 +71,10 @@ class ForgivenessTests(TestCase):
         )
 
     def test_nothing_happens_while_it_is_off(self):
+        recovery.save_settings({**recovery.DEFAULTS, "enabled": False})
+        _forget_settings()
         self._media_server_is_watching()
+
         self.assertFalse(recovery.forgive_disconnect(self.redis, self.CHANNEL, 600))
         self.assertEqual(recovery.recent_events(self.redis), [])
 
@@ -129,7 +135,7 @@ class SettingsViewTests(TestCase):
         )
 
     def test_reading_and_changing_the_settings(self):
-        self.assertFalse(
+        self.assertTrue(
             self.client_api.get("/proxy/stream-recovery/").json()["settings"]["enabled"]
         )
 
