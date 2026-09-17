@@ -172,7 +172,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
     probation_seconds = serializers.IntegerField(
         required=False, write_only=True, min_value=1, max_value=120
     )
-    probation_allow_anonymous = serializers.BooleanField(required=False, write_only=True)
     probation_stop_skipped = serializers.BooleanField(required=False, write_only=True)
     probation_surf_delay_ms = serializers.IntegerField(
         required=False, write_only=True, min_value=0, max_value=2000
@@ -216,7 +215,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "auto_enable_new_groups_series",
             "probation_enabled",
             "probation_seconds",
-            "probation_allow_anonymous",
             "probation_stop_skipped",
             "probation_surf_delay_ms",
             "probation_account_preference",
@@ -270,7 +268,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         data["auto_enable_new_groups_series"] = custom_props.get("auto_enable_new_groups_series", True)
         data["probation_enabled"] = custom_props.get("probation_enabled", False)
         data["probation_seconds"] = custom_props.get("probation_seconds", 10)
-        data["probation_allow_anonymous"] = custom_props.get("probation_allow_anonymous", False)
         data["probation_stop_skipped"] = custom_props.get("probation_stop_skipped", False)
         data["probation_surf_delay_ms"] = custom_props.get("probation_surf_delay_ms", 500)
         from apps.proxy.live_proxy.probation import account_switch_preference, suggested_lan_subnet
@@ -324,7 +321,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         auto_enable_new_groups_series = validated_data.pop("auto_enable_new_groups_series", None)
         probation_enabled = validated_data.pop("probation_enabled", None)
         probation_seconds = validated_data.pop("probation_seconds", None)
-        probation_allow_anonymous = validated_data.pop("probation_allow_anonymous", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
         probation_surf_delay_ms = validated_data.pop("probation_surf_delay_ms", None)
         probation_account_preference = validated_data.pop("probation_account_preference", None)
@@ -357,8 +353,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_enabled"] = probation_enabled
         if probation_seconds is not None:
             custom_props["probation_seconds"] = probation_seconds
-        if probation_allow_anonymous is not None:
-            custom_props["probation_allow_anonymous"] = probation_allow_anonymous
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
         if probation_surf_delay_ms is not None:
@@ -431,7 +425,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         auto_enable_new_groups_series = validated_data.pop("auto_enable_new_groups_series", True)
         probation_enabled = validated_data.pop("probation_enabled", None)
         probation_seconds = validated_data.pop("probation_seconds", None)
-        probation_allow_anonymous = validated_data.pop("probation_allow_anonymous", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
         probation_surf_delay_ms = validated_data.pop("probation_surf_delay_ms", None)
         probation_account_preference = validated_data.pop("probation_account_preference", None)
@@ -453,8 +446,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_enabled"] = probation_enabled
         if probation_seconds is not None:
             custom_props["probation_seconds"] = probation_seconds
-        if probation_allow_anonymous is not None:
-            custom_props["probation_allow_anonymous"] = probation_allow_anonymous
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
         if probation_surf_delay_ms is not None:

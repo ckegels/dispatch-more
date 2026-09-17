@@ -1116,6 +1116,10 @@ class WhoIsWatchingTests(TestCase):
         # And the client on that channel is that viewer, so holds and Stop Skipped apply
         client = self.redis.hgetall(RedisKeys.client_metadata("channel-1", "c1"))
         self.assertEqual(client["server_device"], "server|mkk9dgqsm9p8")
+        # And the page can say who that is, instead of the media server's address
+        self.assertEqual(
+            media_servers.device_name(self.redis, "server|mkk9dgqsm9p8"), "Ckegels · Chrome"
+        )
         viewer = probation._client_viewer(client)
         self.assertEqual(viewer.server_device, "server|mkk9dgqsm9p8")
 

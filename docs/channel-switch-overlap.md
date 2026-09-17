@@ -293,8 +293,7 @@ A viewer is **recognised** (`is_identified()`) when it has:
 
 Everything else is **anonymous**: media servers (recognised by User-Agent), and players
 outside the subnets without a login. They are matched on IP alone, and only on accounts that
-enable **Allow Overlap For Anonymous Connections**. DVR recordings never take part.
-
+enable 
 Identity is per account (`identity_key(viewer, account)`), because the subnets and the
 setting belong to the account the channel runs on.
 
@@ -343,7 +342,6 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 | Stop Skipped Channels | `probation_stop_skipped` | off |
 | Surfing Delay (ms, 0–2000) | `probation_surf_delay_ms` | 500 |
 | When Switching Channels | `probation_account_preference` | `order` |
-| Allow Anonymous Connections (IP match) | `probation_allow_anonymous` | off |
 | LAN Subnets | `probation_lan_subnets` | the detected /24 when the overlap is switched on |
 
 The form only shows the toggle until it is enabled (after confirming the explanation

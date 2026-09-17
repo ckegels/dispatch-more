@@ -63,13 +63,13 @@ What it does:
 • When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between. Failover, stream changes, VOD, catch-up and previews leave it alone too (also on a login shared through a Server Group); DVR recordings can still use it. Channels stopped from the dashboard, deleted or removed by a refresh are not kept.
 • With a Channel Shutdown Delay, a channel nobody watches any more is closed early when it keeps this account over its limit during a switch.
 • "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account with this setting enabled first (never on custom fallback streams), and only falls back to its own account when none is free.
-• Stream links and playlists stay exactly as they are: nothing is added to them, so players do not need to re-download anything. Jellyfin, Emby and Plex are recognised by their User-Agent (unless a custom one is set in their tuner settings) and count as anonymous, because they stream on behalf of all their viewers.
+• Stream links and playlists stay exactly as they are: nothing is added to them, so players do not need to re-download anything. A media server (Plex, Jellyfin, Emby) streams on behalf of all its viewers, so it only takes part when it is added under Settings → Streaming → Media Servers and can say which of its devices is watching.
 
 What it does not do:
 • It changes nothing while an account still has free slots.
 • It never stops a stream that was already playing, or a channel someone else is also watching.
 • It does not give extra connections to other viewers (other users, devices or IP addresses) or to DVR recordings.
-• Viewers that are not recognised (HDHomeRun, Plex, Jellyfin, Emby, and players outside your network without a login) are only included when "Allow Anonymous Connections" is also enabled, matched by IP address only, and are never affected by "Stop Skipped Channels". With "Stay on same account", several anonymous viewers behind one IP can be kept on one account; a new stream that turns out not to be a switch is moved to a free account after the window.
+• Viewers that cannot be told apart take no part in any of this: HDHomeRun, players outside your network without a login, and a media server that cannot say which of its devices is asking. For them Dispatcharr behaves exactly as it does with this switched off, because an extra connection given to the wrong viewer is somebody else's stream stopped.
 
 The change takes effect after you save the account.`}
   </div>
@@ -133,7 +133,6 @@ const M3U = ({
       enable_vod: false,
       probation_enabled: false,
       probation_seconds: 10,
-      probation_allow_anonymous: false,
       probation_stop_skipped: false,
       probation_surf_delay_ms: 500,
       probation_account_preference: 'order',
@@ -175,8 +174,6 @@ const M3U = ({
         enable_vod: m3uAccount.enable_vod || false,
         probation_enabled: m3uAccount.probation_enabled || false,
         probation_seconds: m3uAccount.probation_seconds ?? 10,
-        probation_allow_anonymous:
-          m3uAccount.probation_allow_anonymous || false,
         probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
         probation_surf_delay_ms: m3uAccount.probation_surf_delay_ms ?? 500,
         probation_account_preference:
@@ -205,9 +202,7 @@ const M3U = ({
   useEffect(() => {
     if (storeExpDate === undefined) return;
     const next = expDateFromPlaylist(storeExpDate);
-    setExpDate((prev) =>
-      expDateKey(prev) === expDateKey(next) ? prev : next
-    );
+    setExpDate((prev) => (expDateKey(prev) === expDateKey(next) ? prev : next));
   }, [storeExpDate]);
 
   const handleNewPlaylist = async (newPlaylist, values, create_epg) => {
@@ -479,16 +474,6 @@ const M3U = ({
                       key={form.key('probation_account_preference')}
                       {...form.getInputProps('probation_account_preference')}
                     />
-                    <Switch
-                      id="probation_allow_anonymous"
-                      name="probation_allow_anonymous"
-                      label="Allow Anonymous Connections"
-                      description="Match viewers without a login by IP only."
-                      key={form.key('probation_allow_anonymous')}
-                      {...form.getInputProps('probation_allow_anonymous', {
-                        type: 'checkbox',
-                      })}
-                    />
                     <TagsInput
                       id="probation_lan_subnets"
                       name="probation_lan_subnets"
@@ -725,7 +710,10 @@ const M3U = ({
           // Start with the network Dispatcharr is on, so players on the LAN are recognised
           // without a login. Visible in the form, so it can be changed or cleared before saving.
           const suggestion = m3uAccount?.probation_lan_subnet_suggestion;
-          if (suggestion && form.getValues().probation_lan_subnets.length === 0) {
+          if (
+            suggestion &&
+            form.getValues().probation_lan_subnets.length === 0
+          ) {
             form.setFieldValue('probation_lan_subnets', [suggestion]);
           }
           setOverlapEnabled(true);

@@ -780,9 +780,10 @@ describe('M3U', () => {
       expect(
         screen.getByRole('combobox', { name: /when switching channels/i })
       ).toBeInTheDocument();
+      // Viewers that cannot be told apart never take part, so there is nothing to allow
       expect(
-        screen.getByRole('switch', { name: /anonymous connections/i })
-      ).toBeInTheDocument();
+        screen.queryByRole('switch', { name: /anonymous connections/i })
+      ).not.toBeInTheDocument();
       // The network Dispatcharr is on is filled in, so LAN players are recognised
       expect(screen.getByText('192.168.9.0/24')).toBeInTheDocument();
     });
@@ -808,8 +809,8 @@ describe('M3U', () => {
         screen.getByRole('combobox', { name: /when switching channels/i })
       ).toHaveValue('alternate');
       expect(
-        screen.getByRole('switch', { name: /anonymous connections/i })
-      ).not.toBeChecked();
+        screen.queryByRole('switch', { name: /anonymous connections/i })
+      ).not.toBeInTheDocument();
     });
 
     it('shows the LAN subnets of an account that has them', () => {

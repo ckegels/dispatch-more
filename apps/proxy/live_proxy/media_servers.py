@@ -492,6 +492,7 @@ def bind_device(redis_client, channel_uuid, session):
         redis_client.setex(
             CHANNEL_DEVICE_KEY.format(channel_uuid=channel_uuid), CHANNEL_DEVICE_TTL, device
         )
+        remember_device_name(redis_client, device, session)
         for client_id in redis_client.smembers(RedisKeys.clients(channel_uuid)) or ():
             client_id = client_id.decode() if isinstance(client_id, bytes) else client_id
             redis_client.hset(
@@ -503,6 +504,26 @@ def bind_device(redis_client, channel_uuid, session):
         )
     except Exception as e:
         logger.debug(f"Could not remember who is watching channel {channel_uuid}: {e}")
+
+
+DEVICE_NAME_KEY = "live:media_servers:device:{device}"
+
+
+def remember_device_name(redis_client, device, session):
+    """What to call a device on the Diagnostics page: who is watching, on what."""
+    name = " · ".join(part for part in (session.get("user"), session.get("player")) if part)
+    if name:
+        redis_client.setex(
+            DEVICE_NAME_KEY.format(device=device), CHANNEL_DEVICE_TTL, name
+        )
+
+
+def device_name(redis_client, device):
+    """The readable name of a media server device, when one was seen (see bind_device)."""
+    try:
+        return _as_str(redis_client.get(DEVICE_NAME_KEY.format(device=device)))
+    except Exception:
+        return None
 
 
 def device_watching(redis_client, channel_uuid):

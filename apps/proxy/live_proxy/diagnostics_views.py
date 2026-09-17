@@ -17,14 +17,21 @@ from rest_framework.decorators import api_view, permission_classes
 from apps.accounts.permissions import IsAdmin
 from core.utils import RedisClient
 
+from . import media_servers
 from . import probation
 from . import timing
 
 logger = logging.getLogger("live_proxy")
 
 
-def _viewer_name(event, usernames):
-    """A short, readable viewer: its login, or its address and app."""
+def _viewer_name(event, usernames, redis_client=None):
+    """A short, readable viewer: who a media server said it is, its login, or address and app."""
+    device = event.get("server_device")
+    if device and redis_client:
+        # "Ckegels · Chrome", which is what the media server calls whoever is watching
+        name = media_servers.device_name(redis_client, device)
+        if name:
+            return name
     username = usernames.get(event.get("user_id"))
     if username and event.get("app"):
         return f"{username} · {event['app']}"
@@ -161,7 +168,7 @@ def diagnostics(request):
         "events": [
             {
                 "time": float(event.get("time", 0)),
-                "viewer": _viewer_name(event, usernames),
+                "viewer": _viewer_name(event, usernames, redis_client),
                 "from_channel": channels.get(event.get("from_channel", ""), ""),
                 "channel": channels.get(event.get("channel", ""), ""),
                 "account": event.get("account", ""),

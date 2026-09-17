@@ -258,7 +258,15 @@ class GetStreamProbationTests(TestCase):
         account.custom_properties = {**account.custom_properties, **props}
         account.save()
 
-    def _watching(self, profile, ip=IP, user_id="0", user_agent=None, channel_uuid="old-channel"):
+    def _watching(
+        self,
+        profile,
+        ip=IP,
+        user_id="0",
+        user_agent=None,
+        channel_uuid="old-channel",
+        server_device=None,
+    ):
         self.redis.hset(
             RedisKeys.channel_metadata(channel_uuid),
             mapping={ChannelMetadataField.M3U_PROFILE: profile.id},
@@ -266,6 +274,8 @@ class GetStreamProbationTests(TestCase):
         self.redis.sadd(RedisKeys.clients(channel_uuid), "client_1")
         # No User-Agent means no app, like a media server: the viewer in the test has none either
         client = {"ip_address": ip, "user_id": user_id, "user_agent": user_agent or ""}
+        if server_device:
+            client["server_device"] = server_device
         self.redis.hset(RedisKeys.client_metadata(channel_uuid, "client_1"), mapping=client)
 
     def _deadline_seconds(self):
@@ -329,20 +339,29 @@ class GetStreamProbationTests(TestCase):
             self.channel.get_stream(viewer=probation.Viewer(self.IP, user_id=7))
         )
 
-    def test_anonymous_viewer_needs_account_opt_in(self, _preempt):
-        # No app in the User-Agent (a media server), so no account recognises it
+    def test_a_viewer_that_cannot_be_told_apart_gets_nothing(self, _preempt):
+        # No app in the User-Agent (a media server that could not say who is asking), so no
+        # account recognises it: an extra connection could go to the wrong person entirely.
         self._fill_both()
         self._watching(self.profile_a)
 
-        self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer(self.IP)))
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            self._assert_limit_error(self.channel.get_stream(viewer=probation.Viewer(self.IP)))
+        self.assertTrue(
+            any("no media server said which of its devices" in line for line in logs.output)
+        )
 
-        self._set_props(self.account_a, probation_allow_anonymous=True)
-        result = self.channel.get_stream(viewer=probation.Viewer(self.IP))
+    def test_a_media_server_that_named_its_device_is_told_apart(self, _preempt):
+        self._fill_both()
+        self._watching(self.profile_a, server_device="server|apple-tv")
+
+        result = self.channel.get_stream(
+            viewer=probation.Viewer(self.IP, server_device="server|apple-tv")
+        )
 
         self._assert_probation_on(result, self.stream_a, self.profile_a)
 
     def test_anonymous_viewer_does_not_match_identified_client(self, _preempt):
-        self._set_props(self.account_a, probation_allow_anonymous=True)
         self._fill_both()
         self._watching(self.profile_a, user_agent="TiviMate")
 
@@ -475,18 +494,26 @@ class GetStreamProbationTests(TestCase):
         self.assertEqual(result, (self.stream_a.id, self.profile_a.id, None, True))
         self.assertIsNone(self.redis.get(probation._last_profile_key(probation._viewer_key(probation.Viewer(self.IP, app="TiviMate")))))
 
-    def test_sticky_anonymous_needs_account_opt_in(self, _preempt):
+    def test_stay_on_same_account_needs_a_viewer_it_can_tell_apart(self, _preempt):
+        """A viewer with no login, no app and no media server device is nobody in particular."""
         self._set_props(self.account_b, probation_account_preference="same")
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
         self._watching(self.profile_b)
         viewer = probation.Viewer(self.IP)
 
+        # It follows the channel's order instead of the account it "was" on
         self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_a.id)
 
+        # The same viewer, recognised by a media server, does stay on its account
         self.redis.set(profile_connections_key(self.profile_a.id), 0)
         self.redis.delete(f"channel_stream:{self.channel.id}")
-        self._set_props(self.account_b, probation_allow_anonymous=True)
-        self.assertEqual(self.channel.get_stream(viewer=viewer)[1], self.profile_b.id)
+        self._watching(self.profile_b, server_device="server|apple-tv")
+        self.assertEqual(
+            self.channel.get_stream(
+                viewer=probation.Viewer(self.IP, server_device="server|apple-tv")
+            )[1],
+            self.profile_b.id,
+        )
 
     def test_sticky_ignores_redirect_profiles(self, _preempt):
         self.stream_profile.is_redirect.return_value = True
@@ -729,7 +756,7 @@ class GetStreamProbationTests(TestCase):
     def test_recording_never_uses_the_overlap_or_account_preferences(self, _preempt):
         for account in (self.account_a, self.account_b):
             self._set_props(
-                account, probation_allow_anonymous=True, probation_account_preference="same"
+                account, probation_account_preference="same"
             )
         self._fill_both()
         # A recording already runs on profile A
@@ -1458,7 +1485,6 @@ class StopSkippedChannelsTests(TestCase):
         mock_stop.assert_not_called()
 
     def test_anonymous_viewer_never_stops_anything(self, mock_stop, _mock_spawn):
-        self._set_props(self.account, probation_allow_anonymous=True)
         self._channel("anonymous", clients=[("c1", self.IP, "0", None, 1)])
 
         with patch.object(probation, "any_account_stops_skipped_channels") as mock_any:
@@ -1732,7 +1758,7 @@ class AccountProbationSettingsTests(TestCase):
     def test_account_settings_defaults_and_bounds(self):
         account = MagicMock(custom_properties={})
         self.assertFalse(probation.account_allows_probation(account))
-        self.assertFalse(probation.account_allows_anonymous(account))
+
         self.assertEqual(probation.account_probation_seconds(account), 10)
 
         self.assertFalse(probation.account_stops_skipped_channels(account))
@@ -1740,11 +1766,10 @@ class AccountProbationSettingsTests(TestCase):
         account.custom_properties = {
             "probation_enabled": True,
             "probation_seconds": 500,
-            "probation_allow_anonymous": True,
             "probation_stop_skipped": True,
         }
         self.assertTrue(probation.account_allows_probation(account))
-        self.assertTrue(probation.account_allows_anonymous(account))
+
         self.assertTrue(probation.account_stops_skipped_channels(account))
         self.assertFalse(probation.account_keeps_viewers(account))
         self.assertEqual(probation.account_switch_preference(account), "order")
@@ -1776,8 +1801,7 @@ class AccountProbationSettingsTests(TestCase):
             data={
                 "probation_enabled": True,
                 "probation_seconds": 30,
-                "probation_allow_anonymous": True,
-                "probation_stop_skipped": True,
+                    "probation_stop_skipped": True,
                 "probation_surf_delay_ms": 800,
                 "probation_account_preference": "alternate",
             },
@@ -1789,13 +1813,11 @@ class AccountProbationSettingsTests(TestCase):
         account.refresh_from_db()
         self.assertTrue(account.custom_properties["probation_enabled"])
         self.assertEqual(account.custom_properties["probation_seconds"], 30)
-        self.assertTrue(account.custom_properties["probation_allow_anonymous"])
         self.assertTrue(account.custom_properties["enable_vod"])
 
         data = M3UAccountSerializer(account).data
         self.assertTrue(data["probation_enabled"])
         self.assertEqual(data["probation_seconds"], 30)
-        self.assertTrue(data["probation_allow_anonymous"])
         self.assertTrue(data["probation_stop_skipped"])
         self.assertEqual(data["probation_surf_delay_ms"], 800)
         self.assertEqual(data["probation_account_preference"], "alternate")
@@ -2734,6 +2756,22 @@ class DiagnosticsViewTests(TestCase):
         keyframe = next(p for p in start["phases"] if p["label"] == "first keyframe")
         self.assertAlmostEqual(keyframe["at"], 3.9, places=2)
         self.assertAlmostEqual(keyframe["took"], 3.8, places=2)
+
+    def test_a_media_server_viewer_is_shown_by_who_is_watching(self):
+        from apps.proxy.live_proxy import media_servers
+
+        self.redis.setex(
+            media_servers.DEVICE_NAME_KEY.format(device="server|apple-tv"), 60, "Ckegels · Chrome"
+        )
+        probation.record_event(
+            self.redis,
+            probation.Viewer("192.168.2.30", server_device="server|apple-tv"),
+            "another account",
+        )
+
+        (event,) = self._get().json()["events"]
+        # Not the media server's address, which is the same for everyone behind it
+        self.assertEqual(event["viewer"], "Ckegels · Chrome")
 
     def test_a_login_is_shown_by_name(self):
         from apps.accounts.models import User

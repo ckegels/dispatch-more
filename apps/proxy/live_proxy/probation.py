@@ -17,9 +17,10 @@ account has "probation_enabled":
 A viewer is recognised by its Dispatcharr user (Xtream login), or, on the account's LAN
 Subnets, by its IP address plus its player app ("probation_lan_subnets"): on a local network
 every device has its own address. A device outside those subnets therefore needs its own
-login. Viewers with neither (HDHomeRun, media servers, a shared login) are anonymous: matched
-on IP only, and only where "probation_allow_anonymous" is set. Streams that were already
-playing, or that someone else also watches, are never stopped.
+Viewers with neither (HDHomeRun, and a media server that cannot say which of its devices is
+asking) take no part in it at all: acting on a viewer that cannot be told apart is how one
+person's channel gets stopped for another. Streams that were already playing, or that someone
+else also watches, are never stopped.
 
 "Probation" is the internal name; the UI and logs say overlap. See
 docs/channel-switch-overlap.md for the full design.
@@ -261,6 +262,8 @@ def record_event(redis_client, viewer, action, **fields):
             "ip": (viewer.ip if viewer else "") or "",
             "user_id": str((viewer.user_id if viewer else None) or ""),
             "app": (viewer.app if viewer else "") or "",
+            # A media server device, so the page can say who was watching (see device_name)
+            "server_device": (viewer.server_device if viewer else "") or "",
             "action": action,
         }
         event.update({key: str(value) for key, value in fields.items() if value is not None})
@@ -317,10 +320,6 @@ def _account_props(m3u_account):
 def account_allows_probation(m3u_account) -> bool:
     # Strict "is True": custom_properties is free-form JSON and must opt in explicitly.
     return _account_props(m3u_account).get("probation_enabled") is True
-
-
-def account_allows_anonymous(m3u_account) -> bool:
-    return _account_props(m3u_account).get("probation_allow_anonymous") is True
 
 
 def account_probation_seconds(m3u_account) -> int:
@@ -1359,7 +1358,7 @@ def hold_slot_for_viewer(redis_client, channel_uuid, profile_id):
         ((viewer_key, viewer),) = viewers.items()
         if viewer.recording:
             return
-        if not is_identified(viewer, account) and not account_allows_anonymous(account):
+        if not is_identified(viewer, account):
             return
 
         seconds = account_probation_seconds(account)
@@ -1524,7 +1523,7 @@ def reserve_sticky_slot(channel, redis_client, viewer):
     or was just assigned, ahead of the channel's normal stream order.
 
     Only streams on accounts with probation_enabled and preference "same" are considered
-    (anonymous viewers additionally need probation_allow_anonymous). A free slot on the
+    (a viewer that cannot be told apart never gets one). A free slot on the
     preferred profile is used first; when that profile is full and the viewer is watching
     on it (its own old stream is still closing), the overlap slot is used instead of
     moving the viewer to another account. Returns get_stream()'s result tuple, or None
@@ -1540,7 +1539,7 @@ def reserve_sticky_slot(channel, redis_client, viewer):
         channel,
         lambda account: account_allows_probation(account)
         and account_keeps_viewers(account)
-        and (is_identified(viewer, account) or account_allows_anonymous(account)),
+        and is_identified(viewer, account),
     )
     if not candidates or channel.get_stream_profile().is_redirect():
         return None
@@ -1658,7 +1657,7 @@ def reserve_alternate_slot(channel, redis_client, viewer):
         if profile_id in accounts
         and account_allows_probation(accounts[profile_id])
         and account_alternates_viewers(accounts[profile_id])
-        and (is_identified(viewer, accounts[profile_id]) or account_allows_anonymous(accounts[profile_id]))
+        and is_identified(viewer, accounts[profile_id])
     }
     if not left_profile_ids or channel.get_stream_profile().is_redirect():
         return None
@@ -1728,25 +1727,21 @@ def reserve_overlap_slot(channel, redis_client, viewer, full_candidates):
         for stream, profile in full_candidates
         if profile.max_streams > 0 and account_allows_probation(stream.m3u_account)
     ]
-    anonymous_candidates = [
+    unknown = [
         (stream, profile)
         for stream, profile in candidates
         if not is_identified(viewer, stream.m3u_account)
     ]
-    if anonymous_candidates:
-        # Anonymous viewers can only be matched by IP; accounts opt in separately.
-        candidates = [
-            (stream, profile)
-            for stream, profile in candidates
-            if (stream, profile) not in anonymous_candidates
-            or account_allows_anonymous(stream.m3u_account)
-        ]
+    if unknown:
+        # A viewer that cannot be told apart takes no part: an extra connection given to the
+        # wrong one is a stream stopped for somebody else.
+        candidates = [pair for pair in candidates if pair not in unknown]
         if not candidates:
             log_not_used(
                 channel.uuid,
                 viewer,
-                f"{viewer} has no login and is not on a LAN subnet of these accounts, and "
-                f"none of them allows anonymous connections",
+                f"{viewer} has no login, is not on a LAN subnet of these accounts, and no "
+                f"media server said which of its devices is asking",
             )
     if not candidates:
         return None

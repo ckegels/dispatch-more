@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Collapse,
   Group,
   Loader,
   PasswordInput,
@@ -25,6 +26,8 @@ const MediaServers = ({ active }) => {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  // A server's details fold away: with several of them the page is mostly tables
+  const [openServers, setOpenServers] = useState({});
 
   const load = useCallback(async () => {
     try {
@@ -96,6 +99,20 @@ const MediaServers = ({ active }) => {
         <Card key={server.id} withBorder padding="sm">
           <Group justify="space-between" wrap="wrap">
             <Group gap="xs" wrap="wrap">
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                color="gray"
+                aria-label={`${openServers[server.id] ? 'Hide' : 'Show'} ${server.name}`}
+                onClick={() =>
+                  setOpenServers({
+                    ...openServers,
+                    [server.id]: !openServers[server.id],
+                  })
+                }
+              >
+                {openServers[server.id] ? '▾' : '▸'}
+              </Button>
               <Text fw={600}>{server.name}</Text>
               <Text size="sm" c="dimmed">
                 {server.url}
@@ -148,58 +165,67 @@ const MediaServers = ({ active }) => {
             </Group>
           </Group>
 
-          {server.online &&
-            (server.sessions.length === 0 ? (
-              <Text size="sm" c="dimmed" mt="xs">
-                Nothing is playing.
-              </Text>
-            ) : (
-              <Table mt="xs" fz="sm" verticalSpacing={4}>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Watching</Table.Th>
-                    <Table.Th>Who</Table.Th>
-                    <Table.Th>Player</Table.Th>
-                    <Table.Th>How</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {server.sessions.map((session) => (
-                    <Table.Tr key={`${session.user}-${session.title}`}>
-                      <Table.Td>{session.title}</Table.Td>
-                      <Table.Td>{session.user}</Table.Td>
-                      <Table.Td c="dimmed">{session.player}</Table.Td>
-                      <Table.Td>
-                        <Badge
-                          size="sm"
-                          variant="light"
-                          color={
-                            session.decision === 'direct play'
-                              ? 'teal'
-                              : 'orange'
-                          }
-                        >
-                          {session.decision}
-                          {session.speed ? ` ${session.speed.toFixed(1)}×` : ''}
-                        </Badge>
-                        {session.state === 'buffering' && (
+          <Collapse in={!!openServers[server.id]}>
+            {server.online &&
+              (server.sessions.length === 0 ? (
+                <Text size="sm" c="dimmed" mt="xs">
+                  Nothing is playing.
+                </Text>
+              ) : (
+                <Table mt="xs" fz="sm" verticalSpacing={4}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Watching</Table.Th>
+                      <Table.Th>Who</Table.Th>
+                      <Table.Th>Player</Table.Th>
+                      <Table.Th>How</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {server.sessions.map((session) => (
+                      <Table.Tr key={`${session.user}-${session.title}`}>
+                        <Table.Td>{session.title}</Table.Td>
+                        <Table.Td>{session.user}</Table.Td>
+                        <Table.Td c="dimmed">{session.player}</Table.Td>
+                        <Table.Td>
                           <Badge
                             size="sm"
-                            color="yellow"
                             variant="light"
-                            ml={6}
+                            color={
+                              session.decision === 'direct play'
+                                ? 'teal'
+                                : 'orange'
+                            }
                           >
-                            buffering
+                            {session.decision}
+                            {session.speed
+                              ? ` ${session.speed.toFixed(1)}×`
+                              : ''}
                           </Badge>
-                        )}
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            ))}
+                          {session.state === 'buffering' && (
+                            <Badge
+                              size="sm"
+                              color="yellow"
+                              variant="light"
+                              ml={6}
+                            >
+                              buffering
+                            </Badge>
+                          )}
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              ))}
 
-          <MediaServerTuners serverId={server.id} enabled={server.enabled} />
+            {openServers[server.id] && (
+              <MediaServerTuners
+                serverId={server.id}
+                enabled={server.enabled}
+              />
+            )}
+          </Collapse>
         </Card>
       ))}
 

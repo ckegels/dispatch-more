@@ -84,10 +84,13 @@ vi.mock('@mantine/core', () => {
       />
     ),
     Badge: ({ children }) => <span>{children}</span>,
-    Button: ({ children, onClick }) => (
-      <button onClick={onClick}>{children}</button>
+    Button: ({ children, onClick, ...rest }) => (
+      <button aria-label={rest['aria-label']} onClick={onClick}>
+        {children}
+      </button>
     ),
     Card: ({ children }) => <div>{children}</div>,
+    Collapse: ({ in: open, children }) => (open ? <div>{children}</div> : null),
     Group: ({ children }) => <div>{children}</div>,
     Loader: () => <div>loading</div>,
     PasswordInput: input,
@@ -156,6 +159,15 @@ const tuners = {
   profile_prefix: 'plexmedia',
 };
 
+// A server's details are folded away until it is opened
+const openServer = async () => {
+  fireEvent.click(
+    await screen.findByRole('button', { name: /^Show Home Plex$/ })
+  );
+  // "Tuners" is also a field label, so wait for something only the tuner list has
+  await screen.findByText('Add a tuner');
+};
+
 describe('MediaServers', () => {
   beforeEach(() => {
     API.getMediaServers.mockResolvedValue({ servers });
@@ -170,6 +182,8 @@ describe('MediaServers', () => {
     expect(await screen.findByText('Home Plex')).toBeInTheDocument();
     expect(screen.getByText('http://192.168.2.141:32400')).toBeInTheDocument();
     expect(screen.getByText('connected · 1.41.0')).toBeInTheDocument();
+    // What it is playing is inside the folded part
+    await openServer();
     expect(screen.getByText('ZIB')).toBeInTheDocument();
     expect(screen.getByText('Ckegels')).toBeInTheDocument();
     expect(
@@ -246,8 +260,9 @@ describe('MediaServers', () => {
 
   it('lists the tuners and flags a leftover', async () => {
     render(<MediaServers active={true} />);
+    await openServer();
 
-    expect(await screen.findByText('Austria')).toBeInTheDocument();
+    expect(screen.getByText('Austria')).toBeInTheDocument();
     expect(screen.getByText('Dispatcharr')).toBeInTheDocument();
     expect(screen.getByText('dead')).toBeInTheDocument();
     // A tuner in no DVR does nothing, which is worth saying
@@ -259,7 +274,7 @@ describe('MediaServers', () => {
     API.deleteMediaServerTuner.mockResolvedValue(tuners);
 
     render(<MediaServers active={true} />);
-    await screen.findByText('Austria');
+    await openServer();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Sync' })[0]);
     await waitFor(() =>
@@ -276,7 +291,7 @@ describe('MediaServers', () => {
     API.addMediaServerTuner.mockResolvedValue(tuners);
 
     render(<MediaServers active={true} />);
-    await screen.findByText('Austria');
+    await openServer();
 
     // The guessed address can be corrected before it is used
     expect(screen.getByLabelText(/Dispatcharr address/)).toHaveValue(
@@ -317,8 +332,7 @@ describe('MediaServers', () => {
     API.deleteMediaServerDvr.mockResolvedValue(tuners);
 
     render(<MediaServers active={true} />);
-    // "Belgium" is both the DVR and an option in the dropdowns, so wait for the button
-    await screen.findByRole('button', { name: 'Remove DVR' });
+    await openServer();
 
     expect(
       screen.getByText(
@@ -336,7 +350,7 @@ describe('MediaServers', () => {
     API.attachMediaServerTuner.mockResolvedValue(tuners);
 
     render(<MediaServers active={true} />);
-    await screen.findByText('A1 TV');
+    await openServer();
 
     fireEvent.change(screen.getByLabelText('Add A1 TV to a DVR'), {
       target: { value: '32' },
@@ -355,7 +369,7 @@ describe('MediaServers', () => {
     });
 
     render(<MediaServers active={true} />);
-    await screen.findByText('Austria');
+    await openServer();
 
     fireEvent.change(screen.getByLabelText(/New profile name/), {
       target: { value: 'france' },
