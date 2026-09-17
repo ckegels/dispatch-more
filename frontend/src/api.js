@@ -2648,6 +2648,14 @@ export default class API {
     });
   }
 
+  static async setMediaServerTunerUri(server, id, uri) {
+    // Moves a registered tuner, so its channel mappings are not lost
+    return await request(`${host}/proxy/media-servers/tuners/`, {
+      method: 'POST',
+      body: { server, id, uri, action: 'set_uri' },
+    });
+  }
+
   static async makeMediaServerDvr(server, id, guideUrl, language) {
     // A DVR is a tuner plus the guide its channels are listed in: both at once
     return await request(`${host}/proxy/media-servers/tuners/`, {

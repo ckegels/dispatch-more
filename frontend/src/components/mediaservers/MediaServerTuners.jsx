@@ -133,8 +133,69 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                   </Table.Td>
                   <Table.Td c="dimmed" style={{ wordBreak: 'break-all' }}>
                     <Stack gap={2}>
-                      <Text size="xs">tuner: {tuner.uri}</Text>
-                      {guideEdit && guideEdit.tuner === tuner.id ? (
+                      {guideEdit &&
+                      guideEdit.tuner === tuner.id &&
+                      guideEdit.field === 'tuner' ? (
+                        <Group gap={4} wrap="nowrap">
+                          <TextInput
+                            size="xs"
+                            style={{ flex: 1 }}
+                            aria-label={`Address for ${tuner.title}`}
+                            value={guideEdit.value}
+                            onChange={(event) =>
+                              setGuideEdit({
+                                ...guideEdit,
+                                value: event.currentTarget.value,
+                              })
+                            }
+                          />
+                          <Button
+                            size="compact-xs"
+                            disabled={busy}
+                            onClick={() => {
+                              const { value } = guideEdit;
+                              setGuideEdit(null);
+                              run(() =>
+                                API.setMediaServerTunerUri(
+                                  serverId,
+                                  tuner.id,
+                                  value
+                                )
+                              );
+                            }}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            onClick={() => setGuideEdit(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </Group>
+                      ) : (
+                        <Group gap={6} wrap="nowrap">
+                          <Text size="xs">tuner: {tuner.uri}</Text>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            disabled={busy}
+                            onClick={() =>
+                              setGuideEdit({
+                                tuner: tuner.id,
+                                field: 'tuner',
+                                value: tuner.uri,
+                              })
+                            }
+                          >
+                            Change address
+                          </Button>
+                        </Group>
+                      )}
+                      {guideEdit &&
+                      guideEdit.tuner === tuner.id &&
+                      guideEdit.field === 'guide' ? (
                         <Group gap={4} wrap="nowrap">
                           <TextInput
                             size="xs"
@@ -192,6 +253,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                             onClick={() =>
                               setGuideEdit({
                                 tuner: tuner.id,
+                                field: 'guide',
                                 value:
                                   tuner.guide ||
                                   guideForTuner(

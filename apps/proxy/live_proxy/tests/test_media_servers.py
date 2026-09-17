@@ -952,6 +952,87 @@ class TunerTests(TestCase):
         self.assertEqual(austria["guide"], "http://d:9191/output/epg/austria")
         self.assertEqual(belgium["guide"], "http://d:9191/output/epg/belgium")
 
+    def test_a_registered_tuner_can_be_pointed_somewhere_else(self):
+        """Moving it keeps it in its DVR, with the channels already mapped against it."""
+        moved = {
+            "MediaContainer": {
+                "Device": [
+                    {
+                        "key": "22",
+                        "title": "Austria",
+                        "uri": "http://192.168.2.50:9191/hdhr/austria",
+                    }
+                ]
+            }
+        }
+
+        def after_the_move(url, **_kwargs):
+            if "/media/grabbers/devices" in url:
+                return fake_response(moved)
+            if "/livetv/dvrs" in url:
+                return fake_response(DVRS)
+            return plex(url)
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.side_effect = after_the_move
+            put.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "action": "set_uri",
+                    "id": "22",
+                    "uri": "http://192.168.2.50:9191/hdhr/austria",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        call = next(
+            call for call in put.call_args_list
+            if call.args[0] == "http://192.168.2.141:32400/media/grabbers/devices/22"
+        )
+        self.assertEqual(
+            call.kwargs["params"]["uri"], "http://192.168.2.50:9191/hdhr/austria"
+        )
+
+    def test_a_server_that_keeps_the_old_address_is_not_called_a_success(self):
+        """
+        Asking is not enough: the address is read back.
+
+        A server may take the request and keep what it had, and saying it worked would leave
+        a tuner pointing at an address that has moved with nothing to show for it.
+        """
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.put"
+        ) as put:
+            get.side_effect = plex_with_tuners  # still the old address
+            put.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {
+                    "server": "a1",
+                    "action": "set_uri",
+                    "id": "22",
+                    "uri": "http://192.168.2.50:9191/hdhr/austria",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("kept the address it had", response.json()["error"])
+
+    def test_a_tuner_address_has_to_be_one(self):
+        response = self.client_api.post(
+            "/proxy/media-servers/tuners/",
+            {"server": "a1", "action": "set_uri", "id": "22", "uri": "hdhr/austria"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("http://", response.json()["error"])
+
     def test_a_tuner_can_be_put_into_a_dvr(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.put"

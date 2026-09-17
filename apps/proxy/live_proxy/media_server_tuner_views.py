@@ -253,6 +253,36 @@ def media_server_tuners(request):
 
     action = request.data.get("action") or "add"
 
+    if action == "set_uri":
+        # Changing where a tuner points, without taking it out of its DVR and losing the
+        # channels mapped against it
+        device_id = str(request.data.get("id") or "")
+        uri = media_servers.clean_url(request.data.get("uri"))
+        if not uri.startswith(("http://", "https://")):
+            return JsonResponse(
+                {"error": "The tuner address must start with http:// or https://"}, status=400
+            )
+        device = next(
+            (t for t in media_servers.tuners(server, hosts) if t["id"] == device_id), None
+        )
+        if device is None:
+            return JsonResponse({"error": "That tuner is not on this server"}, status=400)
+        if not media_servers.set_tuner_uri(server, device_id, uri, device.get("title")):
+            return JsonResponse(
+                {
+                    "error": "The server kept the address it had. Not every server lets a "
+                    "tuner be moved once it is registered; remove it and add it again at "
+                    "the new address instead."
+                },
+                status=400,
+            )
+        logger.info(f"Tuner {device_id} on {server.get('name')} now points at {uri}")
+        return JsonResponse({
+            "tuners": media_servers.tuners(server, hosts),
+            "dvrs": media_servers.dvr_list(server),
+            **_choices(),
+        })
+
     if action in ("make_dvr", "set_guide"):
         # The guide belongs with the tuner: a DVR is a tuner plus the guide its channels are
         # listed in. Both are given here so neither can be left behind, which is what made a

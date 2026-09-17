@@ -588,6 +588,35 @@ def _guide_for(uri, lineups, fallback) -> str:
     return fallback
 
 
+def set_tuner_uri(server, device_id, uri, title=None) -> bool:
+    """
+    Point a tuner that is already registered at another address.
+
+    Asking is not enough: a server may take the request and keep the address it had, so
+    whether it changed is read back rather than assumed. Says whether it really moved.
+    """
+    if kind(server) == "jellyfin":
+        # Saving a tuner host with the Id it already has replaces that one
+        _post(server, "/LiveTv/TunerHosts", json_body={
+            "Id": str(device_id),
+            "Type": "hdhomerun",
+            "Url": uri,
+            "FriendlyName": title or "Dispatcharr",
+            "AllowHWTranscoding": True,
+            "EnableStreamLooping": False,
+        })
+    else:
+        params = {"uri": uri}
+        if title:
+            params["title"] = title
+        _put(server, f"/media/grabbers/devices/{device_id}", params)
+
+    return any(
+        str(tuner["id"]) == str(device_id) and tuner["uri"] == uri
+        for tuner in tuners(server)
+    )
+
+
 def guide_url(lineup) -> str:
     """
     The plain address of the guide a DVR uses, back out of the lineup it stores.

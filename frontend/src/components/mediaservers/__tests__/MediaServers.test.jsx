@@ -20,6 +20,7 @@ vi.mock('../../../api', () => ({
     deleteMediaServerTuner: vi.fn(),
     attachMediaServerTuner: vi.fn(),
     makeMediaServerDvr: vi.fn(),
+    setMediaServerTunerUri: vi.fn(),
     setMediaServerGuide: vi.fn(),
     deleteMediaServerDvr: vi.fn(),
   },
@@ -316,6 +317,43 @@ describe('MediaServers', () => {
     ).toBeGreaterThan(0);
     // The one in no DVR has no guide either, and says so rather than looking fine
     expect(screen.getByText('guide: none')).toBeInTheDocument();
+  });
+
+  it('moves a tuner that is already registered to another address', async () => {
+    API.setMediaServerTunerUri.mockResolvedValue(tuners);
+
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change address' })[0]);
+    fireEvent.change(screen.getByLabelText('Address for Austria'), {
+      target: { value: 'http://192.168.2.50:9191/hdhr/austria' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(API.setMediaServerTunerUri).toHaveBeenCalledWith(
+        'a1',
+        '22',
+        'http://192.168.2.50:9191/hdhr/austria'
+      )
+    );
+  });
+
+  it('says so when the server keeps the address it had', async () => {
+    API.setMediaServerTunerUri.mockRejectedValue({
+      body: { error: 'The server kept the address it had.' },
+    });
+
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Change address' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'kept the address it had'
+    );
   });
 
   it('changes the guide on the DVR a tuner is in', async () => {
