@@ -562,6 +562,32 @@ def name_device(server, device_id, title):
     })
 
 
+def _profile_in(address, marker) -> str:
+    """The channel profile named in one of our addresses, after "hdhr" or after "epg"."""
+    parts = [part for part in str(address).split("?", 1)[0].split("/") if part]
+    if marker not in parts:
+        return ""
+    index = parts.index(marker) + 1
+    return unquote(parts[index]).lower() if len(parts) > index else ""
+
+
+def _guide_for(uri, lineups, fallback) -> str:
+    """
+    Which of a DVR's guides belongs to this tuner.
+
+    A DVR holds a guide per channel source, but it does not say which is whose: the tuners
+    carry no lineup of their own and the guides carry no tuner. Both of ours name the same
+    channel profile in their address, so they are matched on that. A tuner that is not ours,
+    or one whose guide is not, falls back to the guide the DVR was made with.
+    """
+    profile = _profile_in(uri, "hdhr")
+    if profile:
+        for lineup in lineups:
+            if _profile_in(lineup, "epg") == profile:
+                return lineup
+    return fallback
+
+
 def guide_url(lineup) -> str:
     """
     The plain address of the guide a DVR uses, back out of the lineup it stores.
@@ -628,14 +654,21 @@ def tuners(server, our_hosts=()):
     if kind(server) == "jellyfin":
         return _jellyfin_tuners(server, our_hosts)
     container = (_get(server, "/media/grabbers/devices") or {}).get("MediaContainer") or {}
-    # A tuner's guide is the guide of the DVR it is in: Plex keeps one guide per DVR, shared
-    # by every tuner in it, so this is what the page shows next to the tuner's own address.
+    # A DVR holds a guide per channel source, so the guide shown against a tuner is the one
+    # for its own channels rather than whichever the DVR happens to have been made with.
     in_dvr = {}
     dvr_guides = {}
+    dvr_lineups = {}
     for dvr in dvrs(server):
-        dvr_guides[str(dvr.get("key"))] = guide_url(dvr.get("lineup"))
+        key = str(dvr.get("key"))
+        dvr_guides[key] = guide_url(dvr.get("lineup"))
+        dvr_lineups[key] = [
+            guide_url(lineup.get("id"))
+            for lineup in dvr.get("Lineup") or ()
+            if lineup.get("id")
+        ]
         for device in dvr.get("Device") or ():
-            in_dvr[str(device.get("key"))] = str(dvr.get("key"))
+            in_dvr[str(device.get("key"))] = key
 
     found = []
     for device in container.get("Device") or ():
@@ -651,7 +684,11 @@ def tuners(server, our_hosts=()):
             "state": device.get("status", ""),
             "tuners": int(device.get("tuners") or 0),
             "dvr_id": in_dvr.get(key, ""),
-            "guide": dvr_guides.get(in_dvr.get(key, ""), ""),
+            "guide": _guide_for(
+                uri,
+                dvr_lineups.get(in_dvr.get(key, ""), ()),
+                dvr_guides.get(in_dvr.get(key, ""), ""),
+            ),
             "ours": host in set(our_hosts) if host else False,
         })
     return found

@@ -329,7 +329,12 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                 {dvr.tuners.length > 0
                   ? dvr.tuners.join(', ')
                   : 'no tuners in it'}
-                {dvr.guide && ` · guide: ${dvr.guide}`}
+                {/* Its guides are shown against the tuners they belong to, so what is
+                    worth saying here is only what the DVR holds */}
+                {dvr.tuners.length > 0 &&
+                  ` · ${dvr.tuners.length} channel source${
+                    dvr.tuners.length === 1 ? '' : 's'
+                  }`}
               </Text>
               <Button
                 size="compact-xs"
@@ -350,8 +355,11 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             </Group>
           ))}
           <Text size="xs" c="dimmed">
-            Removing a DVR leaves its tuners registered on the server, outside
-            any DVR, so they can be put in another one.
+            A DVR is the media server&apos;s own container: it holds the channel
+            sources and their guides, and a tuner outside one is registered but
+            never scanned, listed or played from. There is normally just the one.
+            Removing it leaves its tuners registered, outside any DVR, so they
+            can be put in another.
           </Text>
         </>
       )}

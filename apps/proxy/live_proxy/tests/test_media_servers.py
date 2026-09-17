@@ -891,6 +891,67 @@ class TunerTests(TestCase):
         # And nothing was asked of the server, because there was nothing to ask
         post.assert_not_called()
 
+    def test_each_tuner_shows_its_own_guide_not_the_dvrs_first_one(self):
+        """
+        A DVR holds a guide per channel source but does not say which is whose.
+
+        The tuners carry no lineup and the guides carry no tuner, so they are matched on the
+        channel profile both name. Without that every tuner in a DVR showed the guide it
+        happened to be made with, which read as all of them sharing one.
+        """
+        two_in_one_dvr = {
+            "MediaContainer": {
+                "Dvr": [
+                    {
+                        "key": "44",
+                        "lineupTitle": "austria",
+                        "lineup": "lineup://tv.plex.providers.epg.xmltv/"
+                        "http%3A%2F%2Fd%3A9191%2Foutput%2Fepg%2Faustria#austria",
+                        "Device": [
+                            {"key": "22", "title": "Austria"},
+                            {"key": "50", "title": "Belgium"},
+                        ],
+                        "Lineup": [
+                            {
+                                "id": "lineup://tv.plex.providers.epg.xmltv/"
+                                "http%3A%2F%2Fd%3A9191%2Foutput%2Fepg%2Faustria#austria",
+                                "title": "austria",
+                            },
+                            {
+                                "id": "lineup://tv.plex.providers.epg.xmltv/"
+                                "http%3A%2F%2Fd%3A9191%2Foutput%2Fepg%2Fbelgium#Belgium",
+                                "title": "Belgium",
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+        devices = {
+            "MediaContainer": {
+                "Device": [
+                    {"key": "22", "title": "Austria", "uri": "http://d:9191/hdhr/austria"},
+                    {"key": "50", "title": "Belgium", "uri": "http://d:9191/hdhr/belgium"},
+                ]
+            }
+        }
+
+        def server_with_two(url, **_kwargs):
+            if "/media/grabbers/devices" in url:
+                return fake_response(devices)
+            if "/livetv/dvrs" in url:
+                return fake_response(two_in_one_dvr)
+            return plex(url)
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = server_with_two
+            austria, belgium = media_servers.tuners(
+                {"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}
+            )
+
+        self.assertEqual(austria["guide"], "http://d:9191/output/epg/austria")
+        self.assertEqual(belgium["guide"], "http://d:9191/output/epg/belgium")
+
     def test_a_tuner_can_be_put_into_a_dvr(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.put"

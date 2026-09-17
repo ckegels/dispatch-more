@@ -423,10 +423,12 @@ describe('MediaServers', () => {
     render(<MediaServers active={true} />);
     await openServer();
 
+    // What a DVR is for, and that removing it does not remove the tuners
     expect(
-      screen.getByText(
-        'Removing a DVR leaves its tuners registered on the server, outside any DVR, so they can be put in another one.'
-      )
+      screen.getByText(/never scanned, listed or played from/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/leaves its tuners registered, outside any DVR/)
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove DVR' }));
     const dvrDialog = await screen.findByRole('dialog');
