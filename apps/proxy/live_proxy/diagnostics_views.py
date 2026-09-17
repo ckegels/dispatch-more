@@ -19,6 +19,7 @@ from core.utils import RedisClient
 
 from . import media_servers
 from . import probation
+from . import recovery
 from . import timing
 
 logger = logging.getLogger("live_proxy")
@@ -170,6 +171,8 @@ def diagnostics(request):
 
     return JsonResponse({
         "starts": _starts(redis_client),
+        # What has happened to the channels themselves (see recovery.py)
+        "health": recovery.recent_events(redis_client),
         "enabled": enabled,
         "accounts": _account_rows(redis_client) if enabled else [],
         "events": [

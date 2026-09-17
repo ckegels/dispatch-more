@@ -9,9 +9,13 @@ connection" lines, hundreds of "Maximum retry attempts (3) reached" on a real se
 import time
 from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase
+from django.test import TestCase
 
+from apps.proxy.live_proxy import recovery
 from apps.proxy.live_proxy.input.manager import StreamManager
+from apps.proxy.live_proxy.redis_keys import RedisKeys
+
+from .test_probation import FakeRedis
 
 
 def _manager(stable_threshold=30, window=1800, max_retries=3):
@@ -25,10 +29,20 @@ def _manager(stable_threshold=30, window=1800, max_retries=3):
     manager.max_retries = max_retries
     manager.connection_start_time = 0
     manager.last_data_time = 0
+    manager.buffer = MagicMock(redis_client=FakeRedis())
     return manager
 
 
-class ReconnectBudgetTests(SimpleTestCase):
+class ReconnectBudgetTests(TestCase):
+    """With Stream Recovery on; off, none of this happens and the count just goes up."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.delete(recovery.SETTINGS_CACHE_KEY)
+        self.addCleanup(cache.delete, recovery.SETTINGS_CACHE_KEY)
+        recovery.save_settings({**recovery.DEFAULTS, "enabled": True, "scope": "all"})
+        cache.delete(recovery.SETTINGS_CACHE_KEY)
     def test_a_rotation_after_stable_playback_never_adds_up(self):
         manager = _manager()
         now = time.time()
@@ -63,6 +77,21 @@ class ReconnectBudgetTests(SimpleTestCase):
         manager.connection_start_time = now + 5
         manager.last_data_time = now + 10
         self.assertEqual(manager._record_connection_failure(), 2)
+
+    def test_nothing_changes_while_stream_recovery_is_off(self):
+        from django.core.cache import cache
+
+        recovery.save_settings({**recovery.DEFAULTS, "enabled": False})
+        cache.delete(recovery.SETTINGS_CACHE_KEY)
+
+        manager = _manager()
+        now = time.time()
+        for rotation in range(3):
+            manager.connection_start_time = now + rotation * 600
+            manager.last_data_time = manager.connection_start_time + 600
+            count = manager._record_connection_failure()
+        # Exactly Dispatcharr's own behaviour: three rotations and the stream is given up
+        self.assertEqual(count, manager.max_retries)
 
     def test_the_long_quiet_window_still_clears_the_count(self):
         manager = _manager(window=60)

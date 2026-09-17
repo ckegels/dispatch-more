@@ -114,9 +114,16 @@ def _tuner_url(
     return url
 
 
-def _epg_url(base_url, channel_profile) -> str:
-    """Dispatcharr's own EPG for a channel profile, which is what a DVR uses as its guide."""
-    return f"{media_servers.clean_url(base_url)}/output/epg/{quote(channel_profile, safe='')}"
+def _epg_url(base_url, channel_profile, skip_cached_logos=True) -> str:
+    """
+    Dispatcharr's own EPG for a channel profile, which is what a DVR uses as its guide.
+
+    Media servers fetch the logos themselves and cannot read Dispatcharr's cached ones, so by
+    default the guide points at the original addresses ("cachedlogos=false"). Anyone whose
+    server can read the cached ones can turn that off when adding the tuner.
+    """
+    url = f"{media_servers.clean_url(base_url)}/output/epg/{quote(channel_profile, safe='')}"
+    return f"{url}?cachedlogos=false" if skip_cached_logos else url
 
 
 def _profile_from_uri(uri) -> str:
@@ -199,6 +206,10 @@ def media_server_tuners(request):
             **_choices(),
         })
 
+    # Media servers cannot read Dispatcharr's cached logos, so this is on unless it is turned
+    # off when adding the tuner
+    skip_cached_logos = request.data.get("skip_cached_logos", True) is not False
+
     if request.method == "DELETE" and request.query_params.get("dvr"):
         dvr_id = request.query_params.get("dvr")
         if not media_servers.delete_dvr(server, dvr_id):
@@ -242,7 +253,10 @@ def media_server_tuners(request):
             profile = _profile_from_uri(tuner["uri"]) if tuner else ""
             if profile:
                 media_servers.add_lineup(
-                    server, dvr_id, _epg_url(base_url, profile), profile
+                    server,
+                    dvr_id,
+                    _epg_url(base_url, profile, skip_cached_logos),
+                    profile,
                 )
         elif not dvr_id:
             # Nothing to rescan: a tuner outside a DVR is not used by the server at all
@@ -330,7 +344,10 @@ def media_server_tuners(request):
         if media_servers.attach_tuner(server, dvr_id, device["id"]):
             # The DVR gains this tuner's guide next to the ones it already has
             media_servers.add_lineup(
-                server, dvr_id, _epg_url(base_url, channel_profile), channel_profile
+                server,
+                dvr_id,
+                _epg_url(base_url, channel_profile, skip_cached_logos),
+                channel_profile,
             )
         else:
             warning = "The tuner was added, but the server would not put it in that DVR."
@@ -338,7 +355,7 @@ def media_server_tuners(request):
         if media_servers.create_dvr(
             server,
             device["uuid"],
-            _epg_url(base_url, channel_profile),
+            _epg_url(base_url, channel_profile, skip_cached_logos),
             channel_profile,
             language_code(request.data.get("language")),
         ):

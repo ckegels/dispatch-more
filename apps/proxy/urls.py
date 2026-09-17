@@ -16,6 +16,12 @@ urlpatterns = [
     path('diagnostics/', diagnostics_views.diagnostics, name='live_diagnostics'),
     # Media Servers: the servers themselves, for the settings tab
     path('media-servers/', media_server_views.media_server_list, name='media_servers'),
+    # Stream Recovery: what happens when a provider closes a working connection
+    path(
+        'stream-recovery/',
+        media_server_views.stream_recovery,
+        name='stream_recovery',
+    ),
     path(
         'media-servers/tuners/',
         media_server_tuner_views.media_server_tuners,

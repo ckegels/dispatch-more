@@ -9,6 +9,7 @@ import {
   NumberInput,
   Select,
   Stack,
+  Switch,
   Table,
   Text,
   TextInput,
@@ -25,6 +26,8 @@ const emptyTuner = {
   dvr_id: '',
   language: 'eng',
   tuner_type: 'hdhomerun',
+  // Media servers fetch logos themselves and cannot read Dispatcharr's cached ones
+  skip_cached_logos: true,
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -380,6 +383,18 @@ const MediaServerTuners = ({ serverId, enabled }) => {
             data={data.languages || []}
           />
         )}
+        <Switch
+          size="sm"
+          label="Original logos"
+          description="Media servers cannot read the cached ones"
+          checked={form.skip_cached_logos}
+          onChange={(event) =>
+            setForm({
+              ...form,
+              skip_cached_logos: event.currentTarget.checked,
+            })
+          }
+        />
         <Button
           size="compact-sm"
           loading={busy}
@@ -395,6 +410,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                 tuner_count: form.tuner_count || 0,
                 dvr_id: form.dvr_id,
                 language: form.language,
+                skip_cached_logos: form.skip_cached_logos,
               })
             )
           }

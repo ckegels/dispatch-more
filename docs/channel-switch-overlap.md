@@ -442,6 +442,7 @@ overlap window.
 | `apps/proxy/live_proxy/server.py` | The cleanup loop resumes overlap checks whose worker restarted |
 | `apps/proxy/live_proxy/input/manager.py` | Longer wait before retrying a connection the provider refused; a connection that had been working does not count towards giving up on the channel |
 | `apps/proxy/live_proxy/diagnostics_views.py` | Read-only data for the Diagnostics page |
+| `apps/proxy/live_proxy/recovery.py` | Stream Recovery: forgives the close of a connection that had been working, so a provider rotating connections does not use up the retry budget and kill the channel |
 | `apps/proxy/live_proxy/timing.py` | Times each phase of a channel start, finds the first keyframe, logs one line per start |
 | `apps/proxy/live_proxy/media_servers.py`, `media_server_views.py` | Media servers (Plex and Jellyfin): stored in `CoreSettings["media-servers"]`, token never returned; watches sessions after a start on a media server; keeps a background list of what is playing so a request can be told which device is watching |
 | `apps/proxy/live_proxy/media_server_tuner_views.py` | Tuners on a media server: list, add (into a chosen DVR or a new one with Dispatcharr's EPG), remove, rescan + reload guide; builds a channel profile from channel groups |

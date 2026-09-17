@@ -30,6 +30,7 @@ class FakeRedis:
         self.hashes = {}
         self.sets = {}
         self.zsets = {}
+        self.lists = {}
         # Keys with an expiry, and the seconds they were given (nothing expires by itself here)
         self.expiring = set()
         self.ttls = {}
@@ -58,14 +59,18 @@ class FakeRedis:
     def delete(self, *keys):
         removed = 0
         for key in keys:
-            for store in (self.strings, self.hashes, self.sets, self.zsets):
+            for store in (self.strings, self.hashes, self.sets, self.zsets, self.lists):
                 if store.pop(key, None) is not None:
                     removed += 1
         return removed
 
     def exists(self, key):
         return int(
-            key in self.strings or key in self.hashes or key in self.sets or key in self.zsets
+            key in self.strings
+            or key in self.hashes
+            or key in self.sets
+            or key in self.zsets
+            or key in self.lists
         )
 
     def expire(self, key, ttl):
@@ -78,6 +83,21 @@ class FakeRedis:
         if not self.exists(key):
             return -2
         return self.ttls.get(key, 30) if key in self.expiring else -1
+
+    def lpush(self, key, *values):
+        items = self.lists.setdefault(key, [])
+        for value in values:
+            items.insert(0, str(value))
+        return len(items)
+
+    def ltrim(self, key, start, stop):
+        items = self.lists.get(key, [])
+        self.lists[key] = items[start : stop + 1] if stop >= 0 else items[start:]
+        return True
+
+    def lrange(self, key, start, stop):
+        items = self.lists.get(key, [])
+        return items[start : stop + 1] if stop >= 0 else items[start:]
 
     def pipeline(self, transaction=True):
         return _FakePipeline(self)

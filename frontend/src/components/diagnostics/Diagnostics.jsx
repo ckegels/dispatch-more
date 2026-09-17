@@ -26,6 +26,7 @@ import ChannelSwitches, {
   ACTION_COLORS,
   ACTION_MEANINGS,
 } from './ChannelSwitches';
+import ChannelHealth, { HEALTH_COLORS, HEALTH_MEANINGS } from './ChannelHealth';
 
 const REFRESH_MS = 5000;
 
@@ -97,14 +98,20 @@ const Diagnostics = ({ active }) => {
             value: 'switches',
             label: `Channel switches (${activity.events.length})`,
           },
+          {
+            value: 'health',
+            label: `Channel health (${(activity.health || []).length})`,
+          },
         ]}
       />
 
-      {tab === 'starts' ? (
+      {tab === 'starts' && (
         <ChannelStarts starts={activity.starts} onCopy={copyToClipboard} />
-      ) : (
+      )}
+      {tab === 'switches' && (
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
+      {tab === 'health' && <ChannelHealth events={activity.health} />}
 
       <Group gap="xs" align="center">
         <Text size="xs" c="dimmed">
@@ -209,6 +216,33 @@ const Diagnostics = ({ active }) => {
                       />
                       <Text size="sm">{label}</Text>
                     </Group>
+                  </Table.Td>
+                  <Table.Td>{meaning}</Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+
+          <Text size="sm" fw={600} mt="sm">
+            Channel health
+          </Text>
+          <Text size="sm">
+            What happened to a channel itself, rather than to a viewer. A
+            provider closing connections is normal; whether it costs you the
+            channel is what this shows.
+          </Text>
+          <Table verticalSpacing={4} fz="sm">
+            <Table.Tbody>
+              {HEALTH_MEANINGS.map(([action, meaning]) => (
+                <Table.Tr key={action}>
+                  <Table.Td style={{ whiteSpace: 'nowrap' }}>
+                    <Badge
+                      size="sm"
+                      variant="light"
+                      color={HEALTH_COLORS[action]}
+                    >
+                      {action}
+                    </Badge>
                   </Table.Td>
                   <Table.Td>{meaning}</Table.Td>
                 </Table.Tr>

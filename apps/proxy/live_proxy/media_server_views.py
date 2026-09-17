@@ -12,8 +12,42 @@ from rest_framework.decorators import api_view, permission_classes
 from apps.accounts.permissions import IsAdmin
 
 from . import media_servers
+from . import recovery
 
 logger = logging.getLogger("live_proxy")
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def stream_recovery(request):
+    """Stream Recovery: keeping a channel alive when a working connection is closed."""
+    if request.method == "GET":
+        return JsonResponse({"settings": recovery.settings(), "scopes": list(recovery.SCOPES)})
+
+    values = dict(recovery.settings())
+    try:
+        if "enabled" in request.data:
+            values["enabled"] = bool(request.data["enabled"])
+        if "stable_seconds" in request.data:
+            seconds = int(request.data["stable_seconds"])
+            if not 5 <= seconds <= 600:
+                raise ValueError("Give a number of seconds between 5 and 600")
+            values["stable_seconds"] = seconds
+        if "max_per_hour" in request.data:
+            per_hour = int(request.data["max_per_hour"])
+            if not 1 <= per_hour <= 120:
+                raise ValueError("Give a number between 1 and 120")
+            values["max_per_hour"] = per_hour
+        if "scope" in request.data:
+            if request.data["scope"] not in recovery.SCOPES:
+                raise ValueError("Choose which channels this applies to")
+            values["scope"] = request.data["scope"]
+    except (TypeError, ValueError) as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+    recovery.save_settings(values)
+    logger.info(f"Stream Recovery settings saved: {values}")
+    return JsonResponse({"settings": values, "scopes": list(recovery.SCOPES)})
 
 
 def _server_rows():

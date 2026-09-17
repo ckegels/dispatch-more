@@ -348,6 +348,8 @@ describe('MediaServers', () => {
         tuner_count: '2',
         dvr_id: '',
         language: 'eng',
+        // On unless it is turned off: media servers cannot read the cached logos
+        skip_cached_logos: true,
       })
     );
   });

@@ -15,6 +15,7 @@ from .buffer import StreamBuffer
 from ..utils import detect_stream_type, get_logger
 from ..redis_keys import RedisKeys
 from .. import probation
+from .. import recovery
 from .. import timing
 from ..constants import ChannelState, EventType, StreamType, ChannelMetadataField, TS_PACKET_SIZE
 from ..config_helper import ConfigHelper
@@ -200,22 +201,26 @@ class StreamManager:
         Providers close and rotate a connection as normal behaviour, every few minutes on some
         of them. Counting each of those as a failure means three rotations inside the retry
         window (30 minutes by default) abandon a channel that was playing perfectly -- so the
-        longer someone watches, the more likely the stream is to die. A connection that
-        delivered data for at least STABLE_CONNECTION_THRESHOLD seconds is treated as a fresh
-        start rather than another step towards giving up.
+        longer someone watches, the more likely the stream is to die.
 
-        A stream that keeps failing quickly still exhausts the budget, because a connection
-        that never became stable does not clear anything.
+        Stream Recovery (see recovery.py, off by default) forgives the close of a connection
+        that had been working: the count is cleared rather than increased. It decides the how
+        long, the which channels and the how often, because keeping a stream that drops every
+        minute is not always better than failing over to the next one.
         """
         now = time.time()
         stable_for = self._stable_seconds()
-        if stable_for >= self._stable_connection_threshold:
-            if self.retry_count:
-                logger.info(
-                    f"Connection for channel {self.channel_id} had been working for "
-                    f"{stable_for:.0f}s before it closed; not counting it against the "
-                    f"{self.max_retries} retries"
-                )
+        # The buffer may not be there yet on an early failure, so it is asked for carefully
+        if recovery.forgive_disconnect(
+            getattr(getattr(self, "buffer", None), "redis_client", None),
+            self.channel_id,
+            stable_for,
+        ):
+            logger.info(
+                f"Connection for channel {self.channel_id} had been working for "
+                f"{stable_for:.0f}s before the provider closed it; not counting it against "
+                f"the {self.max_retries} retries (Stream Recovery)"
+            )
             self.retry_count = 0
         elif (
             self._last_failure_time is not None
