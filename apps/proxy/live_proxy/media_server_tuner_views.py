@@ -339,13 +339,29 @@ def media_server_tuners(request):
         if action == "attach":
             if not dvr_id:
                 return JsonResponse({"error": "Choose a DVR to put it in"}, status=400)
+            # The guide goes in before the tuner, which is the order the server's own
+            # settings use: a DVR holds a lineup per channel source, and a tuner arriving
+            # without one has its channels listed against nothing.
+            tuner = next(
+                (t for t in media_servers.tuners(server, hosts) if t["id"] == str(device_id)),
+                None,
+            )
+            profile = _profile_from_uri(tuner["uri"]) if tuner else ""
+            if profile and not media_servers.add_lineup(
+                server, dvr_id, _epg_url(base_url, profile, skip_cached_logos), profile
+            ):
+                return JsonResponse(
+                    {"error": "The server would not add this tuner's guide to that DVR"},
+                    status=400,
+                )
+            if profile and tuner:
+                # Without a name the server shows it as a blank row, and a tuner it does
+                # not consider enabled is not used
+                media_servers.name_device(server, device_id, tuner.get("title") or profile)
             if not media_servers.attach_tuner(server, dvr_id, device_id):
                 return JsonResponse(
                     {"error": "The server would not put this tuner in that DVR"}, status=400
                 )
-            # Nothing else to do about the guide: a DVR keeps one guide, shared by every
-            # tuner in it. The tuner has programmes if that guide covers its channels, which
-            # is why the page shows the guide against each tuner and lets it be changed.
         elif not dvr_id:
             # Nothing to rescan: a tuner outside a DVR is not used by the server at all
             return JsonResponse(
@@ -428,12 +444,22 @@ def media_server_tuners(request):
     dvr_id = request.data.get("dvr_id") or None
     if device is None:
         warning = "The tuner was added, but the server did not list it afterwards."
+    else:
+        # A tuner added through the API arrives with no name and switched off, which the
+        # server shows as a blank row it will not use
+        media_servers.name_device(server, device["id"], channel_profile)
+
+    if device is None:
+        pass
     elif dvr_id:
-        if media_servers.attach_tuner(server, dvr_id, device["id"]):
-            # The DVR's own guide now covers this tuner as well. If it does not reach these
-            # channels the tuner plays with no programmes, which the page says and can fix.
-            pass
-        else:
+        # Its guide first, then the tuner: a DVR holds a lineup per channel source
+        media_servers.add_lineup(
+            server,
+            dvr_id,
+            _epg_url(base_url, channel_profile, skip_cached_logos),
+            channel_profile,
+        )
+        if not media_servers.attach_tuner(server, dvr_id, device["id"]):
             warning = "The tuner was added, but the server would not put it in that DVR."
     else:
         if media_servers.create_dvr(

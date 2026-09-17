@@ -529,6 +529,39 @@ def xmltv_lineup(xmltv_url, title) -> str:
     return f"lineup://tv.plex.providers.epg.xmltv/{quote(xmltv_url, safe='')}#{title}"
 
 
+def add_lineup(server, dvr_id, xmltv_url, title):
+    """
+    Give a DVR another guide, for a channel source being added to it.
+
+    A DVR holds a lineup per channel source, so a tuner put into a DVR that was already
+    there needs its guide added as well or its channels are listed against nothing. This is
+    what the server's own settings do, in this order: the guide first, then the tuner.
+    """
+    if kind(server) == "jellyfin":
+        # Its guide already covers every tuner
+        return True
+    return _put(
+        server, f"/livetv/dvrs/{dvr_id}/lineups", {"lineup": xmltv_lineup(xmltv_url, title)}
+    )
+
+
+def name_device(server, device_id, title):
+    """
+    Give a tuner its name and switch it on.
+
+    A tuner added through the API has no title until this is done: the server shows it as a
+    blank row, and a tuner it does not consider enabled is not used. The server's own
+    settings do this straight after adding one.
+    """
+    if kind(server) == "jellyfin":
+        # Its name is given when it is added
+        return True
+    return _put(server, f"/media/grabbers/devices/{device_id}", {
+        "title": title,
+        "enabled": 1,
+    })
+
+
 def guide_url(lineup) -> str:
     """
     The plain address of the guide a DVR uses, back out of the lineup it stores.
@@ -710,6 +743,9 @@ def enable_channels(server, device_id, channels=None):
     # the last one and enables a single channel.
     params = {"channelsEnabled": ",".join(str(channel) for channel in channels)}
     for channel in channels:
+        # Both maps, which is what the server's own settings send. Dispatcharr's EPG uses
+        # the same numbers on both sides, so each channel maps to itself.
+        params[f"channelMappingByKey[{channel}]"] = channel
         params[f"channelMapping[{channel}]"] = channel
     return _put(server, f"/media/grabbers/devices/{device_id}/channelmap", params)
 

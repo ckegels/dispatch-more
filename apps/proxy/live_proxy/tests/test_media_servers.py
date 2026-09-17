@@ -842,9 +842,13 @@ class TunerTests(TestCase):
         self.assertTrue(
             any("/livetv/dvrs/32/devices/" in url for url in puts), puts
         )
-        # The DVR keeps the one guide it already had: there is no guide per tuner, and the
-        # endpoint Dispatcharr used to call for that does not exist on the server
-        self.assertNotIn("http://192.168.2.141:32400/livetv/dvrs/32/lineups", puts)
+        # A DVR holds a lineup per channel source, so this tuner's guide goes in beside them
+        self.assertEqual(
+            puts["http://192.168.2.141:32400/livetv/dvrs/32/lineups"]["lineup"],
+            "lineup://tv.plex.providers.epg.xmltv/"
+            "http%3A%2F%2F192.168.2.142%3A9191%2Foutput%2Fepg%2Faustria%3Fcachedlogos%3Dfalse"
+            "#austria",
+        )
 
     def test_a_dvr_that_could_not_be_made_is_said_so_without_losing_the_tuner(self):
         from apps.channels.models import ChannelProfile
@@ -908,13 +912,13 @@ class TunerTests(TestCase):
         self.assertEqual(dvr["title"], "Belgium")
         self.assertEqual(dvr["tuners"], ["Austria"])
 
-    def test_putting_a_tuner_in_a_dvr_leaves_the_dvrs_guide_alone(self):
+    def test_a_tuner_of_ours_put_into_a_dvr_takes_its_guide_with_it(self):
         """
-        A DVR keeps one guide, shared by every tuner in it.
+        A DVR holds a lineup per channel source, and this is the order the server uses.
 
-        Dispatcharr used to add a guide per tuner here, against an endpoint the server does
-        not have, so the call failed quietly and the tuner played channels with nothing
-        listed against them. The guide is changed on the DVR itself instead.
+        Measured from a server's own log while adding a channel source through its settings:
+        the guide goes in with PUT /livetv/dvrs/{id}/lineups, the tuner is named and switched
+        on, and only then is it put into the DVR.
         """
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.put"
@@ -929,8 +933,22 @@ class TunerTests(TestCase):
             )
 
         called = [call.args[0] for call in put.call_args_list]
-        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/22", called)
-        self.assertNotIn("http://192.168.2.141:32400/livetv/dvrs/32/lineups", called)
+        self.assertEqual(
+            called,
+            [
+                "http://192.168.2.141:32400/livetv/dvrs/32/lineups",
+                "http://192.168.2.141:32400/media/grabbers/devices/22",
+                "http://192.168.2.141:32400/livetv/dvrs/32/devices/22",
+            ],
+        )
+        puts = {call.args[0]: call.kwargs.get("params", {}) for call in put.call_args_list}
+        self.assertIn(
+            "austria", puts["http://192.168.2.141:32400/livetv/dvrs/32/lineups"]["lineup"]
+        )
+        # Named and switched on, or the server shows a blank row it will not use
+        self.assertEqual(
+            puts["http://192.168.2.141:32400/media/grabbers/devices/22"]["enabled"], 1
+        )
 
     def test_a_dvr_can_be_made_for_a_tuner_that_is_in_none(self):
         """A tuner outside a DVR is registered and unused: this is the way out of that."""
@@ -1369,6 +1387,9 @@ class ChannelMapTests(TestCase):
         # Dispatcharr's EPG uses the same numbers, so each channel maps to itself
         self.assertEqual(params["channelMapping[6420]"], "6420")
         self.assertEqual(params["channelMapping[6422]"], "6422")
+        # Both maps, which is what the server's own settings send
+        self.assertEqual(params["channelMappingByKey[6420]"], "6420")
+        self.assertEqual(params["channelMappingByKey[6422]"], "6422")
         self.assertIn("/media/grabbers/devices/22/channelmap", put.call_args.args[0])
 
     def test_a_tuner_without_channels_is_left_alone(self):
