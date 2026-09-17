@@ -26,19 +26,26 @@ const emptyTuner = {
   dvr_id: '',
   language: 'eng',
   tuner_type: 'hdhomerun',
-  // Cached logos usually do not show up on a media server, so the guide points at the
-  // original addresses instead. Why they do not is not understood: the cache endpoint
-  // needs no login and is on the same network, so the server can reach it.
+  // Cached logos live on Dispatcharr's own, usually private, address, and a media server
+  // hands that address to whatever is watching instead of fetching the image itself. A
+  // phone or a television off the network cannot load it, so the guide points at the
+  // original addresses, which the provider serves publicly.
   skip_cached_logos: true,
 };
 
-// A media server keeps one guide for all of its tuners, so the guide it is offered has to
-// cover every channel any of them serves. Dispatcharr's EPG without a channel profile is
-// exactly that: every channel. Narrowing it to one tuner's profile would leave the other
-// tuners playing channels with nothing listed against them.
-export const guideForServer = (base, skipCachedLogos = true) => {
+// The guide that belongs with a tuner: Dispatcharr's EPG for the same channel profile the
+// tuner serves. A media server keeps a guide per channel source, so each tuner gets the one
+// listing its own channels rather than everything the server can reach.
+export const guideForTuner = (uri, base, skipCachedLogos = true) => {
+  const parts = String(uri || '')
+    .split('/')
+    .filter(Boolean);
+  const at = parts.indexOf('hdhr');
+  if (at < 0 || at + 1 >= parts.length) return '';
   const root = String(base || '').replace(/\/+$/, '');
-  return `${root}/output/epg${skipCachedLogos ? '?cachedlogos=false' : ''}`;
+  return `${root}/output/epg/${parts[at + 1]}${
+    skipCachedLogos ? '?cachedlogos=false' : ''
+  }`;
 };
 
 const MediaServerTuners = ({ serverId, enabled }) => {
@@ -187,7 +194,8 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                                 tuner: tuner.id,
                                 value:
                                   tuner.guide ||
-                                  guideForServer(
+                                  guideForTuner(
+                                    tuner.uri,
                                     baseUrl,
                                     form.skip_cached_logos
                                   ),
@@ -296,14 +304,12 @@ const MediaServerTuners = ({ serverId, enabled }) => {
 
       <Text size="xs" c="dimmed">
         A tuner is where the channels come from and the guide is what is listed
-        against them, so both are shown above. The media server keeps{' '}
-        <b>one guide for all of its tuners</b> — Plex and Jellyfin both work
-        that way, and neither can give a tuner a guide of its own. So the guide
-        has to cover every channel any tuner serves, which is why it is offered
-        as Dispatcharr&apos;s EPG for all channels rather than for one channel
-        profile. Narrow it and the tuners it leaves out play with nothing listed
-        against them. A tuner that is in no DVR is registered and unused until
-        you make one for it.
+        against them, so both are shown above and either can be changed. Each
+        tuner has its own guide, which is Dispatcharr&apos;s EPG for the channel
+        profile that tuner serves. A DVR can hold several tuners, each with its
+        own guide, so there is no need to put every channel in one listing. A
+        tuner that is in no DVR is registered and unused until you make one for
+        it.
         Its channels are then scanned and the guide loaded, so it is ready to
         watch: its channels are scanned, switched on and mapped to the guide,
         because a channel the server found but left switched off never appears.
@@ -478,7 +484,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
         <Switch
           size="sm"
           label="Original logos"
-          description="Cached logos usually do not show up on a media server"
+          description="Cached logos are on a private address players cannot reach"
           checked={form.skip_cached_logos}
           onChange={(event) =>
             setForm({

@@ -118,10 +118,13 @@ def _epg_url(base_url, channel_profile, skip_cached_logos=True) -> str:
     """
     Dispatcharr's own EPG for a channel profile, which is what a DVR uses as its guide.
 
-    Cached logos usually do not show up on a media server, so by default the guide points at
-    the original addresses instead ("cachedlogos=false"). Why they do not is not understood:
-    the cache endpoint needs no login and sits on the same network, so the server can reach
-    it. Anyone whose server does show them can turn this off when adding the tuner.
+    The guide points at the original logo addresses by default ("cachedlogos=false").
+
+    Dispatcharr's cached logos are on its own address, which is usually a private one. The
+    media server hands that address to whatever is watching rather than fetching the image
+    itself, so a phone or a television off the network cannot load it and the channel shows
+    no logo. An address the provider serves on the public internet works everywhere. Anyone
+    whose Dispatcharr is reachable from outside can turn this off when adding the tuner.
     """
     url = f"{media_servers.clean_url(base_url)}/output/epg/{quote(channel_profile, safe='')}"
     return f"{url}?cachedlogos=false" if skip_cached_logos else url
@@ -297,17 +300,6 @@ def media_server_tuners(request):
             if device.get("dvr_id"):
                 return JsonResponse(
                     {"error": "This tuner is already in a DVR"}, status=400
-                )
-            # A server shows one DVR and uses one guide for every tuner in it. A second one
-            # can be made through the API and then sits there unused, which is easy to do by
-            # accident and hard to notice, so the tuner joins the one that is there instead.
-            if media_servers.dvr_list(server):
-                return JsonResponse(
-                    {
-                        "error": "This server already has a DVR, and it keeps one guide for "
-                        "all of its tuners. Put this tuner in that DVR instead."
-                    },
-                    status=400,
                 )
             if not media_servers.create_dvr(
                 server,

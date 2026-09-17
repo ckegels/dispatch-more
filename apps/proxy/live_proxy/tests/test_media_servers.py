@@ -958,31 +958,34 @@ class TunerTests(TestCase):
         # Named after the channels it lists, not the language it happens to be in
         self.assertTrue(made.kwargs["params"]["lineup"].endswith("#austria"))
 
-    def test_a_second_dvr_is_not_made(self):
+    def test_another_dvr_can_be_made_beside_the_ones_there(self):
         """
-        A server shows one DVR and uses its one guide for every tuner in it.
+        A server holds as many DVRs as you like, each with a guide of its own.
 
-        A second can be made through the API and then sits there unused, which is easy to do
-        by accident and hard to see afterwards.
+        Dispatcharr refused this for a while, on the belief that a server keeps one DVR with
+        one guide for everything in it. It does not: a guide belongs to a channel source.
         """
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post:
             get.side_effect = plex_with_tuners
+            post.return_value = fake_response({})
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
                 {
                     "server": "a1",
                     "action": "make_dvr",
                     "id": "1",
-                    "guide_url": "http://192.168.2.142:9191/output/epg",
+                    "guide_url": "http://192.168.2.142:9191/output/epg/france",
                 },
                 format="json",
             )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("already has a DVR", response.json()["error"])
-        post.assert_not_called()
+        self.assertEqual(response.status_code, 200, response.content)
+        made = next(
+            call for call in post.call_args_list if call.args[0].endswith("/livetv/dvrs")
+        )
+        self.assertIn("france", made.kwargs["params"]["lineup"])
 
     def test_a_dvr_already_in_one_is_not_given_another(self):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
