@@ -184,10 +184,40 @@ class StreamManager:
 
         return session
 
+    def _stable_seconds(self) -> float:
+        """How long the connection that just ended was delivering data."""
+        started = getattr(self, "connection_start_time", 0) or 0
+        if not started or not self.last_data_time:
+            return 0.0
+        # Negative when the last data came from an earlier connection: this one sent nothing
+        return max(self.last_data_time - started, 0.0)
+
     def _record_connection_failure(self):
-        """Record a failure; reset the counter if the last one was long ago."""
+        """
+        Count a failed connection towards the retry budget, unless the one that just ended had
+        been working.
+
+        Providers close and rotate a connection as normal behaviour, every few minutes on some
+        of them. Counting each of those as a failure means three rotations inside the retry
+        window (30 minutes by default) abandon a channel that was playing perfectly -- so the
+        longer someone watches, the more likely the stream is to die. A connection that
+        delivered data for at least STABLE_CONNECTION_THRESHOLD seconds is treated as a fresh
+        start rather than another step towards giving up.
+
+        A stream that keeps failing quickly still exhausts the budget, because a connection
+        that never became stable does not clear anything.
+        """
         now = time.time()
-        if (
+        stable_for = self._stable_seconds()
+        if stable_for >= self._stable_connection_threshold:
+            if self.retry_count:
+                logger.info(
+                    f"Connection for channel {self.channel_id} had been working for "
+                    f"{stable_for:.0f}s before it closed; not counting it against the "
+                    f"{self.max_retries} retries"
+                )
+            self.retry_count = 0
+        elif (
             self._last_failure_time is not None
             and (now - self._last_failure_time) > self._retry_window_seconds
         ):
