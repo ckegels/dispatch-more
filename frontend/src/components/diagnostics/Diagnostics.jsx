@@ -60,6 +60,15 @@ const Diagnostics = ({ active }) => {
     }
   }, []);
 
+  const changeHealth = async (settings) => {
+    try {
+      setActivity(await API.setChannelHealth(settings));
+      setError(null);
+    } catch {
+      setError('Could not change the channel health recording.');
+    }
+  };
+
   const changeRetention = async (value) => {
     try {
       setActivity(await API.setDiagnosticsRetention(Number(value)));
@@ -100,7 +109,8 @@ const Diagnostics = ({ active }) => {
           },
           {
             value: 'health',
-            label: `Channel health (${(activity.health || []).length})`,
+            // What is running now, not what has gone wrong: the count that matters
+            label: `Channel health (${(activity.running || []).length})`,
           },
         ]}
       />
@@ -111,7 +121,15 @@ const Diagnostics = ({ active }) => {
       {tab === 'switches' && (
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
-      {tab === 'health' && <ChannelHealth events={activity.health} />}
+      {tab === 'health' && (
+        <ChannelHealth
+          events={activity.health}
+          running={activity.running}
+          stopped={activity.stopped}
+          settings={activity.channel_health}
+          onSettings={changeHealth}
+        />
+      )}
 
       <Group gap="xs" align="center">
         <Text size="xs" c="dimmed">

@@ -91,10 +91,14 @@ const MediaServers = ({ active }) => {
   return (
     <Stack gap="md">
       <Text size="sm" c="dimmed">
-        A media server is read only: Dispatcharr asks Plex what it is playing
-        and how, and adds that to the Diagnostics page, so you can see what
-        happens to a stream after Dispatcharr hands it over. Nothing is changed
-        on the server.
+        Dispatcharr asks a media server what it is playing and how, and adds
+        that to the Diagnostics page, so you can see what happens to a stream
+        after it is handed over — and so a switch made through Plex or Jellyfin
+        is recognised as coming from the person watching rather than from the
+        server. It also sets the server up: adding Dispatcharr as a channel
+        source, with the guide for the channels that source serves, and keeping
+        both pointing where they should. What it changes on the server is what
+        you ask it to here; nothing else is touched.
       </Text>
 
       {error && <Alert color="red">{error}</Alert>}

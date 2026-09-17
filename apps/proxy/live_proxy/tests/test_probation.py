@@ -2675,14 +2675,39 @@ class RecentSwitchesTests(TestCase):
         actions = [event["action"] for event in probation.recent_events(self.redis)]
         self.assertEqual(actions, ["overlap slot"])
 
-    def test_a_switch_by_a_viewer_it_cannot_tell_apart_says_so(self):
+    def test_a_switch_by_a_viewer_it_cannot_tell_apart_says_why(self):
+        """
+        Which of the three ways of being identified failed, not just that one did.
+
+        They fail for different reasons and need different things done about them, and the
+        cost is a switch without its overlap and a channel left running, so the page saying
+        only "cannot tell apart" leaves nothing to act on.
+        """
         viewer = probation.Viewer(self.IP)  # no login, no app, no media server device
         probation.record_switch(self.redis, viewer, "channel-a")
         probation.record_switch(self.redis, viewer, "channel-b")
 
         (event,) = probation.recent_events(self.redis)
         self.assertEqual(event["action"], "not used")
-        self.assertEqual(event["result"], "not a viewer Dispatcharr can tell apart")
+        self.assertEqual(event["result"], "nothing in the request says which player it is")
+
+    def test_the_reason_given_fits_what_was_missing(self):
+        """
+        The usual one is a media server: more than one of its players is streaming, so the
+        request could belong to either and it says so rather than "cannot tell apart".
+        """
+        self.assertIn(
+            "did not say which of its players",
+            probation.why_not_identified(probation.Viewer(self.IP, app="Lavf/60.3.100")),
+        )
+        self.assertEqual(
+            probation.why_not_identified(probation.Viewer(self.IP)),
+            "nothing in the request says which player it is",
+        )
+        self.assertIn(
+            "LAN subnets",
+            probation.why_not_identified(probation.Viewer(self.IP, app="VLC")),
+        )
 
     def test_only_the_last_switches_are_kept(self):
         for number in range(probation.EVENTS_KEPT + 5):

@@ -277,6 +277,10 @@ def media_server_tuners(request):
                 status=400,
             )
         logger.info(f"Tuner {device_id} on {server.get('name')} now points at {uri}")
+        # An address that changed means different channels behind it: without a rescan the
+        # server keeps the ones it found at the old one, and plays from addresses that moved
+        if device.get("dvr_id"):
+            media_servers.sync_tuner(server, device_id, device["dvr_id"])
         return JsonResponse({
             "tuners": media_servers.tuners(server, hosts),
             "dvrs": media_servers.dvr_list(server),
@@ -342,10 +346,9 @@ def media_server_tuners(request):
             **_choices(),
         })
 
-    if action in ("make_dvr", "set_guide"):
-        # The guide belongs with the tuner: a DVR is a tuner plus the guide its channels are
-        # listed in. Both are given here so neither can be left behind, which is what made a
-        # tuner sit in a DVR playing channels with no programmes against them.
+    if action == "set_guide":
+        # Changing the guide a DVR holds. Making one is not offered: a tuner goes into the
+        # DVR the server has, and "place" makes one only when there is none.
         guide = (request.data.get("guide_url") or "").strip()
         if not guide.startswith(("http://", "https://")):
             return JsonResponse(
@@ -357,64 +360,30 @@ def media_server_tuners(request):
             or "Dispatcharr"
         )
 
-        if action == "set_guide":
-            dvr_id = request.data.get("dvr_id")
-            dvr = next(
-                (d for d in media_servers.dvr_list(server) if d["id"] == str(dvr_id)), None
+        dvr_id = request.data.get("dvr_id")
+        dvr = next(
+            (d for d in media_servers.dvr_list(server) if d["id"] == str(dvr_id)), None
+        )
+        if dvr is None:
+            return JsonResponse({"error": "That DVR is not on this server"}, status=400)
+        # Its tuners go back with the guide: a DVR is stored as both at once
+        if not media_servers.set_guide(
+            server, dvr_id, guide, title, dvr.get("devices") or ()
+        ):
+            # Recent Plex versions answer most DVR writes with "not found", so this is
+            # as likely to mean "this server does not allow it" as "that was wrong".
+            return JsonResponse(
+                {
+                    "error": "The server would not change the guide. Newer Plex versions "
+                    "refuse this, and the guide then has to be changed in the server's "
+                    "own Live TV settings."
+                },
+                status=400,
             )
-            if dvr is None:
-                return JsonResponse({"error": "That DVR is not on this server"}, status=400)
-            # Its tuners go back with the guide: a DVR is stored as both at once
-            if not media_servers.set_guide(
-                server, dvr_id, guide, title, dvr.get("devices") or ()
-            ):
-                # Recent Plex versions answer most DVR writes with "not found", so this is
-                # as likely to mean "this server does not allow it" as "that was wrong".
-                return JsonResponse(
-                    {
-                        "error": "The server would not change the guide. Newer Plex versions "
-                        "refuse this, and the guide then has to be changed in the server's "
-                        "own Live TV settings."
-                    },
-                    status=400,
-                )
-            logger.info(f"Changed the guide on DVR {dvr_id} to {guide}")
-        else:
-            device_id = str(request.data.get("id") or "")
-            device = next(
-                (t for t in media_servers.tuners(server, hosts) if t["id"] == device_id), None
-            )
-            if device is None:
-                return JsonResponse({"error": "That tuner is not on this server"}, status=400)
-            if device.get("dvr_id"):
-                return JsonResponse(
-                    {"error": "This tuner is already in a DVR"}, status=400
-                )
-            # A server takes more DVRs through its API than it shows: Plex lists one and
-            # leaves the rest out of its settings, so a tuner alone in a second DVR is
-            # registered, invisible and unwatchable. Channel sources belong side by side in
-            # the one DVR, each with a guide of its own.
-            if media_servers.dvr_list(server):
-                return JsonResponse(
-                    {
-                        "error": "This server already has a DVR. Put the tuner in that one: "
-                        "a DVR holds several channel sources, each with its own guide, and a "
-                        "second DVR would not show up in the server's settings."
-                    },
-                    status=400,
-                )
-            if not media_servers.create_dvr(
-                server,
-                device["uuid"],
-                guide,
-                title,
-                language_code(request.data.get("language")),
-            ):
-                return JsonResponse(
-                    {"error": "The server would not make a DVR for this tuner"}, status=400
-                )
-            logger.info(f"Made a DVR for tuner {device_id} with guide {guide}")
-
+        logger.info(f"Changed the guide on DVR {dvr_id} to {guide}")
+        # A new guide is not read until the DVR reloads it, so the change would appear to
+        # have done nothing until something else happened to make the server look
+        media_servers.reload_guide(server, dvr_id)
         return JsonResponse({
             "tuners": media_servers.tuners(server, hosts),
             "dvrs": media_servers.dvr_list(server),

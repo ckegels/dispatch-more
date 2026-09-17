@@ -319,7 +319,7 @@ def record_switch(redis_client, viewer, channel_uuid):
                 "not used",
                 from_channel=previous,
                 channel=channel_uuid,
-                result="not a viewer Dispatcharr can tell apart",
+                result=why_not_identified(viewer),
             )
             return
         record_event(
@@ -846,6 +846,35 @@ def may_be_identified(viewer) -> bool:
         or viewer.server_device is not None
         or (bool(viewer.app) and lan_tracking_in_use())
     )
+
+
+def why_not_identified(viewer) -> str:
+    """
+    Why this viewer could not be told apart, in the words of whatever was missing.
+
+    "Not a viewer Dispatcharr can tell apart" is true and useless: the three ways to be
+    identified fail for different reasons and need different things done about them. This
+    costs a switch its overlap and, where an account stops the channel being left behind,
+    costs a slot, so it is worth saying which one it was.
+    """
+    try:
+        if is_media_server(viewer.app, viewer.ip):
+            return (
+                "its media server did not say which of its players this is, which happens "
+                "while more than one of them is streaming"
+            )
+        if viewer.user_id is not None:
+            return "signed in, but not to an account with the overlap switched on"
+        if not viewer.app:
+            return "nothing in the request says which player it is"
+        if not lan_tracking_in_use():
+            return (
+                "no login, and no account has LAN subnets set, so players on the network "
+                "cannot be told apart by address"
+            )
+        return "no login, and its address is not in any account's LAN subnets"
+    except Exception:
+        return "not a viewer Dispatcharr can tell apart"
 
 
 def _is_viewer(viewer, client, m3u_account=None) -> bool:

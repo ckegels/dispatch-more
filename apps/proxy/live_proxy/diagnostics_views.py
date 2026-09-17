@@ -17,6 +17,7 @@ from rest_framework.decorators import api_view, permission_classes
 from apps.accounts.permissions import IsAdmin
 from core.utils import RedisClient
 
+from . import health
 from . import media_servers
 from . import probation
 from . import recovery
@@ -158,7 +159,15 @@ def diagnostics(request):
 
     if request.method == "POST":
         try:
-            probation.set_event_ttl(redis_client, request.data.get("keep_seconds"))
+            if "keep_seconds" in request.data:
+                probation.set_event_ttl(redis_client, request.data.get("keep_seconds"))
+            if "channel_health" in request.data:
+                # Sampling costs a few writes a second whether or not anyone is looking,
+                # so it can be switched off
+                wanted = request.data.get("channel_health") or {}
+                health.save_settings({
+                    key: wanted[key] for key in health.DEFAULTS if key in wanted
+                })
         except (TypeError, ValueError) as e:
             return JsonResponse({"error": str(e)}, status=400)
 
@@ -173,6 +182,12 @@ def diagnostics(request):
         "starts": _starts(redis_client),
         # What has happened to the channels themselves (see recovery.py)
         "health": recovery.recent_events(redis_client),
+        # What the channels are doing now, and what the ones that stopped ended on
+        "running": health.running_now(redis_client),
+        "stopped": health.stopped_lately(
+            redis_client, probation.event_ttl(redis_client)
+        ),
+        "channel_health": health.settings(),
         "enabled": enabled,
         "accounts": _account_rows(redis_client) if enabled else [],
         "events": [

@@ -2664,14 +2664,6 @@ export default class API {
     });
   }
 
-  static async makeMediaServerDvr(server, id, guideUrl, language) {
-    // A DVR is a tuner plus the guide its channels are listed in: both at once
-    return await request(`${host}/proxy/media-servers/tuners/`, {
-      method: 'POST',
-      body: { server, id, guide_url: guideUrl, language, action: 'make_dvr' },
-    });
-  }
-
   static async setMediaServerGuide(server, dvrId, guideUrl) {
     // One guide per DVR, shared by every tuner in it
     return await request(`${host}/proxy/media-servers/tuners/`, {
@@ -2720,6 +2712,14 @@ export default class API {
       errorNotification('Failed to retrieve streaming diagnostics', e);
       throw e;
     }
+  }
+
+  static async setChannelHealth(settings) {
+    // Whether every running channel is read every few seconds; answers with the page
+    return await request(`${host}/proxy/diagnostics/`, {
+      method: 'POST',
+      body: { channel_health: settings },
+    });
   }
 
   static async setDiagnosticsRetention(keepSeconds) {

@@ -2098,6 +2098,21 @@ class ProxyServer:
                 except Exception as e:
                     logger.error(f"Error in cleanup thread: {e}", exc_info=True)
 
+                # Take a reading of every running channel, so there is a record of what it
+                # was doing if it stops (see apps.proxy.live_proxy.health). Reads the
+                # metadata the proxy already writes and writes only to its own keys, so a
+                # failure here can cost a reading and nothing else.
+                now = time.time()
+                health_every = 5
+                if self.redis_client and now - getattr(self, '_last_health_sweep', 0) >= health_every:
+                    self._last_health_sweep = now
+                    try:
+                        from . import health
+
+                        health.sweep(self.redis_client)
+                    except Exception as health_error:
+                        logger.debug(f"Could not sample channel health: {health_error}")
+
                 # Periodically check for orphaned channels (every 30 seconds)
                 if hasattr(self, '_last_orphan_check'):
                     if time.time() - self._last_orphan_check > 30:

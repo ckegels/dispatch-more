@@ -439,6 +439,40 @@ def plex_with_tuners(url, **_kwargs):
     return plex(url)
 
 
+# One of ours that is in no DVR, which is what "place" is for
+SPARE = {
+    "MediaContainer": {
+        "Device": DEVICES["MediaContainer"]["Device"]
+        + [
+            {
+                "key": "40",
+                "uuid": "device://tv.plex.grabbers.hdhomerun/dispatcharr-hdhr-austria-t2",
+                "uri": "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/2",
+                "title": "Austria",
+                "status": "alive",
+                "tuners": "2",
+            }
+        ]
+    }
+}
+
+
+def plex_with_a_spare_tuner(url, **_kwargs):
+    if "/media/grabbers/devices" in url:
+        return fake_response(SPARE)
+    if "/livetv/dvrs" in url:
+        return fake_response(DVRS)
+    return plex(url)
+
+
+def plex_with_a_spare_tuner_and_no_dvr(url, **_kwargs):
+    if "/media/grabbers/devices" in url:
+        return fake_response(SPARE)
+    if "/livetv/dvrs" in url:
+        return fake_response({"MediaContainer": {"size": 0}})
+    return plex(url)
+
+
 def plex_without_a_dvr(url, **_kwargs):
     """A server whose tuners are registered but which has no DVR: nothing plays yet."""
     if "/media/grabbers/devices" in url:
@@ -1101,21 +1135,47 @@ class TunerTests(TestCase):
             puts["http://192.168.2.141:32400/media/grabbers/devices/22"]["enabled"], 1
         )
 
-    def test_a_dvr_can_be_made_for_a_tuner_that_is_in_none(self):
-        """A tuner outside a DVR is registered and unused: this is the way out of that."""
+    def test_a_tuner_goes_into_the_dvr_that_is_there(self):
+        """
+        There is nothing to choose. A server takes more DVRs through its API than its
+        settings show, and a tuner alone in one of the extra ones is registered, invisible
+        and unwatchable, so a tuner joins the DVR that exists.
+        """
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
-        ) as post:
-            get.side_effect = plex_without_a_dvr
+        ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put:
+            get.side_effect = plex_with_a_spare_tuner
             post.return_value = fake_response({})
+            put.return_value = fake_response({})
+            # Tuner 40 is ours and in no DVR; DVR 32 is the one the server has
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
-                {
-                    "server": "a1",
-                    "action": "make_dvr",
-                    "id": "1",
-                    "guide_url": "http://192.168.2.142:9191/output/epg/austria?cachedlogos=false",
-                },
+                {"server": "a1", "action": "place", "id": "40"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        # No DVR was made: it went into the one that was there
+        self.assertNotIn(
+            "http://192.168.2.141:32400/livetv/dvrs",
+            [call.args[0] for call in post.call_args_list],
+        )
+        called = [call.args[0] for call in put.call_args_list]
+        # Its guide first, then named and switched on, then put in
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/lineups", called)
+        self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/40", called)
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/40", called)
+
+    def test_a_dvr_is_made_only_when_the_server_has_none(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put:
+            get.side_effect = plex_with_a_spare_tuner_and_no_dvr
+            post.return_value = fake_response({})
+            put.return_value = fake_response({})
+            response = self.client_api.post(
+                "/proxy/media-servers/tuners/",
+                {"server": "a1", "action": "place", "id": "40"},
                 format="json",
             )
 
@@ -1123,56 +1183,23 @@ class TunerTests(TestCase):
         made = next(
             call for call in post.call_args_list if call.args[0].endswith("/livetv/dvrs")
         )
-        self.assertIn("cachedlogos", made.kwargs["params"]["lineup"])
-        # Named after the channels it lists, not the language it happens to be in
-        self.assertTrue(made.kwargs["params"]["lineup"].endswith("#austria"))
+        # With the guide for the channels that tuner serves
+        self.assertIn("austria", made.kwargs["params"]["lineup"])
 
-    def test_a_second_dvr_is_not_made_beside_the_one_there(self):
-        """
-        A server takes more DVRs through its API than it shows in its settings.
-
-        Plex lists one and leaves the rest out, so a tuner alone in a second DVR is
-        registered, invisible and unwatchable. Channel sources belong side by side in the
-        one DVR, each with a guide of its own.
-        """
+    def test_a_tuner_that_is_not_ours_has_no_guide_to_go_with_it(self):
+        """Its channels are not Dispatcharr's, so there is nothing to list them from."""
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post:
             get.side_effect = plex_with_tuners
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
-                {
-                    "server": "a1",
-                    "action": "make_dvr",
-                    "id": "1",
-                    "guide_url": "http://192.168.2.142:9191/output/epg/france",
-                },
+                {"server": "a1", "action": "place", "id": "1"},
                 format="json",
             )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("already has a DVR", response.json()["error"])
-        post.assert_not_called()
-
-    def test_a_dvr_already_in_one_is_not_given_another(self):
-        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
-            "apps.proxy.live_proxy.media_servers.requests.post"
-        ) as post:
-            get.side_effect = plex_with_tuners
-            # Tuner 22 is already in DVR 32
-            response = self.client_api.post(
-                "/proxy/media-servers/tuners/",
-                {
-                    "server": "a1",
-                    "action": "make_dvr",
-                    "id": "22",
-                    "guide_url": "http://192.168.2.142:9191/output/epg/austria",
-                },
-                format="json",
-            )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("already in a DVR", response.json()["error"])
+        self.assertIn("not one of Dispatcharr's", response.json()["error"])
         post.assert_not_called()
 
     def test_the_guide_on_a_dvr_can_be_changed(self):

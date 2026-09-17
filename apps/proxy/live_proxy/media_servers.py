@@ -784,6 +784,18 @@ def add_guide(server, xmltv_url, name=None):
     )
 
 
+def reload_guide(server, dvr_id):
+    """
+    Make a DVR read its guide again, after the guide it points at has changed.
+
+    Without this the change is stored and nothing happens until the server next decides to
+    look, so it appears not to have worked.
+    """
+    if kind(server) == "jellyfin":
+        return refresh_guide(server)
+    return _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide")
+
+
 def refresh_guide(server):
     """Jellyfin: run the guide refresh, which is a scheduled task rather than an endpoint."""
     for task in _get(server, "/ScheduledTasks") or ():

@@ -19,7 +19,6 @@ vi.mock('../../../api', () => ({
     syncMediaServerTuner: vi.fn(),
     deleteMediaServerTuner: vi.fn(),
     attachMediaServerTuner: vi.fn(),
-    makeMediaServerDvr: vi.fn(),
     placeMediaServerTuner: vi.fn(),
     setMediaServerTunerUri: vi.fn(),
     setMediaServerGuide: vi.fn(),
