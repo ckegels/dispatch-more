@@ -72,8 +72,9 @@ DEFAULTS = {
     "window_to": "",
     # How long a stream has to show a picture
     "timeout_seconds": 12,
-    # The pause between two streams of one provider
-    "gap_seconds": 1,
+    # The pause between two streams of one provider: about what zapping leaves, so the
+    # provider -- or a bridge in front of it -- has let go of one before the next
+    "gap_seconds": 3,
     # Runs in a row a stream has to fail before it is called broken
     "broken_after": 2,
     # Channel groups to check; empty is every channel
@@ -98,6 +99,11 @@ STOP_KEY = "stream-check:stop"
 YIELD_KEY = "stream-check:make-way"
 YIELD_SECONDS = 20
 PROGRESS_KEY = "stream-check:progress"
+# Set while the next batch is queued, so the tick does not start a second chain of them
+QUEUED_KEY = "stream-check:queued"
+# How soon a round that is waiting (a provider in use or refusing) is tried again. The tick
+# every five minutes is there if this is ever lost.
+RETRY_WAITING = 60
 # The round going: which streams it is to look at, so a batch knows where to carry on
 ROUND_KEY = "stream-check:round"
 ROUND_TTL = 7 * 86400
@@ -156,9 +162,10 @@ def _store(key, name, value):
 
 
 # Saved settings from before a default changed keep everything but what changed. Version 2:
-# only_when_idle went from on to off, once providers in use could be told apart.
-SETTINGS_VERSION = 2
-CHANGED_IN = {2: ("only_when_idle",)}
+# only_when_idle went from on to off, once providers in use could be told apart. Version 3:
+# gap_seconds went from 1 to 3.
+SETTINGS_VERSION = 3
+CHANGED_IN = {2: ("only_when_idle",), 3: ("gap_seconds",)}
 
 
 def load_settings():
@@ -715,9 +722,16 @@ def _take_connection(logins, redis_client):
 
 
 def _url_for(stream, profile):
-    from apps.proxy.live_proxy.url_utils import transform_url
+    """
+    The address a viewer would be sent to, made the way the proxy makes it. For an Xtream
+    Codes account that is the login as it is now plus the provider's stream id, not the
+    address kept from the last playlist refresh: that one can carry an old login, and a
+    provider answers it with an error (HTTP 407 from a bridge, on a real installation) that
+    a viewer never sees.
+    """
+    from apps.proxy.live_proxy.url_utils import _resolve_live_stream_url
 
-    return transform_url(stream.url, profile.search_pattern, profile.replace_pattern)
+    return _resolve_live_stream_url(stream, profile.m3u_account, profile)
 
 
 # ── A run ────────────────────────────────────────────────────────────────────
@@ -799,6 +813,25 @@ def start_round(redis_client, force=False):
     return total
 
 
+def queue_next(redis_client, task, seconds, ended):
+    """
+    Queue the next batch of the round, once: the tick sees it is queued and leaves it. Says
+    on the page and in the log why the batch ended and when the next one is.
+    """
+    if current_round(redis_client) is None:
+        return False
+    if not redis_client.set(QUEUED_KEY, "1", nx=True, ex=int(seconds) + 120):
+        return False
+    task.apply_async(countdown=seconds)
+    at = datetime.fromtimestamp(time.time() + seconds, timezone.utc).isoformat(timespec="milliseconds")
+    _progress(redis_client, next_batch_at=at, last_batch_ended=ended)
+    message = progress(redis_client).get("message") or ""
+    logger.info(
+        f"Stream Check: batch ended ({ended}{': ' + message if message else ''}), next in {seconds} s"
+    )
+    return True
+
+
 def current_round(redis_client):
     try:
         return json.loads(redis_client.get(ROUND_KEY) or "null")
@@ -835,6 +868,8 @@ def run(redis_client, only=None, batch_seconds=None):
     settings = load_settings()
     if not redis_client.set(RUN_KEY, "1", nx=True, ex=RUN_TTL):
         return "already running"
+    if only is None:
+        redis_client.delete(QUEUED_KEY)
     try:
         round_ = None if only is not None else current_round(redis_client)
         if only is None and round_ is None:
@@ -851,7 +886,7 @@ def run(redis_client, only=None, batch_seconds=None):
         if idle_only and _Providers(redis_client, profiles=[]).anything_playing():
             _progress(redis_client, waiting=True, message="Waiting until nothing is playing")
             return "waiting"
-        _progress(redis_client, waiting=False, message="")
+        _progress(redis_client, waiting=False, message="", next_batch_at="")
 
         unavailable = dict((round_ or {}).get("unavailable") or {})
         by_account = _targets(
@@ -1121,8 +1156,12 @@ def run(redis_client, only=None, batch_seconds=None):
         if not left:
             return _finish(redis_client, round_)
         if {providers.provider_of(a) for a in left} <= waiting:
-            # Everything left is on providers someone is using: the next tick looks again
-            _progress(redis_client, waiting=True, message="Waiting for viewers to finish")
+            # Everything left is on providers that cannot be used now: in use, or refusing
+            reasons = "; ".join(
+                f"{e['name']}: {e['reason']}" for e in accounts.values()
+                if e.get("reason") and e.get("status") in ("in use", "waiting")
+            )
+            _progress(redis_client, waiting=True, message=reasons or "Waiting for viewers to finish")
             return "waiting"
         return "more"
     finally:
@@ -1175,6 +1214,7 @@ def _touch(results, stream):
 
 
 def _finish(redis_client, round_):
+    redis_client.delete(QUEUED_KEY)
     done = progress(redis_client).get("done", 0)
     _keep_last_run({
         "finished_at": _now(), "checked": done, "total": (round_ or {}).get("total", done),
@@ -1188,6 +1228,7 @@ def _finish(redis_client, round_):
 
 
 def _stopped(redis_client):
+    redis_client.delete(QUEUED_KEY)
     redis_client.delete(ROUND_KEY, STOP_KEY)
     done = progress(redis_client).get("done", 0)
     _keep_last_run({"finished_at": _now(), "checked": done, "total": progress(redis_client).get("total", done), "stopped": True})

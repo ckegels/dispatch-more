@@ -602,11 +602,23 @@ class RunTests(_Setup):
         self.assertIn("refused 2 streams in a row", self._status("Provider A")["reason"])
         self.assertIn("407", self._status("Provider A")["reason"])
 
+    def test_an_xtream_stream_is_opened_the_way_the_proxy_opens_it(self):
+        """With the login as it is now, not the address kept from the last refresh."""
+        self._as_xc(self.a)
+        self.first.url = "http://old-address/live/olduser/oldpass/1.ts"
+        self.first.stream_id = 1234
+        self.first.save()
+        login = self.a.profiles.get()
+        url = stream_check._url_for(Stream.objects.select_related("m3u_account").get(id=self.first.id), login)
+        self.assertIn("/live/user/pass/1234.ts", url)
+        self.assertNotIn("olduser", url)
+
     def test_the_saved_on_from_before_goes_back_to_off(self):
         """Checking beside viewers is the default now; a setting saved before it is not kept."""
-        stream_check._store(stream_check.SETTINGS_KEY, "Stream Check", {"only_when_idle": True, "every_hours": 12})
+        stream_check._store(stream_check.SETTINGS_KEY, "Stream Check", {"only_when_idle": True, "every_hours": 12, "gap_seconds": 1})
         loaded = stream_check.load_settings()
         self.assertFalse(loaded["only_when_idle"])
+        self.assertEqual(loaded["gap_seconds"], 3)
         self.assertEqual(loaded["every_hours"], 12)
         stream_check.save_settings({"only_when_idle": True})
         self.assertTrue(stream_check.load_settings()["only_when_idle"])
@@ -753,6 +765,51 @@ class TickTests(_Setup):
         stream_check.start_round(self.redis, force=True)
         with mock.patch.object(stream_check, "probe", side_effect=_answers({})):
             self.assertEqual(stream_check_tick(), "done")
+
+
+class ChainTests(_Setup):
+    """Batches follow one another: never two chains, and a waiting round is tried again soon."""
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        patcher = mock.patch("core.utils.RedisClient.get_client", return_value=self.redis)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        stream_check.save_settings({"gap_seconds": 0})
+
+    def test_a_waiting_round_is_tried_again_in_a_minute_once(self):
+        from apps.channels.tasks import run_stream_check, stream_check_tick
+
+        stream_check.start_round(self.redis, force=True)
+        self.redis.set("live:channel:abc:metadata", "1")
+        self.redis.set("stream_profile:1", self.a.profiles.get().id)
+        self.redis.set("stream_profile:2", self.b.profiles.get().id)
+        with mock.patch.object(run_stream_check, "apply_async") as queued, \
+                mock.patch.object(stream_check, "probe") as probe:
+            self.assertEqual(run_stream_check(), "waiting")
+            queued.assert_called_once_with(countdown=stream_check.RETRY_WAITING)
+            # The tick sees the next batch is queued and does not start another
+            self.assertEqual(stream_check_tick(), "the next batch is queued")
+        probe.assert_not_called()
+        self.assertTrue(stream_check.progress(self.redis)["next_batch_at"])
+        self.assertIn("someone is watching through it", stream_check.progress(self.redis)["message"])
+
+    def test_a_full_batch_queues_the_next_at_once(self):
+        from apps.channels.tasks import run_stream_check
+
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "BATCH_SECONDS", 0.001), \
+                mock.patch.object(stream_check, "probe", side_effect=_answers({})), \
+                mock.patch.object(run_stream_check, "apply_async") as queued:
+            self.assertEqual(run_stream_check(), "more")
+        queued.assert_called_once_with(countdown=1)
+
+    def test_a_stopped_round_leaves_nothing_queued(self):
+        stream_check.start_round(self.redis, force=True)
+        self.redis.set(stream_check.QUEUED_KEY, "1")
+        stream_check.request_stop(self.redis)
+        self.assertFalse(self.redis.exists(stream_check.QUEUED_KEY))
 
 
 class ViewTests(_Setup):

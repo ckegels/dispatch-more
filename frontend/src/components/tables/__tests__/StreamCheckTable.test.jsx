@@ -160,7 +160,7 @@ describe('StreamCheckTable', () => {
       })
     );
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
-    expect(await screen.findByText(/Checking: 1 of 3 streams · Waiting for viewers to finish/)).toBeInTheDocument();
+    expect(await screen.findByText(/Checking: 1 of 3 streams · paused: Waiting for viewers to finish/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
     await waitFor(() => expect(API.stopStreamCheck).toHaveBeenCalled());
   });

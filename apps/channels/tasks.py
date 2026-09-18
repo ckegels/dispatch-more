@@ -4500,16 +4500,21 @@ def build_logo_library():
 def run_stream_check(only=None):
     """
     A batch of the Stream Check round going, or a check of the streams given (see
-    stream_check.run). A batch that ends with more to do queues the next at once: other
-    work queued meanwhile gets its turn in between.
+    stream_check.run). A batch that ends with more to do queues the next at once, so other
+    work queued meanwhile gets its turn in between; one that ends waiting -- a provider in
+    use, or refusing -- is tried again a minute later rather than left for the tick.
     """
     from core.utils import RedisClient
 
-    from .stream_check import run
+    from .stream_check import RETRY_WAITING, queue_next, run
 
-    ended = run(RedisClient.get_client(), only=only)
-    if ended == "more":
-        run_stream_check.apply_async(countdown=1)
+    redis_client = RedisClient.get_client()
+    ended = run(redis_client, only=only)
+    if only is None:
+        if ended == "more":
+            queue_next(redis_client, run_stream_check, 1, ended)
+        elif ended == "waiting":
+            queue_next(redis_client, run_stream_check, RETRY_WAITING, ended)
     return ended
 
 
@@ -4522,12 +4527,15 @@ def stream_check_tick():
     """
     from core.utils import RedisClient
 
-    from .stream_check import RUN_KEY, current_round, due, load_settings, start_round
+    from .stream_check import QUEUED_KEY, RUN_KEY, current_round, due, load_settings, start_round
 
     redis_client = RedisClient.get_client()
     if current_round(redis_client) is not None:
         if redis_client.exists(RUN_KEY):
             return "a batch is running"
+        if redis_client.exists(QUEUED_KEY):
+            # The next batch is already queued; a second would be a second chain
+            return "the next batch is queued"
         return run_stream_check(None)
     settings = load_settings()
     if not settings.get("enabled"):

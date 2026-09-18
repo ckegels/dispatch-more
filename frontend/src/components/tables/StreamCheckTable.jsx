@@ -687,7 +687,11 @@ const StreamCheckTable = () => {
                       progress.broken
                         ? ` · ${progress.broken} broken so far`
                         : ''
-                    }${progress.waiting ? ` · ${progress.message || 'waiting'}` : ''}`
+                    }${progress.waiting ? ` · paused: ${progress.message || 'waiting'}` : ''}${
+                      progress.next_batch_at && progress.waiting
+                        ? ` · trying again at ${new Date(progress.next_batch_at).toLocaleTimeString()}`
+                        : ''
+                    }`
                   : lastRun.finished_at
                     ? `Last run ${when(lastRun.finished_at)}: ${lastRun.checked || 0} of ${
                         lastRun.total || 0
