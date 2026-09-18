@@ -33,6 +33,10 @@ DEFAULTS = {
 # Held while a reading is being taken, so only one worker takes it (see sweep)
 SWEEP_LOCK_KEY = "live:health:sweeping"
 
+# How far back a rate is worked out over. The byte counter is written about as often as a
+# reading is taken, so a shorter span catches updates unevenly and reads as nothing.
+RATE_WINDOW = 20
+
 # The samples of a channel that is running now, newest last
 LIVE_KEY = "live:health:samples:{channel_id}"
 # How many are kept: at five seconds apart, about three minutes of history
@@ -123,6 +127,9 @@ def sample(redis_client, channel_id) -> dict:
     started = _number(metadata, "init_time")
     reading = {
         "at": now,
+        # Carried in the reading rather than looked up when the channel stops: by then its
+        # metadata is gone and all that is left to call it by is its id, which says nothing
+        "name": _text(metadata, "channel_name"),
         "state": _text(metadata, "state", "unknown"),
         "uptime": round(now - started, 1) if started else 0,
         # How far behind real time ffmpeg is: under 1.0 for any length of time is a stream
@@ -214,8 +221,13 @@ def _put_away_the_stopped(redis_client, running):
 
         from . import recovery
 
+        # The name as it was while the channel ran. Asking now would only get its id back.
+        named = next(
+            (s["name"] for s in reversed(samples) if s.get("name")),
+            recovery._channel_name(channel_id),
+        )
         record = {
-            "channel": recovery._channel_name(channel_id),
+            "channel": named,
             "stopped_at": samples[-1].get("at", time.time()),
             "samples": with_rates(samples),
         }
@@ -238,23 +250,34 @@ def _read_samples(redis_client, key):
 
 def with_rates(samples):
     """
-    Work out what each reading actually carried, from how many bytes arrived since the last.
+    Work out what each reading carried, from how many bytes arrived over a window of them.
 
     ffmpeg's own speed and bitrate are only written while a stream profile is running one,
     so on a channel proxied straight through they are never there and every column about how
-    well it is going would be empty. The bytes are always counted, and the rate between two
-    readings is the honest measure of whether data is still arriving and how much.
+    well it is going would be empty. The bytes are always counted.
+
+    Over a window rather than against the reading before it, because the byte counter is
+    written to Redis about as often as these readings are taken. Compared one to the next,
+    the two beat against each other: an interval that catches no update reads as nothing
+    arriving, which looks exactly like a channel that has stopped carrying anything. Over a
+    longer span every window contains several updates and the answer is steady.
     """
-    previous = None
-    for reading in samples:
+    for index, reading in enumerate(samples):
         rate = 0.0
-        if previous:
-            seconds = reading.get("at", 0) - previous.get("at", 0)
-            arrived = reading.get("bytes", 0) - previous.get("bytes", 0)
+        # The most recent reading far enough back to hold a few updates of the counter
+        earlier = None
+        for candidate in reversed(samples[:index]):
+            if reading.get("at", 0) - candidate.get("at", 0) >= RATE_WINDOW:
+                earlier = candidate
+                break
+        if earlier is None and index:
+            earlier = samples[0]
+        if earlier is not None:
+            seconds = reading.get("at", 0) - earlier.get("at", 0)
+            arrived = reading.get("bytes", 0) - earlier.get("bytes", 0)
             if seconds > 0 and arrived >= 0:
                 rate = arrived * 8 / seconds / 1000
         reading["kbps"] = round(rate, 1)
-        previous = reading
     return samples
 
 

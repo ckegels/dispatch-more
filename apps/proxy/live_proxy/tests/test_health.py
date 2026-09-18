@@ -91,6 +91,7 @@ class SamplingTests(TestCase):
     def _a_running_channel(self, uuid="abc", speed="1.00", clients=2, bitrate="4500"):
         self.redis.hset(f"live:channel:{uuid}:metadata", mapping={
             "state": "active",
+            "channel_name": "ORF 1",
             "init_time": "1000",
             "ffmpeg_speed": speed,
             "source_bitrate": bitrate,
@@ -141,6 +142,8 @@ class SamplingTests(TestCase):
 
         stopped = health.stopped_lately(self.redis)
         self.assertEqual(len(stopped), 1)
+        # Called what it was called while it ran, not by its id
+        self.assertEqual(stopped[0]["channel"], "ORF 1")
         self.assertEqual(stopped[0]["samples"][-1]["speed"], 0.62)
         # And the live readings are not left behind for a channel that is gone
         self.assertEqual(self.redis.lrange(health.LIVE_KEY.format(channel_id="abc"), 0, -1), [])
@@ -197,32 +200,52 @@ class SamplingTests(TestCase):
         ffmpeg's speed and bitrate are only written where a stream profile is running one.
 
         A channel proxied straight through has neither, so every column about how well it is
-        going would be empty. The bytes are always counted, and the rate between two readings
-        says whether data is still arriving and how much.
+        going would be empty. The bytes are always counted, and how many arrived over a
+        window of readings says whether data is still arriving and how much.
         """
         samples = health.with_rates([
-            {"at": 100.0, "bytes": 0},
-            {"at": 105.0, "bytes": 2_500_000},
-            {"at": 110.0, "bytes": 5_000_000},
+            {"at": 100.0 + step * 5, "bytes": step * 2_500_000} for step in range(7)
         ])
 
         self.assertEqual(samples[0]["kbps"], 0.0)  # nothing to compare the first with
-        self.assertEqual(samples[1]["kbps"], 4000.0)  # 2.5 MB in 5s is 4 Mbps
-        self.assertEqual(samples[2]["kbps"], 4000.0)
+        # 2.5 MB every 5s is 4 Mbps, whichever window it is measured over
+        self.assertEqual(samples[-1]["kbps"], 4000.0)
+        self.assertEqual(samples[5]["kbps"], 4000.0)
+
+    def test_a_counter_written_as_rarely_as_the_readings_still_reads_steadily(self):
+        """
+        The byte counter goes to Redis about as often as a reading is taken.
+
+        Compared against the reading before it, the two beat against each other: an interval
+        that catches no update reads as nothing arriving, which is what a channel that has
+        stopped carrying looks like. Measured over a window, every one holds several.
+        """
+        # Nothing, then a lump, then nothing, then a lump: the same stream either way
+        samples = health.with_rates([
+            {"at": 100.0, "bytes": 0},
+            {"at": 105.0, "bytes": 0},
+            {"at": 110.0, "bytes": 5_000_000},
+            {"at": 115.0, "bytes": 5_000_000},
+            {"at": 120.0, "bytes": 10_000_000},
+            {"at": 125.0, "bytes": 10_000_000},
+        ])
+
+        # 10 MB over 20s is 4 Mbps, and no reading in the window says the channel died
+        self.assertEqual(samples[-1]["kbps"], 4000.0)
+        self.assertGreater(min(s["kbps"] for s in samples[2:]), 0)
 
     def test_a_channel_that_stopped_carrying_anything_reads_as_zero(self):
         """Which is the difference between a slow stream and a stopped one."""
         samples = health.with_rates([
-            {"at": 100.0, "bytes": 5_000_000},
-            {"at": 105.0, "bytes": 5_000_000},
+            {"at": 100.0 + step * 5, "bytes": 5_000_000} for step in range(6)
         ])
-        self.assertEqual(samples[1]["kbps"], 0.0)
+        self.assertEqual(samples[-1]["kbps"], 0.0)
 
     def test_a_counter_that_went_backwards_is_not_a_negative_rate(self):
         """The channel restarted behind it; nothing arrived that can be measured."""
         samples = health.with_rates([
             {"at": 100.0, "bytes": 5_000_000},
-            {"at": 105.0, "bytes": 10},
+            {"at": 125.0, "bytes": 10},
         ])
         self.assertEqual(samples[1]["kbps"], 0.0)
 
