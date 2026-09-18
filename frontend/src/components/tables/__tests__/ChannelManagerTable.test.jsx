@@ -146,4 +146,26 @@ describe('ChannelManagerTable', () => {
     expect(await screen.findByText(/The levers have changed/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Apply/ })).toBeDisabled();
   });
+
+  it('goes back to the defaults, keeping what is looked at', async () => {
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality', match_tvg_id: true, channel_groups: [7] },
+      defaults: { order: 'provider', match_tvg_id: false, channel_groups: [] },
+      accounts: [], stream_groups: [], channel_groups: [], all_groups: [], profiles: [],
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Levers' }));
+    expect(screen.getByRole('switch', { name: /Trust tvg-id first/ })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /Back to the defaults/ }));
+    expect(screen.getByRole('switch', { name: /Trust tvg-id first/ })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview/ }));
+    await waitFor(() =>
+      expect(API.previewChannelManager).toHaveBeenLastCalledWith(
+        expect.objectContaining({ order: 'provider', match_tvg_id: false, channel_groups: [7] })
+      )
+    );
+  });
 });

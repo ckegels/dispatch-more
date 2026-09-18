@@ -11,17 +11,20 @@ It merges into channels that already exist first, because that is how it is used
 group of channels someone has set up, which should gain every copy of themselves the
 providers carry. New channels are made only for what no channel has, and only if asked.
 
-Three rules learned from tools that did this before, and kept:
+Out of the box it matches the way DispatcharrUtils does, because that is what people
+trust: the whole name, country box and all, with only a quality at its end and the case
+set aside, and every channel of that name given the stream. Nothing else is trusted by
+default -- not a tvg-id, which providers share between channels that are not the same,
+and not a guess at the country. Every other way of matching is a lever to turn on.
+
+Two rules learned from tools that did this before, and kept:
 
 - a channel is never emptied: a run that finds nothing for it leaves what it has;
-- a stream is only taken away from a channel when that is asked for, never by default;
-- two channels that could both be the one a stream belongs to is a conflict to be shown,
-  not a guess to be made, because a wrong guess sends someone's channel to another
-  channel's streams.
+- a stream is only taken away from a channel when that is asked for, never by default.
 
-Matching reuses the key Find Logos matches on (see logo_library.match_key), which has
-already been taught what goes wrong: accents folded rather than dropped, "+" and "&" as
-words, and the country box in front taken off.
+Loose matching reuses the key Find Logos matches on (see logo_library.match_key), which
+has already been taught what goes wrong: accents folded rather than dropped, "+" and "&"
+as words, and the country box in front taken off.
 """
 
 import logging
@@ -55,18 +58,24 @@ DEFAULTS = {
     # When more than one channel is the one a stream belongs to: "all" gives it to each of
     # them, as those tools do; "conflict" shows it and leaves it alone
     "several_matches": "all",
-    "match_tvg_id": True,
-    # Words that are about the stream, not the channel, taken off before matching
-    "ignore_tags": "VIP, RAW, BACKUP, ALT, MULTI, [Dead], (Backup)",
+    # Off by default, as DispatcharrUtils has no such thing: providers give one tvg-id to
+    # many channels -- every CBS station, an East and a West feed, and on one real setup a
+    # Krone stream carrying Euronews' -- and trusting it merged them all
+    "match_tvg_id": False,
+    # Words that are about the stream, not the channel, taken off before matching. The two
+    # the group merge people ran by hand took off; anything more is theirs to add.
+    "ignore_tags": "VIP, RAW",
     # [[find, replace], ...] applied to stream names before anything else
     "regex_rules": [],
     # {"Channel name": ["another name", ...]} for channels known by more than one
     "aliases": {},
-    # Only put a stream on a channel of the same country, when both say one
-    "same_country": True,
+    # Only put a stream on a channel of the same country, when both say one. Off, as in
+    # DispatcharrUtils: with the whole name compared, the country box already decides it
+    "same_country": False,
     # ── Quality ──
-    # "quality" puts the best picture first, "provider" the preferred account first
-    "order": "quality",
+    # "quality" puts the best picture first, "provider" the preferred account first.
+    # "provider" is what DispatcharrUtils does.
+    "order": "provider",
     "skip_stale": True,
     # Custom streams are made by hand and are nobody's copy of anything
     "skip_custom": True,
@@ -80,11 +89,20 @@ DEFAULTS = {
     "reorder_existing": False,
     "replace_streams": False,
     # ── EPG and logo ──
-    # "keep", "tvg_id" or "tvg_id_then_name"
-    "epg": "tvg_id_then_name",
-    # "keep", "collections" (the Find Logos collections, then the stream's) or "stream"
-    "logo": "collections",
+    # "keep", "tvg_id" or "tvg_id_then_name". "keep" by default: DispatcharrUtils does
+    # not touch a channel's guide
+    "epg": "keep",
+    # "keep", "collections" (the Find Logos collections, then the stream's) or "stream".
+    # "keep" by default, for the same reason
+    "logo": "keep",
 }
+
+# Which settings a saved set is allowed to keep when the defaults change under it. The
+# first defaults matched far more loosely than DispatcharrUtils, and a page opened once
+# saved them all, so they would have outlived the fix. What was chosen to look at is
+# kept; how matching is done goes back to the defaults.
+DEFAULTS_VERSION = 2
+SCOPE_SETTINGS = ("accounts", "stream_groups", "channel_groups", "target_group", "profiles")
 
 QUALITY_LABELS = ["4K", "FHD", "HD", "SD"]
 # How a quality is written in a name, best first. Whole words only: "HD" inside a word is
@@ -109,7 +127,8 @@ def load_settings():
     try:
         stored = CoreSettings.objects.filter(key=SETTINGS_KEY).first()
         if stored and isinstance(stored.value, dict):
-            values.update({k: v for k, v in stored.value.items() if k in DEFAULTS})
+            kept = DEFAULTS if stored.value.get("version") == DEFAULTS_VERSION else SCOPE_SETTINGS
+            values.update({k: v for k, v in stored.value.items() if k in kept})
     except Exception as e:
         logger.debug(f"Could not read the channel manager settings: {e}")
     return values
@@ -120,7 +139,8 @@ def save_settings(values):
 
     clean = {k: values[k] for k in DEFAULTS if k in values}
     CoreSettings.objects.update_or_create(
-        key=SETTINGS_KEY, defaults={"name": "Channel Manager", "value": clean}
+        key=SETTINGS_KEY,
+        defaults={"name": "Channel Manager", "value": {**clean, "version": DEFAULTS_VERSION}},
     )
     return clean
 
@@ -142,6 +162,15 @@ def _word_pattern(words):
 
 QUALITY_PATTERNS = {label: _word_pattern(words) for label, words in QUALITY_WORDS.items()}
 ALL_QUALITY = _word_pattern([w for words in QUALITY_WORDS.values() for w in words] + list(NOISE_WORDS))
+# One quality or noise word ending a name, bare or in brackets: "ORF 1 HD", "ORF 1 (1080p)".
+# Taken off again and again, so "ORF 1 FHD HEVC" is ORF 1 too.
+_ENDINGS = "|".join(
+    re.escape(w)
+    for w in sorted([w for words in QUALITY_WORDS.values() for w in words] + list(NOISE_WORDS), key=len, reverse=True)
+)
+TRAILING_QUALITY = re.compile(
+    rf"[\s\-|:]*(?:[(\[]\s*(?:{_ENDINGS})\s*[)\]]|(?<![0-9a-z])(?:{_ENDINGS}))\s*$", re.IGNORECASE
+)
 
 
 def _tags(settings):
@@ -167,13 +196,24 @@ def clean_name(name, settings):
             text = re.sub(re.escape(tag), " ", text, flags=re.IGNORECASE)
         else:
             text = _word_pattern([tag]).sub(" ", text)
-    # Resolution in brackets, as some playlists write it: "ATV (Belgium) (1080p)". Before
-    # the quality words, which would take the 1080p and leave the brackets behind.
-    text = re.sub(r"\(\s*\d{3,4}[pi]\s*\)", " ", text, flags=re.IGNORECASE)
-    text = ALL_QUALITY.sub(" ", text)
-    # Brackets anything above emptied, which would otherwise be part of the name
-    text = re.sub(r"[(\[]\s*[)\]]", " ", text)
-    return re.sub(r"\s+", " ", text).strip(" -|:")
+    if settings.get("name_matching") == "loose":
+        # Resolution in brackets, as some playlists write it: "ATV (Belgium) (1080p)".
+        # Before the quality words, which would take the 1080p and leave the brackets.
+        text = re.sub(r"\(\s*\d{3,4}[pi]\s*\)", " ", text, flags=re.IGNORECASE)
+        text = ALL_QUALITY.sub(" ", text)
+        # Brackets anything above emptied, which would otherwise be part of the name
+        text = re.sub(r"[(\[]\s*[)\]]", " ", text)
+        return re.sub(r"\s+", " ", text).strip(" -|:")
+    # Exactly: only the quality at the end of the name, as DispatcharrUtils' normalizer and
+    # the group merge take it off. In the middle a word like "4K" or "HD" can be part of
+    # what the channel is, and taking it out made different channels one.
+    text = re.sub(r"\s+", " ", text).strip()
+    while True:
+        shorter = TRAILING_QUALITY.sub("", text).strip()
+        if shorter == text or not shorter:
+            break
+        text = shorter
+    return text.strip(" -|:")
 
 
 def _alias_map(settings):
@@ -360,16 +400,25 @@ def _existing_channels(settings, aliases):
     return found
 
 
-def _pick(candidates, country, same_country):
+def _pick(candidates, country, same_country, give_all=False):
     """
     The one channel a stream belongs to among those with its name, or None and why not.
 
     The same country first. A country nobody states matches any, because a stream or a
     channel that does not say is not a different country. Two that fit equally is a
     conflict, not a choice to make.
+
+    Unless every one of them is to have it, as in DispatcharrUtils: then they all fit, and
+    the country only narrows them when that is asked for.
     """
     if not candidates:
         return None, None
+    if give_all:
+        if same_country and country:
+            candidates = [c for c in candidates if c["country"] in (country, "")]
+        if len(candidates) == 1:
+            return candidates[0], None
+        return None, candidates or None
     if country:
         same = [c for c in candidates if c["country"] == country]
         if len(same) == 1:
@@ -501,10 +550,13 @@ def build_plan(settings):
     same_country = bool(settings.get("same_country"))
     for stream in streams:
         record, tied = None, None
+        give_all = settings.get("several_matches") != "conflict"
         if settings.get("match_tvg_id") and stream["tvg_id"]:
-            record, tied = _pick(by_tvg.get(stream["tvg_id"].lower(), []), stream["country"], same_country)
+            record, tied = _pick(
+                by_tvg.get(stream["tvg_id"].lower(), []), stream["country"], same_country, give_all
+            )
         if record is None and tied is None and stream["key"]:
-            record, tied = _pick(by_key.get(stream["key"], []), stream["country"], same_country)
+            record, tied = _pick(by_key.get(stream["key"], []), stream["country"], same_country, give_all)
         if tied:
             if settings.get("several_matches") == "conflict":
                 conflict_key = (stream["country"], stream["key"])

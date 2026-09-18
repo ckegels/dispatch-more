@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CirclePlay, Play, SlidersHorizontal } from 'lucide-react';
+import { Check, CirclePlay, Play, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import {
   ActionIcon,
   Alert,
@@ -41,6 +41,9 @@ const STATUS = {
   conflict: { label: 'Conflict', color: 'orange' },
   unchanged: { label: 'Unchanged', color: 'gray' },
 };
+
+// What is being looked at, which going back to the defaults leaves as it is
+const SCOPE_LEVERS = ['accounts', 'stream_groups', 'channel_groups', 'target_group', 'profiles'];
 
 const QUALITY_COLOR = { '4K': 'grape', FHD: 'teal', HD: 'blue', SD: 'gray' };
 
@@ -124,9 +127,8 @@ const StreamLine = ({ stream }) => (
     <Quality stream={stream} />
     <Text
       size="xs"
-      lineClamp={1}
       c={stream.removed ? 'red' : stream.added ? 'green' : undefined}
-      style={{ minWidth: 0 }}
+      style={{ minWidth: 0, flex: 1, wordBreak: 'break-word' }}
     >
       {stream.added ? '+ ' : stream.removed ? '− ' : ''}
       {stream.name}
@@ -135,12 +137,12 @@ const StreamLine = ({ stream }) => (
       {stream.account}
     </Badge>
     {stream.group && (
-      <Text size="xs" c="dimmed" lineClamp={1} style={{ flexShrink: 1 }}>
+      <Text size="xs" c="dimmed" style={{ maxWidth: 180, wordBreak: 'break-word' }}>
         {stream.group}
       </Text>
     )}
     {stream.tvg_id && (
-      <Text size="xs" c="dimmed" ff="monospace" lineClamp={1}>
+      <Text size="xs" c="dimmed" ff="monospace" style={{ maxWidth: 160, wordBreak: 'break-all' }}>
         {stream.tvg_id}
       </Text>
     )}
@@ -209,6 +211,8 @@ const ChannelManagerTable = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showLevers, setShowLevers] = useState(false);
+  // Remounts the levers after a reset, so their text boxes show the reset values
+  const [leverReset, setLeverReset] = useState(0);
   const [show, setShow] = useState('changes');
   const [search, setSearch] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
@@ -342,7 +346,7 @@ const ChannelManagerTable = () => {
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Logo url={channel?.logo_url} name={channel?.name} />
               <Box style={{ minWidth: 0 }}>
-                <Text size="sm" fw={500} lineClamp={1}>
+                <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
                   {channel ? channel.name : r.status === 'conflict' ? 'Could be several' : 'No channel yet'}
                 </Text>
                 <Text size="xs" c="dimmed" lineClamp={1}>
@@ -373,8 +377,8 @@ const ChannelManagerTable = () => {
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Logo url={channel.logo_url} name={channel.name} />
               <Box style={{ minWidth: 0 }}>
-                <Group gap={6} wrap="nowrap">
-                  <Text size="sm" fw={500} lineClamp={1}>
+                <Group gap={6} wrap="wrap">
+                  <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
                     {channel.name}
                   </Text>
                   <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
@@ -382,7 +386,7 @@ const ChannelManagerTable = () => {
                     {channel.group ? ` · ${channel.group}` : ''}
                   </Text>
                 </Group>
-                <Text size="xs" c={epg ? 'dimmed' : 'orange'} lineClamp={1}>
+                <Text size="xs" c={epg ? 'dimmed' : 'orange'} style={{ wordBreak: 'break-word' }}>
                   {epg
                     ? `Guide: ${epg.name}${epg.how && epg.how !== 'kept' ? ` (by ${epg.how})` : ''}`
                     : 'No guide'}
@@ -594,7 +598,29 @@ const ChannelManagerTable = () => {
 
             {showLevers && options && levers && (
               <Box p="md" style={{ borderBottom: '1px solid #3f3f46' }}>
-                <ChannelManagerLevers options={options} value={levers} onChange={setLevers} />
+                <Group justify="flex-end" mb="sm">
+                  <Button
+                    variant="subtle"
+                    size="xs"
+                    leftSection={<RotateCcw size={14} />}
+                    onClick={() => {
+                      // Back to matching as DispatcharrUtils does; what is looked at stays
+                      const scope = Object.fromEntries(
+                        SCOPE_LEVERS.map((name) => [name, levers[name]])
+                      );
+                      setLevers({ ...options.defaults, ...scope });
+                      setLeverReset((n) => n + 1);
+                    }}
+                  >
+                    Back to the defaults
+                  </Button>
+                </Group>
+                <ChannelManagerLevers
+                  key={leverReset}
+                  options={options}
+                  value={levers}
+                  onChange={setLevers}
+                />
               </Box>
             )}
 

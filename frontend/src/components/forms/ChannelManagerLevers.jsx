@@ -130,11 +130,11 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           data={[
             {
               value: 'exact',
-              label: 'Exactly, apart from quality and case (as DispatcharrUtils)',
+              label: 'Exactly, apart from a quality at the end and case (as DispatcharrUtils)',
             },
             {
               value: 'loose',
-              label: 'Loosely: letters and digits only, accents folded',
+              label: 'Loosely: letters and digits only, accents folded, quality anywhere',
             },
           ]}
         />
@@ -153,21 +153,21 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
         <Switch
           size="xs"
           label="Trust tvg-id first"
-          description="A stream with the same tvg-id as a channel is that channel, whatever it is called."
+          description="A stream with the same tvg-id as a channel is that channel, whatever it is called. Off in DispatcharrUtils: providers give one tvg-id to channels that are not the same, such as every CBS station, or East and West."
           checked={!!value.match_tvg_id}
           onChange={(e) => set({ match_tvg_id: e.currentTarget.checked })}
         />
         <Switch
           size="xs"
           label="Same country only"
-          description="Only put a stream on a channel of the same country. One that does not say is not a different country."
+          description="Only put a stream on a channel of the same country. One that does not say is not a different country. Off in DispatcharrUtils, where the country box in the name already decides it."
           checked={!!value.same_country}
           onChange={(e) => set({ same_country: e.currentTarget.checked })}
         />
         <TextInput
           size="xs"
           label="Words to ignore"
-          description="About the stream, not the channel. Comma separated. The quality (HD, FHD, 4K, 1080p…) is always ignored."
+          description="About the stream, not the channel. Comma separated, taken off wherever they are. A quality (HD, FHD, 4K, 1080p…) at the end of a name is always ignored."
           value={value.ignore_tags || ''}
           onChange={(e) => set({ ignore_tags: e.currentTarget.value })}
         />
@@ -209,7 +209,7 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           onChange={(order) => order && set({ order })}
           data={[
             { value: 'quality', label: 'The best picture, then the preferred provider' },
-            { value: 'provider', label: 'The preferred provider, then the best picture' },
+            { value: 'provider', label: 'The preferred provider, then the best picture (as DispatcharrUtils)' },
           ]}
         />
         <Switch

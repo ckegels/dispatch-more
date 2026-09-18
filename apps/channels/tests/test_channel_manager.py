@@ -191,8 +191,37 @@ class MergeTests(_Setup):
         self.orf1.tvg_id = "ORF1.at"
         self.orf1.save()
         self._stream("┃AT┃ ORF EINS", self.b, tvg_id="ORF1.at")
-        row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
+        row = self._row(channel_manager.build_plan(settings(match_tvg_id=True)), f"ch:{self.orf1.id}")
         self.assertEqual(row["adds"], 1)
+
+    def test_a_shared_tvg_id_is_not_trusted_unless_asked(self):
+        """
+        Providers give one tvg-id to channels that are not the same. On a real setup a
+        Krone stream carried Euronews' and was put on Euronews, and every CBS station and
+        its East and West feeds were made one. DispatcharrUtils never looks at it.
+        """
+        euronews = Channel.objects.create(name="┃AT┃ EURONEWS", channel_number=5, channel_group=self.austria, tvg_id="euronews.at")
+        self._stream("┃AT┃ KRONE TV", self.b, tvg_id="euronews.at")
+        row = self._row(channel_manager.build_plan(settings()), f"ch:{euronews.id}")
+        self.assertEqual(row["adds"], 0)
+
+    def test_stations_of_one_network_are_not_made_one(self):
+        cbs = Channel.objects.create(name="┃US┃ CBS", channel_number=6, channel_group=self.austria, tvg_id="CBS.us")
+        for name in ("┃US┃ CBS EAST", "┃US┃ CBS WEST", "┃US┃ CBS (WCBS) NEW YORK", "┃US┃ CBS 4K SPORTS"):
+            self._stream(name, self.b, tvg_id="CBS.us")
+        self._stream("┃US┃ CBS HD", self.b, tvg_id="CBS.us")
+        row = self._row(channel_manager.build_plan(settings()), f"ch:{cbs.id}")
+        self.assertEqual([s["name"] for s in row["streams"] if s["added"]], ["┃US┃ CBS HD"])
+
+    def test_only_a_quality_at_the_end_is_taken_off(self):
+        """As DispatcharrUtils' normalizer and the group merge do. Several in a row go."""
+        clean = lambda name: channel_manager.clean_name(name, settings())
+        self.assertEqual(clean("┃AT┃ ORF 1 FHD HEVC"), "┃AT┃ ORF 1")
+        self.assertEqual(clean("┃AT┃ ORF 1 (1080p)"), "┃AT┃ ORF 1")
+        self.assertEqual(clean("┃US┃ CBS 4K SPORTS"), "┃US┃ CBS 4K SPORTS")
+        self.assertEqual(clean("┃UK┃ SKY HD"), "┃UK┃ SKY")
+        # A name that is nothing but a quality is kept, rather than matching everything
+        self.assertEqual(clean("HD"), "HD")
 
     def test_several_channels_of_one_name_each_get_it_as_the_group_merge_did(self):
         """
@@ -290,7 +319,8 @@ class NewChannelTests(_Setup):
     def test_a_channel_no_channel_has_is_made_with_every_copy(self):
         self._stream("┃AT┃ PULS 4 HD", self.a, tvg_id="PULS4.at")
         self._stream("┃AT┃ PULS 4 FHD", self.b)
-        plan = channel_manager.build_plan(settings(create_new=True))
+        levers = settings(create_new=True, order="quality", epg="tvg_id_then_name")
+        plan = channel_manager.build_plan(levers)
 
         (row,) = [r for r in plan["rows"] if r["status"] == "new"]
         self.assertEqual(row["channel"]["name"], "┃AT┃ PULS 4")
@@ -300,7 +330,7 @@ class NewChannelTests(_Setup):
         # Numbered after the highest there is
         self.assertEqual(row["channel"]["number"], 2)
 
-        channel_manager.apply_plan(settings(create_new=True), [row["key"]])
+        channel_manager.apply_plan(levers, [row["key"]])
         made = Channel.objects.get(name="┃AT┃ PULS 4")
         self.assertEqual(made.epg_data.tvg_id, "PULS4.at")
         self.assertEqual(self._order(made), ["┃AT┃ PULS 4 FHD", "┃AT┃ PULS 4 HD"])
@@ -309,7 +339,8 @@ class NewChannelTests(_Setup):
 
     def test_the_guide_is_found_by_name_when_no_stream_carries_a_tvg_id(self):
         self._stream("┃AT┃ PULS 4 HD", self.a)
-        (row,) = [r for r in channel_manager.build_plan(settings(create_new=True))["rows"] if r["status"] == "new"]
+        levers = settings(create_new=True, epg="tvg_id_then_name")
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "new"]
         self.assertEqual(row["channel"]["epg"]["how"], "name")
 
     def test_the_country_box_can_be_left_off_the_name(self):
@@ -364,9 +395,33 @@ class ViewTests(_Setup):
 
     def test_the_levers_are_kept(self):
         self.client_api.put(
-            "/api/channels/channel-manager/settings/", {"settings": {"order": "provider"}}, format="json"
+            "/api/channels/channel-manager/settings/", {"settings": {"order": "quality"}}, format="json"
         )
-        self.assertEqual(channel_manager.load_settings()["order"], "provider")
+        self.assertEqual(channel_manager.load_settings()["order"], "quality")
+
+    def test_levers_saved_under_the_first_defaults_go_back_to_the_new_ones(self):
+        """
+        The first defaults matched far more loosely, and opening the page saved them, so
+        they would have outlived the fix. What was chosen to look at is kept.
+        """
+        from core.models import CoreSettings
+
+        CoreSettings.objects.update_or_create(
+            key=channel_manager.SETTINGS_KEY,
+            defaults={"name": "Channel Manager", "value": {
+                "match_tvg_id": True, "same_country": True, "order": "quality",
+                "channel_groups": [self.austria.id],
+            }},
+        )
+        loaded = channel_manager.load_settings()
+        self.assertFalse(loaded["match_tvg_id"])
+        self.assertFalse(loaded["same_country"])
+        self.assertEqual(loaded["order"], "provider")
+        self.assertEqual(loaded["channel_groups"], [self.austria.id])
+
+        # Saved again, they are the person's own and are kept as they are
+        channel_manager.save_settings({**loaded, "match_tvg_id": True})
+        self.assertTrue(channel_manager.load_settings()["match_tvg_id"])
 
     def test_nothing_chosen_is_refused(self):
         response = self.client_api.post(
