@@ -4,6 +4,7 @@ import useLogosStore from '../store/logos';
 import useVODLogosStore from '../store/vodLogos';
 import LogosTable from '../components/tables/LogosTable';
 import VODLogosTable from '../components/tables/VODLogosTable';
+import LogoLibraryTable from '../components/tables/LogoLibraryTable';
 import { showNotification } from '../utils/notificationUtils.js';
 
 const LogosPage = () => {
@@ -68,6 +69,7 @@ const LogosPage = () => {
             <TabsList>
               <TabsTab value="channel">Channel Logos</TabsTab>
               <TabsTab value="vod">VOD Logos</TabsTab>
+              <TabsTab value="library">Find Logos</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -76,6 +78,7 @@ const LogosPage = () => {
       {/* Content based on active tab */}
       {activeTab === 'channel' && <LogosTable />}
       {activeTab === 'vod' && <VODLogosTable />}
+      {activeTab === 'library' && <LogoLibraryTable />}
     </Box>
   );
 };

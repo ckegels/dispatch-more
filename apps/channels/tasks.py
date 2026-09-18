@@ -4481,3 +4481,16 @@ def set_channels_tvg_ids_from_epg(self, channel_ids):
             'error': str(e)
         })
         raise
+
+
+@shared_task
+def build_logo_library():
+    """
+    Download the public logo collections and index them (see logo_library).
+
+    In the background because they are several megabytes: long enough that a request held
+    open for it risks being cut off before it is done.
+    """
+    from .logo_library import build_index
+
+    return build_index()

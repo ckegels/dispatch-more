@@ -2864,6 +2864,32 @@ export default class API {
     }
   }
 
+  static async getLogoLibrary(show = 'suggested', search = '') {
+    // Every channel, with the logo it has and the ones the public collections would give it
+    const query = new URLSearchParams({ show });
+    if (search) query.set('search', search);
+    return await request(`${host}/api/channels/logo-library/?${query}`);
+  }
+
+  static async getLogoLibraryStatus() {
+    return await request(`${host}/api/channels/logo-library/status/`);
+  }
+
+  static async refreshLogoLibrary() {
+    // Downloads the collections again, in the background
+    return await request(`${host}/api/channels/logo-library/refresh/`, {
+      method: 'POST',
+    });
+  }
+
+  static async applyLogoLibrary(assignments) {
+    // [{channel_id, url, name}]: only what was chosen on the page changes
+    return await request(`${host}/api/channels/logo-library/apply/`, {
+      method: 'POST',
+      body: { assignments },
+    });
+  }
+
   static async getLogos(params = {}) {
     try {
       const queryParams = new URLSearchParams(params);

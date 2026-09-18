@@ -1,5 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+
+from . import logo_library_views
 from .api_views import (
     StreamViewSet,
     ChannelViewSet,
@@ -61,6 +63,11 @@ urlpatterns = [
         name='recording-hls',
     ),
     path('dvr/comskip-config/', ComskipConfigAPIView.as_view(), name='comskip_config'),
+    # Logos from public collections, suggested per channel (see logo_library)
+    path('logo-library/', logo_library_views.logo_library_suggestions, name='logo_library'),
+    path('logo-library/status/', logo_library_views.logo_library_status, name='logo_library_status'),
+    path('logo-library/refresh/', logo_library_views.logo_library_refresh, name='logo_library_refresh'),
+    path('logo-library/apply/', logo_library_views.logo_library_apply, name='logo_library_apply'),
     # Some clients strip trailing slashes from artwork URLs. Serve the same
     # view directly (no redirect) so logo fetches still return an image.
     path(
