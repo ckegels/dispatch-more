@@ -337,9 +337,10 @@ def sessions(server):
         transcode = item.get("TranscodeSession") or {}
         playing.append({
             "title": item.get("title", ""),
-            # Which channel this is. On live TV the item is the programme and the channel is
-            # the thing it belongs to, which Plex calls the grandparent; which of these
-            # carries it varies, so all of them are offered and the caller matches on any.
+            # Plex does not say which channel a live session is on. Measured on a real one:
+            # the title is the programme, the type is what the programme is, and the fields
+            # that would hold a channel are empty. What it is on is worked out from the
+            # guide instead (see programme_now). Kept for the servers that do say.
             "channel": item.get("grandparentTitle") or item.get("parentTitle") or "",
             "user": (item.get("User") or {}).get("title", ""),
             "player": player.get("title") or player.get("product") or "",
@@ -1165,6 +1166,8 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
         # What the channel is called, so a session can be matched to it by what it is
         # playing rather than by when it started
         channel_name = ""
+        # What is on it, for the servers that name the programme instead of the channel
+        programme_name = ""
         if channel_uuid:
             try:
                 from .utils import resolve_channel_display_name
@@ -1174,6 +1177,7 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
                 ) or ""
             except Exception:
                 channel_name = ""
+            programme_name = programme_now(channel_uuid)
         deadline = time.time() + WATCH_SECONDS
         # When each stage was first seen, measured from the moment the channel was requested
         seen = {}
@@ -1181,7 +1185,9 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
         position = None
         while time.time() < deadline:
             for server in servers:
-                session = _session_for(server, started_at, channel_name)
+                session = _session_for(
+                    server, started_at, channel_name, programme_name
+                )
                 if session:
                     break
             if not session:
@@ -1288,15 +1294,55 @@ def _same_channel(reported, channel_name) -> bool:
     return bool(ours) and ours == theirs
 
 
-def _session_for(server, started_at, channel_name=None):
+def programme_now(channel_uuid) -> str:
     """
-    The live session this channel start belongs to: the one playing the channel we just
-    handed over, or failing that one that began at the right moment.
+    What Dispatcharr's own guide says is on this channel at the moment.
 
-    Matching on the channel is worth preferring because it is a fact about the session. The
-    times are not: they come from two clocks that do not agree, and "when it started" means
-    when the session began on Plex and when it was last active on Jellyfin, which is
-    refreshed while it plays. They are the fallback, not the method.
+    Plex does not say which channel a live session is on: it names the programme, and its
+    guid says that name came from our XMLTV. So the guide answers the question the session
+    does not -- if the server is playing "Le banquet" and our guide has "Le banquet" on the
+    channel we just handed over, that is the session.
+
+    Empty when there is no guide for the channel, which is a fallback lost and nothing more.
+    """
+    try:
+        from django.utils import timezone
+
+        from apps.channels.models import Channel
+        from apps.epg.models import ProgramData
+
+        channel = (
+            Channel.objects.filter(uuid=channel_uuid).only("epg_data_id").first()
+        )
+        if not channel or not channel.epg_data_id:
+            return ""
+        now = timezone.now()
+        programme = (
+            ProgramData.objects.filter(
+                epg_id=channel.epg_data_id, start_time__lte=now, end_time__gte=now
+            )
+            .only("title")
+            .first()
+        )
+        return programme.title if programme else ""
+    except Exception as e:
+        logger.debug(f"Could not tell what is on channel {channel_uuid}: {e}")
+        return ""
+
+
+def _session_for(server, started_at, channel_name=None, programme_name=None):
+    """
+    The live session this channel start belongs to: the one playing what we just handed
+    over, or failing that one that began at the right moment.
+
+    Two ways to know what it is playing, because the servers say different things. Jellyfin
+    names the channel. Plex names the programme, taken from Dispatcharr's own guide, so the
+    guide says which channel that programme is on.
+
+    Either is worth preferring because it is a fact about the session. The times are not:
+    they come from two clocks that do not agree, and "when it started" means when the
+    session began on Plex and when it was last active on Jellyfin, which is refreshed while
+    it plays. They are the fallback, not the method.
     """
     live = [session for session in sessions(server) if session["live"]]
 
@@ -1306,12 +1352,13 @@ def _session_for(server, started_at, channel_name=None):
     # do not agree and a timestamp that means different things on different servers. Only
     # when exactly one session is on that channel, because with two there is no telling
     # which of them asked.
-    if channel_name:
+    if channel_name or programme_name:
         named = [
             session
             for session in live
             if _same_channel(session.get("channel"), channel_name)
             or _same_channel(session.get("title"), channel_name)
+            or _same_channel(session.get("title"), programme_name)
         ]
         if len(named) == 1:
             return named[0]

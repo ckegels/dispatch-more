@@ -1488,6 +1488,90 @@ class BindingOnEitherServerTests(TestCase):
         self.assertIsNotNone(session)
         self.assertEqual(session["device_id"], "shield-1")
 
+    def test_the_guide_says_what_is_on_a_channel_now(self):
+        """What makes the programme usable: our own guide, which is where Plex got it."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.channels.models import Channel
+        from apps.epg.models import EPGData, ProgramData
+
+        epg = EPGData.objects.create(tvg_id="tfx", name="TFX")
+        channel = Channel.objects.create(
+            channel_number=1, name="┃FR┃ TFX", epg_data=epg
+        )
+        now = timezone.now()
+        ProgramData.objects.create(
+            epg=epg,
+            title="Over already",
+            start_time=now - timedelta(hours=2),
+            end_time=now - timedelta(hours=1),
+        )
+        ProgramData.objects.create(
+            epg=epg,
+            title="Le banquet",
+            start_time=now - timedelta(minutes=10),
+            end_time=now + timedelta(minutes=50),
+        )
+
+        self.assertEqual(media_servers.programme_now(channel.uuid), "Le banquet")
+
+    def test_a_channel_with_no_guide_simply_has_no_programme(self):
+        """A fallback lost, not a failure: the times still place the session."""
+        from apps.channels.models import Channel
+
+        channel = Channel.objects.create(channel_number=2, name="No guide")
+        self.assertEqual(media_servers.programme_now(channel.uuid), "")
+        self.assertEqual(media_servers.programme_now("not-a-channel"), "")
+
+    def test_plex_names_the_programme_and_the_guide_says_which_channel_that_is(self):
+        """
+        Taken from a real Plex live session: it does not say which channel it is on.
+
+        The title is the programme, the type is what the programme is, and the fields that
+        would carry a channel are empty. The programme name came from Dispatcharr's own
+        guide, so the guide answers what the session does not.
+        """
+        as_plex_really_reports_it = {
+            "MediaContainer": {
+                "size": 1,
+                "Metadata": [
+                    {
+                        "title": "Le banquet",
+                        "type": "movie",
+                        "live": "1",
+                        "guid": "tv.plex.xmltv://movie/Le%20banquet",
+                        "addedAt": 1789711777,
+                        "User": {"title": "Ckegels"},
+                        "Player": {
+                            "title": "Chrome",
+                            "machineIdentifier": "mkk9dgqsm9p8jxbatwh6373h",
+                            "state": "buffering",
+                        },
+                    }
+                ],
+            }
+        }
+        server = {"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"}
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = lambda url, **kwargs: (
+                fake_response(as_plex_really_reports_it)
+                if "/status/sessions" in url
+                else plex(url, **kwargs)
+            )
+            (session,) = media_servers.sessions(server)
+            self.assertEqual(session["channel"], "", "Plex named a channel after all")
+
+            # Matched on the programme our guide says is on the channel we handed over,
+            # with the clock hours out to show it is not what decided this
+            found = media_servers._session_for(
+                server, 1, channel_name="┃FR┃ TFX", programme_name="Le banquet"
+            )
+
+        self.assertIsNotNone(found, "the programme did not place the session")
+        self.assertEqual(found["device_id"], "mkk9dgqsm9p8jxbatwh6373h")
+
     def test_channel_names_are_compared_on_what_they_say_not_how_they_are_written(self):
         """Dispatcharr's names carry decoration a server drops, and a server may shorten."""
         self.assertTrue(media_servers._same_channel("TFX", "┃FR┃ TFX"))
