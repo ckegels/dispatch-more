@@ -2914,6 +2914,11 @@ export default class API {
     });
   }
 
+  static async clearStreamCheck() {
+    // Forget what the runs found; parked streams stay parked
+    return await request(`${host}/api/channels/stream-check/clear/`, { method: 'POST' });
+  }
+
   static async streamCheckAction(action, streamId, channelId = null) {
     // remove, park, restore or forget
     return await request(`${host}/api/channels/stream-check/action/`, {

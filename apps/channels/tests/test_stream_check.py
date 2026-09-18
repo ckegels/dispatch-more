@@ -334,11 +334,14 @@ def _answers(by_name):
     return fake
 
 
+@mock.patch.object(stream_check, "PROVIDER_ASK_EVERY", 0.01)
+@mock.patch.object(stream_check, "PROVIDER_LINGER", 0.2)
 class RunTests(_Setup):
     def setUp(self):
         super().setUp()
         self.redis = FakeRedis()
-        stream_check.save_settings({"gap_seconds": 0, "broken_after": 2})
+        # Most of these are about checking alongside viewers, which is not the default
+        stream_check.save_settings({"gap_seconds": 0, "broken_after": 2, "only_when_idle": False})
 
     def _run(self, answers, only=None, batch_seconds=None):
         """A whole round, batch after batch, as the tasks chain them; (last ending, probe)."""
@@ -441,6 +444,83 @@ class RunTests(_Setup):
             self._done_watching(login)
             self.assertEqual(stream_check.run(self.redis), "done")
         self.assertTrue(stream_check.load_results()["streams"][str(self.second.id)]["ok"])
+
+    def test_by_default_nothing_is_checked_while_anything_plays(self):
+        """On any provider: a provider can know logins Dispatcharr thinks are separate."""
+        stream_check.save_settings({"only_when_idle": True})
+        self._watching(self.b.profiles.get())
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            self.assertEqual(stream_check.run(self.redis), "waiting")
+        probe.assert_not_called()
+
+    def test_by_default_a_viewer_starting_anywhere_stops_the_check(self):
+        stream_check.save_settings({"only_when_idle": True})
+        other = M3UAccount.objects.create(name="Provider C", account_type="STD", server_url="http://c", is_active=True)
+        M3UAccountProfile.objects.filter(m3u_account=other).delete()
+        elsewhere = M3UAccountProfile.objects.create(m3u_account=other, name="default", is_default=True, max_streams=1)
+
+        def viewer_starts_elsewhere(should_stop):
+            self._watching(elsewhere)
+            time.sleep(0.6)
+            if should_stop():
+                raise stream_check.Stopped()
+            return {"ok": True, "reason": "", "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
+
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": viewer_starts_elsewhere})):
+            self.assertEqual(stream_check.run(self.redis), "waiting")
+        self.assertNotIn(str(self.second.id), stream_check.load_results()["streams"])
+
+    def test_one_login_under_two_accounts_is_one_login(self):
+        """A viewer on it through either account is a viewer on it: the check must not join them."""
+        self._as_xc(self.a)
+        twin = M3UAccount.objects.create(
+            name="Provider A (VOD)", account_type="XC", server_url="http://ProviderA", username="user",
+            password="pass", is_active=True,
+        )
+        M3UAccountProfile.objects.filter(m3u_account=twin).delete()
+        twin_login = M3UAccountProfile.objects.create(m3u_account=twin, name="default", is_default=True, max_streams=1)
+        self._watching(twin_login)
+        with mock.patch.object(stream_check, "_xc_user_info", return_value={"auth": 1, "status": "Active", "active_cons": 0}):
+            final, probe = self._run({})
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+
+    def test_a_login_the_provider_says_is_in_use_is_not_checked_with(self):
+        """Someone on it in another app: only the provider can see them."""
+        self._as_xc(self.a)
+        stream_check.start_round(self.redis, force=True)
+        busy = {"auth": 1, "status": "Active", "active_cons": "1", "max_connections": "2"}
+        with mock.patch.object(stream_check, "_xc_user_info", return_value=busy), \
+                mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            self.assertEqual(stream_check.run(self.redis), "waiting")
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+        self.assertEqual(stream_check.progress(self.redis)["accounts"][str(self.a.id)]["status"], "in use")
+
+    def test_the_check_just_closed_is_waited_out_not_taken_for_a_viewer(self):
+        """A provider can go on counting a closed connection for a while."""
+        self._as_xc(self.a)
+        answers = iter([0] + [1, 1, 0] + [0] * 20)
+
+        def provider(account, profile, agent):
+            return {"auth": 1, "status": "Active", "active_cons": next(answers)}
+
+        with mock.patch.object(stream_check, "_xc_user_info", side_effect=provider):
+            final, probe = self._run({})
+        self.assertEqual(final["ended"], "done")
+        self.assertEqual(probe.call_count, 3)
+
+    def test_a_provider_that_will_not_give_a_connection_is_not_counted_against_the_stream(self):
+        def refused(should_stop):
+            return {"ok": False, "reason": "The provider answered HTTP 458", "refused": True,
+                    "resolution": "", "codec": "", "bytes": 0, "seconds": 0.1}
+
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": refused})):
+            stream_check.run(self.redis)
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
+        self.assertIn("refused", stream_check.progress(self.redis)["accounts"][str(self.b.id)]["reason"])
 
     def _as_xc(self, account):
         account.account_type = "XC"
@@ -630,6 +710,11 @@ class ViewTests(_Setup):
         self.assertEqual(response.json()["streams"], 3)
         delay.assert_called_once_with()
         self.assertTrue(self.api.get("/api/channels/stream-check/").json()["running"])
+
+    def test_results_that_cannot_be_trusted_can_be_forgotten(self):
+        stream_check._store(stream_check.RESULTS_KEY, "x", {"streams": {"1": {"ok": False}}, "last_run": {}})
+        self.assertEqual(self.api.post("/api/channels/stream-check/clear/").status_code, 200)
+        self.assertEqual(stream_check.load_results()["streams"], {})
 
     def test_bad_settings_are_refused(self):
         response = self.api.put("/api/channels/stream-check/settings/", {"settings": {"window_to": "nope"}}, format="json")

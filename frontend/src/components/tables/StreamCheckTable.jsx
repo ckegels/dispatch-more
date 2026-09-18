@@ -179,6 +179,12 @@ const ACT_TEXT = {
     message: `"${stream.name}" comes off ${channel ? `"${channel.name}"` : 'every channel'} for good. The stream itself stays in Dispatcharr, since it is the provider's. Park it instead to have it checked again and put back if it works.`,
     confirmLabel: 'Remove',
   }),
+  clear: () => ({
+    title: 'Forget all results?',
+    message:
+      'Every stream goes back to not checked, as if no run had happened. Nothing on your channels changes, and parked streams stay parked.',
+    confirmLabel: 'Forget them',
+  }),
   forget: (stream) => ({
     title: 'Stop keeping this stream?',
     message: `"${stream.name}" stays off the channels it was parked from, and is no longer checked or offered to be put back.`,
@@ -232,7 +238,10 @@ const StreamCheckTable = () => {
     setError(null);
     setNotice(null);
     try {
-      if (action === 'check') {
+      if (action === 'clear') {
+        await API.clearStreamCheck();
+        setNotice('Every result was forgotten.');
+      } else if (action === 'check') {
         await API.runStreamCheck([stream.id]);
         setNotice(
           `Checking "${stream.name}" now, if a login of its provider is free.`
@@ -548,6 +557,10 @@ const StreamCheckTable = () => {
 
   const progress = data?.progress || {};
   const lastRun = data?.last_run || {};
+  const rule =
+    data?.settings?.only_when_idle === false
+      ? 'and never on a login someone is using'
+      : 'and only while nothing is playing';
   // Providers the last finished run left alone: expired, refused the login, or down
   const skipped = !data?.running ? lastRun.unavailable || [] : [];
   const first = rows.length ? pageIndex * pageSize + 1 : 0;
@@ -682,8 +695,8 @@ const StreamCheckTable = () => {
                       data.settings.window_from
                         ? `, between ${data.settings.window_from} and ${data.settings.window_to}`
                         : ''
-                    }, never on a login someone is using.`
-                  : 'Only runs when started here, and never on a login someone is using.'}
+                    }, ${rule}.`
+                  : `Only runs when started here, ${rule}.`}
               </Text>
               {data?.running && (
                 <Group gap="md" mt={4}>
@@ -753,6 +766,7 @@ const StreamCheckTable = () => {
                   value={data.settings}
                   groups={data.channel_groups}
                   onSave={saveSettings}
+                  onClear={() => setAsking({ action: 'clear', stream: {} })}
                   saving={saving}
                 />
               </Box>

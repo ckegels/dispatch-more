@@ -24,7 +24,7 @@ const Section = ({ title, children }) => (
   </Stack>
 );
 
-const StreamCheckSettings = ({ value, groups, onSave, saving }) => {
+const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
   const [draft, setDraft] = useState(value);
   const set = (changes) => setDraft({ ...draft, ...changes });
   const number = (field) => (given) =>
@@ -36,8 +36,16 @@ const StreamCheckSettings = ({ value, groups, onSave, saving }) => {
         <Section title="When">
           <Switch
             size="xs"
+            color="green"
+            label="Only while nothing is playing"
+            description="On: no check runs while anyone watches anything through Dispatcharr, and one in progress stops the moment someone starts. Off: checks go on beside viewers, on logins no one is using -- but a provider can see viewers Dispatcharr cannot, such as the same login in another app."
+            checked={draft.only_when_idle !== false}
+            onChange={(e) => set({ only_when_idle: e.currentTarget.checked })}
+          />
+          <Switch
+            size="xs"
             label="Check streams by itself"
-            description="Off, it only runs when started here. It never uses a login someone is watching on."
+            description="Off, it only runs when started here."
             checked={!!draft.enabled}
             onChange={(e) => set({ enabled: e.currentTarget.checked })}
           />
@@ -144,7 +152,10 @@ const StreamCheckSettings = ({ value, groups, onSave, saving }) => {
           while the others go on.
         </Text>
       </Alert>
-      <Group justify="flex-end">
+      <Group justify="space-between">
+        <Button size="xs" variant="subtle" color="red" onClick={onClear}>
+          Forget all results
+        </Button>
         <Button size="xs" loading={saving} onClick={() => onSave(draft)}>
           Save settings
         </Button>

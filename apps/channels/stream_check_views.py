@@ -83,6 +83,16 @@ def stream_check_settings(request):
     return JsonResponse({"settings": saved})
 
 
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def stream_check_clear(request):
+    """Forget what the runs found, for results that cannot be trusted. Parked stay parked."""
+    if stream_check.is_running(RedisClient.get_client()):
+        return JsonResponse({"error": "Stop the check first"}, status=409)
+    stream_check.clear_results()
+    return JsonResponse({"cleared": True})
+
+
 ACTIONS = {
     # Off this channel, or every channel, for good
     "remove": lambda data: stream_check.remove(data["stream_id"], data.get("channel_id")),

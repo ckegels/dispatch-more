@@ -80,6 +80,7 @@ urlpatterns = [
     path('stream-check/stop/', stream_check_views.stream_check_stop, name='stream_check_stop'),
     path('stream-check/settings/', stream_check_views.stream_check_settings, name='stream_check_settings'),
     path('stream-check/action/', stream_check_views.stream_check_action, name='stream_check_action'),
+    path('stream-check/clear/', stream_check_views.stream_check_clear, name='stream_check_clear'),
     # Some clients strip trailing slashes from artwork URLs. Serve the same
     # view directly (no redirect) so logo fetches still return an image.
     path(
