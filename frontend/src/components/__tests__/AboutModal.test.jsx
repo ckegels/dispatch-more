@@ -20,11 +20,19 @@ vi.mock('../icons.jsx', () => ({
 vi.mock('lucide-react', () => ({
   BookOpen: ({ size }) => <svg data-testid="icon-book-open" data-size={size} />,
   Heart: ({ size }) => <svg data-testid="icon-heart" data-size={size} />,
+  TriangleAlert: () => <svg data-testid="icon-alert" />,
   Users: ({ size }) => <svg data-testid="icon-users" data-size={size} />,
 }));
 
 // ── Mantine core mock ──────────────────────────────────────────────────────────
 vi.mock('@mantine/core', async () => ({
+  Alert: ({ children, title }) => (
+    <div data-testid="alert">
+      <strong>{title}</strong>
+      {children}
+    </div>
+  ),
+  Code: ({ children }) => <code>{children}</code>,
   Box: ({ children, style }) => <div style={style}>{children}</div>,
   Button: ({ children, href, target, rel, variant, color, leftSection }) => (
     <a
@@ -85,6 +93,25 @@ const setupStore = (version = { version: '1.2.3', timestamp: '20240601' }) => {
 describe('AboutModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // ── A modified build ────────────────────────────────────────────────────────
+
+  describe('modified build', () => {
+    it('says it is not official Dispatcharr, how to uninstall, and not to report upstream', () => {
+      setupStore({ version: '0.31.0', timestamp: null, build: 'mod' });
+      render(<AboutModal isOpen={true} onClose={vi.fn()} />);
+      expect(screen.getByText('v0.31.0+mod')).toBeInTheDocument();
+      expect(screen.getByText('A modified build, not official Dispatcharr')).toBeInTheDocument();
+      expect(screen.getByText('bash /root/uninstall-probation.sh')).toBeInTheDocument();
+      expect(screen.getByText(/Do not report problems with this build/)).toBeInTheDocument();
+    });
+
+    it('says nothing of the kind on an official build', () => {
+      setupStore({ version: '0.31.0', timestamp: null });
+      render(<AboutModal isOpen={true} onClose={vi.fn()} />);
+      expect(screen.queryByTestId('alert')).not.toBeInTheDocument();
+    });
   });
 
   // ── Visibility ───────────────────────────────────────────────────────────────

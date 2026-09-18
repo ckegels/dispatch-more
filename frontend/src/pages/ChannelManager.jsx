@@ -1,5 +1,16 @@
 import React, { useState } from 'react';
-import { Box, Flex, Tabs, TabsList, TabsTab, Text } from '@mantine/core';
+import { Link } from 'react-router-dom';
+import {
+  Alert,
+  Anchor,
+  Box,
+  Flex,
+  Tabs,
+  TabsList,
+  TabsTab,
+  Text,
+} from '@mantine/core';
+import { DatabaseBackup } from 'lucide-react';
 import ChannelManagerTable from '../components/tables/ChannelManagerTable';
 import StreamCheckTable from '../components/tables/StreamCheckTable';
 
@@ -45,6 +56,26 @@ const ChannelManagerPage = () => {
             </TabsList>
           </Tabs>
         </Flex>
+      </Box>
+      <Box style={{ display: 'flex', justifyContent: 'center' }} pb="md">
+        {/* Both tabs change channels in bulk: hundreds of them in one apply */}
+        <Alert
+          color="yellow"
+          variant="light"
+          icon={<DatabaseBackup size={18} />}
+          title="Make a backup before you apply anything"
+          w="100%"
+          maw="1200px"
+        >
+          <Text size="sm">
+            Applying a merge, removing or parking streams changes many channels
+            at once, and there is no undo. A backup lets you put everything back
+            as it was.{' '}
+            <Anchor component={Link} to="/settings#backups" size="sm" fw={600}>
+              Make a backup in Settings → Backup &amp; Restore
+            </Anchor>
+          </Text>
+        </Alert>
       </Box>
       {activeTab === 'merge' ? <ChannelManagerTable /> : <StreamCheckTable />}
     </Box>

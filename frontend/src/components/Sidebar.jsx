@@ -29,6 +29,7 @@ import {
 import logo from '../images/logo.png';
 import useChannelsStore from '../store/channels';
 import './sidebar.css';
+import { versionLabel } from '../utils/versionLabel';
 import useSettingsStore from '../store/settings';
 import useAuthStore from '../store/auth';
 import { USER_LEVELS } from '../constants';
@@ -497,7 +498,11 @@ const Sidebar = ({ collapsed, toggleDrawer, drawerWidth, miniDrawerWidth }) => {
       {!collapsed && (
         <Group gap="xs" wrap="nowrap" style={{ padding: '0 16px 16px', justifyContent: 'space-between' }}>
           <Tooltip
-            label={`v${appVersion?.version || '0.0.0'}${appVersion?.timestamp ? `-${appVersion.timestamp}` : ''}`}
+            label={
+              appVersion?.build
+                ? `${versionLabel(appVersion)}: a modified build, not official Dispatcharr`
+                : versionLabel(appVersion)
+            }
             position="top"
           >
             <Text
@@ -506,12 +511,12 @@ const Sidebar = ({ collapsed, toggleDrawer, drawerWidth, miniDrawerWidth }) => {
               style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1, cursor: 'pointer' }}
               onClick={() =>
                 copyToClipboard(
-                  `v${appVersion?.version || '0.0.0'}${appVersion?.timestamp ? `-${appVersion.timestamp}` : ''}`,
+                  versionLabel(appVersion),
                   { successTitle: 'Copied', successMessage: 'Version copied to clipboard' }
                 )
               }
             >
-              v{appVersion?.version || '0.0.0'}{appVersion?.timestamp ? `-${appVersion.timestamp}` : ''}
+              {versionLabel(appVersion)}
             </Text>
           </Tooltip>
           <Group gap="xs" wrap="nowrap">

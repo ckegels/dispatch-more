@@ -1,6 +1,8 @@
 import React from 'react';
 import {
+  Alert,
   Box,
+  Code,
   Button,
   Divider,
   Group,
@@ -10,14 +12,15 @@ import {
   Text,
   Tooltip,
 } from '@mantine/core';
-import { BookOpen, Heart, Users } from 'lucide-react';
+import { BookOpen, Heart, TriangleAlert, Users } from 'lucide-react';
 import { DiscordIcon, GitHubIcon } from './icons.jsx';
 import logo from '../images/logo.png';
 import useSettingsStore from '../store/settings';
+import { versionLabel } from '../utils/versionLabel';
 
 const AboutModal = ({ isOpen, onClose }) => {
   const appVersion = useSettingsStore((s) => s.version);
-  const versionString = `v${appVersion?.version || '0.0.0'}${appVersion?.timestamp ? `-${appVersion.timestamp}` : ''}`;
+  const versionString = versionLabel(appVersion);
 
   return (
     <Modal
@@ -39,6 +42,36 @@ const AboutModal = ({ isOpen, onClose }) => {
             </Text>
           </Stack>
         </Group>
+
+        {appVersion?.build && (
+          // A modified build: said first, so a problem with it is not taken to the
+          // Dispatcharr developers, who did not write it
+          <Alert
+            color="orange"
+            variant="light"
+            icon={<TriangleAlert size={18} />}
+            title="A modified build, not official Dispatcharr"
+          >
+            <Stack gap={6}>
+              <Text size="sm">
+                This Dispatcharr {appVersion.version} carries changes of its
+                own: Channel Switch Overlap, media servers, Channel Manager,
+                Stream Check, Find Logos and more. The Dispatcharr developers
+                did not write them and do not support them.
+              </Text>
+              <Text size="sm">
+                If something goes wrong, first uninstall the changes and try the
+                same thing on stock Dispatcharr:
+              </Text>
+              <Code block>bash /root/uninstall-probation.sh</Code>
+              <Text size="sm" fw={600}>
+                Do not report problems with this build on the official
+                Dispatcharr GitHub or Discord. Only a problem that also happens
+                on stock Dispatcharr, after uninstalling, belongs there.
+              </Text>
+            </Stack>
+          </Alert>
+        )}
 
         <Divider />
 

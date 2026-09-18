@@ -440,12 +440,15 @@ def environment(request):
 @permission_classes([AllowAny])
 def version(request):
     # Import version information
+    import version as version_module
     from version import __version__, __timestamp__
 
     return Response(
         {
             "version": __version__,
             "timestamp": __timestamp__,
+            # Set on a modified build, so the page can say it is not the official one
+            "build": getattr(version_module, "__build__", None),
         }
     )
 
