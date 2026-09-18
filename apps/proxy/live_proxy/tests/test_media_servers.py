@@ -1142,8 +1142,12 @@ class TunerTests(TestCase):
             )
         self.assertNotIn("Another tuner is being moved", why)
 
-    def test_a_moved_tuner_is_not_scanned_on_the_way(self):
-        """A tuner scanned the moment it arrives answers 500, and the server is already busy."""
+    def test_a_moved_tuner_is_scanned_last_of_all(self):
+        """
+        A tuner scanned the moment it arrives answers 500: taken, but not ready to be
+        looked down. So the scan waits until everything else is done, when there is nothing
+        left to lose if it is refused.
+        """
         server = {"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}
         device = {"id": "22", "title": "Austria", "dvr_id": "32", "uuid": "old"}
         with patch("apps.proxy.live_proxy.media_servers.add_tuner") as add, patch(
@@ -1162,8 +1166,12 @@ class TunerTests(TestCase):
             moved, why = media_servers.move_tuner(server, device, "http://new")
 
         self.assertTrue(moved)
-        scan.assert_not_called()
-        self.assertIn("Press Sync", why)
+        # Last, after the tuner is in its DVR and the old one is gone
+        scan.assert_called_once_with(server, "77", "32")
+        self.assertEqual(why, "")
+        self.assertLess(
+            remove.call_args_list[0][0][1], "78", "the old one went before the scan"
+        )
 
     def test_a_tuner_that_could_not_be_attached_does_not_stay_behind(self):
         """The server goes back as it was rather than keeping a tuner in no DVR."""

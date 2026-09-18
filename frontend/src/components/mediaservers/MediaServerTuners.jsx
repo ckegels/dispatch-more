@@ -82,6 +82,9 @@ const MediaServerTuners = ({ serverId, enabled }) => {
   // The guide being edited, if any: {tuner, value}. One at a time, so the address on show
   // is always the one the server holds rather than a half typed one.
   const [guideEdit, setGuideEdit] = useState(null);
+  // A tuner count being typed, before it is applied: asking on every keystroke would ask
+  // about "1" on the way to "12"
+  const [pendingTuners, setPendingTuners] = useState({});
 
   const load = useCallback(async () => {
     if (!enabled) return;
@@ -114,6 +117,22 @@ const MediaServerTuners = ({ serverId, enabled }) => {
       setBusy(false);
     }
   };
+
+  // Changing where a tuner points is not an edit on the server: it has no way to move one,
+  // so a tuner is put at the new address and the old one removed. That is worth being told
+  // before it happens, and it is the operation that crashed a Plex when it was done twice
+  // at once, so it is also worth doing on purpose rather than by mistyping a number.
+  const askThenMove = (tuner, uri, what) =>
+    setConfirming({
+      title: 'Change this tuner?',
+      message:
+        `${what}\n\n` +
+        'The server cannot move a tuner, so a new one is added at the new address, put ' +
+        'back in the DVR with its guide, and the old one removed. Its channels are ' +
+        'scanned again afterwards. This takes a few seconds and should not be interrupted.',
+      confirmLabel: 'Change it',
+      action: () => API.setMediaServerTunerUri(serverId, tuner.id, uri),
+    });
 
   if (!enabled) return null;
   if (!data) return <Loader size="xs" />;
@@ -177,12 +196,10 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                             onClick={() => {
                               const { value } = guideEdit;
                               setGuideEdit(null);
-                              run(() =>
-                                API.setMediaServerTunerUri(
-                                  serverId,
-                                  tuner.id,
-                                  value
-                                )
+                              askThenMove(
+                                tuner,
+                                value,
+                                `${tuner.title} will be asked for at ${value}.`
                               );
                             }}
                           >
@@ -237,20 +254,33 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                             onClick={() => {
                               const { value } = guideEdit;
                               setGuideEdit(null);
-                              run(() =>
-                                tuner.dvr_id
-                                  ? API.setMediaServerGuide(
-                                      serverId,
-                                      tuner.dvr_id,
-                                      value
-                                    )
-                                  : // Not in the DVR yet: put it there with this guide
-                                    API.placeMediaServerTuner(
-                                      serverId,
-                                      tuner.id,
-                                      value
-                                    )
-                              );
+                              if (!tuner.dvr_id) {
+                                // Not in the DVR yet: put it there with this guide
+                                run(() =>
+                                  API.placeMediaServerTuner(
+                                    serverId,
+                                    tuner.id,
+                                    value
+                                  )
+                                );
+                                return;
+                              }
+                              setConfirming({
+                                title: 'Change this guide?',
+                                message:
+                                  `The guide for ${tuner.title} becomes ${value}.\n\n` +
+                                  'A DVR is stored with its guide and its tuners ' +
+                                  'together, so all of them go back to the server at ' +
+                                  'once, and it is asked to read the new guide ' +
+                                  'afterwards. Nothing else about the DVR changes.',
+                                confirmLabel: 'Change it',
+                                action: () =>
+                                  API.setMediaServerGuide(
+                                    serverId,
+                                    tuner.dvr_id,
+                                    value
+                                  ),
+                              });
                             }}
                           >
                             Save
@@ -323,6 +353,7 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                           the number is part of the address, so it can be changed here
                           rather than by removing the tuner and adding it again. */}
                       {isOurTuner(tuner.uri) ? (
+                        <>
                         <NumberInput
                           size="xs"
                           w={110}
@@ -332,19 +363,38 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                           // One added without a count has none in its address to show
                           placeholder={`${tuner.tuners || '?'} counted`}
                           disabled={busy}
-                          value={tunerCountIn(tuner.uri) ?? ''}
-                          onChange={(value) => {
-                            const wanted = Number(value);
-                            if (!wanted || wanted === tunerCountIn(tuner.uri)) return;
-                            run(() =>
-                              API.setMediaServerTunerUri(
-                                serverId,
-                                tuner.id,
-                                withTunerCount(tuner.uri, wanted)
-                              )
-                            );
-                          }}
+                          value={
+                            pendingTuners[tuner.id] ??
+                            (tunerCountIn(tuner.uri) ?? '')
+                          }
+                          onChange={(value) =>
+                            setPendingTuners({
+                              ...pendingTuners,
+                              [tuner.id]: value,
+                            })
+                          }
                         />
+                        {Number(pendingTuners[tuner.id]) > 0 &&
+                          Number(pendingTuners[tuner.id]) !==
+                            tunerCountIn(tuner.uri) && (
+                            <Button
+                              size="compact-xs"
+                              disabled={busy}
+                              onClick={() =>
+                                askThenMove(
+                                  tuner,
+                                  withTunerCount(
+                                    tuner.uri,
+                                    Number(pendingTuners[tuner.id])
+                                  ),
+                                  `${tuner.title} will offer ${pendingTuners[tuner.id]} tuners.`
+                                )
+                              }
+                            >
+                              Apply
+                            </Button>
+                          )}
+                        </>
                       ) : (
                         tuner.tuners > 0 && (
                           <Text size="xs" c="dimmed">

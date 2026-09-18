@@ -363,6 +363,10 @@ describe('MediaServers', () => {
       target: { value: '4' },
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }));
+
     await waitFor(() =>
       expect(API.setMediaServerTunerUri).toHaveBeenCalledWith(
         'a1',
@@ -390,6 +394,10 @@ describe('MediaServers', () => {
     fireEvent.change(screen.getByLabelText('Tuners for Austria'), {
       target: { value: '6' },
     });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }));
 
     await waitFor(() =>
       expect(API.setMediaServerTunerUri).toHaveBeenCalledWith(
@@ -419,6 +427,10 @@ describe('MediaServers', () => {
       target: { value: '6' },
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }));
+
     await waitFor(() =>
       expect(API.setMediaServerTunerUri).toHaveBeenCalledWith(
         'a1',
@@ -439,6 +451,10 @@ describe('MediaServers', () => {
       target: { value: 'http://192.168.2.50:9191/hdhr/austria' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog');
+    // What it really costs is said before it happens
+    expect(dialog).toHaveTextContent('cannot move a tuner');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }));
 
     await waitFor(() =>
       expect(API.setMediaServerTunerUri).toHaveBeenCalledWith(
@@ -459,6 +475,8 @@ describe('MediaServers', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Change address' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'kept the address it had'
@@ -477,6 +495,9 @@ describe('MediaServers', () => {
       target: { value: 'http://192.168.2.142:9191/output/epg/france' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('all of them go back to the server');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }));
 
     await waitFor(() =>
       expect(API.setMediaServerGuide).toHaveBeenCalledWith(

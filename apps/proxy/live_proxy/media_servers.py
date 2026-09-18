@@ -710,10 +710,24 @@ def _move_tuner(server, device, uri, guide_url, title, tuner_count):
         )
         return True, "The tuner was moved, but the old one could not be removed"
 
-    # Deliberately not scanned here. A tuner scanned the moment it arrives answers 500, and
-    # a server in the middle of all this is the last thing to give more work to.
+    # Scanned last, and only after a longer wait than the steps before it. A tuner scanned
+    # the moment it arrives answers 500: the server has taken it but is not ready to go
+    # looking down it. By here everything else is done, so there is nothing left to lose if
+    # the scan is refused -- the tuner is in its DVR either way and Sync can be pressed.
+    if was_in:
+        _settle()
+        _settle()
+        if not sync_tuner(server, replacement["id"], was_in):
+            logger.info(
+                f"Moved tuner {device.get('id')} to {uri}, but the scan was refused; "
+                f"press Sync when the server has settled"
+            )
+            return True, (
+                "Moved, but the server would not scan it yet. Press Sync in a moment."
+            )
+
     logger.info(f"Moved tuner {device.get('id')} to {uri} as {replacement['id']}")
-    return True, "Moved. Press Sync when you are ready to scan its channels."
+    return True, ""
 
 
 def set_tuner_uri(server, device_id, uri, title=None, tuner_count=None) -> bool:
