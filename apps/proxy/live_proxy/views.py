@@ -370,6 +370,12 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             probation.stop_skipped_channels(
                                 proxy_server.redis_client, viewer, channel_id, hold_slots=True
                             )
+                            # Stream Check: a check may be holding the connection this
+                            # viewer needs. It lets go within a second, inside the wait
+                            # below. Costs one lookup when no check is running.
+                            from apps.channels.stream_check import make_way
+
+                            make_way(proxy_server.redis_client)
 
                         # Check if we have time remaining for another sleep cycle
                         elapsed_time = time.time() - wait_start_time

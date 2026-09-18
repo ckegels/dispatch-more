@@ -301,6 +301,13 @@ def _stream_rows(settings):
         streams = streams.filter(is_stale=False)
     if settings.get("skip_custom"):
         streams = streams.filter(is_custom=False)
+    # Parked by Stream Check: taken off their channels until they work again, and merging
+    # them would put them straight back
+    from .stream_check import parked_ids
+
+    parked = parked_ids()
+    if parked:
+        streams = streams.exclude(id__in=parked)
 
     account_names = dict(M3UAccount.objects.values_list("id", "name"))
     group_names = dict(ChannelGroup.objects.values_list("id", "name"))

@@ -2891,6 +2891,37 @@ export default class API {
     });
   }
 
+  static async getStreamCheck(show = 'problems') {
+    // The channels with a stream that does not play, the parked streams, and how a run is going
+    return await request(`${host}/api/channels/stream-check/?${new URLSearchParams({ show })}`);
+  }
+
+  static async runStreamCheck(only = null) {
+    return await request(`${host}/api/channels/stream-check/run/`, {
+      method: 'POST',
+      body: only ? { only } : {},
+    });
+  }
+
+  static async stopStreamCheck() {
+    return await request(`${host}/api/channels/stream-check/stop/`, { method: 'POST' });
+  }
+
+  static async saveStreamCheckSettings(settings) {
+    return await request(`${host}/api/channels/stream-check/settings/`, {
+      method: 'PUT',
+      body: { settings },
+    });
+  }
+
+  static async streamCheckAction(action, streamId, channelId = null) {
+    // remove, park, restore or forget
+    return await request(`${host}/api/channels/stream-check/action/`, {
+      method: 'POST',
+      body: { action, stream_id: streamId, channel_id: channelId },
+    });
+  }
+
   static async getLogoLibrary(show = 'suggested', search = '') {
     // Every channel, with the logo it has and the ones the public collections would give it
     const query = new URLSearchParams({ show });

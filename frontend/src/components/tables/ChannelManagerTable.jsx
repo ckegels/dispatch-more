@@ -3,7 +3,6 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
-  CirclePlay,
   Play,
   RotateCcw,
   SlidersHorizontal,
@@ -16,7 +15,6 @@ import {
   Button,
   Center,
   Group,
-  Image,
   LoadingOverlay,
   NativeSelect,
   Pagination,
@@ -32,10 +30,8 @@ import {
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
 import ChannelManagerLevers from '../forms/ChannelManagerLevers';
-import useVideoStore from '../../store/useVideoStore';
-import useSettingsStore from '../../store/settings';
-import { buildLiveStreamUrl } from '../../utils/components/FloatingVideoUtils.js';
 import { CustomTable, useTable } from './CustomTable';
+import { Logo, Watch } from './StreamParts';
 
 // Laid out like Find Logos and the Logo Manager tabs: the same panel, toolbar, table and
 // pagination. Each row is one channel as it would come out, and opens to show every stream
@@ -55,32 +51,6 @@ const SCOPE_LEVERS = ['accounts', 'stream_groups', 'channel_groups', 'target_gro
 
 const QUALITY_COLOR = { '4K': 'grape', FHD: 'teal', HD: 'blue', SD: 'gray' };
 
-const Logo = ({ url, name }) => (
-  <Center style={{ width: 40, flexShrink: 0 }}>
-    {url ? (
-      <Image
-        src={url}
-        alt={name || ''}
-        w={40}
-        h={30}
-        fit="contain"
-        fallbackSrc="/logo.png"
-        style={{ transition: 'transform 0.3s ease', cursor: 'pointer' }}
-        onMouseEnter={(e) => {
-          e.target.style.transform = 'scale(1.5)';
-        }}
-        onMouseLeave={(e) => {
-          e.target.style.transform = 'scale(1)';
-        }}
-      />
-    ) : (
-      <Text size="xs" c="dimmed">
-        —
-      </Text>
-    )}
-  </Center>
-);
-
 const Quality = ({ stream }) =>
   stream.custom ? (
     <Badge size="xs" variant="light" color="yellow">
@@ -92,34 +62,6 @@ const Quality = ({ stream }) =>
       {stream.probed ? ' ✓' : ''}
     </Badge>
   );
-
-// Plays a stream in the preview player the Streams table uses, so two streams said to be
-// the same channel can be looked at rather than taken on trust
-const Watch = ({ stream }) => {
-  const showVideo = useVideoStore((s) => s.showVideo);
-  const envMode = useSettingsStore((s) => s.environment?.env_mode);
-  if (!stream.hash) return null;
-  return (
-    <Tooltip label="Watch this stream">
-      <ActionIcon
-        size="xs"
-        variant="subtle"
-        color="blue"
-        aria-label={`Watch ${stream.name}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          let url = buildLiveStreamUrl(`/proxy/ts/stream/${stream.hash}`);
-          if (envMode === 'dev') {
-            url = `${window.location.protocol}//${window.location.hostname}:5656${url}`;
-          }
-          showVideo(url, 'live', { name: stream.name });
-        }}
-      >
-        <CirclePlay size={14} />
-      </ActionIcon>
-    </Tooltip>
-  );
-};
 
 // Up and down, for putting a channel's streams in the order they should be tried
 const Move = ({ stream, onMove, first, last }) => (

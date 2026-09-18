@@ -4494,3 +4494,45 @@ def build_logo_library():
     from .logo_library import build_index
 
     return build_index()
+
+
+@shared_task
+def run_stream_check(only=None):
+    """
+    A batch of the Stream Check round going, or a check of the streams given (see
+    stream_check.run). A batch that ends with more to do queues the next at once: other
+    work queued meanwhile gets its turn in between.
+    """
+    from core.utils import RedisClient
+
+    from .stream_check import run
+
+    ended = run(RedisClient.get_client(), only=only)
+    if ended == "more":
+        run_stream_check.apply_async(countdown=1)
+    return ended
+
+
+@shared_task
+def stream_check_tick():
+    """
+    Every few minutes: carry on a round that is waiting (for viewers to finish, or for its
+    window), or begin one when it is due. Does nothing at all while Stream Check is off and
+    no round was started from the page.
+    """
+    from core.utils import RedisClient
+
+    from .stream_check import RUN_KEY, current_round, due, load_settings, start_round
+
+    redis_client = RedisClient.get_client()
+    if current_round(redis_client) is not None:
+        if redis_client.exists(RUN_KEY):
+            return "a batch is running"
+        return run_stream_check(None)
+    settings = load_settings()
+    if not settings.get("enabled"):
+        return "off"
+    if not due(settings, redis_client):
+        return "not due"
+    start_round(redis_client)
+    return run_stream_check(None)

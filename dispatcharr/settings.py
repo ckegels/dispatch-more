@@ -458,6 +458,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.m3u.tasks.check_account_expirations",
         "schedule": 86400.0,  # Once every 24 hours
     },
+    # Start a Stream Check run when one is due; does nothing while Stream Check is off
+    "stream-check-tick": {
+        "task": "apps.channels.tasks.stream_check_tick",
+        "schedule": 300.0,  # Every 5 minutes
+    },
 }
 
 MEDIA_ROOT = BASE_DIR / "media"
