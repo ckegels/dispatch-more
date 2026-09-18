@@ -46,6 +46,15 @@ DEFAULTS = {
     # "all" joins every profile, as Dispatcharr does; "none", or a list of profile ids
     "profiles": "all",
     # ── Recognition ──
+    # "exact": the whole name, country box and punctuation and all, with only the quality,
+    # the words to ignore and the rules taken off, and case ignored. What DispatcharrUtils
+    # and the group merge people ran by hand do, and so the default: it is what they trust.
+    # "loose": letters and digits only, accents folded, "+" and "&" read as words. Finds
+    # more, and merges more that should not be.
+    "name_matching": "exact",
+    # When more than one channel is the one a stream belongs to: "all" gives it to each of
+    # them, as those tools do; "conflict" shows it and leaves it alone
+    "several_matches": "all",
     "match_tvg_id": True,
     # Words that are about the stream, not the channel, taken off before matching
     "ignore_tags": "VIP, RAW, BACKUP, ALT, MULTI, [Dead], (Backup)",
@@ -158,9 +167,12 @@ def clean_name(name, settings):
             text = re.sub(re.escape(tag), " ", text, flags=re.IGNORECASE)
         else:
             text = _word_pattern([tag]).sub(" ", text)
-    text = ALL_QUALITY.sub(" ", text)
-    # Resolution in brackets, as some playlists write it: "ATV (Belgium) (1080p)"
+    # Resolution in brackets, as some playlists write it: "ATV (Belgium) (1080p)". Before
+    # the quality words, which would take the 1080p and leave the brackets behind.
     text = re.sub(r"\(\s*\d{3,4}[pi]\s*\)", " ", text, flags=re.IGNORECASE)
+    text = ALL_QUALITY.sub(" ", text)
+    # Brackets anything above emptied, which would otherwise be part of the name
+    text = re.sub(r"[(\[]\s*[)\]]", " ", text)
     return re.sub(r"\s+", " ", text).strip(" -|:")
 
 
@@ -168,17 +180,28 @@ def _alias_map(settings):
     """Every alias's key pointing at the key of the name it stands for."""
     mapping = {}
     for canonical, others in (settings.get("aliases") or {}).items():
-        target = logo_library.match_key(canonical)
+        target = _key(clean_name(canonical, settings), settings)
         for other in others if isinstance(others, (list, tuple)) else [others]:
-            key = logo_library.match_key(other)
+            key = _key(clean_name(other, settings), settings)
             if key and target:
                 mapping[key] = target
     return mapping
 
 
+def _exact_key(name):
+    """The name as written, apart from case and runs of spaces."""
+    return re.sub(r"\s+", " ", str(name or "")).strip().lower()
+
+
+def _key(name, settings):
+    if settings.get("name_matching") == "loose":
+        return logo_library.match_key(name)
+    return _exact_key(name)
+
+
 def channel_key(name, settings, aliases=None):
     """What identifies a channel in a name, the same whichever provider wrote it."""
-    key = logo_library.match_key(clean_name(name, settings))
+    key = _key(clean_name(name, settings), settings)
     aliases = aliases if aliases is not None else _alias_map(settings)
     return aliases.get(key, key)
 
@@ -252,7 +275,7 @@ def _stream_rows(settings):
 
 STREAM_FIELDS = (
     "id", "name", "tvg_id", "logo_url", "m3u_account_id", "channel_group_id",
-    "stream_stats", "is_custom",
+    "stream_stats", "is_custom", "stream_hash",
 )
 
 
@@ -299,6 +322,9 @@ def _row(s, settings, aliases, account_names, group_names, priority, in_scope):
         "probed": probed,
         "custom": bool(s["is_custom"]),
         "in_scope": in_scope,
+        # What the preview player plays it by, so two streams can be watched to see if
+        # they are really the same channel
+        "hash": s["stream_hash"] or "",
     }
 
 
@@ -364,6 +390,7 @@ def _pick(candidates, country, same_country):
 
 def _stream_summary(stream, added=False, removed=False):
     return {
+        "hash": stream.get("hash", ""),
         "custom": stream.get("custom", False),
         "in_scope": stream.get("in_scope", True),
         "id": stream["id"],
@@ -479,8 +506,14 @@ def build_plan(settings):
         if record is None and tied is None and stream["key"]:
             record, tied = _pick(by_key.get(stream["key"], []), stream["country"], same_country)
         if tied:
-            conflict_key = (stream["country"], stream["key"])
-            conflicts.setdefault(conflict_key, {"streams": [], "channels": tied})["streams"].append(stream)
+            if settings.get("several_matches") == "conflict":
+                conflict_key = (stream["country"], stream["key"])
+                conflicts.setdefault(conflict_key, {"streams": [], "channels": tied})["streams"].append(stream)
+            else:
+                # Each channel of that name gets it, as DispatcharrUtils does
+                for each in tied:
+                    if stream["id"] not in each["stream_ids"]:
+                        additions.setdefault(each["channel"].id, []).append(stream)
             continue
         if record is not None:
             if stream["id"] not in record["stream_ids"]:

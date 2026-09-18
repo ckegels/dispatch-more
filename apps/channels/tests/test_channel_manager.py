@@ -28,38 +28,48 @@ def settings(**overrides):
 
 
 class RecognitionTests(TestCase):
+    def same(self, a, b, **overrides):
+        s = settings(**overrides)
+        return channel_manager.channel_key(a, s) == channel_manager.channel_key(b, s)
+
     def test_the_quality_and_the_stream_words_come_off(self):
-        s = settings()
         for name in ("┃AT┃ ORF 1 HD", "┃AT┃ ORF 1 FHD", "┃AT┃ ORF 1 4K HEVC", "┃AT┃ ORF 1 VIP",
-                     "┃AT┃ ORF 1 (1080p)", "┃AT┃ ORF 1"):
-            self.assertEqual(channel_manager.channel_key(name, s), "orf1", name)
+                     "┃AT┃ ORF 1 (1080p)", "┃at┃ orf 1"):
+            self.assertTrue(self.same(name, "┃AT┃ ORF 1"), name)
+
+    def test_by_default_the_rest_of_the_name_counts_as_written(self):
+        """
+        As DispatcharrUtils and the group merge people ran by hand: the country box, the
+        spacing and the punctuation are part of the name. Loosening that merged channels
+        those tools kept apart, and each merge of two channels was a conflict.
+        """
+        self.assertFalse(self.same("┃AT┃ ORF 1", "┃DE┃ ORF 1"))
+        self.assertFalse(self.same("┃AT┃ ORF 1", "┃AT┃ ORF-1"))
+        self.assertFalse(self.same("┃BE┃ Eén", "┃BE┃ Een"))
+
+    def test_loose_matching_is_there_to_be_asked_for(self):
+        self.assertTrue(self.same("┃AT┃ ORF 1", "┃AT┃ ORF-1", name_matching="loose"))
+        self.assertTrue(self.same("┃BE┃ Eén", "┃BE┃ Een", name_matching="loose"))
 
     def test_quality_is_a_whole_word_not_part_of_one(self):
         """"HD" in the middle of a word is the word: SHD Sport is not SH plus a quality."""
-        s = settings()
-        self.assertEqual(channel_manager.channel_key("SHD Sport", s), "shdsport")
+        self.assertFalse(self.same("SHD Sport", "S Sport"))
 
     def test_a_number_on_its_own_is_part_of_the_name(self):
         """Counted as a quality, "Channel 480" and "Channel 720" both became "Channel"."""
-        s = settings()
-        self.assertNotEqual(
-            channel_manager.channel_key("Channel 480", s), channel_manager.channel_key("Channel 720", s)
-        )
-        self.assertEqual(channel_manager.channel_key("ORF 1 720p", s), "orf1")
+        self.assertFalse(self.same("Channel 480", "Channel 720"))
+        self.assertTrue(self.same("ORF 1 720p", "ORF 1"))
 
     def test_rules_and_aliases(self):
-        s = settings(
+        overrides = dict(
             regex_rules=[[r"^AT:\s*", "┃AT┃ "]],
-            aliases={"National Geographic": ["NGC", "Nat Geo"]},
+            aliases={"┃BE┃ National Geographic": ["┃BE┃ NGC", "┃BE┃ Nat Geo"]},
         )
-        self.assertEqual(
-            channel_manager.channel_key("AT: ORF 1", s), channel_manager.channel_key("┃AT┃ ORF 1", s)
-        )
-        self.assertEqual(channel_manager.channel_key("┃BE┃ NGC HD", s), "nationalgeographic")
+        self.assertTrue(self.same("AT: ORF 1", "┃AT┃ ORF 1", **overrides))
+        self.assertTrue(self.same("┃BE┃ NGC HD", "┃BE┃ National Geographic", **overrides))
 
     def test_a_rule_that_does_not_work_is_skipped_not_fatal(self):
-        s = settings(regex_rules=[["(unclosed", ""]])
-        self.assertEqual(channel_manager.channel_key("ORF 1", s), "orf1")
+        self.assertTrue(self.same("ORF 1", "ORF 1 HD", regex_rules=[["(unclosed", ""]]))
 
     def test_the_picture_a_probe_measured_outranks_what_the_name_claims(self):
         self.assertEqual(channel_manager.quality_of("ORF 1 4K", {"resolution": "1280x720"})[0], "HD")
@@ -174,7 +184,7 @@ class MergeTests(_Setup):
         """Not saying is not a different country."""
         other = ChannelGroup.objects.create(name="Unsorted")
         self._stream("ORF 1 HD", self.b, group=other)
-        row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
+        row = self._row(channel_manager.build_plan(settings(name_matching="loose")), f"ch:{self.orf1.id}")
         self.assertEqual(row["adds"], 1)
 
     def test_tvg_id_is_trusted_over_the_name(self):
@@ -184,16 +194,46 @@ class MergeTests(_Setup):
         row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
         self.assertEqual(row["adds"], 1)
 
-    def test_two_channels_either_of_which_could_be_it_is_a_conflict_not_a_guess(self):
-        self._channel("┃AT┃ ORF 1 HD", 2, self.austria)
+    def test_several_channels_of_one_name_each_get_it_as_the_group_merge_did(self):
+        """
+        Dispatcharr's own sync makes a channel per stream, so a setup has plenty of channels
+        with one name. The group merge people ran gave each of them every stream of that
+        name, and so does this, by default.
+        """
+        twin = self._channel("┃AT┃ ORF 1 HD", 2, self.austria)
         self._stream("┃AT┃ ORF 1 FHD", self.b)
         plan = channel_manager.build_plan(settings())
+
+        self.assertFalse(any(r["status"] == "conflict" for r in plan["rows"]))
+        for channel in (self.orf1, twin):
+            row = self._row(plan, f"ch:{channel.id}")
+            self.assertIn("┃AT┃ ORF 1 FHD", [s["name"] for s in row["streams"] if s["added"]])
+
+    def test_or_shown_as_a_conflict_and_left_alone_when_asked(self):
+        self._channel("┃AT┃ ORF 1 HD", 2, self.austria)
+        self._stream("┃AT┃ ORF 1 FHD", self.b)
+        plan = channel_manager.build_plan(settings(several_matches="conflict"))
 
         conflict = next(r for r in plan["rows"] if r["status"] == "conflict")
         self.assertEqual(len(conflict["candidates"]), 2)
         # And applying it does nothing
-        result = channel_manager.apply_plan(settings(), [conflict["key"]])
+        result = channel_manager.apply_plan(settings(several_matches="conflict"), [conflict["key"]])
         self.assertEqual(result, {"created": 0, "updated": 0, "streams_added": 0})
+
+    def test_what_the_group_merge_did_is_what_this_does(self):
+        """
+        Taken from the group merge people ran by hand: for each channel in the group, every
+        stream of the same name with its quality taken off, from any provider.
+        """
+        self._stream("┃AT┃ ORF 1 FHD", self.b, group=self.germany)  # another group, same name
+        self._stream("┃AT┃ ORF 1 UHD", self.a)
+        self._stream("┃AT┃ ORF 2", self.a)
+        plan = channel_manager.build_plan(settings(channel_groups=[self.austria.id]))
+        row = self._row(plan, f"ch:{self.orf1.id}")
+        self.assertEqual(
+            sorted(s["name"] for s in row["streams"] if s["added"]),
+            ["┃AT┃ ORF 1 FHD", "┃AT┃ ORF 1 UHD"],
+        )
 
     def test_only_the_chosen_group_is_touched(self):
         """The group-scoped merge people were running by hand."""

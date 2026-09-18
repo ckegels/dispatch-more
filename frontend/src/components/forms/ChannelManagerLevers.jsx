@@ -120,6 +120,36 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
       </Section>
 
       <Section title="Recognising a channel">
+        <Select
+          size="xs"
+          label="Match names"
+          description="How close a stream's name has to be to a channel's."
+          allowDeselect={false}
+          value={value.name_matching || 'exact'}
+          onChange={(mode) => mode && set({ name_matching: mode })}
+          data={[
+            {
+              value: 'exact',
+              label: 'Exactly, apart from quality and case (as DispatcharrUtils)',
+            },
+            {
+              value: 'loose',
+              label: 'Loosely: letters and digits only, accents folded',
+            },
+          ]}
+        />
+        <Select
+          size="xs"
+          label="Several channels of that name"
+          description="When more than one of your channels is the one a stream belongs to."
+          allowDeselect={false}
+          value={value.several_matches || 'all'}
+          onChange={(mode) => mode && set({ several_matches: mode })}
+          data={[
+            { value: 'all', label: 'Give it to each of them (as DispatcharrUtils)' },
+            { value: 'conflict', label: 'Show a conflict and leave it alone' },
+          ]}
+        />
         <Switch
           size="xs"
           label="Trust tvg-id first"

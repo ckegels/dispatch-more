@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Play, SlidersHorizontal } from 'lucide-react';
+import { Check, CirclePlay, Play, SlidersHorizontal } from 'lucide-react';
 import {
+  ActionIcon,
   Alert,
   Badge,
   Box,
@@ -23,6 +24,9 @@ import {
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
 import ChannelManagerLevers from '../forms/ChannelManagerLevers';
+import useVideoStore from '../../store/useVideoStore';
+import useSettingsStore from '../../store/settings';
+import { buildLiveStreamUrl } from '../../utils/components/FloatingVideoUtils.js';
 import { CustomTable, useTable } from './CustomTable';
 
 // Laid out like Find Logos and the Logo Manager tabs: the same panel, toolbar, table and
@@ -78,6 +82,34 @@ const Quality = ({ stream }) =>
     </Badge>
   );
 
+// Plays a stream in the preview player the Streams table uses, so two streams said to be
+// the same channel can be looked at rather than taken on trust
+const Watch = ({ stream }) => {
+  const showVideo = useVideoStore((s) => s.showVideo);
+  const envMode = useSettingsStore((s) => s.environment?.env_mode);
+  if (!stream.hash) return null;
+  return (
+    <Tooltip label="Watch this stream">
+      <ActionIcon
+        size="xs"
+        variant="subtle"
+        color="blue"
+        aria-label={`Watch ${stream.name}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          let url = buildLiveStreamUrl(`/proxy/ts/stream/${stream.hash}`);
+          if (envMode === 'dev') {
+            url = `${window.location.protocol}//${window.location.hostname}:5656${url}`;
+          }
+          showVideo(url, 'live', { name: stream.name });
+        }}
+      >
+        <CirclePlay size={14} />
+      </ActionIcon>
+    </Tooltip>
+  );
+};
+
 // One stream, with everything worth knowing about it on one line
 const StreamLine = ({ stream }) => (
   <Group
@@ -88,6 +120,7 @@ const StreamLine = ({ stream }) => (
       textDecoration: stream.removed ? 'line-through' : 'none',
     }}
   >
+    <Watch stream={stream} />
     <Quality stream={stream} />
     <Text
       size="xs"

@@ -8,6 +8,14 @@ import theme from '../../../mantineTheme';
 import ChannelManagerTable from '../ChannelManagerTable.jsx';
 import API from '../../../api';
 
+const showVideo = vi.fn();
+vi.mock('../../../store/useVideoStore', () => ({
+  default: (select) => select({ showVideo }),
+}));
+vi.mock('../../../store/settings', () => ({
+  default: (select) => select({ environment: { env_mode: 'prod' } }),
+}));
+
 vi.mock('../../../api', () => ({
   default: {
     getChannelManagerOptions: vi.fn(),
@@ -18,7 +26,7 @@ vi.mock('../../../api', () => ({
 }));
 
 const stream = (id, name, extra = {}) => ({
-  id, name, account: 'Provider A', group: '┃AT┃ AUSTRIA', quality: 'HD', probed: false,
+  id, name, hash: `hash-${id}`, account: 'Provider A', group: '┃AT┃ AUSTRIA', quality: 'HD', probed: false,
   tvg_id: '', logo_url: '', added: false, removed: false, custom: false, in_scope: true, ...extra,
 });
 const fallback = stream(9, 'could not dispatch', { custom: true, account: 'custom' });
@@ -85,6 +93,20 @@ describe('ChannelManagerTable', () => {
 
     expect(await screen.findByText('+ ┃AT┃ ORF 1 FHD')).toBeInTheDocument();
     expect(screen.getAllByText('fallback').length).toBeGreaterThan(0);
+  });
+
+  it('plays any stream, to see whether it really is the same channel', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+
+    fireEvent.click(await screen.findByLabelText('Watch ┃AT┃ ORF 1 FHD'));
+
+    expect(showVideo).toHaveBeenCalledWith(
+      expect.stringContaining('/proxy/ts/stream/hash-2'),
+      'live',
+      { name: '┃AT┃ ORF 1 FHD' }
+    );
   });
 
   it('applies only the channels ticked, after asking', async () => {
