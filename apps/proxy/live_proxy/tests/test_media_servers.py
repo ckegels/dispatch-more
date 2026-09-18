@@ -1042,31 +1042,95 @@ class TunerTests(TestCase):
             call.kwargs["params"]["uri"], "http://192.168.2.50:9191/hdhr/austria"
         )
 
-    def test_a_server_that_keeps_the_old_address_is_not_called_a_success(self):
+    def test_a_server_that_keeps_the_old_address_has_a_tuner_put_there_instead(self):
         """
-        Asking is not enough: the address is read back.
+        Plex takes the request and keeps the address it had, whatever it is asked.
 
-        A server may take the request and keep what it had, and saying it worked would leave
-        a tuner pointing at an address that has moved with nothing to show for it.
+        Measured, not assumed: the address is read back, and when it has not moved the
+        change is made the only way that server allows, which is the way its own settings
+        do it. A tuner at the new address, named, its guide added, attached where the old
+        one was, and only then the old one removed.
         """
+        after = {
+            "MediaContainer": {
+                "Device": DEVICES["MediaContainer"]["Device"]
+                + [
+                    {
+                        "key": "77",
+                        "uuid": "device://tv.plex.grabbers.hdhomerun/moved",
+                        "uri": "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/4",
+                        "title": "Austria",
+                        "status": "alive",
+                    }
+                ]
+            }
+        }
+
+        def keeps_the_old_address(url, **_kwargs):
+            if "/media/grabbers/devices" in url:
+                return fake_response(after)
+            if "/livetv/dvrs" in url:
+                return fake_response(DVRS)
+            return plex(url)
+
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
-            "apps.proxy.live_proxy.media_servers.requests.put"
-        ) as put:
-            get.side_effect = plex_with_tuners  # still the old address
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put, patch(
+            "apps.proxy.live_proxy.media_servers.requests.delete"
+        ) as delete:
+            get.side_effect = keeps_the_old_address
+            post.return_value = fake_response({})
             put.return_value = fake_response({})
+            delete.return_value = fake_response({})
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
                 {
                     "server": "a1",
                     "action": "set_uri",
                     "id": "22",
-                    "uri": "http://192.168.2.50:9191/hdhr/austria",
+                    "uri": "http://192.168.2.142:9191/proxy/hdhr/austria/tuners/4",
+                    "base_url": "http://192.168.2.142:9191",
                 },
                 format="json",
             )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("kept the address it had", response.json()["error"])
+        self.assertEqual(response.status_code, 200, response.content)
+        added = [call.args[0] for call in post.call_args_list]
+        self.assertTrue(
+            any("/media/grabbers/devices" in url for url in added), added
+        )
+        # Its guide went in and it was attached where the old one was
+        put_urls = [call.args[0] for call in put.call_args_list]
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/lineups", put_urls)
+        self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/devices/77", put_urls)
+        # And only then the old one removed
+        self.assertEqual(
+            delete.call_args.args[0],
+            "http://192.168.2.141:32400/media/grabbers/devices/22",
+        )
+
+    def test_a_tuner_that_could_not_be_attached_does_not_stay_behind(self):
+        """The server goes back as it was rather than keeping a tuner in no DVR."""
+        server = {"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}
+        device = {"id": "22", "title": "Austria", "dvr_id": "32", "uuid": "old"}
+        with patch("apps.proxy.live_proxy.media_servers.add_tuner") as add, patch(
+            "apps.proxy.live_proxy.media_servers.tuners"
+        ) as listed, patch(
+            "apps.proxy.live_proxy.media_servers.name_device"
+        ), patch("apps.proxy.live_proxy.media_servers.add_lineup"), patch(
+            "apps.proxy.live_proxy.media_servers.attach_tuner"
+        ) as attach, patch(
+            "apps.proxy.live_proxy.media_servers.delete_tuner"
+        ) as remove:
+            add.return_value = True
+            listed.return_value = [{"id": "77", "uri": "http://new"}]
+            attach.return_value = False
+            moved, why = media_servers.move_tuner(server, device, "http://new")
+
+        self.assertFalse(moved)
+        self.assertIn("back in its DVR", why)
+        # The one that could not be used is gone; the original is untouched
+        remove.assert_called_once_with(server, "77")
 
     def test_a_tuner_address_has_to_be_one(self):
         response = self.client_api.post(

@@ -623,6 +623,57 @@ def _guide_for(uri, lineups, fallback) -> str:
     return fallback
 
 
+def move_tuner(server, device, uri, guide_url=None, title=None, tuner_count=None):
+    """
+    Point a registered tuner at another address by putting a new one there in its place.
+
+    Plex has no way to change the address of a tuner it already has: it takes the request
+    and keeps what it had (measured, not assumed -- the address is read back afterwards).
+    So the change is made the only way it can be, which is the way its own settings do it:
+    a tuner at the new address, named and switched on, its guide put in the DVR, attached
+    where the old one was, and only then the old one removed.
+
+    The old one goes last on purpose. Anything that fails before that leaves the server
+    exactly as it was apart from a tuner that could not be attached, which is removed again,
+    and says so. Returns (moved, what went wrong).
+    """
+    was_in = device.get("dvr_id")
+    name = title or device.get("title") or ""
+
+    if not add_tuner(server, uri, name, tuner_count):
+        return False, f"The server would not add a tuner at {uri}"
+
+    replacement = next(
+        (t for t in tuners(server) if t["uri"] == uri and t["id"] != device["id"]), None
+    )
+    if replacement is None:
+        return False, "The server took the new tuner but did not list it afterwards"
+
+    name_device(server, replacement["id"], name)
+
+    if was_in:
+        # Its guide first, then the tuner, which is the order the server's settings use
+        if guide_url:
+            add_lineup(server, was_in, guide_url, name)
+        if not attach_tuner(server, was_in, replacement["id"]):
+            # Put the server back as it was rather than leave a tuner in no DVR
+            delete_tuner(server, replacement["id"])
+            return False, "The server would not put the moved tuner back in its DVR"
+
+    if not delete_tuner(server, device["id"]):
+        # The new one works; the old one is still there and would be a second copy
+        logger.warning(
+            f"Moved the tuner to {uri} but could not remove the old one "
+            f"({device.get('id')}); remove it by hand"
+        )
+        return True, "The tuner was moved, but the old one could not be removed"
+
+    if was_in:
+        sync_tuner(server, replacement["id"], was_in)
+    logger.info(f"Moved tuner {device.get('id')} to {uri} as {replacement['id']}")
+    return True, ""
+
+
 def set_tuner_uri(server, device_id, uri, title=None, tuner_count=None) -> bool:
     """
     Point a tuner that is already registered at another address.

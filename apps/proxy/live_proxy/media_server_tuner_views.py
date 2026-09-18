@@ -314,25 +314,36 @@ def media_server_tuners(request):
             return JsonResponse(
                 {"error": f"Give a number of tuners between 1 and {MAX_TUNERS}"}, status=400
             )
-        if not media_servers.set_tuner_uri(
+        warning = ""
+        if media_servers.set_tuner_uri(
             server, device_id, uri, device.get("title"), wanted_tuners
         ):
-            return JsonResponse(
-                {
-                    "error": "The server kept the address it had. Not every server lets a "
-                    "tuner be moved once it is registered; remove it and add it again at "
-                    "the new address instead."
-                },
-                status=400,
+            # An address that changed means different channels behind it: without a rescan
+            # the server keeps the ones it found at the old one
+            if device.get("dvr_id"):
+                media_servers.sync_tuner(server, device_id, device["dvr_id"])
+        else:
+            # Plex keeps the address it had, whatever it is asked. The only way to move a
+            # tuner there is to put one at the new address in its place, which is what its
+            # own settings do, so that is done rather than refusing.
+            profile = _profile_from_uri(uri)
+            moved, warning = media_servers.move_tuner(
+                server,
+                device,
+                uri,
+                _epg_url(base_url, profile, skip_cached_logos) if profile else None,
+                device.get("title") or profile,
+                wanted_tuners,
             )
+            if not moved:
+                return JsonResponse({"error": warning}, status=400)
         logger.info(f"Tuner {device_id} on {server.get('name')} now points at {uri}")
-        # An address that changed means different channels behind it: without a rescan the
-        # server keeps the ones it found at the old one, and plays from addresses that moved
-        if device.get("dvr_id"):
-            media_servers.sync_tuner(server, device_id, device["dvr_id"])
         return JsonResponse({
             "tuners": media_servers.tuners(server, hosts),
             "dvrs": media_servers.dvr_list(server),
+            # Something worked but not everything: worth saying, without looking like a
+            # failure the page should undo
+            **({"warning": warning} if warning else {}),
             **_choices(),
         })
 
