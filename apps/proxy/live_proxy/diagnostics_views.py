@@ -75,16 +75,47 @@ def _account_rows(redis_client):
     return sorted(rows, key=lambda row: (row["account"], row["profile"]))
 
 
-def _channel_names(uuids):
+def _channel_names(values):
+    """
+    Channel names by what the switches recorded them as: a channel's UUID as a rule, but
+    its id where the request only had that, and "None" where it had nothing. Anything that
+    is neither is left out rather than looked up: the database refuses a UUID lookup with
+    anything that is not one, and that took the whole page down.
+    """
+    import uuid as uuid_module
+
     from apps.channels.models import Channel
 
-    uuids = {uuid for uuid in uuids if uuid}
-    if not uuids:
-        return {}
-    return {
-        str(uuid): name
-        for uuid, name in Channel.objects.filter(uuid__in=uuids).values_list("uuid", "name")
-    }
+    uuids, ids = set(), set()
+    for value in values:
+        value = str(value or "").strip()
+        if value.isdigit():
+            ids.add(int(value))
+            continue
+        try:
+            uuids.add(str(uuid_module.UUID(value)))
+        except ValueError:
+            continue
+    names = {}
+    if uuids:
+        names.update({
+            str(channel_uuid): name
+            for channel_uuid, name in Channel.objects.filter(uuid__in=uuids).values_list("uuid", "name")
+        })
+    if ids:
+        names.update({
+            str(channel_id): name
+            for channel_id, name in Channel.objects.filter(id__in=ids).values_list("id", "name")
+        })
+    return names
+
+
+def _channel_label(value, names):
+    """A channel's name, or what was recorded when it cannot be found (a deleted channel)."""
+    value = str(value or "").strip()
+    if value in ("", "None"):
+        return ""
+    return names.get(value) or names.get(value.lower()) or value
 
 
 def _usernames(user_ids):
@@ -183,8 +214,8 @@ def _events(redis_client):
         {
             "time": _number(event.get("time")),
             "viewer": _viewer_name(event, usernames, redis_client),
-            "from_channel": channels.get(event.get("from_channel", ""), ""),
-            "channel": channels.get(event.get("channel", ""), ""),
+            "from_channel": _channel_label(event.get("from_channel"), channels),
+            "channel": _channel_label(event.get("channel"), channels),
             "account": event.get("account", ""),
             "action": event.get("action", ""),
             "result": event.get("result", ""),

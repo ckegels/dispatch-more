@@ -57,3 +57,21 @@ class DiagnosticsPageTests(TestCase):
 
     def test_a_viewer_kept_by_number_is_named(self):
         self.assertEqual(diagnostics_views._usernames([7, "x", None, "abc"]), {})
+
+    def test_switches_with_a_channel_that_is_not_a_uuid_are_shown(self):
+        """What took the page down on a real installation: a switch recorded a channel id."""
+        from apps.channels.models import Channel
+
+        channel = Channel.objects.create(name="┃AT┃ ORF 1", channel_number=1)
+        events = [
+            {"time": "1", "channel": str(channel.uuid), "from_channel": "None", "action": "switched"},
+            {"time": "2", "channel": str(channel.id), "from_channel": "not-a-uuid", "action": "switched"},
+        ]
+        with mock.patch.object(diagnostics_views.probation, "in_use", return_value=True), \
+                mock.patch.object(diagnostics_views.probation, "recent_events", return_value=events), \
+                mock.patch.object(diagnostics_views, "_account_rows", return_value=[]):
+            response = self._get()
+        self.assertEqual(response.status_code, 200)
+        shown = response.json()["events"]
+        self.assertEqual([e["channel"] for e in shown], ["┃AT┃ ORF 1", "┃AT┃ ORF 1"])
+        self.assertEqual([e["from_channel"] for e in shown], ["", "not-a-uuid"])
