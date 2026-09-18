@@ -110,13 +110,48 @@ def logo_library_apply(request):
         return JsonResponse(
             {"error": f"No more than {MAX_APPLY} at once"}, status=400
         )
+    # By address for logos from a collection or a pasted link, by id for one uploaded from
+    # the page, which is kept on disk and has no address of its own to give
+    by_url, by_id = [], []
     try:
-        assignments = [
-            (int(item["channel_id"]), str(item["url"]), str(item.get("name") or ""))
-            for item in chosen
-        ]
+        for item in chosen:
+            if item.get("logo_id"):
+                by_id.append((int(item["channel_id"]), int(item["logo_id"])))
+            else:
+                by_url.append(
+                    (int(item["channel_id"]), str(item["url"]), str(item.get("name") or ""))
+                )
     except (KeyError, TypeError, ValueError):
         return JsonResponse(
-            {"error": "Each logo needs a channel_id and a url"}, status=400
+            {"error": "Each logo needs a channel_id, and a url or a logo_id"}, status=400
         )
-    return JsonResponse(logo_library.apply_logos(assignments))
+
+    result = {"updated": 0, "created_logos": 0}
+    for done in (
+        logo_library.apply_logos(by_url) if by_url else None,
+        logo_library.apply_logo_ids(by_id) if by_id else None,
+    ):
+        if done:
+            result["updated"] += done["updated"]
+            result["created_logos"] += done["created_logos"]
+    return JsonResponse(result)
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def logo_library_search(request):
+    """
+    Search every logo in the collections by name, for a channel nothing was suggested for
+    or the wrong thing was. ?q= what to look for, ?country= to put one country first.
+    """
+    index = logo_library.load_index()
+    if not index:
+        return JsonResponse({"results": [], "built": False})
+    return JsonResponse({
+        "built": True,
+        "results": logo_library.search(
+            request.query_params.get("q") or "",
+            index,
+            request.query_params.get("country") or "",
+        ),
+    })

@@ -278,7 +278,67 @@ def suggestions_for(name, index, limit=6):
     return unique
 
 
+def search(query, index, country="", limit=60):
+    """
+    Every logo whose name contains what was typed, for finding one by hand.
+
+    Looser than the suggestions on purpose: a suggestion is made unasked, so it has to be
+    the whole name or nothing, but someone searching is looking at what comes back and can
+    tell Nickelodeon Teen from Eén. So a part of a name counts here. What matches the whole
+    of it comes first, then what starts with it, then the rest; within each, the country
+    asked for first and the collection whose links last.
+    """
+    wanted = match_key(query)
+    if len(wanted) < 2:
+        return []
+    entries = (index or {}).get("entries") or {}
+    found = []
+    for key, candidates in entries.items():
+        if wanted not in key:
+            continue
+        closeness = 0 if key == wanted else 1 if key.startswith(wanted) else 2
+        for candidate in candidates:
+            found.append((closeness, candidate))
+
+    country = COUNTRY_ALIASES.get(country.lower(), country.lower()) if country else ""
+    found.sort(key=lambda pair: (pair[0], len(pair[1]["key"])) + _rank(pair[1], country))
+    results = []
+    seen = set()
+    for _closeness, candidate in found:
+        if candidate["url"] in seen:
+            continue
+        seen.add(candidate["url"])
+        results.append(candidate)
+        if len(results) >= limit:
+            break
+    return results
+
+
 # ── Applying ─────────────────────────────────────────────────────────────────
+
+
+def apply_logo_ids(assignments):
+    """
+    Give channels logos Dispatcharr already has, by id: [(channel_id, logo_id)].
+
+    For a logo uploaded from the page, which is stored on disk rather than at an address and
+    so cannot go through apply_logos. Only logos that exist are given.
+    """
+    from .models import Channel, Logo
+
+    wanted = {int(channel_id): int(logo_id) for channel_id, logo_id in assignments}
+    existing = set(
+        Logo.objects.filter(id__in=set(wanted.values())).values_list("id", flat=True)
+    )
+    changed = []
+    for channel in Channel.objects.filter(id__in=list(wanted)):
+        logo_id = wanted[channel.id]
+        if logo_id in existing and channel.logo_id != logo_id:
+            channel.logo_id = logo_id
+            changed.append(channel)
+    if changed:
+        Channel.objects.bulk_update(changed, ["logo"])
+    return {"updated": len(changed), "created_logos": 0}
 
 
 def apply_logos(assignments):

@@ -254,3 +254,91 @@ class ViewTests(TestCase):
             user=User.objects.create_user(username="viewer", password="x", user_level=0)
         )
         self.assertEqual(viewer.get("/api/channels/logo-library/").status_code, 403)
+
+
+class SearchTests(TestCase):
+    """Finding a logo by hand, for a channel nothing was suggested for."""
+
+    def setUp(self):
+        self.index = built_index()
+
+    def _names(self, query, country=""):
+        return [r["url"].rsplit("/", 1)[-1] for r in logo_library.search(query, self.index, country)]
+
+    def test_a_part_of_a_name_counts_when_someone_is_looking(self):
+        """Unasked, only whole names are offered; searching, the person can tell them apart."""
+        found = self._names("een")
+        self.assertIn("een-be.png", found)
+        self.assertIn("nickelodeon-teen-fr.png", found)
+
+    def test_the_whole_name_comes_before_names_it_is_part_of(self):
+        found = self._names("een")
+        self.assertEqual(found[0], "een-be.png")
+
+    def test_the_country_asked_for_comes_first(self):
+        self.assertEqual(self._names("tfx", "be")[0], "tfx-be.png")
+        self.assertEqual(self._names("tfx", "fr")[0], "tfx-fr.png")
+
+    def test_too_little_to_go_on_finds_nothing(self):
+        self.assertEqual(self._names("a"), [])
+        self.assertEqual(self._names("┃BE┃"), [])
+
+    def test_the_same_logo_is_listed_once(self):
+        """iptv-org files a channel under each of its names, all pointing at one image."""
+        found = logo_library.search("orf", self.index)
+        urls = [r["url"] for r in found]
+        self.assertEqual(len(urls), len(set(urls)))
+
+
+class ApplyByIdTests(TestCase):
+    """A logo uploaded from the page is on disk, not at an address, so it goes by id."""
+
+    def setUp(self):
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+
+    def test_an_uploaded_logo_is_given_by_id(self):
+        uploaded = Logo.objects.create(name="angers", url="/data/logos/angers.png")
+        channel = Channel.objects.create(channel_number=1, name="┃FR┃ ANGERS TV")
+
+        response = self.client_api.post(
+            "/api/channels/logo-library/apply/",
+            {"assignments": [{"channel_id": channel.id, "logo_id": uploaded.id}]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["updated"], 1)
+        channel.refresh_from_db()
+        self.assertEqual(channel.logo_id, uploaded.id)
+
+    def test_links_and_uploads_can_be_applied_together(self):
+        uploaded = Logo.objects.create(name="angers", url="/data/logos/angers.png")
+        angers = Channel.objects.create(channel_number=1, name="┃FR┃ ANGERS TV")
+        ngc = Channel.objects.create(channel_number=2, name="┃BE┃ NGC")
+
+        response = self.client_api.post(
+            "/api/channels/logo-library/apply/",
+            {
+                "assignments": [
+                    {"channel_id": angers.id, "logo_id": uploaded.id},
+                    {"channel_id": ngc.id, "url": "https://example.com/ngc.png", "name": "NGC"},
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.json(), {"updated": 2, "created_logos": 1})
+
+    def test_a_logo_that_does_not_exist_is_not_given(self):
+        channel = Channel.objects.create(channel_number=1, name="Anything")
+        result = logo_library.apply_logo_ids([(channel.id, 999999)])
+        self.assertEqual(result["updated"], 0)
+
+    def test_searching(self):
+        built_index()
+        data = self.client_api.get("/api/channels/logo-library/search/?q=tfx&country=be").json()
+        self.assertTrue(data["built"])
+        self.assertIn("tfx-be.png", data["results"][0]["url"])

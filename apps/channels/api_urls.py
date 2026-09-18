@@ -68,6 +68,7 @@ urlpatterns = [
     path('logo-library/status/', logo_library_views.logo_library_status, name='logo_library_status'),
     path('logo-library/refresh/', logo_library_views.logo_library_refresh, name='logo_library_refresh'),
     path('logo-library/apply/', logo_library_views.logo_library_apply, name='logo_library_apply'),
+    path('logo-library/search/', logo_library_views.logo_library_search, name='logo_library_search'),
     # Some clients strip trailing slashes from artwork URLs. Serve the same
     # view directly (no redirect) so logo fetches still return an image.
     path(

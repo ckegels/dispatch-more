@@ -15,6 +15,7 @@ import {
 } from '@mantine/core';
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
+import LogoPicker from './LogoPicker';
 
 // How many rows are drawn at once. Every row can carry several images from other sites,
 // and a thousand channels drawn together is a page that takes a while to settle.
@@ -107,6 +108,11 @@ const LogoLibraryTable = () => {
   const [ticked, setTicked] = useState({});
   const [confirming, setConfirming] = useState(false);
   const [building, setBuilding] = useState(false);
+  // A logo chosen by hand for a channel -- searched for, linked or uploaded -- which wins
+  // over anything suggested for it
+  const [custom, setCustom] = useState({});
+  // The channel a logo is being chosen for by hand, if any
+  const [pickerRow, setPickerRow] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -130,13 +136,14 @@ const LogoLibraryTable = () => {
     return wanted ? all.filter((row) => row.name.toLowerCase().includes(wanted)) : all;
   }, [data, search]);
   const shown = rows.slice(page * PAGE, (page + 1) * PAGE);
-  const chosenFor = (row) => row.suggestions[picked[row.channel_id] || 0];
+  const chosenFor = (row) =>
+    custom[row.channel_id] || row.suggestions[picked[row.channel_id] || 0];
 
   const tickedRows = useMemo(
     () => rows.filter((row) => ticked[row.channel_id] && chosenFor(row)),
     // chosenFor reads picked, which is listed
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, ticked, picked]
+    [rows, ticked, picked, custom]
   );
 
   // Downloading the collections runs in the background, so the page asks until the
@@ -171,11 +178,15 @@ const LogoLibraryTable = () => {
       await API.applyLogoLibrary(
         tickedRows.map((row) => {
           const chosen = chosenFor(row);
-          return { channel_id: row.channel_id, url: chosen.url, name: chosen.name };
+          // An uploaded logo is on disk, not at an address, so it goes by id
+          return chosen.logo_id
+            ? { channel_id: row.channel_id, logo_id: chosen.logo_id }
+            : { channel_id: row.channel_id, url: chosen.url, name: chosen.name };
         })
       );
       setTicked({});
       setPicked({});
+      setCustom({});
       await load();
     } catch (e) {
       setError(e?.body?.error || 'Could not apply those logos.');
@@ -320,6 +331,7 @@ const LogoLibraryTable = () => {
                       </Group>
                     </Table.Td>
                     <Table.Td>
+                      <Group gap="xs" wrap="nowrap" justify="space-between">
                       {chosen ? (
                         <Group gap="xs" wrap="nowrap" align="center">
                           <Thumb
@@ -328,7 +340,17 @@ const LogoLibraryTable = () => {
                             selected={!!ticked[row.channel_id]}
                           />
                           <Stack gap={4}>
-                            <About suggestion={chosen} />
+                            {custom[row.channel_id] ? (
+                              <Badge size="xs" variant="light" color="grape">
+                                {chosen.source === 'upload'
+                                  ? 'uploaded'
+                                  : chosen.source === 'link'
+                                    ? 'your link'
+                                    : 'chosen by hand'}
+                              </Badge>
+                            ) : (
+                              <About suggestion={chosen} />
+                            )}
                             {/* The others, small, to be chosen instead */}
                             {row.suggestions.length > 1 && (
                               <Group gap={4} wrap="wrap">
@@ -354,9 +376,18 @@ const LogoLibraryTable = () => {
                         </Group>
                       ) : (
                         <Text size="xs" c="dimmed">
-                          Not in any collection
+                          Not suggested by any collection
                         </Text>
                       )}
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        aria-label={`Find a logo for ${row.name}`}
+                        onClick={() => setPickerRow(row)}
+                      >
+                        Search
+                      </Button>
+                      </Group>
                     </Table.Td>
                   </Table.Tr>
                 );
@@ -390,6 +421,18 @@ const LogoLibraryTable = () => {
           </Button>
         </Group>
       )}
+
+      <LogoPicker
+        row={pickerRow}
+        opened={!!pickerRow}
+        onClose={() => setPickerRow(null)}
+        onChoose={(choice) => {
+          // Chosen for this channel and ticked, since choosing it is the point
+          setCustom({ ...custom, [pickerRow.channel_id]: choice });
+          setTicked({ ...ticked, [pickerRow.channel_id]: true });
+          setPickerRow(null);
+        }}
+      />
 
       <ConfirmationDialog
         opened={confirming}

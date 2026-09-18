@@ -2882,6 +2882,13 @@ export default class API {
     });
   }
 
+  static async searchLogoLibrary(query, country = '') {
+    // Every logo in the collections whose name contains this, for finding one by hand
+    const params = new URLSearchParams({ q: query });
+    if (country) params.set('country', country);
+    return await request(`${host}/api/channels/logo-library/search/?${params}`);
+  }
+
   static async applyLogoLibrary(assignments) {
     // [{channel_id, url, name}]: only what was chosen on the page changes
     return await request(`${host}/api/channels/logo-library/apply/`, {
