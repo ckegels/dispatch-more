@@ -127,8 +127,10 @@ SLOWEST_GAP = 60
 # a login the provider still counts as in use is waited on this long before it is taken to
 # be someone else's.
 PROVIDER_LINGER = 45
-# How often the provider is asked how many connections a login has open, at most
-PROVIDER_ASK_EVERY = 5
+# How often the provider is asked how many connections a login has open, at most. Not before
+# every stream: asking is a request too, and a provider that limits requests per minute
+# counted them. Measured on a real provider, a closed check is off its count at once.
+PROVIDER_ASK_EVERY = 30
 
 # How much of a stream is read before it is judged: enough for ffprobe to find the picture
 READ_BYTES = 1024 * 1024
@@ -385,9 +387,9 @@ class _ProviderCount:
             time.sleep(PROVIDER_ASK_EVERY)
 
     def check_ended(self):
+        # What was asked stays good until PROVIDER_ASK_EVERY has passed: our own check is off
+        # the provider's count as soon as it closes, and anyone else is seen at the next ask
         self.last_check_ended = time.monotonic()
-        # What was asked before the check is no longer true
-        self.asked.clear()
 
 
 # ── Is an account working at all ─────────────────────────────────────────────

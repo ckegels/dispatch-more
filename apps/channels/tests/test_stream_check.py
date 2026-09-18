@@ -542,6 +542,22 @@ class RunTests(_Setup):
         self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
         self.assertEqual(self._status("Provider A")["status"], "in use")
 
+    def test_the_provider_is_not_asked_before_every_stream(self):
+        """Asking is a request too: a provider limiting requests per minute counts them."""
+        self._as_xc(self.a)
+        asked = []
+
+        def provider(account, profile, agent):
+            asked.append(1)
+            return {"auth": 1, "status": "Active", "active_cons": 0}
+
+        with mock.patch.object(stream_check, "PROVIDER_ASK_EVERY", 30), \
+                mock.patch.object(stream_check, "_xc_user_info", side_effect=provider):
+            final, probe = self._run({})
+        self.assertEqual(probe.call_count, 3)
+        # Once to see the login works, once for how busy it is: not once per stream more
+        self.assertEqual(len(asked), 2)
+
     def test_the_check_just_closed_is_waited_out_not_taken_for_a_viewer(self):
         """A provider can go on counting a closed connection for a while."""
         self._as_xc(self.a)
