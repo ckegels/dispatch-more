@@ -1476,6 +1476,50 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(sorted(c.args[0] for c in mock_stop.call_args_list), ["skipped-1", "skipped-2"])
         self.assertTrue(any("Probation: stopping skipped channel" in line for line in logs.output))
 
+    def test_a_media_server_viewer_is_settled_once_its_server_names_them(
+        self, mock_stop, _mock_spawn
+    ):
+        """
+        The request could not say who this was, so the work is done when the server can.
+
+        A media server asks for the stream before it registers what it is playing, so at the
+        moment of the request there is nothing to go on. Waiting for it is a race that is
+        lost often enough to matter; this runs afterwards, when the answer is certain, and
+        stops the channel the viewer left so its slot goes back.
+        """
+        device = "server|shield-1"
+        self._channel("left-behind", clients=[("c1", self.IP, "0", None, 2)])
+        # This one runs after the fact, off the clock rather than at a moment given to it
+        self.redis.hset(
+            RedisKeys.client_metadata("left-behind", "c1"),
+            mapping={"server_device": device, "connected_at": str(time.time() - 2)},
+        )
+
+        stopped = probation.settle_media_server_start(
+            self.redis, "channel-new", device, previous_channel="left-behind"
+        )
+
+        self.assertEqual(stopped, ["left-behind"])
+        mock_stop.assert_called_once_with("left-behind")
+        # And it is on the page as a switch, not as a viewer nobody could place
+        switched = [
+            event
+            for event in probation.recent_events(self.redis)
+            if event["action"] == "switched"
+        ]
+        self.assertEqual(len(switched), 1, probation.recent_events(self.redis))
+        self.assertEqual(switched[0]["from_channel"], "left-behind")
+        self.assertIn("once its server said who", switched[0]["result"])
+
+    def test_settling_a_start_nobody_left_a_channel_for_does_nothing(
+        self, mock_stop, _mock_spawn
+    ):
+        self.assertEqual(
+            probation.settle_media_server_start(self.redis, "channel-new", "server|x"), []
+        )
+        mock_stop.assert_not_called()
+        self.assertEqual(probation.recent_events(self.redis), [])
+
     def test_requested_channel_is_never_stopped(self, mock_stop, _mock_spawn):
         self._channel("channel-new", clients=[("c1", self.IP, "0", "TiviMate", 1)])
 

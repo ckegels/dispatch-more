@@ -720,6 +720,46 @@ def _server_device(user_agent, client_ip, redis_client):
         return None
 
 
+def settle_media_server_start(redis_client, channel_uuid, device, previous_channel=None):
+    """
+    Do the overlap's work for a media server viewer once its server has named them.
+
+    A media server asks for the stream before it registers what it is playing, so at the
+    moment of the request it often cannot say which of its players this is. Everything tried
+    then is a guess against the clock. This is not: it runs a second or two later, from
+    media_servers.bind_device, when the server has said who it is, and does what the request
+    could not -- stops the channel this viewer just left, so its slot goes back.
+
+    Doing it late costs nothing that matters. The slot is freed a moment after the new
+    channel starts instead of a moment before, and the viewer was never going to be watching
+    both. Never raises: this runs in the background, behind a stream that is already playing.
+    """
+    if not redis_client or not device or not channel_uuid:
+        return []
+    try:
+        if not in_use():
+            return []
+        viewer = Viewer("", server_device=device)
+        stopped = stop_skipped_channels(redis_client, viewer, channel_uuid)
+        if stopped:
+            logger.info(
+                f"Media server: stopped {len(stopped)} channel(s) {device} had left, "
+                f"once its server said who was asking"
+            )
+            record_event(
+                redis_client,
+                viewer,
+                "switched",
+                from_channel=str(previous_channel or stopped[0]),
+                channel=str(channel_uuid),
+                result="the channel it left was stopped once its server said who was asking",
+            )
+        return stopped
+    except Exception as e:
+        logger.debug(f"Could not settle the start of channel {channel_uuid}: {e}")
+        return []
+
+
 def _channel_viewers_key(channel_uuid) -> str:
     return CHANNEL_VIEWERS_KEY.format(channel_uuid=channel_uuid)
 

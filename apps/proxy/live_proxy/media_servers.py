@@ -988,6 +988,10 @@ def cached_sessions(redis_client):
 CHANNEL_DEVICE_KEY = "live:media_servers:channel:{channel_uuid}"
 CHANNEL_DEVICE_TTL = 4 * 3600
 
+# The channel each device is on, so the one it was on before is known when it moves. This is
+# what makes a switch recognisable without the request having said anything about who it is.
+DEVICE_CHANNEL_KEY = "live:media_servers:device_channel:{device}"
+
 
 def bind_device(redis_client, channel_uuid, session):
     """
@@ -1013,6 +1017,22 @@ def bind_device(redis_client, channel_uuid, session):
             f"Media server: {session.get('user') or 'someone'} on "
             f"{session.get('player') or 'a device'} is watching channel {channel_uuid}"
         )
+
+        # This is the first moment the viewer is known for certain, so it is where the
+        # overlap's work is really done: the request itself arrived before the server had a
+        # session to report, and anything decided then was a guess against the clock.
+        previous = _as_str(
+            redis_client.get(DEVICE_CHANNEL_KEY.format(device=device))
+        )
+        redis_client.setex(
+            DEVICE_CHANNEL_KEY.format(device=device), CHANNEL_DEVICE_TTL, str(channel_uuid)
+        )
+        if previous and previous != str(channel_uuid):
+            from . import probation
+
+            probation.settle_media_server_start(
+                redis_client, channel_uuid, device, previous
+            )
     except Exception as e:
         logger.debug(f"Could not remember who is watching channel {channel_uuid}: {e}")
 
