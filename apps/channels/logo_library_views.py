@@ -70,12 +70,13 @@ def logo_library_suggestions(request):
         )
         if show == "missing" and current:
             continue
-        # The logos its own streams came with first, then the collections, and the icon
-        # of its guide entry last: the guide is tied to the channel, but its icons are
-        # often the plainest of the lot, so it is the one to fall back on
-        suggestions = logo_library.local_suggestions(channel)
+        # The collections first: they are why this page exists, and the logos a playlist
+        # came with are usually the ones being replaced. Those, and the guides' icons, are
+        # still offered after, as alternatives to fall back on
+        suggestions = []
         if index:
             suggestions += logo_library.suggestions_for(channel.name, index)
+        suggestions += logo_library.local_suggestions(channel)
         suggestions += logo_library.guide_suggestions(channel, guide_icons)
         unique, seen = [], set()
         for suggestion in suggestions:

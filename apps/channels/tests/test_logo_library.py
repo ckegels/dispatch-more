@@ -576,16 +576,13 @@ class WhatDispatcharrAlreadyHasTests(TestCase):
         data = self.client_api.get(f"/api/channels/logo-library/?show={show}").json()
         return next(r for r in data["channels"] if r["channel_id"] == self.channel.id)
 
-    def test_its_streams_come_first_and_its_guide_icon_last(self):
+    def test_the_collections_come_first_then_the_playlist_then_the_guide(self):
+        """The playlist's logo is usually the one being replaced, so it is not offered first."""
         built_index()
-        suggestions = self._row()["suggestions"]
-        self.assertEqual(suggestions[0]["url"], "https://provider/een.png")
-        self.assertEqual(suggestions[0]["source"], logo_library.YOUR_PLAYLIST)
-        # Then the collections
-        self.assertIn("een-be.png", suggestions[1]["url"])
-        # And the guide to fall back on
-        self.assertEqual(suggestions[-1]["url"], self.icon)
-        self.assertEqual(suggestions[-1]["source"], logo_library.YOUR_GUIDE)
+        sources = [s["source"] for s in self._row()["suggestions"]]
+        self.assertEqual(sources[0], logo_library.TV_LOGOS)
+        self.assertLess(sources.index(logo_library.YOUR_PLAYLIST), sources.index(logo_library.YOUR_GUIDE))
+        self.assertEqual(sources[-1], logo_library.YOUR_GUIDE)
 
     def test_every_guide_is_looked_in_not_only_the_one_it_is_mapped_to(self):
         """Each guide source names channels its own way and has its own icons."""
