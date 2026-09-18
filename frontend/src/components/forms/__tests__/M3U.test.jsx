@@ -290,6 +290,7 @@ vi.mock('@mantine/core', () => ({
     </div>
   ),
   Stack: ({ children }) => <div>{children}</div>,
+  Text: ({ children }) => <span>{children}</span>,
   TagsInput: ({ label, value }) => (
     <div>
       <span>{label}</span>
@@ -860,15 +861,20 @@ describe('M3U', () => {
       );
 
       expect(screen.getByText('Channel Switch Overlap')).toBeInTheDocument();
+      // The whole of it, under headings, which is what the short confirm leaves out
+      expect(screen.getByText('What it never does')).toBeInTheDocument();
+      expect(screen.getByText('Who it applies to')).toBeInTheDocument();
+      expect(screen.getByText('The settings')).toBeInTheDocument();
       expect(
-        screen.getByText(/It never stops a stream that was already playing/)
+        screen.getByText(/Stop a stream that was already playing/)
       ).toBeInTheDocument();
       expect(
         screen.queryByTestId('confirmation-dialog')
       ).not.toBeInTheDocument();
     });
 
-    it('explains the feature before enabling it', () => {
+    it('asks what is being agreed to, and no more than that', () => {
+      // A decision needs the trade and the risk; the rest is a page away
       setupStores();
       render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
 
@@ -876,10 +882,15 @@ describe('M3U', () => {
 
       const dialog = screen.getByTestId('confirmation-dialog');
       expect(dialog).toHaveTextContent('Enable Channel Switch Overlap?');
-      expect(dialog).toHaveTextContent('What it does not do');
+      // What it does, what it costs, and who it applies to
+      expect(dialog).toHaveTextContent('one extra connection');
       expect(dialog).toHaveTextContent(
-        'It never stops a stream that was already playing'
+        'Some block accounts that do'
       );
+      expect(dialog).toHaveTextContent('a viewer Dispatcharr can tell apart');
+      // Not the whole reference, which is what made it unreadable
+      expect(dialog).not.toHaveTextContent('Channel Shutdown Delay');
+      expect(dialog.textContent.length).toBeLessThan(900);
     });
 
     it('stays disabled when the explanation is cancelled', async () => {

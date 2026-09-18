@@ -298,6 +298,15 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                           not in a DVR
                         </Badge>
                       )}
+                      {/* Promising more than the providers allow means the server starts
+                          streams they refuse, and the viewer gets the server's error
+                          instead of whatever the channel would have fallen back to */}
+                      {data.provider_streams > 0 &&
+                        tunerCountIn(tuner.uri) > data.provider_streams && (
+                          <Badge size="xs" color="orange" variant="light">
+                            more than the {data.provider_streams} the providers allow
+                          </Badge>
+                        )}
                       {/* How many connections this tuner offers the server. On one of ours
                           the number is part of the address, so it can be changed here
                           rather than by removing the tuner and adding it again. */}
@@ -529,7 +538,11 @@ const MediaServerTuners = ({ serverId, enabled }) => {
           size="xs"
           w={130}
           label="Tuners"
-          description={`Dispatcharr says ${data.calculated_tuners}`}
+          description={
+            data.provider_streams
+              ? `providers allow ${data.provider_streams}`
+              : `Dispatcharr says ${data.calculated_tuners}`
+          }
           placeholder="as calculated"
           min={1}
           max={data.max_tuners}

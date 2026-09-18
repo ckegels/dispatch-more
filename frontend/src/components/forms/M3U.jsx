@@ -20,6 +20,7 @@ import {
   Stack,
   Switch,
   TagsInput,
+  Text,
   TextInput,
 } from '@mantine/core';
 import M3UGroupFilter from './M3UGroupFilter';
@@ -43,35 +44,78 @@ import {
 import ServerGroupsManagerModal from '../ServerGroupsManagerModal';
 import ConfirmationDialog from '../ConfirmationDialog';
 
-const OVERLAP_EXPLANATION = (
+// What you are agreeing to, and nothing else. The long version is a page away, under
+// "What does this do?", for anyone who wants it; a decision does not need it.
+const OVERLAP_CONFIRM = (
   <div style={{ whiteSpace: 'pre-line' }}>
-    {`Only use this if your provider tolerates one extra connection for a few seconds. Some providers block accounts that go over their limit.
+    {`When every account a channel could use is full, a viewer who is already watching may start their next channel on one extra connection for a few seconds, until the stream they left closes.
 
-Warnings:
-• Players on your own network are recognised by their IP address, so each device needs its own address. Do not use this for addresses shared by several devices: a Docker network, a second router, or a reverse proxy Dispatcharr does not trust.
-• Every device outside your network needs its own Dispatcharr login. One login used by several devices at the same time is not supported: the overlap can go to the wrong device, and "Stop Skipped Channels" can stop a channel another device is watching.
-• "Stop Skipped Channels" does not support multiview or picture-in-picture: a player that opens a second channel within the Overlap Window closes the first one.
+Only switch this on if your provider tolerates going one over its limit for a moment. Some block accounts that do.
 
-What it does:
-• Only when every account a channel can use is at its Max Streams, a viewer who is already watching on this account can start a new channel immediately on one temporary extra connection.
-• If a stream on this account ends within the Overlap Window (a channel switch), the new stream simply continues.
-• If none ends in time, the new channel moves to an account with a free slot, or to a custom fallback stream if the channel has one (such as the could-not-dispatch plugin's), or the new stream is stopped. A fallback stream at the end of a channel does not replace a channel switch.
-• With "Stop Skipped Channels", channels a player only watched for a moment (shorter than the Overlap Window) are closed as soon as its next channel has started, so fast channel surfing does not fill every slot.
-• "Surfing Delay": when a player switches again shortly after its previous switch (within the Overlap Window), Dispatcharr waits this long before requesting the channel from the provider. Channels the player passes in the meantime are never requested, so fast surfing does not open a provider connection for every channel. The first switch after watching something starts at once. Not applied to Plex, Jellyfin and Emby.
-• When the provider closes a new connection before sending any video (usually a refusal because the account is full), Dispatcharr waits longer before trying again (1.5 s, then 3 s) instead of retrying within half a second.
-• "LAN Subnets": players with an address in these subnets are recognised by that address plus their app (so TiviMate and Kodi on one device stay separate, and an app update changes nothing). The network Dispatcharr is on is filled in for you; clear the field and only players with a Dispatcharr login are recognised.
-• When a player's channel ends during a switch, its slot is kept for that player for the Overlap Window, so another viewer waiting for a slot cannot take it in between. Failover, stream changes, VOD, catch-up and previews leave it alone too (also on a login shared through a Server Group); DVR recordings can still use it. Channels stopped from the dashboard, deleted or removed by a refresh are not kept.
-• With a Channel Shutdown Delay, a channel nobody watches any more is closed early when it keeps this account over its limit during a switch.
-• "When Switching Channels" chooses the account for a player's next channel. "Follow channel order" uses the channel's stream order. "Stay on same account" uses the account it is watching on or just left, with the overlap slot if its old stream is still closing, even if another account has a free slot. "Use another account" starts it on a free slot on another account with this setting enabled first (never on custom fallback streams), and only falls back to its own account when none is free.
-• Stream links and playlists stay exactly as they are: nothing is added to them, so players do not need to re-download anything. A media server (Plex, Jellyfin, Emby) streams on behalf of all its viewers, so it only takes part when it is added under Settings → Streaming → Media Servers and can say which of its devices is watching.
+It only ever applies to a viewer Dispatcharr can tell apart: a player on your own network with an address of its own, a device with its own login, or a media server that says which of its devices is asking. Everything else behaves exactly as it does today.
 
-What it does not do:
-• It changes nothing while an account still has free slots.
-• It never stops a stream that was already playing, or a channel someone else is also watching.
-• It does not give extra connections to other viewers (other users, devices or IP addresses) or to DVR recordings.
-• Viewers that cannot be told apart take no part in any of this: HDHomeRun, players outside your network without a login, and a media server that cannot say which of its devices is asking. For them Dispatcharr behaves exactly as it does with this switched off, because an extra connection given to the wrong viewer is somebody else's stream stopped.
+It takes effect after you save the account.`}
+  </div>
+);
 
-The change takes effect after you save the account.`}
+const OverlapSection = ({ title, children }) => (
+  <div style={{ marginTop: '0.9rem' }}>
+    <Text fw={600} size="sm">
+      {title}
+    </Text>
+    <div style={{ whiteSpace: 'pre-line' }}>{children}</div>
+  </div>
+);
+
+// The whole thing, in the order someone reads it: what it does, what it never does, who it
+// applies to, then each setting, then the things that catch people out.
+const OVERLAP_EXPLANATION = (
+  <div>
+    <OverlapSection title="What it does">
+      {`Nothing at all while any account still has a free slot.
+
+When every account a channel could use is at its Max Streams, and the viewer asking is already watching on this account, their next channel starts immediately on one extra connection.
+
+If the stream they left closes within the Overlap Window, that is a channel switch and the new one simply continues. If nothing closes in time, the channel moves to an account with a free slot, or to the channel's custom fallback stream if it has one, or it stops.`}
+    </OverlapSection>
+
+    <OverlapSection title="What it never does">
+      {`• Stop a stream that was already playing, or a channel someone else is also watching.
+• Give an extra connection to a different viewer, or to a DVR recording.
+• Touch failover, stream changes, VOD, catch-up or previews.
+• Change your stream links or playlists: nothing is added, so no player has to re-download anything.`}
+    </OverlapSection>
+
+    <OverlapSection title="Who it applies to">
+      {`A viewer has to be recognisable, or an extra connection given to the wrong one is somebody else's stream stopped.
+
+• A player on your own network, by its address and app (so TiviMate and Kodi on one device stay apart). See "LAN Subnets" below.
+• A device outside your network, by its own Dispatcharr login.
+• A media server (Plex, Jellyfin, Emby), when it is added under Settings → Streaming → Media Servers and can say which of its devices is watching.
+
+Everyone else takes no part in any of this and is served exactly as they are with this switched off: HDHomeRun, players outside your network without a login, and a media server that cannot say who is asking.`}
+    </OverlapSection>
+
+    <OverlapSection title="The settings">
+      {`Overlap Window — how long the extra connection may last, and how long a slot is kept for a viewer whose channel ended mid-switch so nobody else takes it in between.
+
+Stop Skipped Channels — a channel a player watched for less than the Overlap Window is closed as soon as its next one has started, so surfing does not fill every slot.
+
+Surfing Delay — when a player switches again within the Overlap Window, Dispatcharr waits this long before asking the provider, so channels passed on the way are never requested. The first switch after actually watching something happens at once. Not applied to Plex, Jellyfin or Emby.
+
+LAN Subnets — the addresses treated as your own network. The one Dispatcharr is on is filled in for you. Clear it and only players with a login are recognised.
+
+When Switching Channels — which account the next channel starts on. "Follow channel order" uses the channel's own stream order. "Stay on same account" keeps the viewer where they are, using the overlap slot even if another account is free. "Use another account" prefers a free slot elsewhere first.
+
+Channel Shutdown Delay — a channel nobody is watching any more is closed early when it is keeping this account over its limit during a switch.`}
+    </OverlapSection>
+
+    <OverlapSection title="Worth knowing before you switch it on">
+      {`• Players on your network are told apart by address, so each device needs its own. Not for an address shared by several: a Docker network, a second router, or an untrusted reverse proxy.
+• A login used by two devices at once is not supported. The overlap can go to the wrong one, and Stop Skipped Channels can close a channel the other is watching.
+• Stop Skipped Channels does not understand multiview or picture-in-picture: a second channel opened within the Overlap Window closes the first.
+• When a provider refuses a new connection without sending any video, Dispatcharr waits longer before trying again (1.5s, then 3s) rather than retrying straight away.`}
+    </OverlapSection>
   </div>
 );
 
@@ -722,7 +766,7 @@ const M3U = ({
         title="Enable Channel Switch Overlap?"
         confirmLabel="Enable"
         size="lg"
-        message={OVERLAP_EXPLANATION}
+        message={OVERLAP_CONFIRM}
       />
 
       <Modal

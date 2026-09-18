@@ -197,7 +197,36 @@ def _choices():
         ],
         # What Dispatcharr would advertise on its own, so the field can be compared to it
         "calculated_tuners": _calculated_tuners(),
+        "provider_streams": _provider_streams(),
     }
+
+
+def _provider_streams() -> int:
+    """
+    How many streams the providers actually allow at once, added up.
+
+    This is what a tuner count is really promising. Told more than this, a media server
+    starts streams the providers refuse, and the viewer gets an error from the server
+    instead of whatever the channel was going to fall back to. Told fewer, the server holds
+    requests back that would have worked.
+
+    Zero when an account has no limit set, which means "as many as you like" and so cannot
+    be added up; the page then says nothing rather than warning about a number it invented.
+    """
+    from apps.m3u.models import M3UAccountProfile
+
+    try:
+        streams = 0
+        for profile in M3UAccountProfile.objects.filter(
+            is_active=True, m3u_account__is_active=True
+        ).only("max_streams"):
+            if not profile.max_streams:
+                # One account without a limit makes the total meaningless
+                return 0
+            streams += profile.max_streams
+        return streams
+    except Exception:
+        return 0
 
 
 def _calculated_tuners() -> int:
