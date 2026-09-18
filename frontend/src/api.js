@@ -2648,6 +2648,14 @@ export default class API {
     });
   }
 
+  static async stopMediaServerSession(server, sessionId) {
+    // Stops what a player is watching, so the slot it holds goes back
+    return await request(`${host}/proxy/media-servers/`, {
+      method: 'POST',
+      body: { id: server, session_id: sessionId, action: 'stop_session' },
+    });
+  }
+
   static async setMediaServerTunerUri(server, id, uri) {
     // Moves a registered tuner, so its channel mappings are not lost
     return await request(`${host}/proxy/media-servers/tuners/`, {

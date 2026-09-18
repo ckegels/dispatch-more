@@ -441,9 +441,19 @@ def refresh_epg_data(source_id, force=False, _file_defer_retry=0):
     _release_task_db_connection()
 
     try:
-        return _refresh_epg_data_impl(
+        result = _refresh_epg_data_impl(
             source_id, force=force, _file_defer_retry=_file_defer_retry
         )
+        # The guide Dispatcharr serves has just changed. A media server keeps its own copy
+        # and only looks again on its own schedule, which is hours, so it is told: without
+        # this the programmes it shows are the ones from before this refresh.
+        try:
+            from apps.proxy.live_proxy import media_servers
+
+            media_servers.reload_every_guide()
+        except Exception as e:
+            logger.debug(f"Could not ask the media servers to reload their guides: {e}")
+        return result
     except Exception as e:
         logger.error(
             f"Error in refresh_epg_data for source {source_id}: {e}",

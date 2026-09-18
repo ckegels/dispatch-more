@@ -21,6 +21,7 @@ vi.mock('../../../api', () => ({
     attachMediaServerTuner: vi.fn(),
     placeMediaServerTuner: vi.fn(),
     setMediaServerTunerUri: vi.fn(),
+    stopMediaServerSession: vi.fn(),
     setMediaServerGuide: vi.fn(),
     deleteMediaServerDvr: vi.fn(),
   },
@@ -146,6 +147,7 @@ const servers = [
         player: 'Chrome',
         state: 'playing',
         decision: 'transcode (video + audio)',
+        session_id: 'pxvkotkn32sbtdp8',
         speed: 0.9,
       },
     ],
@@ -289,6 +291,26 @@ describe('MediaServers', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'The server did not accept this token'
+    );
+  });
+
+  it('stops what a player is watching, so its slot goes back', async () => {
+    API.stopMediaServerSession.mockResolvedValue({ servers });
+
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('ZIB');
+    expect(dialog).toHaveTextContent('Ckegels');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop it' }));
+
+    await waitFor(() =>
+      expect(API.stopMediaServerSession).toHaveBeenCalledWith(
+        'a1',
+        'pxvkotkn32sbtdp8'
+      )
     );
   });
 

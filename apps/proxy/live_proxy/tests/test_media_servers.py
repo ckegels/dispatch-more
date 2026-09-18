@@ -1641,6 +1641,104 @@ class BindingOnEitherServerTests(TestCase):
             self.assertEqual(settle.call_args.args[3], "channel-a")
 
 
+class RecordingsAndGuidesTests(TestCase):
+    """Two things that need the server asked rather than assumed."""
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        media_servers.forget_hosts()
+        self.addCleanup(media_servers.forget_hosts)
+
+    def test_jellyfin_says_what_it_is_recording(self):
+        timers = [
+            {"Status": "InProgress", "ChannelName": "TFX"},
+            {"Status": "New", "ChannelName": "Not started yet"},
+            {"Status": "Completed", "ChannelName": "Over"},
+        ]
+        server = {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+                  "kind": "jellyfin"}
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = lambda url, **kwargs: (
+                fake_response(timers) if "/LiveTv/Timers" in url else jellyfin(url, **kwargs)
+            )
+            self.assertEqual(media_servers.recording_channels(server), {"TFX"})
+
+    def test_plex_recordings_are_not_known_and_it_does_not_pretend(self):
+        """No endpoint for this is known to work there, so nothing is claimed."""
+        server = {"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"}
+        self.assertEqual(media_servers.recording_channels(server), set())
+
+    def test_what_is_being_recorded_is_asked_once_and_kept(self):
+        """A stop is decided while a viewer waits; a slow server must not hold that up."""
+        media_servers.save_servers(
+            [{"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+              "kind": "jellyfin"}]
+        )
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = lambda url, **kwargs: (
+                fake_response([{"Status": "InProgress", "ChannelName": "TFX"}])
+                if "/LiveTv/Timers" in url else jellyfin(url, **kwargs)
+            )
+            self.assertEqual(media_servers.channels_being_recorded(self.redis), {"TFX"})
+            asked = get.call_count
+            self.assertEqual(media_servers.channels_being_recorded(self.redis), {"TFX"})
+            self.assertEqual(get.call_count, asked, "it asked the server twice")
+
+    def test_every_guide_is_reloaded_when_ours_changes(self):
+        """A server looks at ours on its own schedule, which is hours."""
+        media_servers.save_servers([
+            {"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"},
+            {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+             "kind": "jellyfin"},
+        ])
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
+            "apps.proxy.live_proxy.media_servers.requests.post"
+        ) as post:
+            get.side_effect = lambda url, **kwargs: (
+                jellyfin(url, **kwargs) if ":8096" in url else plex_with_tuners(url, **kwargs)
+            )
+            post.return_value = fake_response({})
+            media_servers.reload_every_guide()
+
+        called = [call.args[0] for call in post.call_args_list]
+        self.assertIn("http://plex:32400/livetv/dvrs/32/reloadGuide", called)
+        self.assertTrue(
+            any("/ScheduledTasks/Running/" in url for url in called),
+            f"Jellyfin was not asked to refresh: {called}",
+        )
+
+    def test_a_server_that_is_off_is_not_asked(self):
+        media_servers.save_servers(
+            [{"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t",
+              "enabled": False}]
+        )
+        with patch("apps.proxy.live_proxy.media_servers.requests.post") as post:
+            media_servers.reload_every_guide()
+        post.assert_not_called()
+
+    def test_a_session_can_be_stopped(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.return_value = fake_response({})
+            self.assertTrue(
+                media_servers.stop_session(
+                    {"id": "a1", "url": "http://plex:32400", "token": "t"}, "abc"
+                )
+            )
+        self.assertIn("/status/sessions/terminate", get.call_args.args[0])
+        self.assertEqual(get.call_args.kwargs["params"]["sessionId"], "abc")
+
+    def test_a_jellyfin_session_can_be_stopped(self):
+        with patch("apps.proxy.live_proxy.media_servers.requests.post") as post:
+            post.return_value = fake_response({})
+            self.assertTrue(
+                media_servers.stop_session(
+                    {"id": "j1", "url": "http://jf:8096", "token": "t", "kind": "jellyfin"},
+                    "abc",
+                )
+            )
+        self.assertEqual(post.call_args.args[0], "http://jf:8096/Sessions/abc/Playing/Stop")
+
+
 class SoleDeviceTests(TestCase):
     """A media server asks on behalf of its viewers; sometimes it can say which one."""
 

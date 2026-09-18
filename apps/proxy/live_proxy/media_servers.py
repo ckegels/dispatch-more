@@ -255,6 +255,8 @@ def _jellyfin_sessions(server):
         play_state = session.get("PlayState") or {}
         playing.append({
             "title": item.get("Name", ""),
+            # What the server stops this session by, if asked to
+            "session_id": str(session.get("Id") or ""),
             "user": session.get("UserName", ""),
             "player": session.get("DeviceName") or session.get("Client") or "",
             "device_id": session.get("DeviceId", ""),
@@ -337,6 +339,8 @@ def sessions(server):
         transcode = item.get("TranscodeSession") or {}
         playing.append({
             "title": item.get("title", ""),
+            # What the server stops this session by, if asked to
+            "session_id": str((item.get("Session") or {}).get("id") or ""),
             # Plex does not say which channel a live session is on. Measured on a real one:
             # the title is the programme, the type is what the programme is, and the fields
             # that would hold a channel are empty. What it is on is worked out from the
@@ -808,6 +812,65 @@ def add_guide(server, xmltv_url, name=None):
     )
 
 
+RECORDING_KEY = "live:media_servers:recording"
+RECORDING_TTL = 60
+
+
+def recording_channels(server):
+    """
+    The channels this server is recording right now, by name.
+
+    A recording is a channel nobody is watching, which is exactly what a channel somebody
+    surfed past looks like. Without asking, the overlap can stop one: the recording pulls
+    its stream while a viewer is streaming, so it is taken for that viewer's, and a switch
+    a moment later frees "their" old channel. Losing a recording is the worst thing this
+    fork could do, so the server is asked instead of guessed at.
+
+    Jellyfin says, through its timers. Plex has no endpoint for this that is known to work,
+    so its recordings are not seen and are protected only by the rules that apply to every
+    channel: a recording running longer than the overlap window is never a candidate.
+    """
+    if kind(server) != "jellyfin":
+        return set()
+    names = set()
+    try:
+        for timer in _get(server, "/LiveTv/Timers") or ():
+            if isinstance(timer, dict) and (timer.get("Status") or "") == "InProgress":
+                if timer.get("ChannelName"):
+                    names.add(timer["ChannelName"])
+    except Exception as e:
+        logger.debug(f"Could not ask {server.get('name')} what it is recording: {e}")
+    return names
+
+
+def channels_being_recorded(redis_client):
+    """
+    Every channel any media server is recording, cached because it is asked before a stop.
+
+    Cached rather than asked each time: a stop is decided while a viewer waits, and a server
+    that has gone away must not hold that up. An answer a minute old is good enough, because
+    a recording lasts far longer than that.
+    """
+    if not redis_client:
+        return set()
+    try:
+        cached = redis_client.get(RECORDING_KEY)
+        if cached is not None:
+            return set(json.loads(_as_str(cached)))
+    except Exception:
+        pass
+
+    names = set()
+    try:
+        for server in load_servers():
+            if is_enabled(server):
+                names |= recording_channels(server)
+        redis_client.setex(RECORDING_KEY, RECORDING_TTL, json.dumps(sorted(names)))
+    except Exception as e:
+        logger.debug(f"Could not work out what is being recorded: {e}")
+    return names
+
+
 def reload_guide(server, dvr_id):
     """
     Make a DVR read its guide again, after the guide it points at has changed.
@@ -818,6 +881,52 @@ def reload_guide(server, dvr_id):
     if kind(server) == "jellyfin":
         return refresh_guide(server)
     return _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide")
+
+
+def stop_session(server, session_id):
+    """
+    Stop what a player is watching, from here rather than from the server's own screens.
+
+    A player holding a slot is the thing worth doing something about, and hunting for it in
+    the server's interface is the slow way. What the server does with the player afterwards
+    is its own business: this asks it to stop, and says whether it agreed.
+    """
+    if kind(server) == "jellyfin":
+        return _post(server, f"/Sessions/{session_id}/Playing/Stop")
+    # Plex stops a session by its own id, with a reason it shows the person watching
+    return (
+        _get(
+            server,
+            "/status/sessions/terminate",
+            {"sessionId": session_id, "reason": "Stopped from Dispatcharr"},
+        )
+        is not None
+    )
+
+
+def reload_every_guide():
+    """
+    Tell every media server to read its guide again, after Dispatcharr's own has changed.
+
+    A server keeps its own copy and looks at ours on its own schedule, which is hours, so
+    until it does it shows the programmes from before the refresh. Never raises: a guide
+    that stays stale for a while is not worth failing an EPG refresh over.
+    """
+    reloaded = 0
+    for server in load_servers():
+        if not is_enabled(server):
+            continue
+        try:
+            if kind(server) == "jellyfin":
+                reloaded += 1 if refresh_guide(server) else 0
+            else:
+                for dvr in dvr_list(server):
+                    reloaded += 1 if reload_guide(server, dvr["id"]) else 0
+        except Exception as e:
+            logger.debug(f"Could not reload the guide on {server.get('name')}: {e}")
+    if reloaded:
+        logger.info(f"Asked {reloaded} media server guide(s) to reload after an EPG refresh")
+    return reloaded
 
 
 def refresh_guide(server):

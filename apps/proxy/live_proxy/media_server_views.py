@@ -85,6 +85,25 @@ def media_server_list(request):
         return JsonResponse({"servers": _server_rows()})
 
     servers = media_servers.load_servers()
+
+    # Stopping what a player is watching, which is the thing worth doing about one holding
+    # a slot. Nothing else about the server changes.
+    if request.data.get("action") == "stop_session":
+        server = next(
+            (s for s in servers if s.get("id") == request.data.get("id")), None
+        )
+        if server is None:
+            return JsonResponse({"error": "No such media server"}, status=404)
+        session_id = str(request.data.get("session_id") or "")
+        if not session_id:
+            return JsonResponse({"error": "Which session should be stopped?"}, status=400)
+        if not media_servers.stop_session(server, session_id):
+            return JsonResponse(
+                {"error": "The server would not stop that session"}, status=400
+            )
+        logger.info(f"Stopped session {session_id} on {server.get('name')}")
+        return JsonResponse({"servers": _server_rows()})
+
     # Switching one off (or on) changes nothing else about it, and never needs the server
     if "enabled" in request.data and len(request.data) <= 2:
         server_id = request.data.get("id")

@@ -32,6 +32,8 @@ const MediaServers = ({ active }) => {
   // A server's details fold away: with several of them the page is mostly tables
   const [openServers, setOpenServers] = useState({});
   const [confirmingRemove, setConfirmingRemove] = useState(null);
+  // Stopping a session cannot be undone from here, so it is asked first
+  const [confirmingStop, setConfirmingStop] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -193,6 +195,7 @@ const MediaServers = ({ active }) => {
                       <Table.Th>Who</Table.Th>
                       <Table.Th>Player</Table.Th>
                       <Table.Th>How</Table.Th>
+                      <Table.Th w={80} />
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
@@ -225,6 +228,23 @@ const MediaServers = ({ active }) => {
                             >
                               buffering
                             </Badge>
+                          )}
+                        </Table.Td>
+                        <Table.Td>
+                          {/* A player holding a slot is the thing worth doing
+                              something about, and the server's own screens are
+                              the slow way to reach it */}
+                          {session.session_id && (
+                            <Button
+                              size="compact-xs"
+                              variant="subtle"
+                              color="red"
+                              onClick={() =>
+                                setConfirmingStop({ server, session })
+                              }
+                            >
+                              Stop
+                            </Button>
                           )}
                         </Table.Td>
                       </Table.Tr>
@@ -313,6 +333,30 @@ const MediaServers = ({ active }) => {
         title="Remove this media server?"
         message={`Dispatcharr stops talking to "${confirmingRemove?.name}" and forgets its key. Nothing on the server itself is changed: its tuners, guides and recordings stay as they are.`}
         confirmLabel="Remove"
+      />
+      <ConfirmationDialog
+        opened={!!confirmingStop}
+        onClose={() => setConfirmingStop(null)}
+        onConfirm={async () => {
+          const { server, session } = confirmingStop;
+          setConfirmingStop(null);
+          try {
+            setServers(
+              (await API.stopMediaServerSession(server.id, session.session_id))
+                .servers
+            );
+            setError(null);
+          } catch (e) {
+            setError(e?.body?.error || 'The server would not stop that session.');
+          }
+        }}
+        title="Stop this session?"
+        message={`"${confirmingStop?.session?.title}" stops for ${
+          confirmingStop?.session?.user || 'whoever is watching'
+        } on ${
+          confirmingStop?.session?.player || 'their player'
+        }. The slot it holds goes back.`}
+        confirmLabel="Stop it"
       />
     </Stack>
   );

@@ -1520,6 +1520,47 @@ class StopSkippedChannelsTests(TestCase):
         mock_stop.assert_not_called()
         self.assertEqual(probation.recent_events(self.redis), [])
 
+    def test_a_channel_a_media_server_is_recording_is_never_stopped(
+        self, mock_stop, _mock_spawn
+    ):
+        """
+        A recording is a channel nobody is watching, which is what a skipped one looks like.
+
+        The recording pulls its stream while a viewer is streaming, so it can be taken for
+        that viewer's, and a switch a moment later would free "their" old channel. Losing a
+        recording is the worst thing this could do, so the server is asked.
+        """
+        self.redis.hset(
+            RedisKeys.channel_metadata("being-recorded"),
+            mapping={ChannelMetadataField.CHANNEL_NAME: "┃FR┃ TFX"},
+        )
+        self._channel("being-recorded", clients=[("c1", self.IP, "0", "TiviMate", 2)])
+
+        with patch(
+            "apps.proxy.live_proxy.media_servers.channels_being_recorded"
+        ) as recording:
+            recording.return_value = {"TFX"}
+            stopped = self._stop()
+
+        self.assertEqual(stopped, [])
+        mock_stop.assert_not_called()
+
+    def test_a_channel_nothing_is_recording_is_still_stopped(self, mock_stop, _mock_spawn):
+        """The guard only holds back what is really being recorded."""
+        self.redis.hset(
+            RedisKeys.channel_metadata("just-skipped"),
+            mapping={ChannelMetadataField.CHANNEL_NAME: "┃FR┃ TFX"},
+        )
+        self._channel("just-skipped", clients=[("c1", self.IP, "0", "TiviMate", 2)])
+
+        with patch(
+            "apps.proxy.live_proxy.media_servers.channels_being_recorded"
+        ) as recording:
+            recording.return_value = {"┃BE┃ Een"}
+            stopped = self._stop()
+
+        self.assertEqual(stopped, ["just-skipped"])
+
     def test_requested_channel_is_never_stopped(self, mock_stop, _mock_spawn):
         self._channel("channel-new", clients=[("c1", self.IP, "0", "TiviMate", 1)])
 

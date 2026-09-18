@@ -1385,6 +1385,37 @@ def _stop_channel_now(redis_client, channel_uuid, hold_slot=False):
     gevent.spawn(_stop_channel, channel_uuid)
 
 
+def _being_recorded(redis_client) -> set:
+    """The channels a media server is recording, asked once per stop rather than per channel."""
+    try:
+        from . import media_servers
+
+        return media_servers.channels_being_recorded(redis_client)
+    except Exception as e:
+        logger.debug(f"Could not work out what is being recorded: {e}")
+        return set()
+
+
+def _is_being_recorded(redis_client, channel_uuid, recorded) -> bool:
+    """
+    Whether this channel is one a media server is recording.
+
+    Matched by name, because that is what a server calls it; Dispatcharr's own recordings
+    are already kept out by the viewer being a recording (see is_recording).
+    """
+    if not recorded:
+        return False
+    try:
+        from . import media_servers
+        from .utils import resolve_channel_display_name
+
+        name = resolve_channel_display_name(channel_uuid, redis_client=redis_client)
+        return any(media_servers._same_channel(theirs, name) for theirs in recorded)
+    except Exception as e:
+        logger.debug(f"Could not tell whether channel {channel_uuid} is being recorded: {e}")
+        return False
+
+
 def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None, hold_slots=False):
     """
     Stop the channels this viewer surfed past, so their slots are free again.
@@ -1415,6 +1446,7 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
         candidates = []
         channels = list(_active_channels(redis_client))
         accounts = _accounts_for_profiles(profile_id for _uuid, profile_id in channels)
+        recorded = _being_recorded(redis_client)
         for channel_uuid, profile_id in channels:
             if (
                 profile_id is None
@@ -1422,6 +1454,9 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
                 or redis_client.exists(_skipped_stopping_key(channel_uuid))
                 # Already on its way out; a second stop would leave a stopping marker behind
                 or _dispatcharr_is_stopping(redis_client, channel_uuid)
+                # Being recorded: nobody is watching it, which is what a channel somebody
+                # surfed past looks like, and stopping one loses the recording
+                or _is_being_recorded(redis_client, channel_uuid, recorded)
             ):
                 continue
 
