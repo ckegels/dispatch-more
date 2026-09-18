@@ -279,6 +279,41 @@ class MergeTests(_Setup):
         self.assertEqual(Channel.objects.count(), 1)
 
 
+class HandOrderTests(_Setup):
+    """Streams put in another order on the page, so the Channels page is not needed for it."""
+
+    def test_the_order_given_is_applied(self):
+        fhd = self._stream("┃AT┃ ORF 1 FHD", self.b)
+        key = f"ch:{self.orf1.id}"
+        order = [fhd.id, self.existing.id, self.fallback.id]
+        channel_manager.apply_plan(settings(), [key], {key: order})
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1 FHD", "┃AT┃ ORF 1", "could not dispatch"])
+
+    def test_a_channel_with_nothing_else_to_change_is_applied_for_its_order(self):
+        second = self._stream("┃AT┃ ORF 1 HD", self.b)
+        ChannelStream.objects.filter(channel=self.orf1).delete()
+        self._attach(self.orf1, [self.existing, second, self.fallback])
+        key = f"ch:{self.orf1.id}"
+        self.assertEqual(self._row(channel_manager.build_plan(settings()), key)["status"], "unchanged")
+
+        result = channel_manager.apply_plan(settings(), [key], {key: [second.id, self.existing.id, self.fallback.id]})
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1 HD", "┃AT┃ ORF 1", "could not dispatch"])
+
+    def test_the_fallback_stays_last_whatever_order_is_given(self):
+        fhd = self._stream("┃AT┃ ORF 1 FHD", self.b)
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], {key: [self.fallback.id, fhd.id, self.existing.id]})
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1 FHD", "┃AT┃ ORF 1", "could not dispatch"])
+
+    def test_an_order_of_other_streams_than_there_are_now_is_ignored(self):
+        """The streams changed since the page was looked at: the plan's own order stands."""
+        fhd = self._stream("┃AT┃ ORF 1 FHD", self.b)
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], {key: [fhd.id, self.fallback.id]})
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "┃AT┃ ORF 1 FHD", "could not dispatch"])
+
+
 class ReplaceTests(_Setup):
     def test_a_stream_that_is_not_this_channel_is_removed_when_asked(self):
         wrong = self._stream("┃AT┃ PULS 4", self.a)

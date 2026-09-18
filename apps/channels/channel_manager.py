@@ -729,24 +729,51 @@ def _logo_id(url):
     return logo.id
 
 
-def apply_plan(settings, keys):
+def _in_the_order_given(final_ids, given, custom_ids):
+    """
+    The streams of a row in the order someone put them in on the page, if that order is
+    still of the same streams. Anything else -- a stream gone or come since the page was
+    looked at -- and the plan's own order stands. A custom stream stays last either way:
+    it is the channel's fallback, and one put before a real stream would be played first.
+    """
+    try:
+        given = [int(i) for i in given or ()]
+    except (TypeError, ValueError):
+        return final_ids
+    if sorted(given) != sorted(final_ids):
+        return final_ids
+    return [i for i in given if i not in custom_ids] + [i for i in given if i in custom_ids]
+
+
+def apply_plan(settings, keys, orders=None):
     """
     Carry out the chosen rows of the plan, worked out again now rather than trusted from the
     page: if the streams have changed since it was looked at, what is applied is what is
     true now, not what was true then. Conflicts are never applied.
+
+    orders is {row key: [stream ids]} for rows whose streams were put in another order on
+    the page; a channel with nothing else to change is applied for its order alone.
     """
     from django.db import transaction
 
     from .models import Channel, ChannelProfile, ChannelProfileMembership, ChannelStream
 
     wanted = set(keys or ())
+    orders = orders if isinstance(orders, dict) else {}
     plan = build_plan(settings)
-    rows = [r for r in plan["rows"] if r["key"] in wanted and r["status"] in ("new", "merge")]
+    rows = [
+        r for r in plan["rows"]
+        if r["key"] in wanted
+        and (r["status"] in ("new", "merge") or (r["status"] == "unchanged" and r["key"] in orders))
+    ]
     created = updated = streams_added = 0
 
     with transaction.atomic():
         for row in rows:
             final_ids = [s["id"] for s in row["streams"] if not s["removed"]]
+            if row["key"] in orders:
+                custom_ids = {s["id"] for s in row["streams"] if s.get("custom")}
+                final_ids = _in_the_order_given(final_ids, orders[row["key"]], custom_ids)
             if not final_ids:
                 # Never leaves a channel with nothing to play
                 continue

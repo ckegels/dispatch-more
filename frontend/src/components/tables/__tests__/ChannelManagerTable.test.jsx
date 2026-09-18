@@ -117,7 +117,29 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
 
     await waitFor(() =>
-      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'])
+      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {})
+    );
+  });
+
+  it('puts streams in another order by hand, the fallback staying last', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+
+    // The fallback cannot be moved, and the first cannot go further up
+    expect(screen.queryByLabelText('Move could not dispatch up')).toBeNull();
+    expect(await screen.findByLabelText('Move ┃AT┃ ORF 1 up')).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText('Move ┃AT┃ ORF 1 FHD up'));
+    expect(await screen.findByText('Reordered')).toBeInTheDocument();
+
+    // Ticked with the move, and sent with the order given
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {
+        'ch:1': [2, 1],
+      })
     );
   });
 

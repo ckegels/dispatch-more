@@ -2877,10 +2877,10 @@ export default class API {
     });
   }
 
-  static async applyChannelManager(settings, keys) {
+  static async applyChannelManager(settings, keys, orders = {}) {
     return await request(`${host}/api/channels/channel-manager/apply/`, {
       method: 'POST',
-      body: { settings, keys },
+      body: { settings, keys, orders },
     });
   }
 

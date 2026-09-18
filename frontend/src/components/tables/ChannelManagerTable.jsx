@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CirclePlay, Play, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  CirclePlay,
+  Play,
+  RotateCcw,
+  SlidersHorizontal,
+} from 'lucide-react';
 import {
   ActionIcon,
   Alert,
@@ -113,8 +121,34 @@ const Watch = ({ stream }) => {
   );
 };
 
+// Up and down, for putting a channel's streams in the order they should be tried
+const Move = ({ stream, onMove, first, last }) => (
+  <Group gap={0} wrap="nowrap" style={{ flexShrink: 0 }}>
+    <ActionIcon
+      size="xs"
+      variant="subtle"
+      color="gray"
+      aria-label={`Move ${stream.name} up`}
+      disabled={first}
+      onClick={() => onMove(stream.id, -1)}
+    >
+      <ArrowUp size={12} />
+    </ActionIcon>
+    <ActionIcon
+      size="xs"
+      variant="subtle"
+      color="gray"
+      aria-label={`Move ${stream.name} down`}
+      disabled={last}
+      onClick={() => onMove(stream.id, 1)}
+    >
+      <ArrowDown size={12} />
+    </ActionIcon>
+  </Group>
+);
+
 // One stream, with everything worth knowing about it on one line
-const StreamLine = ({ stream }) => (
+const StreamLine = ({ stream, move }) => (
   <Group
     gap={6}
     wrap="nowrap"
@@ -123,6 +157,7 @@ const StreamLine = ({ stream }) => (
       textDecoration: stream.removed ? 'line-through' : 'none',
     }}
   >
+    {move}
     <Watch stream={stream} />
     <Quality stream={stream} />
     <Text
@@ -149,7 +184,12 @@ const StreamLine = ({ stream }) => (
   </Group>
 );
 
-const Expanded = ({ row }) => (
+// The streams that can be moved: not one taken off, and not the fallback, which stays last
+const movable = (stream) => !stream.removed && !stream.custom;
+
+const Expanded = ({ row, onMove }) => {
+  const moving = row.streams.filter(movable);
+  return (
   <Box p="sm" style={{ background: 'rgba(0,0,0,0.18)' }}>
     {row.status === 'conflict' ? (
       <Stack gap={6}>
@@ -192,14 +232,34 @@ const Expanded = ({ row }) => (
           <Text size="xs" fw={700} c="dimmed" tt="uppercase">
             After · in the order they are tried
           </Text>
-          {row.streams.map((stream) => (
-            <StreamLine key={`${stream.id}-${stream.removed}`} stream={stream} />
-          ))}
+          {row.streams.map((stream) => {
+            const at = moving.indexOf(stream);
+            return (
+              <StreamLine
+                key={`${stream.id}-${stream.removed}`}
+                stream={stream}
+                move={
+                  at === -1 ? (
+                    // Keeps the names lined up with the ones that can move
+                    <Box w={44} style={{ flexShrink: 0 }} />
+                  ) : (
+                    <Move
+                      stream={stream}
+                      first={at === 0}
+                      last={at === moving.length - 1}
+                      onMove={(id, by) => onMove(row.key, id, by)}
+                    />
+                  )
+                }
+              />
+            );
+          })}
         </Stack>
       </SimpleGrid>
     )}
   </Box>
-);
+  );
+};
 
 const ChannelManagerTable = () => {
   const theme = useMantineTheme();
@@ -218,6 +278,8 @@ const ChannelManagerTable = () => {
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [ticked, setTicked] = useState(new Set());
+  // Streams put in another order by hand, by row: {key: [stream ids]}
+  const [orders, setOrders] = useState({});
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const tableRef = useRef(null);
@@ -232,6 +294,7 @@ const ChannelManagerTable = () => {
       setPlan(result);
       setPreviewed(JSON.stringify(withLevers));
       setTicked(new Set());
+      setOrders({});
       tableRef.current?.setSelectedTableIds?.([]);
       // Kept, so the page opens the way it was left
       API.saveChannelManagerSettings(withLevers).catch(() => {});
@@ -258,12 +321,24 @@ const ChannelManagerTable = () => {
   const leversChanged = levers && previewed && JSON.stringify(levers) !== previewed;
 
   const rows = useMemo(() => {
-    const all = (plan?.rows || []).map((row) => ({ ...row, id: row.key }));
+    const all = (plan?.rows || []).map((row) => {
+      const order = orders[row.key];
+      if (!order) return { ...row, id: row.key };
+      // The streams as they were put by hand; the fallback and anything taken off stay
+      // where the plan has them, at the end
+      const byId = Object.fromEntries(row.streams.map((s) => [s.id, s]));
+      const moved = order.map((id) => byId[id]).filter(Boolean);
+      const rest = row.streams.filter((s) => !movable(s));
+      return { ...row, id: row.key, streams: [...moved, ...rest], reordered: true };
+    });
     const byStatus = all.filter((row) =>
       show === 'all'
         ? true
         : show === 'changes'
-          ? row.status === 'new' || row.status === 'merge' || row.status === 'conflict'
+          ? row.status === 'new' ||
+            row.status === 'merge' ||
+            row.status === 'conflict' ||
+            row.reordered
           : row.status === show
     );
     const wanted = search.trim().toLowerCase();
@@ -273,7 +348,7 @@ const ChannelManagerTable = () => {
         .filter(Boolean)
         .some((name) => name.toLowerCase().includes(wanted))
     );
-  }, [plan, show, search]);
+  }, [plan, show, search, orders]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const paginatedRows = useMemo(
@@ -285,7 +360,11 @@ const ChannelManagerTable = () => {
   const tickedKeys = useMemo(
     () =>
       rows
-        .filter((row) => ticked.has(row.key) && (row.status === 'new' || row.status === 'merge'))
+        .filter(
+          (row) =>
+            ticked.has(row.key) &&
+            (row.status === 'new' || row.status === 'merge' || row.reordered)
+        )
         .map((row) => row.key),
     [rows, ticked]
   );
@@ -295,7 +374,10 @@ const ChannelManagerTable = () => {
     setBusy(true);
     setError(null);
     try {
-      await API.applyChannelManager(levers, tickedKeys);
+      const given = Object.fromEntries(
+        tickedKeys.filter((key) => orders[key]).map((key) => [key, orders[key]])
+      );
+      await API.applyChannelManager(levers, tickedKeys, given);
       await preview(levers);
     } catch (e) {
       setError(e?.body?.error || 'Could not apply those channels.');
@@ -303,6 +385,28 @@ const ChannelManagerTable = () => {
       setBusy(false);
     }
   };
+
+  // A stream moved one place up or down. The row is ticked with it: an order put by hand
+  // is something to apply, and would otherwise be easy to lose.
+  const moveStream = useCallback(
+    (key, id, by) => {
+      const row = (plan?.rows || []).find((r) => r.key === key);
+      if (!row) return;
+      const current = orders[key] || row.streams.filter(movable).map((s) => s.id);
+      const from = current.indexOf(id);
+      const to = from + by;
+      if (from === -1 || to < 0 || to >= current.length) return;
+      const next = [...current];
+      [next[from], next[to]] = [next[to], next[from]];
+      setOrders((all) => ({ ...all, [key]: next }));
+      setTicked((all) => {
+        const now = new Set(all).add(key);
+        tableRef.current?.setSelectedTableIds?.([...now]);
+        return now;
+      });
+    },
+    [plan, orders]
+  );
 
   const columns = useMemo(
     () => [
@@ -319,6 +423,11 @@ const ChannelManagerTable = () => {
               <Badge size="xs" variant="light" color={STATUS[r.status].color}>
                 {STATUS[r.status].label}
               </Badge>
+              {r.reordered && (
+                <Badge size="xs" variant="light" color="cyan">
+                  Reordered
+                </Badge>
+              )}
               {r.adds > 0 && (
                 <Text size="xs" c="green">
                   +{r.adds}
@@ -450,7 +559,7 @@ const ChannelManagerTable = () => {
     manualFiltering: false,
     manualPagination: true,
     onRowSelectionChange: (selected) => setTicked(new Set(selected)),
-    expandedRowRenderer: ({ row }) => <Expanded row={row.original} />,
+    expandedRowRenderer: ({ row }) => <Expanded row={row.original} onMove={moveStream} />,
     headerCellRenderFns: {
       status: renderHeaderCell,
       before: renderHeaderCell,
