@@ -43,8 +43,20 @@ export const tunerCountIn = (uri) => {
   return found ? Number(found[1]) : null;
 };
 
-export const withTunerCount = (uri, count) =>
-  String(uri || '').replace(/\/tuners\/\d+/, `/tuners/${count}`);
+// A tuner of ours, whichever way it was added. Without a count it is on Dispatcharr's own
+// /hdhr address, where the server is told to work the number out and arrives at one per
+// custom stream; with one it is on /proxy/hdhr/.../tuners/N.
+export const isOurTuner = (uri) => /\/(proxy\/)?hdhr\//.test(String(uri || ''));
+
+export const withTunerCount = (uri, count) => {
+  const address = String(uri || '');
+  if (/\/tuners\/\d+/.test(address)) {
+    return address.replace(/\/tuners\/\d+/, `/tuners/${count}`);
+  }
+  // Giving a count to one that had none moves it onto the address that carries one,
+  // keeping whatever output profile it was already using
+  return `${address.replace('/hdhr/', '/proxy/hdhr/')}/tuners/${count}`;
+};
 
 export const guideForTuner = (uri, base, skipCachedLogos = true) => {
   const parts = String(uri || '')
@@ -310,15 +322,17 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                       {/* How many connections this tuner offers the server. On one of ours
                           the number is part of the address, so it can be changed here
                           rather than by removing the tuner and adding it again. */}
-                      {tunerCountIn(tuner.uri) !== null ? (
+                      {isOurTuner(tuner.uri) ? (
                         <NumberInput
                           size="xs"
-                          w={92}
+                          w={110}
                           min={1}
                           max={data.max_tuners || 64}
                           aria-label={`Tuners for ${tuner.title}`}
+                          // One added without a count has none in its address to show
+                          placeholder={`${tuner.tuners || '?'} counted`}
                           disabled={busy}
-                          value={tunerCountIn(tuner.uri)}
+                          value={tunerCountIn(tuner.uri) ?? ''}
                           onChange={(value) => {
                             const wanted = Number(value);
                             if (!wanted || wanted === tunerCountIn(tuner.uri)) return;
