@@ -1,33 +1,36 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Check, Library, RefreshCw, Search } from 'lucide-react';
 import {
+  ActionIcon,
   Alert,
   Badge,
   Box,
   Button,
-  Checkbox,
+  Center,
   Group,
-  Loader,
-  SegmentedControl,
+  Image,
+  LoadingOverlay,
+  NativeSelect,
+  Pagination,
+  Paper,
+  Select,
   Stack,
-  Table,
   Text,
   TextInput,
+  Tooltip,
+  useMantineTheme,
 } from '@mantine/core';
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
+import { CustomTable, useTable } from './CustomTable';
 import LogoPicker from './LogoPicker';
 import LogoSources from './LogoSources';
 import { sourceColor } from './logoLibraryColors';
 
-// How many rows are drawn at once. Every row can carry several images from other sites,
-// and a thousand channels drawn together is a page that takes a while to settle.
-const PAGE = 100;
+// Laid out like the Channel Logos and VOD Logos tabs beside it, down to the sizes: the same
+// panel, toolbar, table and pagination, so moving between the three reads as one page.
 
-const SOURCE_LABELS = {
-  'tv-logos': 'tv-logos',
-  'iptv-org': 'iptv-org',
-};
-
+const PAGE_SIZES = ['25', '50', '100', '250'];
 
 const whenBuilt = (seconds) => {
   if (!seconds) return 'never';
@@ -37,85 +40,90 @@ const whenBuilt = (seconds) => {
   return `${Math.round(ago / 86400)} days ago`;
 };
 
-const Thumb = ({ url, size = 56, onClick, selected }) => (
-  <Box
-    onClick={onClick}
-    style={{
-      width: size,
-      height: size * 0.62,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      // A logo is often white on nothing, so it sits on a mid tone that suits both
-      background: 'rgba(128,128,128,0.18)',
-      borderRadius: 4,
-      cursor: onClick ? 'pointer' : 'default',
-      outline: selected ? '2px solid var(--mantine-color-teal-5)' : 'none',
-      flexShrink: 0,
+// A logo the size the other tabs show one, growing under the pointer the way they do
+const Preview = ({ url, alt, width = 40, height = 30, grow = 1.5 }) => (
+  <Image
+    src={url}
+    alt={alt || ''}
+    width={width}
+    height={height}
+    w={width}
+    h={height}
+    fit="contain"
+    fallbackSrc="/logo.png"
+    style={{ transition: 'transform 0.3s ease', cursor: 'pointer' }}
+    onMouseEnter={(e) => {
+      e.target.style.transform = `scale(${grow})`;
     }}
-  >
-    {url ? (
-      <img
-        src={url}
-        alt=""
-        loading="lazy"
-        style={{ maxWidth: '92%', maxHeight: '92%', objectFit: 'contain' }}
-      />
-    ) : (
-      <Text size="xs" c="dimmed">
-        none
-      </Text>
-    )}
-  </Box>
+    onMouseLeave={(e) => {
+      e.target.style.transform = 'scale(1)';
+    }}
+  />
 );
 
-// What a suggestion is, in a line: which collection, which country, and its size where
-// the collection says, which is the quickest way to tell a proper logo from a thumbnail
-const About = ({ suggestion }) => (
-  <Group gap={4} wrap="nowrap">
-    <Badge size="xs" variant="light" color={sourceColor(suggestion.source)}>
-      {SOURCE_LABELS[suggestion.source] || suggestion.source}
-    </Badge>
-    {suggestion.country && (
-      <Badge size="xs" variant="outline" color="gray">
-        {suggestion.country}
+// Where a suggestion came from, and what else is known about it, in one line of badges
+const About = ({ suggestion, byHand }) => {
+  if (byHand) {
+    return (
+      <Badge size="xs" variant="light" color="grape">
+        {suggestion.source === 'upload'
+          ? 'uploaded'
+          : suggestion.source === 'link'
+            ? 'your link'
+            : 'chosen by hand'}
       </Badge>
-    )}
-    {/* Which of your guides, since there can be several with an icon each */}
-    {suggestion.guide && (
-      <Text size="xs" c="dimmed">
-        {suggestion.guide}
-      </Text>
-    )}
-    {suggestion.width && suggestion.height && (
-      <Text size="xs" c="dimmed">
-        {suggestion.width}×{suggestion.height}
-      </Text>
-    )}
-    {suggestion.closed && (
-      <Badge size="xs" variant="light" color="orange">
-        closed
+    );
+  }
+  return (
+    <Group gap={4} wrap="nowrap">
+      <Badge size="xs" variant="light" color={sourceColor(suggestion.source)}>
+        {suggestion.source}
       </Badge>
-    )}
-  </Group>
-);
+      {suggestion.country && (
+        <Badge size="xs" variant="outline" color="gray">
+          {suggestion.country}
+        </Badge>
+      )}
+      {/* Which of your guides, since there can be several with an icon each */}
+      {suggestion.guide && (
+        <Text size="xs" c="dimmed" lineClamp={1}>
+          {suggestion.guide}
+        </Text>
+      )}
+      {suggestion.width && suggestion.height && (
+        <Text size="xs" c="dimmed">
+          {suggestion.width}×{suggestion.height}
+        </Text>
+      )}
+      {suggestion.closed && (
+        <Badge size="xs" variant="light" color="orange">
+          closed
+        </Badge>
+      )}
+    </Group>
+  );
+};
 
 const LogoLibraryTable = () => {
+  const theme = useMantineTheme();
+
   const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [show, setShow] = useState('suggested');
   const [search, setSearch] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [page, setPage] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   // Which suggestion is chosen for each channel, by index; the first unless picked
   const [picked, setPicked] = useState({});
-  // The channels ticked to be applied
-  const [ticked, setTicked] = useState({});
-  const [confirming, setConfirming] = useState(false);
-  const [building, setBuilding] = useState(false);
   // A logo chosen by hand for a channel -- searched for, linked or uploaded -- which wins
   // over anything suggested for it
   const [custom, setCustom] = useState({});
+  // The channels ticked to be applied
+  const [ticked, setTicked] = useState(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const [building, setBuilding] = useState(false);
   // The channel a logo is being chosen for by hand, if any
   const [pickerRow, setPickerRow] = useState(null);
   // The collections panel, folded away until wanted
@@ -124,35 +132,62 @@ const LogoLibraryTable = () => {
   const [sourcesChanged, setSourcesChanged] = useState(false);
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       setData(await API.getLogoLibrary(show));
       setError(null);
     } catch (e) {
       setError(e?.body?.error || 'Could not load the logo library.');
+    } finally {
+      setLoading(false);
     }
   }, [show]);
 
   useEffect(() => {
-    setPage(0);
+    setPageIndex(0);
     load();
   }, [load]);
 
   // Searched here rather than asked for again: the list is already loaded, and asking the
   // server on every keystroke would send a request per letter
   const rows = useMemo(() => {
-    const all = data?.channels || [];
+    const all = (data?.channels || []).map((row) => ({ ...row, id: row.channel_id }));
     const wanted = search.trim().toLowerCase();
     return wanted ? all.filter((row) => row.name.toLowerCase().includes(wanted)) : all;
   }, [data, search]);
-  const shown = rows.slice(page * PAGE, (page + 1) * PAGE);
-  const chosenFor = (row) =>
-    custom[row.channel_id] || row.suggestions[picked[row.channel_id] || 0];
+
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const paginatedRows = useMemo(
+    () => rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
+    [rows, pageIndex, pageSize]
+  );
+
+  const chosenFor = useCallback(
+    (row) => custom[row.channel_id] || row.suggestions[picked[row.channel_id] || 0],
+    [custom, picked]
+  );
 
   const tickedRows = useMemo(
-    () => rows.filter((row) => ticked[row.channel_id] && chosenFor(row)),
-    // chosenFor reads picked, which is listed
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, ticked, picked, custom]
+    () => rows.filter((row) => ticked.has(row.channel_id) && chosenFor(row)),
+    [rows, ticked, chosenFor]
+  );
+
+  // The table keeps what is ticked, the way the other tabs' tables do; it is told here
+  // when a tick is made from somewhere else, such as choosing a logo by hand
+  const tableRef = React.useRef(null);
+  const setTickedEverywhere = useCallback((next) => {
+    setTicked(next);
+    tableRef.current?.setSelectedTableIds?.([...next]);
+  }, []);
+
+  const tick = useCallback(
+    (channelId, on) => {
+      const next = new Set(ticked);
+      if (on) next.add(channelId);
+      else next.delete(channelId);
+      setTickedEverywhere(next);
+    },
+    [ticked, setTickedEverywhere]
   );
 
   // Downloading the collections runs in the background, so the page asks until the
@@ -167,6 +202,7 @@ const LogoLibraryTable = () => {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         const status = await API.getLogoLibraryStatus();
         if (status.built_at && status.built_at > before) {
+          setSourcesChanged(false);
           await load();
           return;
         }
@@ -193,7 +229,7 @@ const LogoLibraryTable = () => {
             : { channel_id: row.channel_id, url: chosen.url, name: chosen.name };
         })
       );
-      setTicked({});
+      setTickedEverywhere(new Set());
       setPicked({});
       setCustom({});
       await load();
@@ -204,259 +240,372 @@ const LogoLibraryTable = () => {
     }
   };
 
-  const tickAllShown = (on) => {
-    const next = { ...ticked };
-    rows.forEach((row) => {
-      if (row.suggestions.length) next[row.channel_id] = on;
-    });
-    setTicked(next);
-  };
+  const columns = useMemo(
+    () => [
+      {
+        // Drawn by the table itself, the same small box with shift-click ranges that the
+        // other tabs have; what is ticked comes back through onRowSelectionChange
+        id: 'select',
+        size: 50,
+        enableSorting: false,
+      },
+      {
+        header: 'Channel',
+        accessorKey: 'name',
+        size: 260,
+        cell: ({ row }) => (
+          <Box style={{ minWidth: 0 }}>
+            <Text fw={500} size="sm" lineClamp={1}>
+              {row.original.name}
+            </Text>
+            {row.original.number != null && (
+              <Text size="xs" c="dimmed">
+                {row.original.number}
+              </Text>
+            )}
+          </Box>
+        ),
+      },
+      {
+        header: 'Now',
+        accessorKey: 'current',
+        size: 200,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+            <Center style={{ width: 40, flexShrink: 0 }}>
+              {row.original.current ? (
+                <Preview url={row.original.current.url} alt={row.original.current.name} />
+              ) : (
+                <Text size="xs" c="dimmed">
+                  —
+                </Text>
+              )}
+            </Center>
+            <Text size="xs" c="dimmed" lineClamp={1}>
+              {row.original.current?.name || 'no logo'}
+            </Text>
+          </Group>
+        ),
+      },
+      {
+        header: 'Suggested',
+        accessorKey: 'suggestions',
+        grow: true,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const original = row.original;
+          const chosen = chosenFor(original);
+          if (!chosen) {
+            return (
+              <Text size="xs" c="dimmed">
+                Not suggested by any collection
+              </Text>
+            );
+          }
+          const current = picked[original.channel_id] || 0;
+          return (
+            <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+              <Center style={{ width: 40, flexShrink: 0 }}>
+                <Preview url={chosen.url} alt={chosen.name} />
+              </Center>
+              <About suggestion={chosen} byHand={!!custom[original.channel_id]} />
+              {/* The others, small, to be chosen instead */}
+              {!custom[original.channel_id] && original.suggestions.length > 1 && (
+                <Group gap={4} wrap="nowrap">
+                  {original.suggestions.map((suggestion, index) => (
+                    <Box
+                      key={suggestion.url}
+                      role="button"
+                      aria-label={`Choose ${suggestion.source} logo ${index + 1} for ${original.name}`}
+                      onClick={(event) => {
+                        // A pick is not a tick: the row stays as it was
+                        event.stopPropagation();
+                        setPicked({ ...picked, [original.channel_id]: index });
+                      }}
+                      style={{
+                        borderRadius: 3,
+                        padding: 1,
+                        outline:
+                          index === current
+                            ? `1px solid ${theme.tailwind.green[5]}`
+                            : '1px solid transparent',
+                        display: 'flex',
+                      }}
+                    >
+                      <Preview
+                        url={suggestion.url}
+                        alt={suggestion.name}
+                        width={28}
+                        height={20}
+                        grow={2}
+                      />
+                    </Box>
+                  ))}
+                </Group>
+              )}
+            </Group>
+          );
+        },
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        size: 80,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <Tooltip label="Search every logo, or use a link or a file">
+            <ActionIcon
+              variant="transparent"
+              size="sm"
+              color={theme.tailwind.blue[6]}
+              aria-label={`Find a logo for ${row.original.name}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                setPickerRow(row.original);
+              }}
+            >
+              <Search size={18} />
+            </ActionIcon>
+          </Tooltip>
+        ),
+      },
+    ],
+    [picked, custom, chosenFor, theme]
+  );
 
-  if (!data) return <Loader size="sm" m="md" />;
+  const renderHeaderCell = (header) => (
+    <Text size="sm" name={header.id}>
+      {header.column.columnDef.header}
+    </Text>
+  );
 
-  const status = data.status || {};
+  const table = useTable({
+    columns,
+    data: paginatedRows,
+    allRowIds: paginatedRows.map((row) => row.id),
+    enablePagination: false,
+    enableRowSelection: true,
+    onRowSelectionChange: (ids) => setTicked(new Set(ids)),
+    enableRowVirtualization: false,
+    renderTopToolbar: false,
+    manualSorting: false,
+    manualFiltering: false,
+    manualPagination: true,
+    headerCellRenderFns: {
+      name: renderHeaderCell,
+      current: renderHeaderCell,
+      suggestions: renderHeaderCell,
+      actions: renderHeaderCell,
+    },
+  });
+
+  useEffect(() => {
+    tableRef.current = table;
+  }, [table]);
+
+  const status = data?.status || {};
+  const first = rows.length ? pageIndex * pageSize + 1 : 0;
+  const last = Math.min((pageIndex + 1) * pageSize, rows.length);
 
   return (
-    <Stack gap="sm" maw={1200} mx="auto" px="md">
-      <Group justify="space-between" wrap="wrap">
-        <Text size="sm" c="dimmed">
-          {status.built
-            ? `${Object.entries(status.counts || {})
-                .map(([source, count]) => `${count.toLocaleString()} from ${source}`)
-                .join(' · ')} · updated ${whenBuilt(status.built_at)}`
-            : 'The logo lists have not been downloaded yet.'}
-        </Text>
-        <Group gap="xs">
-          <Button
-            size="xs"
-            variant="subtle"
-            onClick={() => setShowSources(!showSources)}
-          >
-            {showSources ? 'Hide collections' : 'Collections'}
-          </Button>
-          <Button
-            size="xs"
-            variant={sourcesChanged ? 'filled' : 'light'}
-            loading={building}
-            onClick={async () => {
-              await rebuild();
-              setSourcesChanged(false);
+    <>
+      <Box
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          padding: '0px',
+          minHeight: 'calc(100vh - 200px)',
+          minWidth: '900px',
+        }}
+      >
+        <Stack gap="md" style={{ maxWidth: '1200px', width: '100%' }}>
+          <Paper
+            style={{
+              backgroundColor: '#27272A',
+              border: '1px solid #3f3f46',
+              borderRadius: 'var(--mantine-radius-md)',
             }}
           >
-            {status.built ? 'Update logo lists' : 'Download logo lists'}
-          </Button>
-        </Group>
-      </Group>
+            {/* Top toolbar */}
+            <Box
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '16px',
+                borderBottom: '1px solid #3f3f46',
+              }}
+            >
+              <Group gap="sm">
+                <TextInput
+                  placeholder="Filter by name..."
+                  aria-label="Search channels"
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.currentTarget.value);
+                    setPageIndex(0);
+                  }}
+                  size="xs"
+                  style={{ width: 200 }}
+                />
+                <Select
+                  aria-label="Which channels"
+                  value={show}
+                  onChange={(value) => value && setShow(value)}
+                  allowDeselect={false}
+                  data={[
+                    { value: 'suggested', label: 'With a suggestion' },
+                    { value: 'missing', label: 'Without a logo' },
+                    { value: 'all', label: 'All channels' },
+                  ]}
+                  size="xs"
+                  style={{ width: 170 }}
+                />
+              </Group>
 
-      {showSources && (
-        <LogoSources onChanged={() => setSourcesChanged(true)} />
-      )}
-      {sourcesChanged && (
-        <Alert color="blue">
-          The collections have changed. Update the logo lists to use them.
-        </Alert>
-      )}
+              <Group gap="sm">
+                <Button
+                  leftSection={<Library size={16} />}
+                  variant="default"
+                  size="xs"
+                  onClick={() => setShowSources(!showSources)}
+                >
+                  {showSources ? 'Hide Collections' : 'Collections'}
+                </Button>
 
-      {Object.entries(status.errors || {}).map(([source, message]) => (
-        <Alert key={source} color="orange">
-          {source} could not be reached, so its logos are missing: {message}
-        </Alert>
-      ))}
-      {error && <Alert color="red">{error}</Alert>}
+                <Button
+                  leftSection={<RefreshCw size={16} />}
+                  variant={sourcesChanged ? 'filled' : 'light'}
+                  size="xs"
+                  loading={building}
+                  onClick={rebuild}
+                >
+                  {status.built ? 'Update Lists' : 'Download Lists'}
+                </Button>
 
-      <Text size="xs" c="dimmed">
-        What each channel has now is on the left, and what it could have on the
-        right, best first. First the collections, looked up by name: the
-        channel&apos;s own country first, then tv-logos (whose links last), your
-        added collections, then iptv-org. After them, to fall back on, the logos
-        its streams came with and the icons from your guides. Click another to
-        choose it. Nothing changes until you tick channels and apply them.
-      </Text>
+                <Button
+                  leftSection={<Check size={18} />}
+                  variant="light"
+                  size="xs"
+                  p={5}
+                  disabled={!tickedRows.length || busy}
+                  loading={busy}
+                  onClick={() => setConfirming(true)}
+                  color={theme.tailwind.green[5]}
+                  style={{
+                    borderWidth: '1px',
+                    borderColor: theme.tailwind.green[5],
+                    color: 'white',
+                  }}
+                >
+                  Apply {tickedRows.length ? `(${tickedRows.length})` : ''}
+                </Button>
+              </Group>
+            </Box>
 
-      <Group justify="space-between" wrap="wrap">
-        <Group gap="xs">
-          <SegmentedControl
-            size="xs"
-            value={show}
-            onChange={setShow}
-            data={[
-              { value: 'suggested', label: 'With a suggestion' },
-              { value: 'missing', label: 'Without a logo' },
-              { value: 'all', label: 'All channels' },
-            ]}
-          />
-          <TextInput
-            size="xs"
-            w={200}
-            placeholder="Search channels"
-            aria-label="Search channels"
-            value={search}
-            onChange={(event) => {
-              setSearch(event.currentTarget.value);
-              setPage(0);
-            }}
-          />
-        </Group>
-        <Group gap="xs">
-          <Button size="xs" variant="subtle" onClick={() => tickAllShown(true)}>
-            Tick all
-          </Button>
-          <Button size="xs" variant="subtle" onClick={() => setTicked({})}>
-            Untick all
-          </Button>
-          <Button
-            size="xs"
-            disabled={!tickedRows.length || busy}
-            loading={busy}
-            onClick={() => setConfirming(true)}
-          >
-            Apply {tickedRows.length || ''}
-          </Button>
-        </Group>
-      </Group>
+            {/* What the lists hold, and anything that went wrong with them */}
+            <Box
+              style={{
+                padding: '8px 16px',
+                borderBottom: '1px solid #3f3f46',
+              }}
+            >
+              <Text size="xs" c="dimmed">
+                {status.built
+                  ? `${Object.entries(status.counts || {})
+                      .map(([source, count]) => `${count.toLocaleString()} from ${source}`)
+                      .join(' · ')} · updated ${whenBuilt(status.built_at)}`
+                  : 'The logo lists have not been downloaded yet. Your own streams and guides are shown until they are.'}
+                {' — '}
+                Collections first, then your streams&apos; logos, then your guides.
+                Nothing changes until channels are ticked and applied.
+              </Text>
+            </Box>
 
-      {rows.length === 0 ? (
-        <Text size="sm" c="dimmed">
-          {status.built
-            ? 'Nothing to show.'
-            : 'Download the logo lists to see what they have for your channels.'}
-        </Text>
-      ) : (
-        <Table.ScrollContainer minWidth={760} type="native">
-          <Table striped withTableBorder verticalSpacing={6} fz="sm">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th w={36} />
-                <Table.Th w="26%">Channel</Table.Th>
-                <Table.Th w="22%">Now</Table.Th>
-                <Table.Th>Suggested</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {shown.map((row) => {
-                const chosen = chosenFor(row);
-                return (
-                  <Table.Tr key={row.channel_id}>
-                    <Table.Td>
-                      <Checkbox
-                        aria-label={`Use the suggested logo for ${row.name}`}
-                        disabled={!chosen}
-                        checked={!!ticked[row.channel_id]}
-                        onChange={(event) =>
-                          setTicked({
-                            ...ticked,
-                            [row.channel_id]: event.currentTarget.checked,
-                          })
-                        }
-                      />
-                    </Table.Td>
-                    <Table.Td style={{ wordBreak: 'break-word' }}>
-                      <Text size="sm">{row.name}</Text>
-                      {row.number != null && (
-                        <Text size="xs" c="dimmed">
-                          {row.number}
-                        </Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Thumb url={row.current?.url} />
-                        <Text size="xs" c="dimmed" lineClamp={2}>
-                          {row.current?.name || 'no logo'}
-                        </Text>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap" justify="space-between">
-                      {chosen ? (
-                        <Group gap="xs" wrap="nowrap" align="center">
-                          <Thumb
-                            url={chosen.url}
-                            size={72}
-                            selected={!!ticked[row.channel_id]}
-                          />
-                          <Stack gap={4}>
-                            {custom[row.channel_id] ? (
-                              <Badge size="xs" variant="light" color="grape">
-                                {chosen.source === 'upload'
-                                  ? 'uploaded'
-                                  : chosen.source === 'link'
-                                    ? 'your link'
-                                    : 'chosen by hand'}
-                              </Badge>
-                            ) : (
-                              <About suggestion={chosen} />
-                            )}
-                            {/* The others, small, to be chosen instead */}
-                            {row.suggestions.length > 1 && (
-                              <Group gap={4} wrap="wrap">
-                                {row.suggestions.map((suggestion, index) => (
-                                  <Thumb
-                                    key={suggestion.url}
-                                    url={suggestion.url}
-                                    size={34}
-                                    selected={
-                                      index === (picked[row.channel_id] || 0)
-                                    }
-                                    onClick={() =>
-                                      setPicked({
-                                        ...picked,
-                                        [row.channel_id]: index,
-                                      })
-                                    }
-                                  />
-                                ))}
-                              </Group>
-                            )}
-                          </Stack>
-                        </Group>
-                      ) : (
-                        <Text size="xs" c="dimmed">
-                          Not suggested by any collection
-                        </Text>
-                      )}
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        aria-label={`Find a logo for ${row.name}`}
-                        onClick={() => setPickerRow(row)}
-                      >
-                        Search
-                      </Button>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
+            {(error || sourcesChanged || Object.keys(status.errors || {}).length > 0) && (
+              <Stack gap="xs" p="md" style={{ borderBottom: '1px solid #3f3f46' }}>
+                {error && <Alert color="red">{error}</Alert>}
+                {Object.entries(status.errors || {}).map(([source, message]) => (
+                  <Alert key={source} color="orange">
+                    {source} could not be reached, so its logos are missing: {message}
+                  </Alert>
+                ))}
+                {sourcesChanged && (
+                  <Alert color="blue">
+                    The collections have changed. Update the lists to use them.
+                  </Alert>
+                )}
+              </Stack>
+            )}
 
-      {rows.length > PAGE && (
-        <Group justify="center" gap="xs">
-          <Button
-            size="xs"
-            variant="subtle"
-            disabled={page === 0}
-            onClick={() => setPage(page - 1)}
-          >
-            Previous
-          </Button>
-          <Text size="xs" c="dimmed">
-            {page * PAGE + 1}–{Math.min((page + 1) * PAGE, rows.length)} of{' '}
-            {rows.length}
-          </Text>
-          <Button
-            size="xs"
-            variant="subtle"
-            disabled={(page + 1) * PAGE >= rows.length}
-            onClick={() => setPage(page + 1)}
-          >
-            Next
-          </Button>
-        </Group>
-      )}
+            {showSources && (
+              <Box p="md" style={{ borderBottom: '1px solid #3f3f46' }}>
+                <LogoSources onChanged={() => setSourcesChanged(true)} />
+              </Box>
+            )}
+
+            {/* Table container */}
+            <Box
+              style={{
+                position: 'relative',
+                borderRadius: '0 0 var(--mantine-radius-md) var(--mantine-radius-md)',
+              }}
+            >
+              <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
+                <div>
+                  <LoadingOverlay visible={loading} />
+                  {rows.length === 0 && !loading ? (
+                    <Center p="xl">
+                      <Text size="sm" c="dimmed">
+                        {search ? 'No channel by that name.' : 'Nothing to show.'}
+                      </Text>
+                    </Center>
+                  ) : (
+                    <CustomTable table={table} />
+                  )}
+                </div>
+              </Box>
+
+              {/* Pagination Controls */}
+              <Box
+                style={{
+                  position: 'sticky',
+                  bottom: 0,
+                  zIndex: 3,
+                  backgroundColor: '#27272A',
+                  borderTop: '1px solid #3f3f46',
+                }}
+              >
+                <Group gap={5} justify="center" style={{ padding: 8 }}>
+                  <Text size="xs">Page Size</Text>
+                  <NativeSelect
+                    size="xxs"
+                    value={String(pageSize)}
+                    data={PAGE_SIZES}
+                    onChange={(event) => {
+                      setPageSize(parseInt(event.target.value, 10));
+                      setPageIndex(0);
+                    }}
+                    style={{ paddingRight: 20 }}
+                  />
+                  <Pagination
+                    total={pageCount}
+                    value={pageIndex + 1}
+                    onChange={(page) => setPageIndex(page - 1)}
+                    size="xs"
+                    withEdges
+                    style={{ paddingRight: 20 }}
+                  />
+                  <Text size="xs">
+                    {rows.length ? `${first} to ${last} of ${rows.length}` : '0 channels'}
+                  </Text>
+                </Group>
+              </Box>
+            </Box>
+          </Paper>
+        </Stack>
+      </Box>
 
       <LogoPicker
         row={pickerRow}
@@ -465,7 +614,7 @@ const LogoLibraryTable = () => {
         onChoose={(choice) => {
           // Chosen for this channel and ticked, since choosing it is the point
           setCustom({ ...custom, [pickerRow.channel_id]: choice });
-          setTicked({ ...ticked, [pickerRow.channel_id]: true });
+          tick(pickerRow.channel_id, true);
           setPickerRow(null);
         }}
       />
@@ -474,13 +623,11 @@ const LogoLibraryTable = () => {
         opened={confirming}
         onClose={() => setConfirming(false)}
         onConfirm={apply}
-        title={`Give ${tickedRows.length} channel${
-          tickedRows.length === 1 ? '' : 's'
-        } a new logo?`}
-        message="Each ticked channel gets the logo shown for it on the right. The logo it had stays in Dispatcharr, so it can be given back from the channel itself."
+        title={`Give ${tickedRows.length} channel${tickedRows.length === 1 ? '' : 's'} a new logo?`}
+        message="Each ticked channel gets the logo shown for it. The logo it had stays in Dispatcharr, so it can be given back from the channel itself."
         confirmLabel="Apply"
       />
-    </Stack>
+    </>
   );
 };
 

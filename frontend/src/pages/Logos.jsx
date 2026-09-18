@@ -60,9 +60,12 @@ const LogosPage = () => {
             >
               Logos
             </Text>
-            <Text size="sm" c="dimmed">
-              ({logoCount} {logoCount !== 1 ? 'logos' : 'logo'})
-            </Text>
+            {/* Find Logos is about channels, not a count of logos kept */}
+            {activeTab !== 'library' && (
+              <Text size="sm" c="dimmed">
+                ({logoCount} {logoCount !== 1 ? 'logos' : 'logo'})
+              </Text>
+            )}
           </Flex>
 
           <Tabs value={activeTab} onChange={setActiveTab} variant="pills">

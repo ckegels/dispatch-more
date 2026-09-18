@@ -31,6 +31,57 @@ vi.mock('../../ConfirmationDialog', () => ({
     ) : null,
 }));
 
+// The real table is heavy and drawn elsewhere; this one draws the same cells, so what the
+// tests look at is what the page shows
+vi.mock('../CustomTable', async () => {
+  const { useState } = await import('react');
+  // The tick box is drawn by the real table itself for a "select" column, and what is
+  // ticked comes back through onRowSelectionChange; this does the same
+  const CustomTable = ({ table }) => {
+    const [ticked, setTicked] = useState(new Set());
+    return (
+      <div>
+        {table.data.map((original) => (
+          <div key={original.id}>
+            {table.columns.map((column) =>
+              column.id === 'select' ? (
+                <input
+                  key="select"
+                  type="checkbox"
+                  aria-label={`Use the suggested logo for ${original.name}`}
+                  checked={ticked.has(original.id)}
+                  onChange={(e) => {
+                    const next = new Set(ticked);
+                    if (e.target.checked) next.add(original.id);
+                    else next.delete(original.id);
+                    setTicked(next);
+                    table.onRowSelectionChange([...next]);
+                  }}
+                />
+              ) : (
+                <div key={column.id || column.accessorKey}>
+                  {column.cell({ row: { original } })}
+                </div>
+              )
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+  return {
+    useTable: (options) => ({ ...options, setSelectedTableIds: () => {} }),
+    CustomTable,
+  };
+});
+
+vi.mock('lucide-react', () => ({
+  Check: () => null,
+  Library: () => null,
+  RefreshCw: () => null,
+  Search: () => null,
+}));
+
 vi.mock('@mantine/core', () => {
   const Table = ({ children }) => <table>{children}</table>;
   Table.Thead = ({ children }) => <thead>{children}</thead>;
@@ -41,6 +92,47 @@ vi.mock('@mantine/core', () => {
   Table.ScrollContainer = ({ children }) => <div>{children}</div>;
   const box = ({ children, onClick }) => <div onClick={onClick}>{children}</div>;
   return {
+    ActionIcon: ({ children, onClick, ...rest }) => (
+      <button aria-label={rest['aria-label']} onClick={onClick}>
+        {children}
+      </button>
+    ),
+    Center: box,
+    Image: ({ src, alt }) => <img src={src} alt={alt} />,
+    LoadingOverlay: () => null,
+    NativeSelect: ({ value, onChange, data }) => (
+      <select aria-label="Page size" value={value} onChange={onChange}>
+        {data.map((option) => (
+          <option key={option}>{option}</option>
+        ))}
+      </select>
+    ),
+    Pagination: ({ total, value, onChange }) => (
+      <div>
+        <span>
+          page {value} of {total}
+        </span>
+        <button onClick={() => onChange(value + 1)}>next page</button>
+      </div>
+    ),
+    Paper: box,
+    Select: ({ value, onChange, data, ...rest }) => (
+      <select
+        aria-label={rest['aria-label']}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {data.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    ),
+    Tooltip: ({ children }) => children,
+    useMantineTheme: () => ({
+      tailwind: { green: { 5: 'green' }, blue: { 6: 'blue' } },
+    }),
     Alert: ({ children }) => <div role="alert">{children}</div>,
     Badge: ({ children }) => <span>{children}</span>,
     Box: ({ children, onClick, ...rest }) => (
@@ -187,7 +279,7 @@ describe('LogoLibraryTable', () => {
     fireEvent.click(
       screen.getByLabelText('Use the suggested logo for ┃BE┃ Eén')
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Apply 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('Give 1 channel a new logo?');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
@@ -201,14 +293,13 @@ describe('LogoLibraryTable', () => {
 
   it('applies another suggestion when one is chosen instead', async () => {
     API.applyLogoLibrary.mockResolvedValue({ updated: 1, created_logos: 1 });
-    const { container } = render(<LogoLibraryTable />);
+    render(<LogoLibraryTable />);
     await screen.findByText('┃FR┃ TFX');
 
     // The second of TFX's two, which is the Belgian one
-    const small = [...container.querySelectorAll(`img[src="${TFX_BE}"]`)];
-    fireEvent.click(small[small.length - 1].parentElement);
+    fireEvent.click(screen.getByLabelText('Choose tv-logos logo 2 for ┃FR┃ TFX'));
     fireEvent.click(screen.getByLabelText('Use the suggested logo for ┃FR┃ TFX'));
-    fireEvent.click(screen.getByRole('button', { name: 'Apply 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
     fireEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', {
         name: 'Apply',
@@ -276,7 +367,7 @@ describe('LogoLibraryTable', () => {
     fireEvent.click(await screen.findByLabelText('Use TV Angers'));
 
     // Chosen and ticked, since choosing it is the point; applied with the rest
-    fireEvent.click(screen.getByRole('button', { name: 'Apply 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
     fireEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', {
         name: 'Apply',
@@ -301,7 +392,7 @@ describe('LogoLibraryTable', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use this link' }));
 
     expect(screen.getByText('your link')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
     fireEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', {
         name: 'Apply',
@@ -349,7 +440,7 @@ describe('LogoLibraryTable', () => {
 
     await waitFor(() => expect(API.uploadLogo).toHaveBeenCalledWith(file, 'Eén'));
     expect(await screen.findByText('uploaded')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
     fireEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', {
         name: 'Apply',
@@ -370,7 +461,7 @@ describe('LogoLibraryTable', () => {
     render(<LogoLibraryTable />);
 
     expect(
-      await screen.findByRole('button', { name: 'Download logo lists' })
+      await screen.findByRole('button', { name: 'Download Lists' })
     ).toBeInTheDocument();
   });
 
