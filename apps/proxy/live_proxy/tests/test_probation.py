@@ -17,7 +17,19 @@ from apps.m3u.connection_pool import (
 )
 from apps.m3u.models import M3UAccount, M3UAccountProfile, ServerGroup
 from apps.m3u.serializers import M3UAccountSerializer
-from apps.proxy.live_proxy import probation
+from apps.proxy.live_proxy import media_servers, probation
+
+# Waits that exist to be kind to a real media server, and cost only time here. Set once,
+# in the module the others import, so every test file gets them.
+#
+# DEVICE_WAIT_SECONDS is the one that matters: a request a server cannot place waits for it
+# to catch up, and there are hundreds of those in here.
+media_servers.DEVICE_WAIT_SECONDS = 0
+media_servers.SCAN_SECONDS = 0
+media_servers.MOVE_SETTLE = 0
+# Some of these reach a server that is not there on purpose; waiting for it to not answer
+# proves nothing
+media_servers.REQUEST_TIMEOUT = 0.01
 from apps.proxy.live_proxy.constants import ChannelMetadataField, ChannelState
 from apps.proxy.live_proxy.redis_keys import RedisKeys
 

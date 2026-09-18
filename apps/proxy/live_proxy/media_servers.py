@@ -1093,9 +1093,41 @@ def sync_tuner(server, device_id, dvr_id=None):
         # Jellyfin rescans its tuners while refreshing the guide, and has no channel map
         return refresh_guide(server)
     scanned = _post(server, f"/media/grabbers/devices/{device_id}/scan")
-    enabled = enable_channels(server, device_id)
+    # The scan answers before it has finished. Asked for the channels straight away the
+    # server has none yet, so there is nothing to switch on and the tuner ends up in a DVR
+    # saying "0 enabled", which is exactly what a tuner that does not work looks like.
+    channels = _scanned_channels(server, device_id)
+    enabled = enable_channels(server, device_id, channels)
     reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else False
     return scanned or enabled or reloaded
+
+
+# How long to wait for a scan to turn up channels, and how often to look
+SCAN_SECONDS = 30
+SCAN_INTERVAL = 2.0
+
+
+def _scanned_channels(server, device_id):
+    """
+    The channels a scan found, once it has found any.
+
+    A scan is started, not done, by the time the request for it comes back, and how long it
+    takes depends on how many channels are behind the address. So the server is asked until
+    it has some, and given up on rather than waited for forever: a tuner with no channels is
+    reported as it is instead of holding everything else up.
+    """
+    deadline = time.monotonic() + SCAN_SECONDS
+    while True:
+        channels = device_channels(server, device_id)
+        if channels:
+            return channels
+        if time.monotonic() >= deadline:
+            logger.info(
+                f"Tuner {device_id} on {server.get('name')} reported no channels within "
+                f"{SCAN_SECONDS}s of a scan; press Sync again once it has finished"
+            )
+            return []
+        gevent.sleep(SCAN_INTERVAL)
 
 
 def refresh_sessions(redis_client, force=False):
