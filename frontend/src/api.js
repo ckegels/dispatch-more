@@ -2914,6 +2914,14 @@ export default class API {
     });
   }
 
+  static async setStreamCheckLimit(key, name, limit, windowMinutes) {
+    // A provider's limit set by hand; a limit of null forgets it, so it is learned again
+    return await request(`${host}/api/channels/stream-check/limits/`, {
+      method: 'PUT',
+      body: { key, name, limit, window_minutes: windowMinutes },
+    });
+  }
+
   static async clearStreamCheck() {
     // Forget what the runs found; parked streams stay parked
     return await request(`${host}/api/channels/stream-check/clear/`, { method: 'POST' });

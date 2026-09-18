@@ -22,6 +22,7 @@ vi.mock('../../../api', () => ({
     saveStreamCheckSettings: vi.fn(),
     streamCheckAction: vi.fn(),
     clearStreamCheck: vi.fn(),
+    setStreamCheckLimit: vi.fn(),
   },
 }));
 
@@ -74,6 +75,9 @@ const overview = (extra = {}) => ({
   last_run: { finished_at: '2026-09-18T22:30:00+00:00', checked: 3, total: 3 },
   ffprobe: true,
   channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }],
+  limits: [
+    { key: 'server:line.one-zone.cc', name: 'TiviBridge', limit: 27, window_minutes: 12, how: 'learned', resting: false, said: 'allows 27 streams every 12 min (learned)' },
+  ],
   ...extra,
 });
 
@@ -240,6 +244,22 @@ describe('StreamCheckTable', () => {
     fireEvent.click(name.closest('.tr').querySelector('.td:nth-child(1) > div > div'));
     expect(await screen.findByText(/Not checked: The provider answered HTTP 407/)).toBeInTheDocument();
     expect(screen.queryByText(/^plays/)).toBeNull();
+  });
+
+  it('shows what each provider allows, and lets it be set by hand', async () => {
+    API.setStreamCheckLimit.mockResolvedValue({});
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    expect(screen.getByText('allows 27 streams every 12 min (learned)')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Streams for TiviBridge'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set' }));
+    await waitFor(() =>
+      expect(API.setStreamCheckLimit).toHaveBeenCalledWith('server:line.one-zone.cc', 'TiviBridge', 20, 12)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
+    await waitFor(() =>
+      expect(API.setStreamCheckLimit).toHaveBeenLastCalledWith('server:line.one-zone.cc', 'TiviBridge', null, null)
+    );
   });
 
   it('says so when ffprobe is missing', async () => {

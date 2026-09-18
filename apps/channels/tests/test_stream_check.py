@@ -72,6 +72,29 @@ class FakeRedis:
         for field in fields:
             (self.data.get(key) or {}).pop(field, None)
 
+    def zadd(self, key, mapping):
+        with self.lock:
+            self.data.setdefault(key, {}).update(mapping)
+
+    def _scores(self, key, low, high):
+        high = float("inf") if high == "+inf" else float(high)
+        return sorted(
+            (score, member) for member, score in (self.data.get(key) or {}).items() if float(low) <= score <= high
+        )
+
+    def zcount(self, key, low, high):
+        return len(self._scores(key, low, high))
+
+    def zrangebyscore(self, key, low, high, start=None, num=None, withscores=False):
+        found = self._scores(key, low, high)
+        if start is not None:
+            found = found[start:start + num]
+        return [(member, score) for score, member in found] if withscores else [member for _, member in found]
+
+    def zremrangebyscore(self, key, low, high):
+        for score, member in self._scores(key, low, high):
+            self.data[key].pop(member, None)
+
     def scan_iter(self, match="*", count=None):
         return iter([key for key in list(self.data) if fnmatch.fnmatch(key, match)])
 
@@ -352,7 +375,6 @@ def _answers(by_name):
 
 
 @mock.patch.object(stream_check, "REFUSAL_PAUSE", 0.01)
-@mock.patch.object(stream_check, "SLOWEST_GAP", 0.01)
 @mock.patch.object(stream_check, "PROVIDER_ASK_EVERY", 0.01)
 @mock.patch.object(stream_check, "PROVIDER_LINGER", 0.2)
 class RunTests(_Setup):
@@ -580,44 +602,6 @@ class RunTests(_Setup):
     def _plays(should_stop=None):
         return {"ok": True, "reason": "", "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
 
-    def test_a_refused_stream_is_tried_once_more_then_passed_over_not_counted(self):
-        """What left a real run stuck: one refusal put the whole provider off for the round."""
-        stream_check.save_settings({"account_failures": 99})
-        final, probe = self._run({"ORF1A": self._refusal})
-        called = [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list]
-        self.assertEqual(called.count("ORF1A"), 2)
-        # The provider carried on with its next stream
-        self.assertIn("ORF1A2", called)
-        record = stream_check.load_results()["streams"][str(self.first.id)]
-        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
-        self.assertIn("407", record["refused"])
-        self.assertEqual(final["ended"], "done")
-
-    def test_a_provider_that_refuses_is_given_more_room_between_streams(self):
-        """A provider rate-limiting new connections, or a bridge slow to let go upstream."""
-        pauses = []
-        real_pause = stream_check._pause
-        with mock.patch.object(stream_check, "SLOWEST_GAP", 8), \
-                mock.patch.object(stream_check.time, "sleep", side_effect=lambda seconds: pauses.append(seconds)), \
-                mock.patch.object(stream_check, "_pause", side_effect=lambda seconds, stop: pauses.append(seconds) or True):
-            self._run({"ORF1A": self._refusal})
-        # The retry pause, then a gap grown from 0 to at least 5 seconds
-        self.assertIn(stream_check.REFUSAL_PAUSE, pauses)
-        self.assertTrue(any(5 <= p <= 8 for p in pauses), pauses)
-
-    def test_a_refusal_that_passes_is_forgotten(self):
-        answers = iter([self._refusal(), self._plays()])
-        final, probe = self._run({"ORF1A": lambda should_stop: next(answers)})
-        self.assertTrue(stream_check.load_results()["streams"][str(self.first.id)]["ok"])
-
-    def test_refusals_in_a_row_mean_the_provider_is_busy_for_now(self):
-        stream_check.start_round(self.redis, force=True)
-        with mock.patch.object(stream_check, "REFUSALS_IN_A_ROW", 2), \
-                mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1A": self._refusal, "ORF1A2": self._refusal})):
-            stream_check.run(self.redis)
-        self.assertIn("refused 2 streams in a row", self._status("Provider A")["reason"])
-        self.assertIn("407", self._status("Provider A")["reason"])
-
     def test_an_xtream_stream_is_opened_the_way_the_proxy_opens_it(self):
         """With the login as it is now, not the address kept from the last refresh."""
         self._as_xc(self.a)
@@ -638,6 +622,66 @@ class RunTests(_Setup):
         self.assertEqual(loaded["every_hours"], 12)
         stream_check.save_settings({"only_when_idle": True})
         self.assertTrue(stream_check.load_settings()["only_when_idle"])
+
+    def _limit(self):
+        return stream_check.load_limits().get("server:a", {})
+
+    def test_a_provider_that_stops_giving_streams_has_its_limit_learned_and_rests(self):
+        """Refused after a few, whatever the stream: the provider's limit, not the streams'."""
+        opened = []
+
+        def two_then_refused(should_stop):
+            opened.append(1)
+            return self._plays() if len(opened) <= 1 else self._refusal()
+
+        final, probe = self._run({"ORF1A": two_then_refused, "ORF1A2": two_then_refused})
+        limit = self._limit()
+        self.assertTrue(limit["blocked_since"])
+        self.assertIn("hit its limit after", self._status("Provider A")["reason"])
+        # The refused stream is not counted against, and nothing else was tried while resting
+        self.assertNotIn(str(self.third.id), stream_check.load_results()["streams"])
+        self.assertTrue(stream_check.is_running(self.redis))
+        self.assertGreaterEqual(stream_check.progress(self.redis)["resume_in"], stream_check.RETRY_WAITING)
+
+    def test_once_it_answers_again_the_limit_is_kept_with_room_to_spare(self):
+        state = {"blocked_since": time.time() - 600, "count": 10, "span": 120, "step": 3,
+                 "next_try": time.time() - 1, "good_stream": self.first.id}
+        stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
+        final, probe = self._run({})
+        limit = self._limit()
+        self.assertNotIn("blocked_since", limit)
+        self.assertEqual(limit["limit"], 8)
+        self.assertGreaterEqual(limit["window"], 720)
+        self.assertEqual(final["ended"], "done")
+
+    def test_a_resting_provider_is_not_asked_anything(self):
+        self._as_xc(self.a)
+        state = {"blocked_since": time.time(), "count": 34, "span": 120, "step": 0, "next_try": time.time() + 300}
+        stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
+        with mock.patch.object(stream_check, "_xc_user_info") as asked:
+            final, probe = self._run({})
+        asked.assert_not_called()
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+        self.assertEqual(self._status("Provider A")["status"], "resting")
+
+    def test_one_stream_the_provider_will_not_give_is_told_from_a_limit(self):
+        """A stream that just played there still plays: it is that one stream, not the provider."""
+        stream_check._change_limits(lambda limits: limits.update({"server:a": {"name": "Provider A", "good_stream": self.first.id}}))
+        final, probe = self._run({"ORF1A2": self._refusal})
+        record = stream_check.load_results()["streams"][str(self.third.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
+        self.assertIn("407", record["refused"])
+        self.assertNotIn("blocked_since", self._limit())
+        self.assertEqual(final["ended"], "done")
+
+    def test_a_limit_set_by_hand_is_kept_to(self):
+        stream_check.set_limit("server:a", "Provider A", limit=1, window_minutes=10)
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            self.assertEqual(stream_check.run(self.redis), "waiting")
+        called = [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list]
+        self.assertEqual(called.count("ORF1A") + called.count("ORF1A2"), 1)
+        self.assertIn("allows 1 streams every 10 min (set by hand)", self._status("Provider A")["reason"])
 
     def _as_xc(self, account):
         account.account_type = "XC"
@@ -877,6 +921,20 @@ class ViewTests(_Setup):
         stream_check._store(stream_check.RESULTS_KEY, "x", {"streams": {"1": {"ok": False}}, "last_run": {}})
         self.assertEqual(self.api.post("/api/channels/stream-check/clear/").status_code, 200)
         self.assertEqual(stream_check.load_results()["streams"], {})
+
+    def test_a_providers_limit_is_shown_set_and_forgotten(self):
+        rows = {r["name"]: r for r in self.api.get("/api/channels/stream-check/").json()["limits"]}
+        self.assertEqual(rows["Provider A"]["said"], "no limit found yet")
+        key = rows["Provider A"]["key"]
+
+        self.api.put("/api/channels/stream-check/limits/", {"key": key, "name": "Provider A", "limit": 25, "window_minutes": 10}, format="json")
+        rows = {r["name"]: r for r in self.api.get("/api/channels/stream-check/").json()["limits"]}
+        self.assertEqual((rows["Provider A"]["limit"], rows["Provider A"]["window_minutes"]), (25, 10))
+        self.assertEqual(rows["Provider A"]["how"], "set by hand")
+
+        self.api.put("/api/channels/stream-check/limits/", {"key": key, "limit": None}, format="json")
+        rows = {r["name"]: r for r in self.api.get("/api/channels/stream-check/").json()["limits"]}
+        self.assertIsNone(rows["Provider A"]["limit"])
 
     def test_bad_settings_are_refused(self):
         response = self.api.put("/api/channels/stream-check/settings/", {"settings": {"window_to": "nope"}}, format="json")

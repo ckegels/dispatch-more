@@ -34,6 +34,13 @@ How it goes about it, and why:
   held that long is one the playlist and guide refreshes cannot have. Each batch keeps
   what it found and queues the next, so other work gets its turn in between; one that
   ends because someone is watching is carried on by the next tick (every five minutes).
+- Under what each provider allows. Many refuse every stream for a while after a number of
+  them are opened in a row, however slowly; each has its own number and none says what it
+  is. A stream it refuses is tried against one that just played there: if that plays, it
+  is that one stream; if not, the provider is at its limit. Then it is left alone -- not
+  asked anything -- and tried again after longer and longer waits, which says how long the
+  block lasts, and from then on the checks stay under the limit with room to spare (see
+  _Budget). A limit can be typed in instead, which spares the provider even the first.
 - One failure is not dead. Providers hiccup. A stream is "broken" only after failing a
   number of runs in a row (broken_after), and "failing" until then.
 
@@ -115,14 +122,18 @@ LIVE_RESULTS_KEY = "stream-check:live-results"
 # login, or the login blocked for a moment -- rather than when a stream is gone. Not the
 # stream's fault, and not counted against it.
 REFUSED_STATUS = {401, 403, 406, 407, 423, 429, 456, 458, 503, 509, 512, 513, 551, 882, 884}
-# A refusal is often a moment's: the stream is tried once more after this long, and only
-# this many refusals in a row -- of different streams -- mean the provider is busy for now
-REFUSAL_PAUSE = 15
-REFUSALS_IN_A_ROW = 3
-# Each refusal doubles the pause between a provider's streams, up to this: a provider that
-# rate-limits new connections, or a bridge that keeps its own upstream connection open a
-# while after ours closes, is given room. Each stream that plays brings it back down.
-SLOWEST_GAP = 60
+# A refused stream is told apart from a provider at its limit by trying, this long after, a
+# stream of the same provider that just played
+REFUSAL_PAUSE = 3
+# What a provider allows is kept here, learned or set by hand: {provider: {...}}
+LIMITS_KEY = "stream-check-providers"
+# The streams opened on a provider lately, as times: what its limit is counted against
+OPENS_KEY = "stream-check:opens:{provider}"
+# After a provider's limit is hit, when to try again to learn how long it lasts: the
+# provider is not asked anything in between, not even about its logins
+RECOVERY_STEPS = (30, 60, 120, 240, 480, 900, 1800, 3600)
+# What is learned is used with room to spare, for viewers zapping meanwhile
+LIMIT_MARGIN = 0.8
 # A provider can go on counting a connection for a while after it is closed. After a check,
 # a login the provider still counts as in use is waited on this long before it is taken to
 # be someone else's.
@@ -336,10 +347,22 @@ def _group_providers(profiles):
             # The same login through a different address is still the same customer
             join(node, ("login", fingerprint))
 
+    # Each provider is keyed by a name that does not depend on the order accounts were
+    # joined in: its server when it has one -- the first by name, if several -- otherwise
+    # the smallest of what joined it. What a provider allows is kept under this key, and
+    # must still be found next time.
+    groups = {}
+    for node in list(parent):
+        groups.setdefault(find(node), []).append(node)
+    stable = {}
+    for root, nodes in groups.items():
+        servers = sorted(n for n in nodes if n[0] == "server")
+        stable[root] = servers[0] if servers else min(nodes, key=lambda n: (n[0], str(n[1])))
+
     key_of, members = {}, {}
     for profile in profiles:
         node = ("account", profile.m3u_account_id)
-        key = find(node)
+        key = stable[find(node)]
         key_of[node] = key
         members.setdefault(key, []).append(profile)
     return key_of, members
@@ -352,9 +375,7 @@ class _ProviderCount:
     provider that says any of its logins is in use is not checked.
     """
 
-    def __init__(self, logins):
-        # [(account, profile, user agent)] of the provider's Xtream Codes logins
-        self.logins = logins
+    def __init__(self):
         self.asked = {}
         self.last_check_ended = None
 
@@ -369,14 +390,15 @@ class _ProviderCount:
             self.asked[profile.id] = (time.monotonic(), count)
         return count
 
-    def free(self, should_give_up):
+    def free(self, logins, should_give_up):
         """
         Whether the provider says nobody is on any of its logins. Right after a check it
         may still count that one: then it is waited on, up to PROVIDER_LINGER, rather than
         taken to be a viewer. A provider that cannot be asked is taken to be in use.
         """
         while True:
-            counts = [self._open(*login) for login in self.logins]
+            # [(account, profile, user agent)]: the provider's Xtream Codes logins known to work
+            counts = [self._open(*login) for login in logins]
             if all(count == 0 for count in counts):
                 return True
             if any(count is None for count in counts):
@@ -390,6 +412,179 @@ class _ProviderCount:
         # What was asked stays good until PROVIDER_ASK_EVERY has passed: our own check is off
         # the provider's count as soon as it closes, and anyone else is seen at the next ask
         self.last_check_ended = time.monotonic()
+
+
+# ── What each provider allows ────────────────────────────────────────────────
+
+
+def load_limits():
+    """{provider key: {"name", "limit", "window", "how", ...}}, learned or set by hand."""
+    return dict(_load(LIMITS_KEY, {}))
+
+
+def _change_limits(change):
+    """Read, change and write what providers allow in one go, so two threads cannot race."""
+    from django.db import transaction
+
+    from core.models import CoreSettings
+
+    with transaction.atomic():
+        row, _ = CoreSettings.objects.select_for_update().get_or_create(
+            key=LIMITS_KEY, defaults={"name": "Stream Check provider limits", "value": {}}
+        )
+        limits = dict(row.value or {})
+        answer = change(limits)
+        row.value = limits
+        row.save(update_fields=["value"])
+    return answer
+
+
+def set_limit(key, name, limit=None, window_minutes=None):
+    """A provider's limit set by hand, or with no limit given, forgotten so it is learned again."""
+    def change(limits):
+        if limit:
+            limits[key] = {
+                "name": name, "limit": max(1, int(limit)), "window": max(60, int(float(window_minutes or 10) * 60)),
+                "how": "set by hand", "at": _now(),
+            }
+        else:
+            limits.pop(key, None)
+        return limits.get(key)
+
+    return _change_limits(change)
+
+
+class _Budget:
+    """
+    How many streams a provider lets be opened in a while, and keeping under it.
+
+    Providers limit how many channels a login may open in a stretch of time -- one refused
+    every stream with HTTP 407 after 34, whatever the pace -- and each has its own number.
+    None is assumed: a limit is learned the first time it is hit, how long its block lasts is
+    learned by trying again after longer and longer waits, and from then on the checks stay
+    under it, with room to spare. A limit set by hand is used as it is and not relearned.
+    """
+
+    def __init__(self, redis_client, key, name, state=None):
+        self.redis = redis_client
+        self.key = key
+        self.name = name
+        self.state = dict(state or {})
+        self.changed = False
+
+    def _save(self):
+        # Kept by the batch once its threads are done (see save): a thread only talks to
+        # providers and Redis, never the database
+        self.changed = True
+
+    def save(self):
+        if not self.changed:
+            return
+        state = dict(self.state)
+
+        def change(limits):
+            limits[self.key] = {**state, "name": self.name}
+
+        _change_limits(change)
+        self.changed = False
+
+    def note_open(self):
+        now = time.time()
+        opens = OPENS_KEY.format(provider=self.key)
+        self.redis.zadd(opens, {f"{now:.6f}": now})
+        self.redis.zremrangebyscore(opens, 0, now - 4 * 3600)
+        self.redis.expire(opens, 4 * 3600)
+
+    def _opens(self, since):
+        return self.redis.zcount(OPENS_KEY.format(provider=self.key), since, "+inf")
+
+    def resting(self):
+        """Seconds until the provider may be tried again after hitting its limit, 0 if it may
+        be now, or None when it is not resting at all."""
+        if not self.state.get("blocked_since"):
+            return None
+        return max(0.0, float(self.state.get("next_try", 0)) - time.time())
+
+    def wait(self):
+        """Seconds until one more stream may be opened without going over the limit."""
+        limit, window = self.state.get("limit"), self.state.get("window")
+        if not limit or not window:
+            return 0.0
+        now = time.time()
+        if self._opens(now - window) < limit:
+            return 0.0
+        first = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), now - window, "+inf", start=0, num=1, withscores=True)
+        return max(1.0, (first[0][1] + window - now) if first else window)
+
+    def hit(self):
+        """The limit was reached: count what it took, and start finding out how long it lasts."""
+        now = time.time()
+        since = float(self.state.get("clear_since") or now - 3600)
+        count = self._opens(since)
+        first = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), since, "+inf", start=0, num=1, withscores=True)
+        self.state.update(
+            blocked_since=now, count=int(count), span=(now - first[0][1]) if first else 0.0,
+            step=0, next_try=now + RECOVERY_STEPS[0],
+        )
+        self._save()
+        logger.info(f"Stream Check: {self.name} refused after {count} streams; finding out how long for")
+
+    def still_blocked(self):
+        step = min(int(self.state.get("step", 0)) + 1, len(RECOVERY_STEPS) - 1)
+        self.state.update(step=step, next_try=time.time() + RECOVERY_STEPS[step])
+        self._save()
+
+    def recovered(self):
+        """Answering again: the limit is what was opened, the window how long that took plus
+        how long the block lasted -- used with room to spare."""
+        now = time.time()
+        if self.state.get("how") != "set by hand":
+            blocked = now - float(self.state["blocked_since"])
+            count = int(self.state.get("count") or 1)
+            window = int(float(self.state.get("span") or 0) + blocked + 0.999)
+            learned = max(1, int(count * LIMIT_MARGIN))
+            if self.state.get("limit") and count <= int(self.state["limit"]):
+                # Hit even under what was learned: the provider allows less than it seemed
+                learned = max(1, int(int(self.state["limit"]) * LIMIT_MARGIN))
+            self.state.update(limit=learned, window=max(window, int(self.state.get("window") or 0)), how="learned", at=_now())
+            logger.info(f"Stream Check: {self.name} allows about {count} streams; keeping to {learned} every {window // 60} min")
+        for field in ("blocked_since", "count", "span", "step", "next_try"):
+            self.state.pop(field, None)
+        self.state["clear_since"] = now
+        self._save()
+
+    def describe(self):
+        if self.state.get("blocked_since"):
+            return f"hit its limit after {self.state.get('count')} streams; trying again at {_clock(self.state.get('next_try'))}"
+        if self.state.get("limit"):
+            return f"allows {self.state['limit']} streams every {max(1, int(self.state['window']) // 60)} min ({self.state.get('how')})"
+        return ""
+
+
+def provider_limits(redis_client):
+    """Every provider, with what it allows as far as is known, for the page."""
+    providers = _Providers(redis_client)
+    limits = load_limits()
+    rows = []
+    for key, profiles in providers.members.items():
+        text = _key_text(key)
+        state = limits.get(text) or {}
+        name = " + ".join(sorted({p.m3u_account.name for p in profiles}))
+        budget = _Budget(redis_client, text, name, state)
+        rows.append({
+            "key": text,
+            "name": name,
+            "limit": state.get("limit"),
+            "window_minutes": round(int(state["window"]) / 60, 1) if state.get("window") else None,
+            "how": state.get("how", ""),
+            "resting": bool(state.get("blocked_since")),
+            "said": budget.describe() or "no limit found yet",
+        })
+    return sorted(rows, key=lambda row: row["name"].lower())
+
+
+def _clock(seconds):
+    return datetime.fromtimestamp(float(seconds or 0)).strftime("%H:%M")
 
 
 # ── Is an account working at all ─────────────────────────────────────────────
@@ -867,6 +1062,8 @@ def run(redis_client, only=None, batch_seconds=None):
     from apps.m3u.connection_pool import release_profile_slot
     from django.db import connections
 
+    from .models import Stream
+
     settings = load_settings()
     if not redis_client.set(RUN_KEY, "1", nx=True, ex=RUN_TTL):
         return "already running"
@@ -920,6 +1117,24 @@ def run(redis_client, only=None, batch_seconds=None):
             key: " + ".join(sorted({s.m3u_account.name for s in streams}))
             for key, streams in by_provider.items()
         }
+        # What each provider allows, and a stream known to play there
+        limits = load_limits()
+        budgets = {
+            key: _Budget(redis_client, _key_text(key), names[key], limits.get(_key_text(key)))
+            for key in by_provider
+        }
+        good_ids = {key: budget.state.get("good_stream") for key, budget in budgets.items() if budget.state.get("good_stream")}
+        good_streams = {}
+        for stream in Stream.objects.filter(id__in=list(good_ids.values())).select_related("m3u_account"):
+            for key, stream_id in good_ids.items():
+                if stream_id == stream.id and providers.provider_of(stream.m3u_account_id) == key:
+                    good_streams[key] = stream
+        for stream in good_streams.values():
+            profiles.setdefault(stream.m3u_account_id, _profiles_of(stream.m3u_account))
+            agents.setdefault(stream.m3u_account_id, stream.m3u_account.get_user_agent_string() or "")
+        provider_counts = {key: _ProviderCount() for key in by_provider}
+        resume_in = {}
+
         accounts = progress(redis_client).get("accounts") or {}
         for key, streams in by_provider.items():
             entry = accounts.setdefault(_key_text(key), {"name": names[key], "done": 0})
@@ -947,136 +1162,178 @@ def run(redis_client, only=None, batch_seconds=None):
 
         def one_provider(key, streams):
             entry = accounts[_key_text(key)]
+            budget = budgets[key]
             logins = {}
+            account_of = {}
             # Per account: failures before anything of it played, held back until it is
             # clear whether its streams failed or the account is down
             held, played, given_up = {}, set(), set()
-            xc_logins = []
-            try:
-                for account_id in dict.fromkeys(s.m3u_account_id for s in streams):
-                    account = next(s.m3u_account for s in streams if s.m3u_account_id == account_id)
+            gap = float(settings["gap_seconds"])
+
+            def rest(status, reason, seconds=None):
+                waiting.add(key)
+                if seconds is not None:
+                    resume_in[key] = seconds
+                set_status(entry, status, reason)
+
+            def logins_of(account_id, account):
+                if account_id not in logins:
+                    account_of[account_id] = account
                     usable, problem = _usable_logins(account, profiles[account_id], agents[account_id])
+                    logins[account_id] = usable
                     if not usable:
                         _unavailable(redis_client, round_, account_id, account.name, problem, lock)
                         given_up.add(account_id)
-                        continue
-                    logins[account_id] = usable
-                    if account.account_type == "XC":
-                        xc_logins.extend((account, p, agents[account_id]) for p in usable)
-                provider_count = _ProviderCount(xc_logins)
-                refusals_in_a_row = 0
-                gap = float(settings["gap_seconds"])
-                if not logins:
-                    set_status(entry, "unavailable", "no account of it can be used")
-                    return
+                return logins[account_id]
+
+            def attempt(stream):
+                """Open one stream as a viewer would: its outcome, "busy" when the provider
+                cannot be used now (the status says why), or "stopped" when someone came."""
+                account_id = stream.m3u_account_id
+                usable = logins_of(account_id, stream.m3u_account)
+                if not usable:
+                    return None
+                if providers.in_use(key):
+                    rest("in use", "someone is watching through it")
+                    return "busy"
+                xc_logins = [
+                    (account_of[a], login, agents[a])
+                    for a, usable_here in logins.items() if account_of[a].account_type == "XC"
+                    for login in usable_here
+                ]
+                if not provider_counts[key].free(xc_logins, lambda: stop_asked() or someone_watching() or providers.in_use(key)):
+                    rest("in use", "the provider says one of its logins is in use")
+                    return "busy"
+                profile = _take_connection(usable, redis_client)
+                if profile is None:
+                    rest("in use", "no connection of it is free")
+                    return "busy"
+                if providers.in_use(key, holding=profile):
+                    # A viewer came onto it between the asking and the taking
+                    if profile.max_streams > 0:
+                        release_profile_slot(profile.id, redis_client)
+                    rest("in use", "someone started watching through it")
+                    return "busy"
+                redis_client.expire(RUN_KEY, RUN_TTL)
+                with lock:
+                    entry.update(now=stream.name, status="checking", reason="")
+                    _progress(redis_client, accounts=accounts)
+
+                def should_stop():
+                    # Cut short: asked to stop, a viewer needs a connection, or someone
+                    # started watching through this provider
+                    return (
+                        stop_asked()
+                        or bool(redis_client.exists(YIELD_KEY))
+                        or someone_watching()
+                        or providers.in_use(key, holding=profile)
+                    )
+
+                try:
+                    url = _url_for(stream, profile)
+                    if not (url and url.startswith(("http://", "https://"))):
+                        return None
+                    budget.note_open()
+                    return probe(url, agents[account_id], settings["timeout_seconds"], should_stop)
+                except Stopped:
+                    # Looked at again once the viewer is done, and not counted
+                    rest("in use", "someone started watching through it")
+                    return "stopped"
+                finally:
+                    # An unlimited profile took no slot, so there is none to give back;
+                    # releasing anyway would free one a viewer holds
+                    if profile.max_streams > 0:
+                        release_profile_slot(profile.id, redis_client)
+                    provider_counts[key].check_ended()
+
+            def ready():
+                """Whether this provider may be used now; if not, the status says why."""
+                if stop_asked():
+                    stopped["asked"] = bool(redis_client.exists(STOP_KEY))
+                    waiting.add(key)
+                    return False
+                if redis_client.exists(YIELD_KEY):
+                    rest("waiting", "making way for a viewer")
+                    return False
+                if someone_watching():
+                    rest("waiting", "something is playing")
+                    return False
+                return True
+
+            try:
+                # A provider resting after hitting its limit is not asked anything -- not
+                # even about its logins -- until it is time to try it again
+                resting = budget.resting()
+                if resting is not None:
+                    if resting > 0:
+                        rest("resting", budget.describe(), resting)
+                        return
+                    good = good_streams.get(key)
+                    if good is None:
+                        # Nothing known to play there: the first stream of this round will do
+                        good = streams[0]
+                    if not ready():
+                        return
+                    found = attempt(good)
+                    if found in ("busy", "stopped") or found is None:
+                        return
+                    if not found["ok"]:
+                        budget.still_blocked()
+                        rest("resting", budget.describe(), budget.resting())
+                        return
+                    budget.recovered()
+                    with lock:
+                        count(good, found)
 
                 for stream in streams:
                     account_id = stream.m3u_account_id
                     if account_id in given_up:
                         continue
-                    tries = 0
-                    while True:
-                        tries += 1
-                        if stop_asked():
-                            stopped["asked"] = bool(redis_client.exists(STOP_KEY))
-                            waiting.add(key)
-                            return
-                        if redis_client.exists(YIELD_KEY):
-                            waiting.add(key)
-                            set_status(entry, "waiting", "making way for a viewer")
-                            return
-                        if someone_watching():
-                            waiting.add(key)
-                            set_status(entry, "waiting", "something is playing")
-                            return
-                        # Nobody on this provider, as Dispatcharr sees it and, for Xtream Codes,
-                        # as the provider itself sees it
-                        if providers.in_use(key):
-                            waiting.add(key)
-                            set_status(entry, "in use", "someone is watching through it")
-                            return
-                        if not provider_count.free(lambda: stop_asked() or someone_watching() or providers.in_use(key)):
-                            waiting.add(key)
-                            set_status(entry, "in use", "the provider says one of its logins is in use")
-                            return
-                        profile = _take_connection(logins[account_id], redis_client)
-                        if profile is None:
-                            waiting.add(key)
-                            set_status(entry, "in use", "no connection of it is free")
-                            return
-                        if providers.in_use(key, holding=profile):
-                            # A viewer came onto it between the asking and the taking
-                            if profile.max_streams > 0:
-                                release_profile_slot(profile.id, redis_client)
-                            waiting.add(key)
-                            set_status(entry, "in use", "someone started watching through it")
-                            return
-                        redis_client.expire(RUN_KEY, RUN_TTL)
-                        with lock:
-                            entry.update(now=stream.name, status="checking", reason="")
-                            _progress(redis_client, accounts=accounts)
-
-                        def should_stop(profile=profile):
-                            # Cut short: asked to stop, a viewer needs a connection, or someone
-                            # started watching through this provider
-                            return (
-                                stop_asked()
-                                or bool(redis_client.exists(YIELD_KEY))
-                                or someone_watching()
-                                or providers.in_use(key, holding=profile)
-                            )
-
-                        outcome = None
-                        try:
-                            url = _url_for(stream, profile)
-                            if url and url.startswith(("http://", "https://")):
-                                outcome = probe(url, agents[account_id], settings["timeout_seconds"], should_stop)
-                        except Stopped:
-                            # Looked at again once the viewer is done, and not counted
-                            waiting.add(key)
-                            set_status(entry, "in use", "someone started watching through it")
-                            return
-                        finally:
-                            # An unlimited profile took no slot, so there is none to give back;
-                            # releasing anyway would free one a viewer holds
-                            if profile.max_streams > 0:
-                                release_profile_slot(profile.id, redis_client)
-                            provider_count.check_ended()
-
-                        if outcome is not None and outcome.get("refused"):
-                            # The provider would not give this one: often for a moment. Once
-                            # more after a pause; then it is noted as not checked -- never
-                            # counted against the stream -- and the next is tried.
-                            if tries == 1:
-                                with lock:
-                                    entry.update(status="checking", reason=f"refused, trying again in {REFUSAL_PAUSE} s ({outcome['reason']})")
-                                    _progress(redis_client, accounts=accounts)
-                                # Interrupted or not, the checks at the top decide what next
-                                _pause(REFUSAL_PAUSE, lambda: stop_asked() or someone_watching() or providers.in_use(key))
-                                continue
-                            refusals_in_a_row += 1
-                            gap = min(SLOWEST_GAP, max(gap * 2, 5.0))
-                            with lock:
-                                _refused(results, stream, outcome["reason"])
-                                entry["done"] += 1
-                                entry["left"] -= 1
-                                _progress(redis_client, accounts=accounts, done=progress(redis_client).get("done", 0) + 1)
-                            if refusals_in_a_row >= REFUSALS_IN_A_ROW:
-                                # Not a stream or two: the provider will not give connections now
-                                waiting.add(key)
-                                set_status(
-                                    entry, "in use",
-                                    f"the provider refused {refusals_in_a_row} streams in a row ({outcome['reason']}); trying again later",
-                                )
-                                return
-                            outcome = "refused"
-                        break
-
-                    if outcome == "refused":
-                        _pause(gap, lambda: stop_asked() or someone_watching() or providers.in_use(key))
+                    if str(stream.id) in results and results[str(stream.id)].get("checked_at", "") >= (round_ or {}).get("since", "~"):
+                        # Already looked at in this round (the stream tried to learn the limit)
                         continue
-                    refusals_in_a_row = 0
-                    gap = max(float(settings["gap_seconds"]), gap * 0.75)
+                    if not ready():
+                        return
+                    # Staying under what the provider allows
+                    wait = budget.wait()
+                    if wait > 0:
+                        if wait > 30:
+                            rest("resting", f"{budget.describe()}; next at {_clock(time.time() + wait)}", wait)
+                            return
+                        _pause(wait, lambda: stop_asked() or someone_watching())
+                        if not ready():
+                            return
+
+                    outcome = attempt(stream)
+                    if outcome in ("busy", "stopped"):
+                        return
+                    if account_id in given_up:
+                        continue
+
+                    if outcome is not None and outcome.get("refused"):
+                        # This stream, or the provider? A stream that just played on it tells.
+                        good = good_streams.get(key)
+                        if good is not None and good.id != stream.id:
+                            _pause(REFUSAL_PAUSE, lambda: stop_asked() or someone_watching())
+                            if not ready():
+                                return
+                            other = attempt(good)
+                            if other in ("busy", "stopped"):
+                                return
+                            if other is not None and other["ok"]:
+                                # The provider answers; it is this one stream it will not give
+                                with lock:
+                                    _refused(results, stream, outcome["reason"])
+                                    entry["done"] += 1
+                                    entry["left"] -= 1
+                                    _progress(redis_client, accounts=accounts, done=progress(redis_client).get("done", 0) + 1)
+                                time.sleep(gap)
+                                continue
+                        # The provider will not give any: its limit. Learn it, and rest.
+                        budget.hit()
+                        rest("resting", f"{budget.describe()} ({outcome['reason']})", budget.resting())
+                        return
+
                     account_held = held.setdefault(account_id, [])
                     with lock:
                         if outcome is None:
@@ -1085,6 +1342,8 @@ def run(redis_client, only=None, batch_seconds=None):
                             _touch(results, stream)
                         elif outcome["ok"]:
                             played.add(account_id)
+                            good_streams[key] = stream
+                            budget.state["good_stream"] = stream.id
                             for earlier, found in account_held:
                                 count(earlier, found)
                             account_held.clear()
@@ -1119,6 +1378,9 @@ def run(redis_client, only=None, batch_seconds=None):
                         if account_id not in given_up:
                             for earlier, found in account_held:
                                 count(earlier, found)
+                # The stream known to play there, for telling a refused stream from a limit
+                if budget.state.get("good_stream"):
+                    budget._save()
                 if entry.get("status") == "checking":
                     set_status(entry, "done" if entry["left"] <= 0 else "checking")
                 # Where accounts share a login (a server group), taking a connection reads
@@ -1148,6 +1410,12 @@ def run(redis_client, only=None, batch_seconds=None):
                         logger.info(f"Stream Check: parked stream {stream_id} works again, not put back: {e}")
             _keep_results(results)
             redis_client.delete(LIVE_RESULTS_KEY)
+            # What each provider allows, learned in this batch
+            for budget in budgets.values():
+                try:
+                    budget.save()
+                except Exception as e:
+                    logger.warning(f"Stream Check could not keep what {budget.name} allows: {e}")
 
         if only is not None:
             return "done"
@@ -1161,9 +1429,15 @@ def run(redis_client, only=None, batch_seconds=None):
             # Everything left is on providers that cannot be used now: in use, or refusing
             reasons = "; ".join(
                 f"{e['name']}: {e['reason']}" for e in accounts.values()
-                if e.get("reason") and e.get("status") in ("in use", "waiting")
+                if e.get("reason") and e.get("status") in ("in use", "waiting", "resting")
             )
-            _progress(redis_client, waiting=True, message=reasons or "Waiting for viewers to finish")
+            # When to look again: the soonest a resting provider may be tried, but no sooner
+            # than a minute (a viewer may be done by then) and no later than an hour
+            soonest = min(resume_in.values(), default=RETRY_WAITING)
+            _progress(
+                redis_client, waiting=True, message=reasons or "Waiting for viewers to finish",
+                resume_in=int(min(3600, max(RETRY_WAITING, soonest if len(resume_in) == len(waiting) else RETRY_WAITING))),
+            )
             return "waiting"
         return "more"
     finally:

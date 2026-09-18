@@ -4506,7 +4506,7 @@ def run_stream_check(only=None):
     """
     from core.utils import RedisClient
 
-    from .stream_check import RETRY_WAITING, queue_next, run
+    from .stream_check import RETRY_WAITING, progress, queue_next, run
 
     redis_client = RedisClient.get_client()
     ended = run(redis_client, only=only)
@@ -4514,7 +4514,8 @@ def run_stream_check(only=None):
         if ended == "more":
             queue_next(redis_client, run_stream_check, 1, ended)
         elif ended == "waiting":
-            queue_next(redis_client, run_stream_check, RETRY_WAITING, ended)
+            # Sooner than a minute is pointless; a provider resting after its limit says when
+            queue_next(redis_client, run_stream_check, int(progress(redis_client).get("resume_in") or RETRY_WAITING), ended)
     return ended
 
 

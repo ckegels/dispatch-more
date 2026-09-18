@@ -27,6 +27,7 @@ import {
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
 import StreamCheckSettings from '../forms/StreamCheckSettings';
+import ProviderLimits from '../forms/ProviderLimits';
 import { CustomTable, useTable } from './CustomTable';
 import { Logo, Watch } from './StreamParts';
 
@@ -777,6 +778,27 @@ const StreamCheckTable = () => {
                   onClear={() => setAsking({ action: 'clear', stream: {} })}
                   saving={saving}
                 />
+                <Box mt="lg">
+                  <ProviderLimits
+                    limits={data.limits}
+                    onSave={async (row, limit, minutes) => {
+                      try {
+                        await API.setStreamCheckLimit(
+                          row.key,
+                          row.name,
+                          limit,
+                          minutes
+                        );
+                        await load(true);
+                      } catch (e) {
+                        setError(
+                          e?.body?.error ||
+                            'Could not change what that provider allows.'
+                        );
+                      }
+                    }}
+                  />
+                </Box>
               </Box>
             )}
 

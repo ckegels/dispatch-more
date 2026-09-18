@@ -35,6 +35,8 @@ def stream_check_overview(request):
         "last_run": stream_check.load_results()["last_run"],
         # Without it a stream is judged by whether MPEG-TS keeps coming, which is weaker
         "ffprobe": bool(shutil.which("ffprobe")),
+        # What each provider allows, learned or set by hand
+        "limits": stream_check.provider_limits(redis_client),
         "channel_groups": [
             {"id": g.id, "name": g.name}
             for g in ChannelGroup.objects.filter(channels__isnull=False).distinct().order_by("name")
@@ -91,6 +93,24 @@ def stream_check_clear(request):
         return JsonResponse({"error": "Stop the check first"}, status=409)
     stream_check.clear_results()
     return JsonResponse({"cleared": True})
+
+
+@api_view(["PUT"])
+@permission_classes([IsAdmin])
+def stream_check_limit(request):
+    """Set a provider's limit by hand, or with no limit, forget it so it is learned again."""
+    key = str(request.data.get("key") or "")
+    if not key:
+        return JsonResponse({"error": "Which provider?"}, status=400)
+    try:
+        limit = int(request.data["limit"]) if request.data.get("limit") not in (None, "") else None
+        minutes = float(request.data.get("window_minutes") or 10)
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Numbers only, please"}, status=400)
+    if limit is not None and (limit < 1 or minutes <= 0):
+        return JsonResponse({"error": "At least one stream, over some minutes"}, status=400)
+    kept = stream_check.set_limit(key, str(request.data.get("name") or key), limit, minutes)
+    return JsonResponse({"limit": kept})
 
 
 ACTIONS = {
