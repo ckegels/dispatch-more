@@ -88,13 +88,17 @@ const History = ({ history }) =>
 // What was found, in words: why it failed, or the picture it showed
 const Finding = ({ result }) => {
   if (!result) return null;
-  const text = result.ok
-    ? [result.resolution, result.codec].filter(Boolean).join(' · ') || 'plays'
-    : result.reason;
+  // Looked at but never really checked: the provider would not give a connection
+  const skipped = result.skipped;
+  const text = skipped
+    ? `Not checked: ${result.refused || 'the provider gave no connection'}`
+    : result.ok
+      ? [result.resolution, result.codec].filter(Boolean).join(' · ') || 'plays'
+      : result.reason;
   return (
     <Text
       size="xs"
-      c={result.ok ? 'dimmed' : 'red.4'}
+      c={skipped ? 'yellow.5' : result.ok ? 'dimmed' : 'red.4'}
       style={{ wordBreak: 'break-word' }}
     >
       {text}

@@ -125,6 +125,8 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             good = "username=user&password=pass" in self.path
             body = b'{"user_info": {"auth": 1, "status": "Active", "active_cons": "0", "max_connections": "1"}}' if good else b'{"user_info": {"auth": 0}}'
             self._send(body, "application/json")
+        elif self.path == "/auth.ts":
+            self._send(b"<html><body><h1>Proxy Authentication Required</h1></body></html>", "text/html", 407)
         elif self.path == "/full.m3u8":
             self._send(b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nfull-variant.m3u8\n", "application/vnd.apple.mpegurl")
         elif self.path == "/full-variant.m3u8":
@@ -178,6 +180,11 @@ class ProbeTests(TestCase):
     def test_a_playlist_is_followed_to_its_video(self):
         found = stream_check.probe(f"{self.base}/master.m3u8", timeout=5)
         self.assertTrue(found["ok"], found)
+
+    def test_what_a_provider_says_with_an_error_is_kept(self):
+        found = stream_check.probe(f"{self.base}/auth.ts", timeout=5)
+        self.assertTrue(found["refused"])
+        self.assertEqual(found["reason"], "The provider answered HTTP 407: Proxy Authentication Required")
 
     def test_a_playlist_whose_provider_is_full_is_a_refusal_not_a_failure(self):
         found = stream_check.probe(f"{self.base}/full.m3u8", timeout=5)
@@ -344,6 +351,8 @@ def _answers(by_name):
     return fake
 
 
+@mock.patch.object(stream_check, "REFUSAL_PAUSE", 0.01)
+@mock.patch.object(stream_check, "SLOWEST_GAP", 0.01)
 @mock.patch.object(stream_check, "PROVIDER_ASK_EVERY", 0.01)
 @mock.patch.object(stream_check, "PROVIDER_LINGER", 0.2)
 class RunTests(_Setup):
@@ -546,17 +555,52 @@ class RunTests(_Setup):
         self.assertEqual(final["ended"], "done")
         self.assertEqual(probe.call_count, 3)
 
-    def test_a_provider_that_will_not_give_a_connection_is_not_counted_against_the_stream(self):
-        def refused(should_stop):
-            return {"ok": False, "reason": "The provider answered HTTP 458", "refused": True,
-                    "resolution": "", "codec": "", "bytes": 0, "seconds": 0.1}
+    @staticmethod
+    def _refusal(should_stop=None):
+        return {"ok": False, "reason": "The provider answered HTTP 407: Proxy Authentication Required",
+                "refused": True, "resolution": "", "codec": "", "bytes": 0, "seconds": 0.1}
 
-        stream_check.start_round(self.redis, force=True)
-        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": refused})):
-            stream_check.run(self.redis)
-        record = stream_check.load_results()["streams"][str(self.second.id)]
+    @staticmethod
+    def _plays(should_stop=None):
+        return {"ok": True, "reason": "", "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
+
+    def test_a_refused_stream_is_tried_once_more_then_passed_over_not_counted(self):
+        """What left a real run stuck: one refusal put the whole provider off for the round."""
+        stream_check.save_settings({"account_failures": 99})
+        final, probe = self._run({"ORF1A": self._refusal})
+        called = [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list]
+        self.assertEqual(called.count("ORF1A"), 2)
+        # The provider carried on with its next stream
+        self.assertIn("ORF1A2", called)
+        record = stream_check.load_results()["streams"][str(self.first.id)]
         self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
-        self.assertIn("refused", self._status("Provider B")["reason"])
+        self.assertIn("407", record["refused"])
+        self.assertEqual(final["ended"], "done")
+
+    def test_a_provider_that_refuses_is_given_more_room_between_streams(self):
+        """A provider rate-limiting new connections, or a bridge slow to let go upstream."""
+        pauses = []
+        real_pause = stream_check._pause
+        with mock.patch.object(stream_check, "SLOWEST_GAP", 8), \
+                mock.patch.object(stream_check.time, "sleep", side_effect=lambda seconds: pauses.append(seconds)), \
+                mock.patch.object(stream_check, "_pause", side_effect=lambda seconds, stop: pauses.append(seconds) or True):
+            self._run({"ORF1A": self._refusal})
+        # The retry pause, then a gap grown from 0 to at least 5 seconds
+        self.assertIn(stream_check.REFUSAL_PAUSE, pauses)
+        self.assertTrue(any(5 <= p <= 8 for p in pauses), pauses)
+
+    def test_a_refusal_that_passes_is_forgotten(self):
+        answers = iter([self._refusal(), self._plays()])
+        final, probe = self._run({"ORF1A": lambda should_stop: next(answers)})
+        self.assertTrue(stream_check.load_results()["streams"][str(self.first.id)]["ok"])
+
+    def test_refusals_in_a_row_mean_the_provider_is_busy_for_now(self):
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "REFUSALS_IN_A_ROW", 2), \
+                mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1A": self._refusal, "ORF1A2": self._refusal})):
+            stream_check.run(self.redis)
+        self.assertIn("refused 2 streams in a row", self._status("Provider A")["reason"])
+        self.assertIn("407", self._status("Provider A")["reason"])
 
     def test_the_saved_on_from_before_goes_back_to_off(self):
         """Checking beside viewers is the default now; a setting saved before it is not kept."""

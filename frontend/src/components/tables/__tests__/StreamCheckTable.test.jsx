@@ -220,6 +220,28 @@ describe('StreamCheckTable', () => {
     await waitFor(() => expect(API.clearStreamCheck).toHaveBeenCalled());
   });
 
+  it('says a stream the provider refused was not checked, rather than that it plays', async () => {
+    const refused = {
+      ...channelRow,
+      streams: [
+        {
+          ...channelRow.streams[0],
+          state: 'unchecked',
+          result: {
+            ok: true, skipped: true, refused: 'The provider answered HTTP 407: Proxy Authentication Required',
+            checked_at: '2026-09-19T01:00:00+00:00', history: [],
+          },
+        },
+      ],
+    };
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [refused] }));
+    draw();
+    const name = await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(name.closest('.tr').querySelector('.td:nth-child(1) > div > div'));
+    expect(await screen.findByText(/Not checked: The provider answered HTTP 407/)).toBeInTheDocument();
+    expect(screen.queryByText(/^plays/)).toBeNull();
+  });
+
   it('says so when ffprobe is missing', async () => {
     API.getStreamCheck.mockResolvedValue(overview({ ffprobe: false }));
     draw();
