@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from . import logo_library_views
+from . import channel_manager_views, logo_library_views
 from .api_views import (
     StreamViewSet,
     ChannelViewSet,
@@ -70,6 +70,11 @@ urlpatterns = [
     path('logo-library/apply/', logo_library_views.logo_library_apply, name='logo_library_apply'),
     path('logo-library/search/', logo_library_views.logo_library_search, name='logo_library_search'),
     path('logo-library/sources/', logo_library_views.logo_library_sources, name='logo_library_sources'),
+    # Recognising the same channel across providers and qualities (see channel_manager)
+    path('channel-manager/', channel_manager_views.channel_manager_options, name='channel_manager_options'),
+    path('channel-manager/preview/', channel_manager_views.channel_manager_preview, name='channel_manager_preview'),
+    path('channel-manager/apply/', channel_manager_views.channel_manager_apply, name='channel_manager_apply'),
+    path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
     # Some clients strip trailing slashes from artwork URLs. Serve the same
     # view directly (no redirect) so logo fetches still return an image.
     path(

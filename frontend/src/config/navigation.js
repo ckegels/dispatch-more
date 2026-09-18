@@ -11,6 +11,7 @@ import {
   Download,
   User,
   FileImage,
+  GitMerge,
   Webhook,
   MonitorCog,
   ScrollText,
@@ -86,6 +87,7 @@ export const NAV_ITEMS = {
     paths: [
       { label: 'Users', icon: User, path: '/users' },
       { label: 'Logo Manager', icon: FileImage, path: '/logos' },
+      { label: 'Channel Manager', icon: GitMerge, path: '/channel-manager' },
       { label: 'Connect', icon: Webhook, path: '/connect' },
       { label: 'Logs', icon: ScrollText, path: '/logs', requires: 'logCollectorRunning' },
       { ...SETTINGS_NAV_BASE },

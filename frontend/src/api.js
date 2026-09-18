@@ -2864,6 +2864,33 @@ export default class API {
     }
   }
 
+  static async getChannelManagerOptions() {
+    // What the Channel Manager's levers choose between, and how they were left
+    return await request(`${host}/api/channels/channel-manager/`);
+  }
+
+  static async previewChannelManager(settings) {
+    // Every channel as it would come out; nothing is written
+    return await request(`${host}/api/channels/channel-manager/preview/`, {
+      method: 'POST',
+      body: { settings },
+    });
+  }
+
+  static async applyChannelManager(settings, keys) {
+    return await request(`${host}/api/channels/channel-manager/apply/`, {
+      method: 'POST',
+      body: { settings, keys },
+    });
+  }
+
+  static async saveChannelManagerSettings(settings) {
+    return await request(`${host}/api/channels/channel-manager/settings/`, {
+      method: 'PUT',
+      body: { settings },
+    });
+  }
+
   static async getLogoLibrary(show = 'suggested', search = '') {
     // Every channel, with the logo it has and the ones the public collections would give it
     const query = new URLSearchParams({ show });

@@ -21,6 +21,7 @@ import PluginBrowsePage from './pages/PluginBrowse';
 import ConnectPage from './pages/Connect';
 import Users from './pages/Users';
 import LogosPage from './pages/Logos';
+import ChannelManagerPage from './pages/ChannelManager';
 import VODsPage from './pages/VODs';
 import useAuthStore from './store/auth';
 import useBrowserStorage from './hooks/useBrowserStorage';
@@ -183,6 +184,7 @@ const App = () => {
                             <Route path="/users" element={<Users />} />
                             <Route path="/settings" element={<Settings />} />
                             <Route path="/logos" element={<LogosPage />} />
+                            <Route path="/channel-manager" element={<ChannelManagerPage />} />
                             <Route path="/vods" element={<VODsPage />} />
                           </>
                         ) : (
