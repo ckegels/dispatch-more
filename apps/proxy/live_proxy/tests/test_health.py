@@ -19,6 +19,7 @@ class FakeRedis:
         self.hashes = {}
         self.sets = {}
         self.lists = {}
+        self.strings = {}
         self.expiries = {}
 
     def hgetall(self, key):
@@ -55,6 +56,13 @@ class FakeRedis:
     def expire(self, key, seconds):
         self.expiries[key] = seconds
 
+    def set(self, key, value, nx=False, ex=None):
+        """Only the nx form is used, to keep one worker reading at a time."""
+        if nx and key in self.strings:
+            return False
+        self.strings[key] = value
+        return True
+
     def delete(self, key):
         self.lists.pop(key, None)
         self.hashes.pop(key, None)
@@ -65,12 +73,20 @@ class FakeRedis:
         everything = list(self.hashes) + list(self.lists)
         return [key for key in everything if fnmatch.fnmatch(key, pattern)]
 
+    def scan_iter(self, match=None, count=None):
+        return iter(self.keys(match or "*"))
+
 
 class SamplingTests(TestCase):
     def setUp(self):
         self.redis = FakeRedis()
         health.save_settings(dict(health.DEFAULTS))
         self.addCleanup(lambda: health.save_settings(dict(health.DEFAULTS)))
+
+    def _sweep(self):
+        """One reading, as the next interval would take it: the lock is per interval."""
+        self.redis.strings.pop(health.SWEEP_LOCK_KEY, None)
+        return health.sweep(self.redis)
 
     def _a_running_channel(self, uuid="abc", speed="1.00", clients=2, bitrate="4500"):
         self.redis.hset(f"live:channel:{uuid}:metadata", mapping={
@@ -100,8 +116,8 @@ class SamplingTests(TestCase):
     def test_the_readings_are_kept_while_the_channel_runs(self):
         self._a_running_channel()
 
-        health.sweep(self.redis)
-        health.sweep(self.redis)
+        self._sweep()
+        self._sweep()
 
         samples = self.redis.lrange(health.LIVE_KEY.format(channel_id="abc"), 0, -1)
         self.assertEqual(len(samples), 2)
@@ -109,7 +125,7 @@ class SamplingTests(TestCase):
     def test_only_so_many_readings_are_kept(self):
         self._a_running_channel()
         for _ in range(health.SAMPLES_KEPT + 5):
-            health.sweep(self.redis)
+            self._sweep()
 
         samples = self.redis.lrange(health.LIVE_KEY.format(channel_id="abc"), 0, -1)
         self.assertEqual(len(samples), health.SAMPLES_KEPT)
@@ -117,11 +133,11 @@ class SamplingTests(TestCase):
     def test_what_a_channel_ended_on_is_kept_after_it_stops(self):
         """The whole point: once the metadata is gone there is no way back to this."""
         self._a_running_channel(speed="0.62")
-        health.sweep(self.redis)
+        self._sweep()
 
         # The channel stops: its metadata goes, as it does on a real one
         self.redis.delete("live:channel:abc:metadata")
-        health.sweep(self.redis)
+        self._sweep()
 
         stopped = health.stopped_lately(self.redis)
         self.assertEqual(len(stopped), 1)
@@ -131,9 +147,9 @@ class SamplingTests(TestCase):
 
     def test_a_channel_that_stopped_before_the_window_is_left_out(self):
         self._a_running_channel()
-        health.sweep(self.redis)
+        self._sweep()
         self.redis.delete("live:channel:abc:metadata")
-        health.sweep(self.redis)
+        self._sweep()
 
         # Asked for the last hour, when it stopped just now: still there
         self.assertEqual(len(health.stopped_lately(self.redis, 3600)), 1)
@@ -143,6 +159,21 @@ class SamplingTests(TestCase):
         record["stopped_at"] = 1
         self.redis.lists[health.STOPPED_KEY] = [json.dumps(record)]
         self.assertEqual(health.stopped_lately(self.redis, 3600), [])
+
+    def test_only_one_worker_reads_per_interval(self):
+        """
+        Every worker process runs the thread this is called from.
+
+        Without a lock they all read the same channels in the same instant, which is four
+        times the readings and a handover of a stopped channel racing with itself.
+        """
+        self._a_running_channel()
+
+        self.assertEqual(health.sweep(self.redis), 1)
+        self.assertEqual(health.sweep(self.redis), 0)  # another worker, same instant
+
+        samples = self.redis.lrange(health.LIVE_KEY.format(channel_id="abc"), 0, -1)
+        self.assertEqual(len(samples), 1)
 
     def test_switched_off_it_reads_nothing(self):
         """Off means off: no readings taken and nothing written."""
@@ -197,7 +228,7 @@ class SamplingTests(TestCase):
 
     def test_what_is_running_is_reported_with_its_readings(self):
         self._a_running_channel()
-        health.sweep(self.redis)
+        self._sweep()
 
         (channel,) = health.running_now(self.redis)
         self.assertEqual(channel["now"]["state"], "active")

@@ -1452,6 +1452,74 @@ class BindingOnEitherServerTests(TestCase):
             "server|shield-1",
         )
 
+    def test_the_session_playing_our_channel_is_the_one_whatever_the_clocks_say(self):
+        """
+        What it is playing is a fact about the session; when it started is a guess.
+
+        The times come from two clocks that do not agree, and mean different things on the
+        two servers. The channel does not: Dispatcharr knows which one it handed over, and
+        the server says which one each session is on.
+        """
+        two_watching = [
+            {
+                "Id": "s1",
+                "UserName": "Someone else",
+                "DeviceId": "living-room",
+                "NowPlayingItem": {"Name": "ORF 1", "Type": "TvChannel"},
+                "PlayState": {"PositionTicks": 0},
+            },
+            {
+                "Id": "s2",
+                "UserName": "Chris",
+                "DeviceId": "shield-1",
+                "NowPlayingItem": {"Name": "TFX", "Type": "TvChannel"},
+                "PlayState": {"PositionTicks": 0},
+            },
+        ]
+        server = {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+                  "kind": "jellyfin"}
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = lambda url, **kwargs: (
+                fake_response(two_watching) if "/Sessions" in url else jellyfin(url, **kwargs)
+            )
+            # Both look equally new; only one is on the channel that was handed over
+            session = media_servers._session_for(server, time.time(), "┃FR┃ TFX")
+
+        self.assertIsNotNone(session)
+        self.assertEqual(session["device_id"], "shield-1")
+
+    def test_channel_names_are_compared_on_what_they_say_not_how_they_are_written(self):
+        """Dispatcharr's names carry decoration a server drops, and a server may shorten."""
+        self.assertTrue(media_servers._same_channel("TFX", "┃FR┃ TFX"))
+        self.assertTrue(media_servers._same_channel("ORF 1 HD", "ORF1HD"))
+        self.assertTrue(media_servers._same_channel("┃AT┃ ORF 1", "ORF 1"))
+        self.assertTrue(media_servers._same_channel("[BE] Eén", "Eén"))
+        # Not so loose that anything matches anything
+        self.assertFalse(media_servers._same_channel("BBC One", "TFX"))
+        self.assertFalse(media_servers._same_channel("", "TFX"))
+        # A different channel whose name this one is the beginning of
+        self.assertFalse(media_servers._same_channel("TF1", "TF1 Series Films"))
+
+    def test_two_on_the_same_channel_cannot_be_told_apart_by_it(self):
+        """With two there is no telling which asked, so it falls back rather than guessing."""
+        both_on_it = [
+            {
+                "Id": f"s{number}",
+                "DeviceId": device,
+                "NowPlayingItem": {"Name": "TFX", "Type": "TvChannel"},
+                "PlayState": {"PositionTicks": 3600 * 10_000_000},
+            }
+            for number, device in enumerate(("living-room", "shield-1"))
+        ]
+        server = {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+                  "kind": "jellyfin"}
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = lambda url, **kwargs: (
+                fake_response(both_on_it) if "/Sessions" in url else jellyfin(url, **kwargs)
+            )
+            # Both are an hour in, so the fallback does not claim either
+            self.assertIsNone(media_servers._session_for(server, time.time(), "TFX"))
+
     def test_a_jellyfin_session_already_well_into_a_stream_is_not_this_start(self):
         """Otherwise a channel someone else has been watching is bound to this one."""
         long_running = [

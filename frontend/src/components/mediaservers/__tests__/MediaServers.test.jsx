@@ -319,6 +319,34 @@ describe('MediaServers', () => {
     expect(screen.getByText('guide: none')).toBeInTheDocument();
   });
 
+  it('changes how many tuners one of ours offers, where the number lives', async () => {
+    API.setMediaServerTunerUri.mockResolvedValue(tuners);
+    API.getMediaServerTuners.mockResolvedValue({
+      ...tuners,
+      tuners: [
+        {
+          ...tuners.tuners[0],
+          uri: 'http://192.168.2.142:9191/proxy/hdhr/austria/tuners/4',
+        },
+      ],
+    });
+
+    render(<MediaServers active={true} />);
+    await openServer();
+
+    fireEvent.change(screen.getByLabelText('Tuners for Austria'), {
+      target: { value: '6' },
+    });
+
+    await waitFor(() =>
+      expect(API.setMediaServerTunerUri).toHaveBeenCalledWith(
+        'a1',
+        '22',
+        'http://192.168.2.142:9191/proxy/hdhr/austria/tuners/6'
+      )
+    );
+  });
+
   it('moves a tuner that is already registered to another address', async () => {
     API.setMediaServerTunerUri.mockResolvedValue(tuners);
 

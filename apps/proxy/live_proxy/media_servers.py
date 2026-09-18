@@ -264,6 +264,11 @@ def _jellyfin_sessions(server):
             # A live channel is usually an item of type TvChannel, but a session that came
             # through the guide is the programme, with the channel it is on beside it. Both
             # are live TV; taking only the first leaves those viewers out of the overlap.
+            # Which channel this is, which is what says whether a session is the start we
+            # are looking at. Started from the guide the item is the programme, with the
+            # channel beside it; tuned directly, the item is the channel.
+            "channel": item.get("ChannelName")
+            or (item.get("Name", "") if item.get("Type") == "TvChannel" else ""),
             "live": item.get("Type") == "TvChannel" or bool(item.get("ChannelId")),
             "watching": (
                 "live TV"
@@ -332,6 +337,10 @@ def sessions(server):
         transcode = item.get("TranscodeSession") or {}
         playing.append({
             "title": item.get("title", ""),
+            # Which channel this is. On live TV the item is the programme and the channel is
+            # the thing it belongs to, which Plex calls the grandparent; which of these
+            # carries it varies, so all of them are offered and the caller matches on any.
+            "channel": item.get("grandparentTitle") or item.get("parentTitle") or "",
             "user": (item.get("User") or {}).get("title", ""),
             "player": player.get("title") or player.get("product") or "",
             "device_id": player.get("machineIdentifier", ""),
@@ -609,23 +618,30 @@ def _guide_for(uri, lineups, fallback) -> str:
     return fallback
 
 
-def set_tuner_uri(server, device_id, uri, title=None) -> bool:
+def set_tuner_uri(server, device_id, uri, title=None, tuner_count=None) -> bool:
     """
     Point a tuner that is already registered at another address.
 
     Asking is not enough: a server may take the request and keep the address it had, so
     whether it changed is read back rather than assumed. Says whether it really moved.
+
+    On a tuner of ours the number of tuners is part of the address, so changing how many
+    connections it offers comes through here as well.
     """
     if kind(server) == "jellyfin":
-        # Saving a tuner host with the Id it already has replaces that one
-        _post(server, "/LiveTv/TunerHosts", json_body={
+        # Saving a tuner host with the Id it already has replaces that one. Its number of
+        # tuners is a field here rather than part of the address.
+        body = {
             "Id": str(device_id),
             "Type": "hdhomerun",
             "Url": uri,
             "FriendlyName": title or "Dispatcharr",
             "AllowHWTranscoding": True,
             "EnableStreamLooping": False,
-        })
+        }
+        if tuner_count:
+            body["TunerCount"] = int(tuner_count)
+        _post(server, "/LiveTv/TunerHosts", json_body=body)
     else:
         params = {"uri": uri}
         if title:
@@ -935,6 +951,11 @@ def wait_for_device(redis_client, seconds=DEVICE_WAIT_SECONDS):
         return None
     deadline = time.monotonic() + max(0.0, seconds)
     while True:
+        # The deadline is checked before asking as well as after: a server that has stopped
+        # answering takes its request timeout to fail, and a stream must not be held for
+        # that on top of the wait it was promised.
+        if time.monotonic() >= deadline:
+            return None
         refresh_sessions(redis_client, force=True)
         device = sole_device(redis_client)
         if device:
@@ -1141,6 +1162,18 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
 
     try:
         servers = [server for server in load_servers() if is_enabled(server)]
+        # What the channel is called, so a session can be matched to it by what it is
+        # playing rather than by when it started
+        channel_name = ""
+        if channel_uuid:
+            try:
+                from .utils import resolve_channel_display_name
+
+                channel_name = resolve_channel_display_name(
+                    channel_uuid, redis_client=redis_client
+                ) or ""
+            except Exception:
+                channel_name = ""
         deadline = time.time() + WATCH_SECONDS
         # When each stage was first seen, measured from the moment the channel was requested
         seen = {}
@@ -1148,7 +1181,7 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
         position = None
         while time.time() < deadline:
             for server in servers:
-                session = _session_for(server, started_at)
+                session = _session_for(server, started_at, channel_name)
                 if session:
                     break
             if not session:
@@ -1223,19 +1256,68 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
             pass
 
 
-def _session_for(server, started_at):
+def _bare_channel_name(name) -> str:
     """
-    The live session this channel start belongs to: one that began when we handed the video
-    over, not one that was already playing.
+    A channel name with the decoration taken off, for comparing one against another.
 
-    The times come from two clocks, so a few seconds early is allowed. If they are further
-    apart than that, nothing is matched and the start simply shows no server information,
-    which is better than showing another stream's numbers.
+    Dispatcharr's names often carry a country in brackets of some kind, which a media server
+    does not repeat: "┃FR┃ TFX" on one side and "TFX" on the other are the same channel.
+    What is left is compared on its letters and digits, so spacing and case do not matter.
+
+    Only the decoration comes off. "TF1" is not "TF1 Series Films", and treating a name as
+    matching anything it is the beginning of would bind a viewer to the wrong channel.
     """
+    text = str(name or "")
+    for opener, closer in (("┃", "┃"), ("[", "]"), ("(", ")"), ("|", "|")):
+        while opener in text and closer in text[text.index(opener) + 1:]:
+            start = text.index(opener)
+            end = text.index(closer, start + 1)
+            text = text[:start] + " " + text[end + 1:]
+    return "".join(c for c in text.lower() if c.isalnum())
+
+
+def _same_channel(reported, channel_name) -> bool:
+    """
+    Whether a server is naming the channel Dispatcharr handed over.
+
+    The two names are written by different hands, so they are compared with the decoration
+    taken off (see _bare_channel_name) rather than exactly.
+    """
+    ours = _bare_channel_name(channel_name)
+    theirs = _bare_channel_name(reported)
+    return bool(ours) and ours == theirs
+
+
+def _session_for(server, started_at, channel_name=None):
+    """
+    The live session this channel start belongs to: the one playing the channel we just
+    handed over, or failing that one that began at the right moment.
+
+    Matching on the channel is worth preferring because it is a fact about the session. The
+    times are not: they come from two clocks that do not agree, and "when it started" means
+    when the session began on Plex and when it was last active on Jellyfin, which is
+    refreshed while it plays. They are the fallback, not the method.
+    """
+    live = [session for session in sessions(server) if session["live"]]
+
+    # What it is playing, before when it started. A server says which channel a session is
+    # on, and Dispatcharr knows which channel it just handed over, so the two can be put
+    # together by name: a fact about the session rather than a guess from two clocks that
+    # do not agree and a timestamp that means different things on different servers. Only
+    # when exactly one session is on that channel, because with two there is no telling
+    # which of them asked.
+    if channel_name:
+        named = [
+            session
+            for session in live
+            if _same_channel(session.get("channel"), channel_name)
+            or _same_channel(session.get("title"), channel_name)
+        ]
+        if len(named) == 1:
+            return named[0]
+
     jellyfin = kind(server) == "jellyfin"
-    for session in sessions(server):
-        if not session["live"]:
-            continue
+    for session in live:
         if jellyfin:
             # Jellyfin reports when a session was last active, not when it began, and that
             # is refreshed while it plays: matched on time, a stream that started an hour

@@ -36,6 +36,16 @@ const emptyTuner = {
 // The guide that belongs with a tuner: Dispatcharr's EPG for the same channel profile the
 // tuner serves. A media server keeps a guide per channel source, so each tuner gets the one
 // listing its own channels rather than everything the server can reach.
+// How many tuners an address of ours offers is written into it, so changing the number is
+// changing the address. A tuner not of ours has no such number to change.
+export const tunerCountIn = (uri) => {
+  const found = String(uri || '').match(/\/tuners\/(\d+)/);
+  return found ? Number(found[1]) : null;
+};
+
+export const withTunerCount = (uri, count) =>
+  String(uri || '').replace(/\/tuners\/\d+/, `/tuners/${count}`);
+
 export const guideForTuner = (uri, base, skipCachedLogos = true) => {
   const parts = String(uri || '')
     .split('/')
@@ -288,10 +298,36 @@ const MediaServerTuners = ({ serverId, enabled }) => {
                           not in a DVR
                         </Badge>
                       )}
-                      {tuner.tuners > 0 && (
-                        <Text size="xs" c="dimmed">
-                          {tuner.tuners} tuners
-                        </Text>
+                      {/* How many connections this tuner offers the server. On one of ours
+                          the number is part of the address, so it can be changed here
+                          rather than by removing the tuner and adding it again. */}
+                      {tunerCountIn(tuner.uri) !== null ? (
+                        <NumberInput
+                          size="xs"
+                          w={92}
+                          min={1}
+                          max={data.max_tuners || 64}
+                          aria-label={`Tuners for ${tuner.title}`}
+                          disabled={busy}
+                          value={tunerCountIn(tuner.uri)}
+                          onChange={(value) => {
+                            const wanted = Number(value);
+                            if (!wanted || wanted === tunerCountIn(tuner.uri)) return;
+                            run(() =>
+                              API.setMediaServerTunerUri(
+                                serverId,
+                                tuner.id,
+                                withTunerCount(tuner.uri, wanted)
+                              )
+                            );
+                          }}
+                        />
+                      ) : (
+                        tuner.tuners > 0 && (
+                          <Text size="xs" c="dimmed">
+                            {tuner.tuners} tuners
+                          </Text>
+                        )
                       )}
                     </Group>
                   </Table.Td>

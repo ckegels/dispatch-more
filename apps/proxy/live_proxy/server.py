@@ -2102,10 +2102,9 @@ class ProxyServer:
                 # was doing if it stops (see apps.proxy.live_proxy.health). Reads the
                 # metadata the proxy already writes and writes only to its own keys, so a
                 # failure here can cost a reading and nothing else.
-                now = time.time()
-                health_every = 5
-                if self.redis_client and now - getattr(self, '_last_health_sweep', 0) >= health_every:
-                    self._last_health_sweep = now
+                # How often is decided there, by a lock every worker shares, so the channels
+                # are read once per interval rather than once per worker.
+                if self.redis_client:
                     try:
                         from . import health
 

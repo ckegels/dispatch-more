@@ -138,6 +138,18 @@ def _profile_from_uri(uri) -> str:
     return unquote(parts[parts.index("hdhr") + 1]) if len(parts) > parts.index("hdhr") + 1 else ""
 
 
+def _tuner_count_in(uri):
+    """How many tuners an address of ours offers, which is written into it."""
+    parts = [part for part in str(uri).split("?", 1)[0].split("/") if part]
+    if "tuners" not in parts:
+        return None
+    index = parts.index("tuners") + 1
+    try:
+        return int(parts[index]) if len(parts) > index else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _profile_from_guide(url) -> str:
     """
     The channel profile a guide of ours covers, from its address.
@@ -267,7 +279,15 @@ def media_server_tuners(request):
         )
         if device is None:
             return JsonResponse({"error": "That tuner is not on this server"}, status=400)
-        if not media_servers.set_tuner_uri(server, device_id, uri, device.get("title")):
+        # On a tuner of ours the number of tuners is part of the address, so it arrives here
+        wanted_tuners = _tuner_count_in(uri)
+        if wanted_tuners and wanted_tuners > MAX_TUNERS:
+            return JsonResponse(
+                {"error": f"Give a number of tuners between 1 and {MAX_TUNERS}"}, status=400
+            )
+        if not media_servers.set_tuner_uri(
+            server, device_id, uri, device.get("title"), wanted_tuners
+        ):
             return JsonResponse(
                 {
                     "error": "The server kept the address it had. Not every server lets a "

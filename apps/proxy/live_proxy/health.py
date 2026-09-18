@@ -30,6 +30,9 @@ DEFAULTS = {
     "every_seconds": 5,
 }
 
+# Held while a reading is being taken, so only one worker takes it (see sweep)
+SWEEP_LOCK_KEY = "live:health:sweeping"
+
 # The samples of a channel that is running now, newest last
 LIVE_KEY = "live:health:samples:{channel_id}"
 # How many are kept: at five seconds apart, about three minutes of history
@@ -142,7 +145,10 @@ def sample(redis_client, channel_id) -> dict:
 def _channel_ids(redis_client):
     """The channels that are running, from the metadata each one writes while it does."""
     found = []
-    for key in redis_client.keys("live:channel:*:metadata") or ():
+    # Scanned rather than asked for outright: this runs every few seconds, and asking Redis
+    # for every key matching a pattern makes it walk the whole keyspace with nothing else
+    # served meanwhile. On an installation with a lot in Redis that is felt everywhere.
+    for key in redis_client.scan_iter(match="live:channel:*:metadata", count=500):
         key = key.decode() if isinstance(key, bytes) else key
         parts = key.split(":")
         if len(parts) >= 4:
@@ -158,7 +164,15 @@ def sweep(redis_client):
     raises: a reading that cannot be taken is worth less than the channel it is about.
     """
     try:
-        if not settings().get("enabled"):
+        values = settings()
+        if not values.get("enabled"):
+            return 0
+
+        # One reading per interval, not one per worker. Every worker process runs the
+        # cleanup thread this is called from, so without this the channels are read four
+        # times over and the handover of a channel that stopped races with itself.
+        every = int(values.get("every_seconds") or DEFAULTS["every_seconds"])
+        if not redis_client.set(SWEEP_LOCK_KEY, "1", nx=True, ex=max(1, every)):
             return 0
 
         running = set(_channel_ids(redis_client))
@@ -185,7 +199,9 @@ def _put_away_the_stopped(redis_client, running):
     This is the whole point of sampling. Once the metadata is gone there is no way back to
     what the channel was doing, so its last few minutes are moved somewhere they survive.
     """
-    for key in redis_client.keys(LIVE_KEY.format(channel_id="*")) or ():
+    for key in redis_client.scan_iter(
+        match=LIVE_KEY.format(channel_id="*"), count=500
+    ):
         key = key.decode() if isinstance(key, bytes) else key
         channel_id = key.split(":")[-1]
         if channel_id in running:
