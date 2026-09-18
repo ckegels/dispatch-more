@@ -541,3 +541,80 @@ class SourcesViewTests(TestCase):
         self._post(type="m3u", url="https://example.com/be.m3u", name="Belgium")
         response = self._post(type="m3u", url="https://example.com/other.m3u", name="Belgium")
         self.assertEqual(response.status_code, 400)
+
+
+class WhatDispatcharrAlreadyHasTests(TestCase):
+    """
+    A channel's own guide entry and streams, which are bound to it by its mapping rather
+    than found by its name, and so come before anything a collection has.
+    """
+
+    def setUp(self):
+        from apps.channels.models import ChannelStream, Stream
+        from apps.epg.models import EPGData
+
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+        # A real Schedules Direct station logo, as your guide carries them
+        self.icon = (
+            "https://schedulesdirect-api20141201-logos.s3.dualstack.us-east-1."
+            "amazonaws.com/stationLogos/s53814_dark_360w_270h.png"
+        )
+        cache.delete(logo_library.GUIDE_ICONS_KEY)
+        epg = EPGData.objects.create(tvg_id="een.be", name="Eén", icon_url=self.icon)
+        self.channel = Channel.objects.create(
+            channel_number=1, name="┃BE┃ Eén", epg_data=epg
+        )
+        stream = Stream.objects.create(
+            name="BE: EEN HD", url="http://provider/een", logo_url="https://provider/een.png"
+        )
+        ChannelStream.objects.create(channel=self.channel, stream=stream, order=0)
+
+    def _row(self, show="all"):
+        data = self.client_api.get(f"/api/channels/logo-library/?show={show}").json()
+        return next(r for r in data["channels"] if r["channel_id"] == self.channel.id)
+
+    def test_its_guide_icon_comes_first_then_its_streams(self):
+        built_index()
+        suggestions = self._row()["suggestions"]
+        self.assertEqual(suggestions[0]["url"], self.icon)
+        self.assertEqual(suggestions[0]["source"], logo_library.YOUR_GUIDE)
+        self.assertEqual(suggestions[1]["url"], "https://provider/een.png")
+        self.assertEqual(suggestions[1]["source"], logo_library.YOUR_PLAYLIST)
+        # And the collections after them
+        self.assertIn("een-be.png", suggestions[2]["url"])
+
+    def test_they_are_offered_before_anything_is_downloaded(self):
+        """Nothing needs fetching for them: they are already in Dispatcharr."""
+        cache.delete(logo_library.INDEX_KEY)
+        row = self._row(show="suggested")
+        self.assertEqual(
+            [s["source"] for s in row["suggestions"]],
+            [logo_library.YOUR_GUIDE, logo_library.YOUR_PLAYLIST],
+        )
+
+    def test_the_logo_it_already_has_is_not_offered_back(self):
+        self.channel.logo = Logo.objects.create(name="Eén", url=self.icon)
+        self.channel.save()
+        built_index()
+        urls = [s["url"] for s in self._row()["suggestions"]]
+        self.assertNotIn(self.icon, urls)
+
+    def test_a_guide_is_searched_too_and_comes_first(self):
+        built_index()
+        data = self.client_api.get("/api/channels/logo-library/search/?q=een").json()
+        self.assertEqual(data["results"][0]["url"], self.icon)
+        self.assertEqual(data["results"][0]["source"], logo_library.YOUR_GUIDE)
+
+    def test_a_guide_is_searched_with_accents_folded(self):
+        """The database compares accents as they are: "een" did not find "Eén"."""
+        results = logo_library.search_guides("een")
+        self.assertEqual([r["url"] for r in results], [self.icon])
+
+    def test_a_guide_is_searched_even_before_anything_is_downloaded(self):
+        cache.delete(logo_library.INDEX_KEY)
+        data = self.client_api.get("/api/channels/logo-library/search/?q=een").json()
+        self.assertFalse(data["built"])
+        self.assertEqual([r["url"] for r in data["results"]], [self.icon])

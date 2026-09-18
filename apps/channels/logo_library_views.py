@@ -38,39 +38,58 @@ def logo_library_suggestions(request):
     the list worth working through. ?show=missing lists channels with no logo at all, and
     ?show=all lists everything. ?search= narrows by name.
     """
-    from .models import Channel
+    from django.db.models import Prefetch
+
+    from .models import Channel, Stream
 
     index = logo_library.load_index()
     show = request.query_params.get("show") or "suggested"
     search = (request.query_params.get("search") or "").strip().lower()
 
+    # What a channel already has comes first and needs nothing downloaded, so it is offered
+    # even before the collections have been; they add to it once they are
+    channels = (
+        Channel.objects.select_related("logo", "epg_data")
+        .prefetch_related(
+            Prefetch("streams", queryset=Stream.objects.only("id", "name", "logo_url"))
+        )
+        .order_by("channel_number", "name")
+    )
+
     rows = []
-    if index:
-        channels = Channel.objects.select_related("logo").order_by("channel_number", "name")
-        for channel in channels:
-            if search and search not in (channel.name or "").lower():
-                continue
-            current = (
-                {"id": channel.logo.id, "name": channel.logo.name, "url": channel.logo.url}
-                if channel.logo_id
-                else None
-            )
-            if show == "missing" and current:
-                continue
-            suggestions = logo_library.suggestions_for(channel.name, index)
-            # A suggestion that is already the logo it has is nothing to suggest
-            if current:
-                suggestions = [s for s in suggestions if s["url"] != current["url"]]
-            if show == "suggested" and not suggestions:
-                continue
-            rows.append({
-                "channel_id": channel.id,
-                "number": channel.channel_number,
-                "name": channel.name,
-                "country": logo_library.country_of(channel.name),
-                "current": current,
-                "suggestions": suggestions,
-            })
+    for channel in channels:
+        if search and search not in (channel.name or "").lower():
+            continue
+        current = (
+            {"id": channel.logo.id, "name": channel.logo.name, "url": channel.logo.url}
+            if channel.logo_id
+            else None
+        )
+        if show == "missing" and current:
+            continue
+        # Its own guide entry and streams first, found by what the channel is mapped to
+        # rather than by what it is called; then whatever the collections have
+        suggestions = logo_library.local_suggestions(channel)
+        if index:
+            taken = {s["url"] for s in suggestions}
+            suggestions += [
+                s
+                for s in logo_library.suggestions_for(channel.name, index)
+                if s["url"] not in taken
+            ]
+        # A suggestion that is already the logo it has is nothing to suggest
+        if current:
+            suggestions = [s for s in suggestions if s["url"] != current["url"]]
+        if show == "suggested" and not suggestions:
+            continue
+        rows.append({
+            "channel_id": channel.id,
+            "number": channel.channel_number,
+            "name": channel.name,
+            "country": logo_library.country_of(channel.name),
+            "current": current,
+            "suggestions": suggestions,
+        })
 
     return JsonResponse({"status": _status(index), "channels": rows})
 
@@ -144,17 +163,21 @@ def logo_library_search(request):
     Search every logo in the collections by name, for a channel nothing was suggested for
     or the wrong thing was. ?q= what to look for, ?country= to put one country first.
     """
+    query = request.query_params.get("q") or ""
+    # Dispatcharr's own guides are searched whether or not the collections have been
+    # downloaded: they are already here, and current
+    results = logo_library.search_guides(query)
     index = logo_library.load_index()
-    if not index:
-        return JsonResponse({"results": [], "built": False})
-    return JsonResponse({
-        "built": True,
-        "results": logo_library.search(
-            request.query_params.get("q") or "",
-            index,
-            request.query_params.get("country") or "",
-        ),
-    })
+    if index:
+        taken = {r["url"] for r in results}
+        results += [
+            r
+            for r in logo_library.search(
+                query, index, request.query_params.get("country") or ""
+            )
+            if r["url"] not in taken
+        ]
+    return JsonResponse({"built": bool(index), "results": results})
 
 
 BUILT_IN = [

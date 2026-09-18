@@ -527,6 +527,101 @@ def search(query, index, country="", limit=60):
     return results
 
 
+# ── What Dispatcharr already has ─────────────────────────────────────────────
+
+YOUR_GUIDE = "your guide"
+YOUR_PLAYLIST = "your playlist"
+
+
+def local_suggestions(channel):
+    """
+    The logos Dispatcharr already has for this very channel, best first.
+
+    Its guide entry's icon, then the logos its own streams came with. These come before any
+    collection, because they are not found by name at all: the channel is mapped to that
+    guide entry and holds those streams, so there is no guessing which channel they are for.
+    A collection can only ever match on what a channel is called.
+
+    Expects the channel with its guide entry and streams already loaded, since this is asked
+    of every channel on the page.
+    """
+    found = []
+    country = country_of(channel.name)
+    epg = getattr(channel, "epg_data", None)
+    icon = (getattr(epg, "icon_url", "") or "").strip()
+    if icon.startswith(("http://", "https://")):
+        found.append(_entry(epg.name or channel.name, icon, YOUR_GUIDE, country))
+    for stream in channel.streams.all():
+        logo = (stream.logo_url or "").strip()
+        if logo.startswith(("http://", "https://")):
+            found.append(_entry(stream.name or channel.name, logo, YOUR_PLAYLIST, country))
+
+    unique = []
+    seen = set()
+    for entry in found:
+        if entry["url"] not in seen:
+            seen.add(entry["url"])
+            unique.append(entry)
+    return unique
+
+
+GUIDE_ICONS_KEY = "logo_library:guide_icons"
+# Long enough to cover someone typing a search, short enough that a guide refreshed a
+# moment ago is in it
+GUIDE_ICONS_TTL = 300
+
+
+def _guide_icons(cache=None):
+    """Every channel icon in Dispatcharr's own guides, by match key, kept briefly."""
+    if cache is None:
+        from django.core.cache import cache
+    cached = cache.get(GUIDE_ICONS_KEY)
+    if cached:
+        return json.loads(cached)
+
+    from apps.epg.models import EPGData
+
+    icons = [
+        {"key": match_key(name), "name": name, "url": url}
+        for name, url in EPGData.objects.filter(icon_url__startswith="http").values_list(
+            "name", "icon_url"
+        )
+        if name
+    ]
+    cache.set(GUIDE_ICONS_KEY, json.dumps(icons), GUIDE_ICONS_TTL)
+    return icons
+
+
+def search_guides(query, limit=24):
+    """
+    The icons in Dispatcharr's own guides whose channel name contains this.
+
+    Compared by match key, not by the database: the database compares accents as they are,
+    so "een" did not find "Eén", which is the same fault that once kept Eén from being
+    suggested at all. The guides are Dispatcharr's own, so they are current without
+    anything being downloaded; the list is only kept for a few minutes.
+    """
+    wanted = match_key(query)
+    if len(wanted) < 2:
+        return []
+    found = [
+        (0 if icon["key"] == wanted else 1 if icon["key"].startswith(wanted) else 2, icon)
+        for icon in _guide_icons()
+        if wanted in icon["key"]
+    ]
+    found.sort(key=lambda pair: (pair[0], len(pair[1]["key"])))
+    results = []
+    seen = set()
+    for _closeness, icon in found:
+        if icon["url"] in seen:
+            continue
+        seen.add(icon["url"])
+        results.append(_entry(icon["name"], icon["url"], YOUR_GUIDE))
+        if len(results) >= limit:
+            break
+    return results
+
+
 # ── Applying ─────────────────────────────────────────────────────────────────
 
 

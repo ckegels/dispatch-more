@@ -15,6 +15,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import API from '../../api';
+import { sourceColor } from './logoLibraryColors';
 
 // The name as a search would want it: what the channel is called, without the box of
 // country in front that no collection repeats
@@ -55,11 +56,7 @@ const Result = ({ result, onChoose }) => (
       {result.name}
     </Text>
     <Group gap={4}>
-      <Badge
-        size="xs"
-        variant="light"
-        color={result.source === 'tv-logos' ? 'teal' : 'blue'}
-      >
+      <Badge size="xs" variant="light" color={sourceColor(result.source)}>
         {result.source}
       </Badge>
       {result.country && (

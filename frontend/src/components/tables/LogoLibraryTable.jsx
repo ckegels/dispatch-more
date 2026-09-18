@@ -17,6 +17,7 @@ import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
 import LogoPicker from './LogoPicker';
 import LogoSources from './LogoSources';
+import { sourceColor } from './logoLibraryColors';
 
 // How many rows are drawn at once. Every row can carry several images from other sites,
 // and a thousand channels drawn together is a page that takes a while to settle.
@@ -26,6 +27,7 @@ const SOURCE_LABELS = {
   'tv-logos': 'tv-logos',
   'iptv-org': 'iptv-org',
 };
+
 
 const whenBuilt = (seconds) => {
   if (!seconds) return 'never';
@@ -71,11 +73,7 @@ const Thumb = ({ url, size = 56, onClick, selected }) => (
 // the collection says, which is the quickest way to tell a proper logo from a thumbnail
 const About = ({ suggestion }) => (
   <Group gap={4} wrap="nowrap">
-    <Badge
-      size="xs"
-      variant="light"
-      color={suggestion.source === 'tv-logos' ? 'teal' : 'blue'}
-    >
+    <Badge size="xs" variant="light" color={sourceColor(suggestion.source)}>
       {SOURCE_LABELS[suggestion.source] || suggestion.source}
     </Badge>
     {suggestion.country && (
@@ -261,11 +259,13 @@ const LogoLibraryTable = () => {
       {error && <Alert color="red">{error}</Alert>}
 
       <Text size="xs" c="dimmed">
-        Each channel is looked up by name in public logo collections. What it has
-        now is on the left, what the collections have for it on the right, best
-        first: the channel&apos;s own country, then tv-logos (whose links last),
-        then iptv-org. Click another to choose it. Nothing changes until you tick
-        channels and apply them.
+        What each channel has now is on the left, and what it could have on the
+        right, best first. First what Dispatcharr already has for that very
+        channel — the icon from its guide and the logos its streams came with,
+        which are tied to it rather than found by name. Then the collections,
+        looked up by name: the channel&apos;s own country first, then tv-logos
+        (whose links last), your added collections, then iptv-org. Click another
+        to choose it. Nothing changes until you tick channels and apply them.
       </Text>
 
       <Group justify="space-between" wrap="wrap">
