@@ -576,15 +576,39 @@ class WhatDispatcharrAlreadyHasTests(TestCase):
         data = self.client_api.get(f"/api/channels/logo-library/?show={show}").json()
         return next(r for r in data["channels"] if r["channel_id"] == self.channel.id)
 
-    def test_its_guide_icon_comes_first_then_its_streams(self):
+    def test_its_streams_come_first_and_its_guide_icon_last(self):
         built_index()
         suggestions = self._row()["suggestions"]
-        self.assertEqual(suggestions[0]["url"], self.icon)
-        self.assertEqual(suggestions[0]["source"], logo_library.YOUR_GUIDE)
-        self.assertEqual(suggestions[1]["url"], "https://provider/een.png")
-        self.assertEqual(suggestions[1]["source"], logo_library.YOUR_PLAYLIST)
-        # And the collections after them
-        self.assertIn("een-be.png", suggestions[2]["url"])
+        self.assertEqual(suggestions[0]["url"], "https://provider/een.png")
+        self.assertEqual(suggestions[0]["source"], logo_library.YOUR_PLAYLIST)
+        # Then the collections
+        self.assertIn("een-be.png", suggestions[1]["url"])
+        # And the guide to fall back on
+        self.assertEqual(suggestions[-1]["url"], self.icon)
+        self.assertEqual(suggestions[-1]["source"], logo_library.YOUR_GUIDE)
+
+    def test_every_guide_is_looked_in_not_only_the_one_it_is_mapped_to(self):
+        """Each guide source names channels its own way and has its own icons."""
+        from apps.epg.models import EPGData, EPGSource
+
+        other = EPGSource.objects.create(name="Another guide", source_type="xmltv")
+        EPGData.objects.create(
+            tvg_id="een.other", name="EEN", icon_url="https://other.example/een.png",
+            epg_source=other,
+        )
+        # Another channel's icon in that guide is not this channel's
+        EPGData.objects.create(
+            tvg_id="canvas.other", name="Canvas", icon_url="https://other.example/canvas.png",
+            epg_source=other,
+        )
+        cache.delete(logo_library.GUIDE_ICONS_KEY)
+        built_index()
+
+        guide = [s for s in self._row()["suggestions"] if s["source"] == logo_library.YOUR_GUIDE]
+        urls = [s["url"] for s in guide]
+        # The one it is mapped to first, then the same channel in the other guide
+        self.assertEqual(urls, [self.icon, "https://other.example/een.png"])
+        self.assertEqual(guide[1]["guide"], "Another guide")
 
     def test_they_are_offered_before_anything_is_downloaded(self):
         """Nothing needs fetching for them: they are already in Dispatcharr."""
@@ -592,7 +616,7 @@ class WhatDispatcharrAlreadyHasTests(TestCase):
         row = self._row(show="suggested")
         self.assertEqual(
             [s["source"] for s in row["suggestions"]],
-            [logo_library.YOUR_GUIDE, logo_library.YOUR_PLAYLIST],
+            [logo_library.YOUR_PLAYLIST, logo_library.YOUR_GUIDE],
         )
 
     def test_the_logo_it_already_has_is_not_offered_back(self):

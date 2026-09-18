@@ -535,22 +535,17 @@ YOUR_PLAYLIST = "your playlist"
 
 def local_suggestions(channel):
     """
-    The logos Dispatcharr already has for this very channel, best first.
+    The logos this channel's own streams came with.
 
-    Its guide entry's icon, then the logos its own streams came with. These come before any
-    collection, because they are not found by name at all: the channel is mapped to that
-    guide entry and holds those streams, so there is no guessing which channel they are for.
-    A collection can only ever match on what a channel is called.
+    Not found by name at all: the channel holds those streams, so there is no guessing
+    which channel they are for. The guides' icons are offered separately, and last (see
+    guide_suggestions).
 
     Expects the channel with its guide entry and streams already loaded, since this is asked
     of every channel on the page.
     """
     found = []
     country = country_of(channel.name)
-    epg = getattr(channel, "epg_data", None)
-    icon = (getattr(epg, "icon_url", "") or "").strip()
-    if icon.startswith(("http://", "https://")):
-        found.append(_entry(epg.name or channel.name, icon, YOUR_GUIDE, country))
     for stream in channel.streams.all():
         logo = (stream.logo_url or "").strip()
         if logo.startswith(("http://", "https://")):
@@ -582,10 +577,10 @@ def _guide_icons(cache=None):
     from apps.epg.models import EPGData
 
     icons = [
-        {"key": match_key(name), "name": name, "url": url}
-        for name, url in EPGData.objects.filter(icon_url__startswith="http").values_list(
-            "name", "icon_url"
-        )
+        {"key": match_key(name), "name": name, "url": url, "guide": guide or ""}
+        for name, url, guide in EPGData.objects.filter(
+            icon_url__startswith="http"
+        ).values_list("name", "icon_url", "epg_source__name")
         if name
     ]
     cache.set(GUIDE_ICONS_KEY, json.dumps(icons), GUIDE_ICONS_TTL)
@@ -616,10 +611,48 @@ def search_guides(query, limit=24):
         if icon["url"] in seen:
             continue
         seen.add(icon["url"])
-        results.append(_entry(icon["name"], icon["url"], YOUR_GUIDE))
+        results.append({**_entry(icon["name"], icon["url"], YOUR_GUIDE), "guide": icon["guide"]})
         if len(results) >= limit:
             break
     return results
+
+
+def guide_icons_by_key():
+    """Every guide icon in Dispatcharr, grouped by match key, for looking channels up."""
+    by_key = {}
+    for icon in _guide_icons():
+        if icon["key"]:
+            by_key.setdefault(icon["key"], []).append(icon)
+    return by_key
+
+
+def guide_suggestions(channel, icons_by_key):
+    """
+    The icons every guide in Dispatcharr has for this channel.
+
+    The guide entry the channel is mapped to first, since that one is tied to it. Then the
+    same channel in every other guide, by whole name the way the collections are matched:
+    each guide source names channels its own way and carries its own icons, and a channel
+    is only mapped to one of them.
+    """
+    found = []
+    epg = getattr(channel, "epg_data", None)
+    icon = (getattr(epg, "icon_url", "") or "").strip()
+    if icon.startswith(("http://", "https://")):
+        source = getattr(getattr(epg, "epg_source", None), "name", "") or ""
+        found.append({**_entry(epg.name or channel.name, icon, YOUR_GUIDE), "guide": source})
+
+    key = match_key(channel.name)
+    matches = icons_by_key.get(key) or icons_by_key.get(without_quality(key)) or []
+    for match in matches:
+        found.append({**_entry(match["name"], match["url"], YOUR_GUIDE), "guide": match["guide"]})
+
+    unique, seen = [], set()
+    for entry in found:
+        if entry["url"] not in seen:
+            seen.add(entry["url"])
+            unique.append(entry)
+    return unique
 
 
 # ── Applying ─────────────────────────────────────────────────────────────────

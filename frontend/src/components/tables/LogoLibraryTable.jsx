@@ -81,6 +81,12 @@ const About = ({ suggestion }) => (
         {suggestion.country}
       </Badge>
     )}
+    {/* Which of your guides, since there can be several with an icon each */}
+    {suggestion.guide && (
+      <Text size="xs" c="dimmed">
+        {suggestion.guide}
+      </Text>
+    )}
     {suggestion.width && suggestion.height && (
       <Text size="xs" c="dimmed">
         {suggestion.width}×{suggestion.height}
@@ -260,12 +266,11 @@ const LogoLibraryTable = () => {
 
       <Text size="xs" c="dimmed">
         What each channel has now is on the left, and what it could have on the
-        right, best first. First what Dispatcharr already has for that very
-        channel — the icon from its guide and the logos its streams came with,
-        which are tied to it rather than found by name. Then the collections,
-        looked up by name: the channel&apos;s own country first, then tv-logos
-        (whose links last), your added collections, then iptv-org. Click another
-        to choose it. Nothing changes until you tick channels and apply them.
+        right, best first. First the logos its own streams came with. Then the
+        collections, looked up by name: the channel&apos;s own country first, then
+        tv-logos (whose links last), your added collections, then iptv-org. Last
+        the icon from its guide, to fall back on. Click another to choose it.
+        Nothing changes until you tick channels and apply them.
       </Text>
 
       <Group justify="space-between" wrap="wrap">

@@ -48,8 +48,11 @@ def logo_library_suggestions(request):
 
     # What a channel already has comes first and needs nothing downloaded, so it is offered
     # even before the collections have been; they add to it once they are
+    # Every guide in Dispatcharr, looked up by name, not only the one each channel is
+    # mapped to: read once for the whole page
+    guide_icons = logo_library.guide_icons_by_key()
     channels = (
-        Channel.objects.select_related("logo", "epg_data")
+        Channel.objects.select_related("logo", "epg_data", "epg_data__epg_source")
         .prefetch_related(
             Prefetch("streams", queryset=Stream.objects.only("id", "name", "logo_url"))
         )
@@ -67,16 +70,19 @@ def logo_library_suggestions(request):
         )
         if show == "missing" and current:
             continue
-        # Its own guide entry and streams first, found by what the channel is mapped to
-        # rather than by what it is called; then whatever the collections have
+        # The logos its own streams came with first, then the collections, and the icon
+        # of its guide entry last: the guide is tied to the channel, but its icons are
+        # often the plainest of the lot, so it is the one to fall back on
         suggestions = logo_library.local_suggestions(channel)
         if index:
-            taken = {s["url"] for s in suggestions}
-            suggestions += [
-                s
-                for s in logo_library.suggestions_for(channel.name, index)
-                if s["url"] not in taken
-            ]
+            suggestions += logo_library.suggestions_for(channel.name, index)
+        suggestions += logo_library.guide_suggestions(channel, guide_icons)
+        unique, seen = [], set()
+        for suggestion in suggestions:
+            if suggestion["url"] not in seen:
+                seen.add(suggestion["url"])
+                unique.append(suggestion)
+        suggestions = unique
         # A suggestion that is already the logo it has is nothing to suggest
         if current:
             suggestions = [s for s in suggestions if s["url"] != current["url"]]
