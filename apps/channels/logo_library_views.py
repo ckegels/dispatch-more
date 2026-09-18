@@ -155,3 +155,133 @@ def logo_library_search(request):
             request.query_params.get("country") or "",
         ),
     })
+
+
+BUILT_IN = [
+    {
+        "id": logo_library.TV_LOGOS,
+        "name": logo_library.TV_LOGOS,
+        "type": logo_library.GITHUB,
+        "url": "https://github.com/tv-logo/tv-logos",
+        "built_in": True,
+    },
+    {
+        "id": logo_library.IPTV_ORG,
+        "name": logo_library.IPTV_ORG,
+        "type": logo_library.JSON_LIST,
+        "url": "https://iptv-org.github.io/api/logos.json",
+        "built_in": True,
+    },
+]
+
+
+def _sources_page():
+    """Every collection, built in or added, with what the last download found in it."""
+    sources = logo_library.load_sources()
+    status = _status(logo_library.load_index())
+    rows = []
+    for source in BUILT_IN + sources["added"]:
+        name = source.get("name") or source.get("url")
+        enabled = (
+            name not in sources["off"]
+            if source.get("built_in")
+            else source.get("enabled", True)
+        )
+        rows.append({
+            **source,
+            "enabled": enabled,
+            "count": status["counts"].get(name),
+            "error": status["errors"].get(name),
+        })
+    return {"sources": rows, "types": list(logo_library.SOURCE_TYPES)}
+
+
+def _checked(source):
+    """
+    What a collection holds, read now, before it is kept.
+
+    Adding a link that turns out to hold nothing, or not to be the kind of thing it was said
+    to be, is found out here rather than at the next download, where it would just be a
+    collection that quietly contributes nothing.
+    """
+    entries = logo_library.read_source(source)
+    return {
+        "count": len(entries),
+        "sample": [
+            {"name": entry["name"], "url": entry["url"], "country": entry["country"]}
+            for entry in entries[:12]
+        ],
+    }
+
+
+@api_view(["GET", "POST", "PATCH", "DELETE"])
+@permission_classes([IsAdmin])
+def logo_library_sources(request):
+    """
+    The collections logos are looked for in.
+
+    GET lists them. POST {"type", "url", "name", "check": true} reads one without keeping
+    it, to see what it holds; without "check" it is read and then kept. PATCH {"id",
+    "enabled"} switches one off or on, built in ones included. DELETE ?id= removes an added
+    one. Nothing here downloads the collections again: that is Update logo lists.
+    """
+    sources = logo_library.load_sources()
+
+    if request.method == "DELETE":
+        source_id = request.query_params.get("id")
+        sources["added"] = [s for s in sources["added"] if s.get("id") != source_id]
+        logo_library.save_sources(sources)
+        return JsonResponse(_sources_page())
+
+    if request.method == "PATCH":
+        source_id = request.data.get("id")
+        enabled = bool(request.data.get("enabled"))
+        if source_id in {b["id"] for b in BUILT_IN}:
+            off = set(sources["off"])
+            (off.discard if enabled else off.add)(source_id)
+            sources["off"] = sorted(off)
+        else:
+            for source in sources["added"]:
+                if source.get("id") == source_id:
+                    source["enabled"] = enabled
+        logo_library.save_sources(sources)
+        return JsonResponse(_sources_page())
+
+    if request.method == "POST":
+        kind = request.data.get("type")
+        url = (request.data.get("url") or "").strip()
+        name = (request.data.get("name") or "").strip() or url
+        if kind not in logo_library.SOURCE_TYPES:
+            return JsonResponse({"error": "Choose what kind of collection it is"}, status=400)
+        if kind != logo_library.GITHUB and not url.startswith(("http://", "https://")):
+            return JsonResponse(
+                {"error": "A link starts with http:// or https://"}, status=400
+            )
+        if not url:
+            return JsonResponse({"error": "Give the link to the collection"}, status=400)
+        taken = {b["name"] for b in BUILT_IN} | {s.get("name") for s in sources["added"]}
+        if not request.data.get("check") and name in taken:
+            return JsonResponse(
+                {"error": f"There is already a collection called {name}"}, status=400
+            )
+
+        source = {"id": logo_library.new_source_id(), "type": kind, "url": url, "name": name}
+        try:
+            checked = _checked(source)
+        except Exception as e:
+            return JsonResponse(
+                {"error": f"Could not read that as {kind}: {str(e)[:200]}"}, status=400
+            )
+        if request.data.get("check"):
+            return JsonResponse(checked)
+        if not checked["count"]:
+            return JsonResponse(
+                {"error": "That was read, but there are no logos in it"}, status=400
+            )
+
+        sources["added"].append({**source, "enabled": True})
+        logo_library.save_sources(sources)
+        logger.info(f"Added logo collection {name} ({kind}, {checked['count']} logos)")
+        return JsonResponse({**_sources_page(), "added": checked})
+
+    return JsonResponse(_sources_page())

@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 TV_LOGOS = "tv-logos"
 IPTV_ORG = "iptv-org"
 
-TV_LOGOS_TREE = "https://api.github.com/repos/tv-logo/tv-logos/git/trees/main?recursive=1"
-TV_LOGOS_RAW = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/"
+TV_LOGOS_TREE = "https://api.github.com/repos/tv-logo/tv-logos/git/trees/HEAD?recursive=1"
+TV_LOGOS_RAW = "https://raw.githubusercontent.com/tv-logo/tv-logos/HEAD/"
 IPTV_ORG_LOGOS = "https://iptv-org.github.io/api/logos.json"
 IPTV_ORG_CHANNELS = "https://iptv-org.github.io/api/channels.json"
 
@@ -174,6 +174,206 @@ def _from_iptv_org():
     return entries
 
 
+# ── Collections anyone can add ───────────────────────────────────────────────
+#
+# Plenty of places publish logos in bulk, in a handful of shapes. Each shape is read the
+# same way whoever publishes it, so adding one is a link and what kind of thing it is.
+
+GITHUB = "github"
+M3U = "m3u"
+XMLTV = "xmltv"
+JSON_LIST = "json"
+SOURCE_TYPES = (GITHUB, M3U, XMLTV, JSON_LIST)
+
+SOURCES_KEY = "logo-library-sources"
+IMAGE_EXTENSIONS = (".png", ".svg", ".jpg", ".jpeg", ".webp", ".gif")
+# A list of logos is text; anything much bigger than this is not what was meant
+MAX_DOWNLOAD = 100 * 1024 * 1024
+
+
+def new_source_id() -> str:
+    import secrets
+
+    return secrets.token_hex(4)
+
+
+def load_sources():
+    """The collections added from the page, and whether the built-in ones are wanted."""
+    from core.models import CoreSettings
+
+    try:
+        stored = CoreSettings.objects.filter(key=SOURCES_KEY).first()
+        value = getattr(stored, "value", None) or {}
+    except Exception as e:
+        logger.debug(f"Could not read the logo sources: {e}")
+        value = {}
+    return {
+        "added": [s for s in value.get("added") or [] if isinstance(s, dict)],
+        "off": [s for s in value.get("off") or [] if isinstance(s, str)],
+    }
+
+
+def save_sources(sources):
+    from core.models import CoreSettings
+
+    CoreSettings.objects.update_or_create(
+        key=SOURCES_KEY,
+        defaults={"name": "Logo library sources", "value": sources},
+    )
+
+
+def _download(url):
+    """A source's contents, refusing anything far bigger than a list of logos could be."""
+    response = requests.get(
+        url, timeout=DOWNLOAD_TIMEOUT, stream=True, headers={"User-Agent": "Dispatcharr"}
+    )
+    response.raise_for_status()
+    body = bytearray()
+    for chunk in response.iter_content(1024 * 256):
+        body.extend(chunk)
+        if len(body) > MAX_DOWNLOAD:
+            raise ValueError("That is far bigger than a list of logos; nothing was read")
+    return bytes(body)
+
+
+def _entry(name, url, source, country=""):
+    return {
+        "key": match_key(name),
+        "name": name,
+        "country": COUNTRY_ALIASES.get(country, country) if country else country_of(name),
+        "url": url,
+        "source": source,
+        "format": url.rsplit(".", 1)[-1].upper() if "." in url.rsplit("/", 1)[-1] else "",
+    }
+
+
+def _github_repo(url):
+    """"owner/repo" out of whatever was pasted: the bare pair, or any link into the repo."""
+    text = str(url or "").strip()
+    text = re.sub(r"^https?://(www\.)?github\.com/", "", text)
+    parts = [part for part in text.split("/") if part]
+    if len(parts) < 2:
+        raise ValueError("A GitHub collection is owner/repository, or a link to one")
+    return parts[0], parts[1].removesuffix(".git")
+
+
+def _from_github(url, label):
+    """
+    Every image in a GitHub repository, named after its file.
+
+    Read through GitHub's listing of the repository at its default branch ("HEAD" means
+    whichever that is), so it works whether a repository calls it main or master. A file
+    ending in "-xx" is taken as being from country xx, which is the convention tv-logos and
+    the repositories copied from it use.
+    """
+    owner, repo = _github_repo(url)
+    tree = json.loads(
+        _download(f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1")
+    )
+    if tree.get("message"):
+        raise ValueError(f"GitHub said: {tree['message']}")
+    entries = []
+    for item in tree.get("tree") or ():
+        path = item.get("path") or ""
+        if item.get("type") != "blob" or not path.lower().endswith(IMAGE_EXTENSIONS):
+            continue
+        stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        head, _, tail = stem.rpartition("-")
+        name, country = (head, tail.lower()) if head and len(tail) == 2 else (stem, "")
+        entries.append(_entry(
+            name.replace("-", " ").replace("_", " "),
+            f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{path}",
+            label,
+            country,
+        ))
+    return entries
+
+
+def _from_m3u(url, label):
+    """
+    The logo of every channel in an M3U playlist.
+
+    Playlists name their logos on each channel as tvg-logo, which is the same attribute
+    Dispatcharr itself reads. The name is tvg-name where there is one, which is the tidy
+    one, and the channel's title otherwise.
+    """
+    text = _download(url).decode("utf-8", "replace")
+    entries = []
+    for line in text.splitlines():
+        if not line.startswith("#EXTINF"):
+            continue
+        logo = re.search(r'tvg-logo="([^"]+)"', line)
+        if not logo or not logo.group(1).startswith(("http://", "https://")):
+            continue
+        name = re.search(r'tvg-name="([^"]+)"', line)
+        title = line.rsplit(",", 1)[-1].strip() if "," in line else ""
+        country = re.search(r'tvg-country="([A-Za-z]{2})', line)
+        entries.append(_entry(
+            (name.group(1) if name else title) or title,
+            logo.group(1),
+            label,
+            country.group(1).lower() if country else "",
+        ))
+    return entries
+
+
+def _from_xmltv(url, label):
+    """
+    The icon of every channel in an XMLTV guide, under each of its display names.
+
+    Read a piece at a time: a guide is mostly programmes, which are no use here and can run
+    to hundreds of megabytes, so they are passed over rather than held.
+    """
+    import io
+    import xml.etree.ElementTree as ET
+
+    entries = []
+    for _event, element in ET.iterparse(io.BytesIO(_download(url)), events=("end",)):
+        if element.tag == "channel":
+            icon = element.find("icon")
+            src = icon.get("src") if icon is not None else ""
+            if src and src.startswith(("http://", "https://")):
+                for display in element.findall("display-name"):
+                    if display.text:
+                        entries.append(_entry(display.text.strip(), src, label))
+            element.clear()
+        elif element.tag == "programme":
+            element.clear()
+    return entries
+
+
+def _from_json(url, label):
+    """
+    A JSON list of logos: [{"name", "url"}], or {"name": "url"}.
+
+    The two shapes people write by hand. "logo" and "icon" are taken for "url", since that
+    is what they tend to be called, and "country" is used where there is one.
+    """
+    data = json.loads(_download(url))
+    if isinstance(data, dict):
+        data = [{"name": name, "url": link} for name, link in data.items()]
+    entries = []
+    for item in data if isinstance(data, list) else ():
+        if not isinstance(item, dict):
+            continue
+        link = item.get("url") or item.get("logo") or item.get("icon") or ""
+        name = item.get("name") or item.get("title") or ""
+        if name and isinstance(link, str) and link.startswith(("http://", "https://")):
+            entries.append(_entry(str(name), link, label, str(item.get("country") or "").lower()))
+    return entries
+
+
+READERS = {GITHUB: _from_github, M3U: _from_m3u, XMLTV: _from_xmltv, JSON_LIST: _from_json}
+
+
+def read_source(source):
+    """Every logo in one added collection."""
+    reader = READERS.get(source.get("type"))
+    if reader is None:
+        raise ValueError(f"Not a kind of collection Dispatcharr can read: {source.get('type')}")
+    return [e for e in reader(source.get("url"), source.get("name") or source.get("url")) if e["key"]]
+
+
 def build_index(cache=None):
     """
     Download the collections and keep them as one index, by match key.
@@ -187,7 +387,17 @@ def build_index(cache=None):
     by_key = {}
     counts = {}
     errors = {}
-    for source, load in ((TV_LOGOS, _from_tv_logos), (IPTV_ORG, _from_iptv_org)):
+    sources = load_sources()
+    loaders = [
+        (name, load)
+        for name, load in ((TV_LOGOS, _from_tv_logos), (IPTV_ORG, _from_iptv_org))
+        if name not in sources["off"]
+    ] + [
+        (added.get("name") or added.get("url"), lambda added=added: read_source(added))
+        for added in sources["added"]
+        if added.get("enabled", True)
+    ]
+    for source, load in loaders:
         try:
             entries = load()
         except Exception as e:
@@ -234,12 +444,15 @@ def _rank(entry, country):
     How good a candidate is for a channel from this country, lower being better.
 
     The same country first, because the same name elsewhere is often another channel with
-    another logo. Then the collection whose links last, then one that is still running, then
-    a plain PNG, which every player shows, over SVG and the rest, which some do not.
+    another logo. Then the collection: tv-logos, whose links last; then any added from the
+    page, which someone chose on purpose; then iptv-org, whose images live on hosts that
+    come and go. Then one still running, then a plain PNG, which every player shows, over
+    SVG and the rest, which some do not.
     """
+    source = entry.get("source")
     return (
         0 if country and entry.get("country") == country else 1,
-        0 if entry.get("source") == TV_LOGOS else 1,
+        0 if source == TV_LOGOS else 2 if source == IPTV_ORG else 1,
         1 if entry.get("closed") else 0,
         0 if entry.get("format") in ("PNG", "") else 1,
         1 if entry.get("hd") else 0,

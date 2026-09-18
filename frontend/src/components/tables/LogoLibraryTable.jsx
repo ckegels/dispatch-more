@@ -16,6 +16,7 @@ import {
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
 import LogoPicker from './LogoPicker';
+import LogoSources from './LogoSources';
 
 // How many rows are drawn at once. Every row can carry several images from other sites,
 // and a thousand channels drawn together is a page that takes a while to settle.
@@ -113,6 +114,10 @@ const LogoLibraryTable = () => {
   const [custom, setCustom] = useState({});
   // The channel a logo is being chosen for by hand, if any
   const [pickerRow, setPickerRow] = useState(null);
+  // The collections panel, folded away until wanted
+  const [showSources, setShowSources] = useState(false);
+  // A collection was added, switched or removed since the lists were last updated
+  const [sourcesChanged, setSourcesChanged] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -217,10 +222,36 @@ const LogoLibraryTable = () => {
                 .join(' · ')} · updated ${whenBuilt(status.built_at)}`
             : 'The logo lists have not been downloaded yet.'}
         </Text>
-        <Button size="xs" variant="light" loading={building} onClick={rebuild}>
-          {status.built ? 'Update logo lists' : 'Download logo lists'}
-        </Button>
+        <Group gap="xs">
+          <Button
+            size="xs"
+            variant="subtle"
+            onClick={() => setShowSources(!showSources)}
+          >
+            {showSources ? 'Hide collections' : 'Collections'}
+          </Button>
+          <Button
+            size="xs"
+            variant={sourcesChanged ? 'filled' : 'light'}
+            loading={building}
+            onClick={async () => {
+              await rebuild();
+              setSourcesChanged(false);
+            }}
+          >
+            {status.built ? 'Update logo lists' : 'Download logo lists'}
+          </Button>
+        </Group>
       </Group>
+
+      {showSources && (
+        <LogoSources onChanged={() => setSourcesChanged(true)} />
+      )}
+      {sourcesChanged && (
+        <Alert color="blue">
+          The collections have changed. Update the logo lists to use them.
+        </Alert>
+      )}
 
       {Object.entries(status.errors || {}).map(([source, message]) => (
         <Alert key={source} color="orange">

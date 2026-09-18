@@ -2889,6 +2889,40 @@ export default class API {
     return await request(`${host}/api/channels/logo-library/search/?${params}`);
   }
 
+  static async getLogoSources() {
+    // The collections logos are looked for in, built in and added
+    return await request(`${host}/api/channels/logo-library/sources/`);
+  }
+
+  static async checkLogoSource(source) {
+    // Reads a collection without keeping it, to see what it holds
+    return await request(`${host}/api/channels/logo-library/sources/`, {
+      method: 'POST',
+      body: { ...source, check: true },
+    });
+  }
+
+  static async addLogoSource(source) {
+    return await request(`${host}/api/channels/logo-library/sources/`, {
+      method: 'POST',
+      body: source,
+    });
+  }
+
+  static async setLogoSourceEnabled(id, enabled) {
+    return await request(`${host}/api/channels/logo-library/sources/`, {
+      method: 'PATCH',
+      body: { id, enabled },
+    });
+  }
+
+  static async removeLogoSource(id) {
+    return await request(
+      `${host}/api/channels/logo-library/sources/?id=${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    );
+  }
+
   static async applyLogoLibrary(assignments) {
     // [{channel_id, url, name}]: only what was chosen on the page changes
     return await request(`${host}/api/channels/logo-library/apply/`, {

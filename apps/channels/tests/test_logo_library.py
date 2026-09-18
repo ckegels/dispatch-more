@@ -5,6 +5,7 @@ of this was written: GitHub's file listing for tv-logo/tv-logos, and iptv-org's 
 and channels.json. The channel names are real ones, including the ones that went wrong.
 """
 
+import json
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -342,3 +343,201 @@ class ApplyByIdTests(TestCase):
         data = self.client_api.get("/api/channels/logo-library/search/?q=tfx&country=be").json()
         self.assertTrue(data["built"])
         self.assertIn("tfx-be.png", data["results"][0]["url"])
+
+
+# The shapes below are copied from real ones: an iptv-org country playlist, and the XMLTV
+# Dispatcharr itself writes.
+M3U_TEXT = b'''#EXTM3U
+#EXTINF:-1 tvg-id="ATV.be@SD" tvg-logo="https://upload.wikimedia.org/atv-be.png" group-title="General",ATV (Belgium) (1080p)
+http://example.com/atv.m3u8
+#EXTINF:-1 tvg-id="BelRTL.be" tvg-name="Bel RTL" tvg-country="BE" tvg-logo="https://i.imgur.com/belrtl.png",Bel RTL (1080p)
+http://example.com/belrtl.m3u8
+#EXTINF:-1 tvg-id="NoLogo.be",No Logo TV
+http://example.com/nologo.m3u8
+#EXTINF:-1 tvg-logo="logos/local.png",Local Only
+http://example.com/local.m3u8
+'''
+XMLTV_TEXT = b'''<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="1"><display-name>ORF 1</display-name><display-name>ORF eins</display-name>
+    <icon src="https://example.com/orf1.png" /></channel>
+  <channel id="2"><display-name>No Icon</display-name></channel>
+  <programme start="20260101000000 +0000" stop="20260101010000 +0000" channel="1">
+    <title>Zeit im Bild</title></programme>
+</tv>
+'''
+TREE_OF_ANOTHER_REPO = json.dumps({
+    "tree": [
+        {"type": "blob", "path": "logos/be/een-be.png"},
+        {"type": "blob", "path": "logos/national_geographic.svg"},
+        {"type": "blob", "path": "README.md"},
+    ]
+}).encode()
+
+
+class AddedSourceTests(TestCase):
+    """Collections added from the page, one reader per shape."""
+
+    def _read(self, kind, body, url="https://example.com/list"):
+        with patch("apps.channels.logo_library._download", return_value=body):
+            return logo_library.read_source({"type": kind, "url": url, "name": "mine"})
+
+    def test_a_playlist_gives_the_logo_on_each_channel(self):
+        entries = self._read(logo_library.M3U, M3U_TEXT)
+        by_key = {e["key"]: e for e in entries}
+        # "(Belgium) (1080p)" is decoration, like the country box in front
+        self.assertEqual(by_key["atv"]["url"], "https://upload.wikimedia.org/atv-be.png")
+        # tvg-name and tvg-country are used where a playlist gives them
+        self.assertEqual(by_key["belrtl"]["country"], "be")
+        # A channel with no logo, or one that is not a link, gives nothing
+        self.assertEqual(set(by_key), {"atv", "belrtl"})
+
+    def test_a_guide_gives_each_channels_icon_under_every_name(self):
+        entries = self._read(logo_library.XMLTV, XMLTV_TEXT)
+        self.assertEqual({e["key"] for e in entries}, {"orf1", "orfeins"})
+        self.assertTrue(all(e["url"] == "https://example.com/orf1.png" for e in entries))
+
+    def test_a_json_list_in_either_shape(self):
+        as_list = json.dumps([
+            {"name": "TFX", "logo": "https://example.com/tfx.png", "country": "FR"},
+            {"name": "Not a link", "url": "tfx.png"},
+        ]).encode()
+        as_map = json.dumps({"Eén": "https://example.com/een.png"}).encode()
+
+        (tfx,) = self._read(logo_library.JSON_LIST, as_list)
+        self.assertEqual((tfx["key"], tfx["country"]), ("tfx", "fr"))
+        (een,) = self._read(logo_library.JSON_LIST, as_map)
+        self.assertEqual(een["key"], "een")
+
+    def test_any_github_repository_of_images(self):
+        """At its default branch, whatever that is called, and only the images."""
+        entries = self._read(
+            logo_library.GITHUB, TREE_OF_ANOTHER_REPO, "https://github.com/someone/logos"
+        )
+        by_key = {e["key"]: e for e in entries}
+        self.assertEqual(set(by_key), {"een", "nationalgeographic"})
+        self.assertEqual(by_key["een"]["country"], "be")
+        self.assertEqual(
+            by_key["een"]["url"],
+            "https://raw.githubusercontent.com/someone/logos/HEAD/logos/be/een-be.png",
+        )
+
+    def test_a_repository_can_be_given_as_owner_and_name(self):
+        self.assertEqual(logo_library._github_repo("someone/logos"), ("someone", "logos"))
+        self.assertEqual(
+            logo_library._github_repo("https://github.com/someone/logos.git/tree/main"),
+            ("someone", "logos"),
+        )
+
+    def test_something_far_too_big_is_not_read(self):
+        class Huge:
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, size):
+                while True:
+                    yield b"x" * size
+
+        with patch("apps.channels.logo_library.requests.get", return_value=Huge()):
+            with self.assertRaises(ValueError):
+                logo_library._download("https://example.com/endless")
+
+    def test_added_collections_rank_between_the_two_built_in(self):
+        """Chosen on purpose, so ahead of iptv-org; its links, unlike tv-logos', unknown."""
+        mine = {"source": "mine", "country": "", "format": "PNG"}
+        ours = {"source": logo_library.TV_LOGOS, "country": "", "format": "PNG"}
+        theirs = {"source": logo_library.IPTV_ORG, "country": "", "format": "PNG"}
+        ranked = sorted([theirs, mine, ours], key=lambda e: logo_library._rank(e, ""))
+        self.assertEqual([e["source"] for e in ranked], [logo_library.TV_LOGOS, "mine", logo_library.IPTV_ORG])
+
+
+class SourcesViewTests(TestCase):
+    def setUp(self):
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+
+    def _post(self, **body):
+        with patch("apps.channels.logo_library._download", return_value=M3U_TEXT):
+            return self.client_api.post(
+                "/api/channels/logo-library/sources/", body, format="json"
+            )
+
+    def test_the_built_in_ones_are_listed(self):
+        data = self.client_api.get("/api/channels/logo-library/sources/").json()
+        self.assertEqual(
+            [s["name"] for s in data["sources"]],
+            [logo_library.TV_LOGOS, logo_library.IPTV_ORG],
+        )
+        self.assertEqual(set(data["types"]), set(logo_library.SOURCE_TYPES))
+
+    def test_a_collection_is_checked_before_it_is_kept(self):
+        response = self._post(type="m3u", url="https://example.com/be.m3u", check=True)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["count"], 2)
+        # Only looked at, not kept
+        self.assertEqual(logo_library.load_sources()["added"], [])
+
+    def test_adding_one_keeps_it(self):
+        response = self._post(type="m3u", url="https://example.com/be.m3u", name="Belgium")
+        self.assertEqual(response.status_code, 200, response.content)
+        (added,) = logo_library.load_sources()["added"]
+        self.assertEqual((added["name"], added["type"]), ("Belgium", "m3u"))
+
+    def test_one_with_nothing_in_it_is_not_kept(self):
+        with patch("apps.channels.logo_library._download", return_value=b"#EXTM3U\n"):
+            response = self.client_api.post(
+                "/api/channels/logo-library/sources/",
+                {"type": "m3u", "url": "https://example.com/empty.m3u"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no logos", response.json()["error"])
+
+    def test_one_that_is_not_what_it_was_said_to_be_says_so(self):
+        with patch("apps.channels.logo_library._download", return_value=b"not json"):
+            response = self.client_api.post(
+                "/api/channels/logo-library/sources/",
+                {"type": "json", "url": "https://example.com/x"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Could not read that as json", response.json()["error"])
+
+    def test_a_built_in_one_can_be_switched_off_and_is_then_not_downloaded(self):
+        self.client_api.patch(
+            "/api/channels/logo-library/sources/",
+            {"id": logo_library.IPTV_ORG, "enabled": False},
+            format="json",
+        )
+        self.assertIn(logo_library.IPTV_ORG, logo_library.load_sources()["off"])
+
+        cache.delete(logo_library.INDEX_KEY)
+        with patch("apps.channels.logo_library.requests.get", side_effect=both_collections):
+            built = logo_library.build_index()
+        self.assertEqual(set(built["counts"]), {logo_library.TV_LOGOS})
+
+    def test_an_added_one_is_part_of_the_next_download(self):
+        self._post(type="m3u", url="https://example.com/be.m3u", name="Belgium")
+
+        cache.delete(logo_library.INDEX_KEY)
+        with patch(
+            "apps.channels.logo_library.requests.get", side_effect=both_collections
+        ), patch("apps.channels.logo_library._download", return_value=M3U_TEXT):
+            built = logo_library.build_index()
+
+        self.assertEqual(built["counts"]["Belgium"], 2)
+        index = logo_library.load_index()
+        self.assertTrue(logo_library.suggestions_for("┃BE┃ Bel RTL", index))
+
+    def test_an_added_one_can_be_removed(self):
+        self._post(type="m3u", url="https://example.com/be.m3u", name="Belgium")
+        (added,) = logo_library.load_sources()["added"]
+        self.client_api.delete(f"/api/channels/logo-library/sources/?id={added['id']}")
+        self.assertEqual(logo_library.load_sources()["added"], [])
+
+    def test_two_cannot_share_a_name(self):
+        self._post(type="m3u", url="https://example.com/be.m3u", name="Belgium")
+        response = self._post(type="m3u", url="https://example.com/other.m3u", name="Belgium")
+        self.assertEqual(response.status_code, 400)
