@@ -1232,8 +1232,17 @@ def _session_for(server, started_at):
     apart than that, nothing is matched and the start simply shows no server information,
     which is better than showing another stream's numbers.
     """
+    jellyfin = kind(server) == "jellyfin"
     for session in sessions(server):
         if not session["live"]:
+            continue
+        if jellyfin:
+            # Jellyfin reports when a session was last active, not when it began, and that
+            # is refreshed while it plays: matched on time, a stream that started an hour
+            # ago looks as new as this one. How far into the stream the player is says it
+            # properly, because a session that has only just begun is still near the start.
+            if session["position"] is not None and session["position"] <= MATCH_WINDOW:
+                return session
             continue
         age = session["started_at"] - started_at
         if -MATCH_BEFORE <= age <= MATCH_WINDOW:

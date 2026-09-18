@@ -1393,6 +1393,102 @@ class OverlapForEitherServerTests(TestCase):
                 )
 
 
+class BindingOnEitherServerTests(TestCase):
+    """
+    The device is bound when the server names it, which is what the overlap really runs on.
+
+    Everything tried while the request is in flight is a guess: the server is asked for the
+    stream before it has a session to report. This is the part that is certain, so it has to
+    work on both kinds of server or the overlap is Plex-only in the one way that matters.
+    """
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        media_servers.forget_hosts()
+        self.addCleanup(media_servers.forget_hosts)
+
+    def test_plex_names_the_device_and_it_is_bound(self):
+        server = {"id": "a1", "name": "Plex", "url": "http://plex:32400", "token": "t"}
+        # Plex says when the session began, so the start it belongs to is the one at that
+        # moment: matched on time, which is what it gives us
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = plex
+            session = media_servers._session_for(server, 1789580681)
+
+        self.assertIsNotNone(session, "Plex named no session for this start")
+        media_servers.bind_device(self.redis, "channel-a", session)
+        self.assertEqual(
+            media_servers._as_str(
+                self.redis.get(
+                    media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid="channel-a")
+                )
+            ),
+            f"server|{session['device_id']}",
+        )
+
+    def test_jellyfin_names_the_device_and_it_is_bound(self):
+        """
+        Jellyfin says when a session was last active, not when it began.
+
+        Matched on that time, a stream that started an hour ago looks as new as this one,
+        and a session whose last activity has not been refreshed looks like neither. How far
+        into the stream the player is says it properly.
+        """
+        server = {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+                  "kind": "jellyfin"}
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = jellyfin
+            session = media_servers._session_for(server, time.time())
+
+        self.assertIsNotNone(session, "Jellyfin named no session for this start")
+        self.assertEqual(session["device_id"], "shield-1")
+        media_servers.bind_device(self.redis, "channel-a", session)
+        self.assertEqual(
+            media_servers._as_str(
+                self.redis.get(
+                    media_servers.CHANNEL_DEVICE_KEY.format(channel_uuid="channel-a")
+                )
+            ),
+            "server|shield-1",
+        )
+
+    def test_a_jellyfin_session_already_well_into_a_stream_is_not_this_start(self):
+        """Otherwise a channel someone else has been watching is bound to this one."""
+        long_running = [
+            {
+                "Id": "s9",
+                "UserName": "Someone else",
+                "DeviceId": "living-room",
+                "NowPlayingItem": {"Name": "ORF 1", "Type": "TvChannel"},
+                # An hour in, and its last activity is a moment ago because it is playing
+                "PlayState": {"PositionTicks": 3600 * 10_000_000},
+                "LastActivityDate": "2026-09-17T20:15:00.0000000Z",
+            }
+        ]
+        server = {"id": "j1", "name": "Jellyfin", "url": "http://jf:8096", "token": "t",
+                  "kind": "jellyfin"}
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
+            get.side_effect = lambda url, **kwargs: (
+                fake_response(long_running) if "/Sessions" in url else jellyfin(url, **kwargs)
+            )
+            self.assertIsNone(media_servers._session_for(server, time.time()))
+
+    def test_binding_settles_the_overlap_on_either_server(self):
+        """The binding is what stops the channel the viewer left; it is not just a name."""
+        session = {"device_id": "shield-1", "user": "Chris", "player": "Shield"}
+        with patch(
+            "apps.proxy.live_proxy.probation.settle_media_server_start"
+        ) as settle:
+            media_servers.bind_device(self.redis, "channel-a", session)
+            settle.assert_not_called()  # nothing to settle: it was on no channel before
+
+            media_servers.bind_device(self.redis, "channel-b", session)
+            settle.assert_called_once()
+            self.assertEqual(settle.call_args.args[1], "channel-b")
+            self.assertEqual(settle.call_args.args[2], "server|shield-1")
+            self.assertEqual(settle.call_args.args[3], "channel-a")
+
+
 class SoleDeviceTests(TestCase):
     """A media server asks on behalf of its viewers; sometimes it can say which one."""
 
