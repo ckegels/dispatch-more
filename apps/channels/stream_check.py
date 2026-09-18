@@ -8,11 +8,18 @@ anyone is sent to them.
 
 How it goes about it, and why:
 
-- Only when nobody is watching. It takes connections from the same providers viewers
-  use, so it waits until nothing is playing, and the moment something starts, the check
-  in progress is dropped and the run waits again. A viewer who finds a provider full
-  because a check holds the connection asks it to make way (see make_way), and gets the
-  connection within a fraction of a second.
+- Never on a login someone is using. It takes connections from the same providers
+  viewers use, so before every stream it looks for a login of that provider nobody is on
+  -- a viewer can move from one provider to another at any time -- and when every one is
+  in use, that provider waits while the others go on. A viewer who comes onto the login
+  being checked with has the check dropped at once, and one who finds a provider full
+  because of a check asks it to make way (see make_way), and gets the connection within
+  a fraction of a second.
+- Only providers that work. Before its streams, each account's logins are looked at:
+  expired, or refused by an Xtream Codes provider, and the account is left for the round.
+  A provider that is down fails every stream, so when its first streams all fail it is
+  taken to be down, and left too. Either way its streams are not counted against: they
+  were never really looked at.
 - One stream at a time per provider, every provider at once. A provider's connections
   are taken the way a viewer takes them (connection_pool.reserve_profile_slot), so a run
   never goes past a provider's limit, and with a pause between streams so it does not
@@ -71,6 +78,9 @@ DEFAULTS = {
     # Put a parked stream back by itself when it works again, rather than leaving it to a
     # person to decide
     "restore_recovered": False,
+    # A provider whose first streams in a run all fail is down, not its streams: after this
+    # many in a row it is left for the rest of the run, and those failures do not count
+    "account_failures": 5,
 }
 
 # ── Redis keys, all short-lived: what outlives a run is written to CoreSettings ──
@@ -96,8 +106,6 @@ TOO_LITTLE = 16 * 1024
 QUIET_POLL = 5
 # Kept per stream, so the page can say "failed 3 of the last 5 runs"
 HISTORY_KEPT = 10
-# A provider with no connection free is waited for this long before the stream is skipped
-SLOT_WAIT = 60
 
 
 # ── Settings and what is kept ────────────────────────────────────────────────
@@ -135,6 +143,7 @@ def save_settings(given):
         values["timeout_seconds"] = min(60, max(3, float(values["timeout_seconds"])))
         values["gap_seconds"] = min(60, max(0, float(values["gap_seconds"])))
         values["broken_after"] = max(1, int(values["broken_after"]))
+        values["account_failures"] = max(2, int(values["account_failures"]))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     for field in ("window_from", "window_to"):
@@ -164,38 +173,147 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-# ── Is anybody watching ──────────────────────────────────────────────────────
+# ── Which logins are in use ──────────────────────────────────────────────────
 
 
-class _Quiet:
+class _Usage:
     """
-    Whether nothing is playing: no live channel running and no VOD being watched.
+    Which of the providers' logins Dispatcharr is using right now, looked at before every
+    stream, since a viewer can move from one provider to another during a run.
 
-    Asked by every provider's thread many times a second while a stream is read, so the
-    answer is kept for half a second; looking it up means walking Redis' keys.
+    A login is a profile of an M3U account: an account with two profiles has two logins,
+    and while a viewer uses one, the other can be checked with.
+
+    Asked by every provider's thread many times a second while a stream is read, so what
+    is found is kept for half a second: finding it means walking Redis' keys.
     """
 
     def __init__(self, redis_client):
         self.redis = redis_client
         self.lock = threading.Lock()
-        self.at = 0.0
-        self.value = True
+        self.at = -1.0
+        self.playing = False
+        self.live_profiles = set()
 
-    def __call__(self):
+    def _look(self):
         with self.lock:
             if time.monotonic() - self.at < 0.5:
-                return self.value
-            self.value = not self._anything_playing()
-            self.at = time.monotonic()
-            return self.value
+                return
+            playing = False
+            for pattern in ("live:channel:*:metadata", "vod_proxy:connection:*"):
+                for _ in self.redis.scan_iter(match=pattern, count=500):
+                    playing = True
+                    break
+            live = set()
+            if playing:
+                # The login each running channel is on (set by the proxy as it starts one)
+                for key in self.redis.scan_iter(match="stream_profile:*", count=500):
+                    try:
+                        live.add(int(self.redis.get(key) or 0))
+                    except (TypeError, ValueError):
+                        pass
+            self.playing, self.live_profiles, self.at = playing, live, time.monotonic()
 
-    def _anything_playing(self):
-        if self.redis.exists(YIELD_KEY):
+    def anything_playing(self):
+        self._look()
+        return self.playing
+
+    def in_use(self, profile, holding=False):
+        """
+        Whether someone other than the check is on this login. holding: the check holds
+        one of its connections, which is not someone else's.
+
+        With nothing playing anywhere, a count left above zero is one a stream that ended
+        badly failed to give back (it happens), not a viewer; trusting it would leave that
+        login unchecked for good.
+        """
+        from apps.m3u.connection_pool import (
+            get_credential_connection_count,
+            get_profile_connection_count,
+        )
+
+        self._look()
+        if not self.playing:
+            return False
+        if profile.id in self.live_profiles:
             return True
-        for pattern in ("live:channel:*:metadata", "vod_proxy:connection:*"):
-            for _ in self.redis.scan_iter(match=pattern, count=500):
-                return True
-        return False
+        own = 1 if holding and profile.max_streams > 0 else 0
+        others = get_profile_connection_count(profile, self.redis) - own
+        others += max(0, get_credential_connection_count(profile, self.redis) - own)
+        return others > 0
+
+
+# ── Is an account working at all ─────────────────────────────────────────────
+
+
+def _xc_user_info(account, profile, user_agent):
+    """
+    What an Xtream Codes provider says about a login: user_info from player_api.php, the
+    call its apps make to log in. Not a stream: it takes no connection. Raises when the
+    provider cannot be asked.
+    """
+    import requests
+
+    from apps.m3u.credentials import get_transformed_credentials
+
+    server, username, password = get_transformed_credentials(account, profile)
+    if not (server and username and password):
+        raise ValueError("no login to ask with")
+    response = requests.get(
+        f"{server.rstrip('/')}/player_api.php",
+        params={"username": username, "password": password},
+        headers={"User-Agent": user_agent} if user_agent else {},
+        timeout=10,
+    )
+    response.raise_for_status()
+    info = (response.json() or {}).get("user_info")
+    if not isinstance(info, dict):
+        raise ValueError("the provider's answer has no account in it")
+    return info
+
+
+def _login_problem(account, profile, user_agent, now=None):
+    """
+    Why a login cannot be checked with, or None: it expired, or its provider refuses it.
+    For an Xtream Codes account the provider is asked; for any other, only the expiry date
+    Dispatcharr has can be looked at, and a provider that is down shows as its streams
+    failing (see account_failures).
+    """
+    import requests
+
+    now = now or datetime.now(timezone.utc)
+    expires = profile.get_account_expiration() if hasattr(profile, "get_account_expiration") else None
+    if expires and expires < now:
+        return f"its login expired on {expires:%Y-%m-%d}"
+    if account.account_type != "XC":
+        return None
+    try:
+        info = _xc_user_info(account, profile, user_agent)
+    except (requests.exceptions.RequestException, ValueError) as e:
+        return f"the provider did not answer when asked about the login ({type(e).__name__})"
+    if str(info.get("auth", "1")) != "1":
+        return "the provider refused the login"
+    status = str(info.get("status") or "Active")
+    if status.lower() != "active":
+        return f"the provider says the login is {status}"
+    return None
+
+
+def _usable_logins(account, profiles, user_agent):
+    """
+    The account's logins that can be checked with, and why none can when none can.
+    Asked once per account per batch: a provider's login does not come and go by the minute.
+    """
+    usable, problems = [], []
+    for profile in profiles:
+        problem = _login_problem(account, profile, user_agent)
+        if problem:
+            problems.append(f"{profile.name}: {problem}" if len(profiles) > 1 else problem)
+        else:
+            usable.append(profile)
+    if not profiles:
+        problems.append("it has no active profile")
+    return usable, "; ".join(problems)
 
 
 def make_way(redis_client):
@@ -370,7 +488,7 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False):
 # ── Which streams, and a provider connection for each ────────────────────────
 
 
-def _targets(settings, only=None, due_before=None):
+def _targets(settings, only=None, due_before=None, skip_accounts=()):
     """
     The streams to look at, by account: those on channels (in the groups chosen), and
     every parked one. Custom streams are made by hand -- a fallback screen -- and are not
@@ -394,6 +512,7 @@ def _targets(settings, only=None, due_before=None):
     by_account = {}
     for stream in (
         Stream.objects.filter(id__in=wanted, m3u_account__is_active=True)
+        .exclude(m3u_account_id__in=[int(a) for a in skip_accounts])
         .select_related("m3u_account")
         .order_by("id")
     ):
@@ -410,19 +529,20 @@ def _profiles_of(account):
     )
 
 
-def _take_connection(profiles, redis_client, should_stop):
-    """A connection of one of the account's profiles, as a viewer would take it; or None."""
+def _take_free_login(logins, redis_client, usage):
+    """
+    A connection on a login nobody is using, taken the way a viewer takes one; or None when
+    every login of the account is in use or full. Asked before every stream, so a viewer who
+    moved onto this provider since the last one is seen.
+    """
     from apps.m3u.connection_pool import reserve_profile_slot
 
-    waited_until = time.monotonic() + SLOT_WAIT
-    while time.monotonic() < waited_until:
-        for profile in profiles:
-            reserved, _, _ = reserve_profile_slot(profile, redis_client)
-            if reserved:
-                return profile
-        if should_stop():
-            raise Stopped()
-        time.sleep(2)
+    for profile in logins:
+        if usage.in_use(profile):
+            continue
+        reserved, _, _ = reserve_profile_slot(profile, redis_client)
+        if reserved:
+            return profile
     return None
 
 
@@ -523,11 +643,20 @@ def run(redis_client, only=None, batch_seconds=None):
     One batch of the round going, or a check of the streams given (only).
 
     A batch looks at streams, every provider at once, for batch_seconds, keeps what it
-    found, and ends. It ends sooner when someone starts watching, when asked to stop, or,
-    for a round that started by itself, when the window closes. Returns why it ended:
-    "more" (time is up and there is more: the caller queues the next batch at once),
-    "waiting" (someone is watching, or the window is closed: the next tick carries on),
-    "done", "stopped", or "already running".
+    found, and ends. Each provider's part:
+
+    - first, whether the account works at all: its logins' expiry dates, and for an Xtream
+      Codes account whether the provider still accepts them. One that does not is left for
+      the rest of the round, and its streams are not counted against;
+    - then, before every stream, a login nobody is using: a viewer can move onto this
+      provider at any time, and a check never takes a login from one. With every login of
+      the account in use, that provider waits and the others go on;
+    - and when its first streams all fail (account_failures in a row), the provider is
+      taken to be down rather than its streams, and left for the rest of the round.
+
+    Returns why it ended: "more" (time is up and there is more: the caller queues the next
+    batch at once), "waiting" (what is left is on logins in use, or the window is closed:
+    the next tick carries on), "done", "stopped", or "already running".
 
     In batches because a worker held for the hours a round can take is a worker the
     playlist and guide refreshes cannot have.
@@ -543,88 +672,144 @@ def run(redis_client, only=None, batch_seconds=None):
         if only is None and round_ is None:
             return "done"
         scheduled = round_ is not None and not round_.get("forced")
-        quiet = _Quiet(redis_client)
-        if not quiet() or (scheduled and not in_window(settings)):
-            _progress(redis_client, waiting=True, message="Waiting for viewers to finish" if not quiet() else "Waiting for its window")
+        if scheduled and not in_window(settings):
+            _progress(redis_client, waiting=True, message="Waiting for its window")
+            return "waiting"
+        if redis_client.exists(YIELD_KEY):
+            # A viewer asked for a connection a moment ago; give them the moment
+            _progress(redis_client, waiting=True, message="Making way for a viewer")
             return "waiting"
         _progress(redis_client, waiting=False, message="")
 
-        by_account = _targets(settings, only=only, due_before=round_["since"] if round_ else None)
+        unavailable = dict((round_ or {}).get("unavailable") or {})
+        by_account = _targets(
+            settings, only=only, due_before=round_["since"] if round_ else None, skip_accounts=unavailable
+        )
         if not by_account:
             return _finish(redis_client, round_) if round_ else "done"
         deadline = time.monotonic() + float(batch_seconds or BATCH_SECONDS)
         results = load_results()["streams"]
         lock = threading.Lock()
+        usage = _Usage(redis_client)
         # Everything the providers' threads need from the database, read here: a thread has
         # a database connection of its own, and all it should do is talk to providers
         profiles = {a: _profiles_of(streams[0].m3u_account) for a, streams in by_account.items()}
         agents = {a: streams[0].m3u_account.get_user_agent_string() or "" for a, streams in by_account.items()}
         was_parked = {str(i) for i in parked_ids()}
         own_connection = connections["default"]
+        give_up_after = int(settings.get("account_failures") or 5)
         recovered = []
-        ended = {"why": "more"}
+        stopped = {"asked": False}
+        waiting = set()
         accounts = progress(redis_client).get("accounts") or {}
         for account_id, streams in by_account.items():
-            entry = accounts.setdefault(str(account_id), {"name": streams[0].m3u_account.name, "done": 0, "now": ""})
-            entry["left"] = len(streams)
+            entry = accounts.setdefault(str(account_id), {"name": streams[0].m3u_account.name, "done": 0})
+            entry.update(left=len(streams), now="", status="checking", reason="")
 
         def stop_asked():
             return bool(redis_client.exists(STOP_KEY)) or (scheduled and not in_window(settings))
 
-        def should_stop():
-            # Cut a check short: for a viewer, or when asked to stop
-            return stop_asked() or not quiet()
+        def set_status(entry, status, reason=""):
+            with lock:
+                entry.update(status=status, reason=reason, now="")
+                _progress(redis_client, accounts=accounts)
+
+        def count(stream, outcome):
+            """What was found kept, under the lock."""
+            record = _record(redis_client, results, stream, outcome, settings)
+            if record["state"] == "broken":
+                _progress(redis_client, broken=progress(redis_client).get("broken", 0) + 1)
+            if outcome["ok"] and str(stream.id) in was_parked:
+                recovered.append(stream.id)
 
         def one_provider(account_id, streams):
             entry = accounts[str(account_id)]
+            account = streams[0].m3u_account
+            # Failures before anything from this provider played: held back until it is
+            # clear whether the streams failed or the provider is down
+            held = []
+            played = False
+            given_up = False
             try:
+                logins, problem = _usable_logins(account, profiles[account_id], agents[account_id])
+                if not logins:
+                    _unavailable(redis_client, round_, account_id, account.name, problem, lock)
+                    set_status(entry, "unavailable", problem)
+                    return
                 for stream in streams:
                     if stop_asked():
-                        ended["why"] = "stopped" if redis_client.exists(STOP_KEY) else "waiting"
+                        stopped["asked"] = bool(redis_client.exists(STOP_KEY))
+                        waiting.add(account_id)
                         return
-                    if not quiet():
-                        ended["why"] = "waiting"
+                    if redis_client.exists(YIELD_KEY):
+                        waiting.add(account_id)
+                        set_status(entry, "waiting", "making way for a viewer")
+                        return
+                    profile = _take_free_login(logins, redis_client, usage)
+                    if profile is None:
+                        # Every login of it in use or full: this provider waits, others go on
+                        waiting.add(account_id)
+                        set_status(entry, "in use", "a viewer is on every login of it")
                         return
                     redis_client.expire(RUN_KEY, RUN_TTL)
                     with lock:
-                        entry["now"] = stream.name
+                        entry.update(now=stream.name, status="checking", reason="")
                         _progress(redis_client, accounts=accounts)
-                    try:
-                        profile = _take_connection(profiles[account_id], redis_client, should_stop)
-                    except Stopped:
-                        ended["why"] = "waiting"
-                        return
+
+                    def should_stop(profile=profile):
+                        # Cut short: asked to stop, a viewer needs a connection, or a viewer
+                        # came onto this very login
+                        return (
+                            stop_asked()
+                            or bool(redis_client.exists(YIELD_KEY))
+                            or usage.in_use(profile, holding=True)
+                        )
+
                     outcome = None
-                    if profile is not None:
-                        try:
-                            url = _url_for(stream, profile)
-                            if url and url.startswith(("http://", "https://")):
-                                outcome = probe(url, agents[account_id], settings["timeout_seconds"], should_stop)
-                        except Stopped:
-                            # Someone started watching: this one is looked at again once they
-                            # are done, and it does not count against the stream
-                            ended["why"] = "waiting"
-                            return
-                        finally:
-                            # An unlimited profile took no slot, so there is none to give back;
-                            # releasing anyway would free one a viewer holds
-                            if profile.max_streams > 0:
-                                release_profile_slot(profile.id, redis_client)
+                    try:
+                        url = _url_for(stream, profile)
+                        if url and url.startswith(("http://", "https://")):
+                            outcome = probe(url, agents[account_id], settings["timeout_seconds"], should_stop)
+                    except Stopped:
+                        # Looked at again once the viewer is done, and not counted
+                        waiting.add(account_id)
+                        set_status(entry, "in use", "a viewer came onto the login being checked with")
+                        return
+                    finally:
+                        # An unlimited profile took no slot, so there is none to give back;
+                        # releasing anyway would free one a viewer holds
+                        if profile.max_streams > 0:
+                            release_profile_slot(profile.id, redis_client)
+
                     with lock:
-                        if outcome is not None:
-                            record = _record(redis_client, results, stream, outcome, settings)
-                            if record["state"] == "broken":
-                                _progress(redis_client, broken=progress(redis_client).get("broken", 0) + 1)
-                            if outcome["ok"] and str(stream.id) in was_parked:
-                                recovered.append(stream.id)
-                        else:
-                            # Nothing could be learned (the provider was full the whole
-                            # time, or the URL is not one to open): noted as looked at,
-                            # so the round moves on and does not come back to it
+                        if outcome is None:
+                            # Not a URL that can be opened: noted as looked at, so the round
+                            # moves on
                             _touch(results, stream)
+                        elif outcome["ok"]:
+                            played = True
+                            for earlier, found in held:
+                                count(earlier, found)
+                            held.clear()
+                            count(stream, outcome)
+                        elif played:
+                            count(stream, outcome)
+                        else:
+                            held.append((stream, outcome))
                         entry["done"] += 1
                         entry["left"] -= 1
                         _progress(redis_client, accounts=accounts, done=progress(redis_client).get("done", 0) + 1)
+
+                    if len(held) >= give_up_after:
+                        given_up = True
+                        reason = f"its first {len(held)} streams all failed ({held[-1][1]['reason']})"
+                        with lock:
+                            for earlier, _ in held:
+                                _touch(results, earlier)
+                        held.clear()
+                        _unavailable(redis_client, round_, account_id, account.name, reason, lock)
+                        set_status(entry, "unavailable", reason)
+                        return
                     time.sleep(float(settings["gap_seconds"]))
                     # After a stream rather than before, so every batch gets somewhere
                     if time.monotonic() > deadline:
@@ -632,6 +817,13 @@ def run(redis_client, only=None, batch_seconds=None):
             except Exception:
                 logger.exception(f"Stream Check: provider {account_id} stopped on an error")
             finally:
+                # Fewer failures than it takes to call the provider down: they are the streams'
+                if held and not given_up:
+                    with lock:
+                        for earlier, found in held:
+                            count(earlier, found)
+                if entry.get("status") == "checking":
+                    set_status(entry, "done" if entry["left"] <= 0 else "checking")
                 # Where accounts share a login (a server group), taking a connection reads
                 # the database, which gives this thread a connection of its own to close.
                 # Under gevent a "thread" can share the batch's own, which must stay open.
@@ -662,16 +854,31 @@ def run(redis_client, only=None, batch_seconds=None):
 
         if only is not None:
             return "done"
-        if ended["why"] == "stopped":
+        if stopped["asked"]:
             return _stopped(redis_client)
-        if ended["why"] == "waiting":
+        round_ = current_round(redis_client) or round_
+        left = _targets(settings, due_before=round_["since"], skip_accounts=round_.get("unavailable") or {})
+        if not left:
+            return _finish(redis_client, round_)
+        if set(left) <= waiting:
+            # Everything left is on providers someone is using: the next tick looks again
             _progress(redis_client, waiting=True, message="Waiting for viewers to finish")
             return "waiting"
-        if not _targets(settings, due_before=round_["since"]):
-            return _finish(redis_client, round_)
         return "more"
     finally:
         redis_client.delete(RUN_KEY)
+
+
+def _unavailable(redis_client, round_, account_id, name, reason, lock):
+    """An account left for the rest of the round, and why, for the page to say."""
+    logger.info(f"Stream Check: {name} left for this round: {reason}")
+    if round_ is None:
+        return
+    with lock:
+        current = current_round(redis_client) or round_
+        current.setdefault("unavailable", {})[str(account_id)] = {"name": name, "reason": reason}
+        round_.setdefault("unavailable", {})[str(account_id)] = {"name": name, "reason": reason}
+        redis_client.set(ROUND_KEY, json.dumps(current), ex=ROUND_TTL)
 
 
 def _touch(results, stream):
@@ -688,7 +895,11 @@ def _touch(results, stream):
 
 def _finish(redis_client, round_):
     done = progress(redis_client).get("done", 0)
-    _keep_last_run({"finished_at": _now(), "checked": done, "total": (round_ or {}).get("total", done)})
+    _keep_last_run({
+        "finished_at": _now(), "checked": done, "total": (round_ or {}).get("total", done),
+        # The providers whose streams were not looked at, and why
+        "unavailable": list(((current_round(redis_client) or round_ or {}).get("unavailable") or {}).values()),
+    })
     redis_client.delete(ROUND_KEY)
     _progress(redis_client, state="done", finished_at=_now(), waiting=False, message="")
     logger.info(f"Stream Check: round finished, {done} streams looked at")

@@ -47,6 +47,9 @@ const STATE = {
   gone: { label: 'Gone', color: 'gray' },
 };
 
+// How each provider is getting on, while a run goes
+const ACCOUNT_COLOR = { 'in use': 'yellow.5', unavailable: 'orange.5' };
+
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
 
 const StateBadge = ({ state }) => (
@@ -231,7 +234,9 @@ const StreamCheckTable = () => {
     try {
       if (action === 'check') {
         await API.runStreamCheck([stream.id]);
-        setNotice(`Checking "${stream.name}" once nobody is watching.`);
+        setNotice(
+          `Checking "${stream.name}" now, if a login of its provider is free.`
+        );
       } else {
         await API.streamCheckAction(action, stream.id, channel?.id ?? null);
         setNotice(
@@ -543,6 +548,8 @@ const StreamCheckTable = () => {
 
   const progress = data?.progress || {};
   const lastRun = data?.last_run || {};
+  // Providers the last finished run left alone: expired, refused the login, or down
+  const skipped = !data?.running ? lastRun.unavailable || [] : [];
   const first = rows.length ? pageIndex * pageSize + 1 : 0;
   const last = Math.min((pageIndex + 1) * pageSize, rows.length);
   const asked =
@@ -663,7 +670,7 @@ const StreamCheckTable = () => {
                       progress.broken
                         ? ` · ${progress.broken} broken so far`
                         : ''
-                    }${progress.waiting ? ' · waiting for viewers to finish' : ''}`
+                    }${progress.waiting ? ` · ${progress.message || 'waiting'}` : ''}`
                   : lastRun.finished_at
                     ? `Last run ${when(lastRun.finished_at)}: ${lastRun.checked || 0} of ${
                         lastRun.total || 0
@@ -675,15 +682,24 @@ const StreamCheckTable = () => {
                       data.settings.window_from
                         ? `, between ${data.settings.window_from} and ${data.settings.window_to}`
                         : ''
-                    }, only while nobody is watching.`
-                  : 'Only runs when started here, and only while nobody is watching.'}
+                    }, never on a login someone is using.`
+                  : 'Only runs when started here, and never on a login someone is using.'}
               </Text>
               {data?.running && (
                 <Group gap="md" mt={4}>
                   {Object.values(progress.accounts || {}).map((account) => (
-                    <Text key={account.name} size="xs" c="dimmed">
-                      {account.name}: {account.done}/{account.total}
-                      {account.now && account.done < account.total
+                    <Text
+                      key={account.name}
+                      size="xs"
+                      c={ACCOUNT_COLOR[account.status] || 'dimmed'}
+                    >
+                      {account.name}: {account.done} checked
+                      {account.left > 0 ? `, ${account.left} left` : ''}
+                      {account.status && account.status !== 'checking'
+                        ? ` · ${account.status}`
+                        : ''}
+                      {account.reason ? ` (${account.reason})` : ''}
+                      {account.status === 'checking' && account.now
                         ? ` · ${account.now}`
                         : ''}
                     </Text>
@@ -692,7 +708,10 @@ const StreamCheckTable = () => {
               )}
             </Box>
 
-            {(error || notice || (data && !data.ffprobe)) && (
+            {(error ||
+              notice ||
+              skipped.length > 0 ||
+              (data && !data.ffprobe)) && (
               <Stack
                 gap="xs"
                 p="md"
@@ -706,6 +725,16 @@ const StreamCheckTable = () => {
                     onClose={() => setNotice(null)}
                   >
                     {notice}
+                  </Alert>
+                )}
+                {skipped.length > 0 && (
+                  <Alert color="orange" title="Not checked in the last run">
+                    {skipped.map((account) => (
+                      <Text key={account.name} size="xs">
+                        {account.name}: {account.reason}. Its streams were left
+                        as they were, not counted as failing.
+                      </Text>
+                    ))}
                   </Alert>
                 )}
                 {data && !data.ffprobe && (

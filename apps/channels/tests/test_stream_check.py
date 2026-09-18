@@ -120,6 +120,11 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             self._send(b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nvariant.m3u8\n", "application/vnd.apple.mpegurl")
         elif self.path == "/variant.m3u8":
             self._send(b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nold.ts\n#EXTINF:2,\nlive.ts\n", "application/vnd.apple.mpegurl")
+        elif self.path.startswith("/player_api.php"):
+            # An Xtream Codes provider asked about a login: this one knows only user/pass
+            good = "username=user&password=pass" in self.path
+            body = b'{"user_info": {"auth": 1, "status": "Active", "active_cons": "0", "max_connections": "1"}}' if good else b'{"user_info": {"auth": 0}}'
+            self._send(body, "application/json")
         elif self.path == "/empty.m3u8":
             self._send(b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n", "application/vnd.apple.mpegurl")
         else:
@@ -177,6 +182,18 @@ class ProbeTests(TestCase):
     def test_nothing_listening(self):
         found = stream_check.probe("http://127.0.0.1:9/live.ts", timeout=3)
         self.assertFalse(found["ok"])
+
+    def test_an_xtream_login_is_asked_about(self):
+        account = M3UAccount.objects.create(
+            name="XC", account_type="XC", server_url=self.base, username="user", password="pass", is_active=True
+        )
+        login = account.profiles.first() or M3UAccountProfile.objects.create(
+            m3u_account=account, name="default", is_default=True, max_streams=1
+        )
+        self.assertIsNone(stream_check._login_problem(account, login, ""))
+        account.password = "wrong"
+        account.save()
+        self.assertEqual(stream_check._login_problem(account, login, ""), "the provider refused the login")
 
     def test_a_check_cut_short_says_nothing(self):
         with self.assertRaises(stream_check.Stopped):
@@ -310,15 +327,13 @@ def _answers(by_name):
         if isinstance(outcome, Exception):
             raise outcome
         if callable(outcome):
-            return outcome()
+            return outcome(should_stop)
         return {"ok": outcome, "reason": "" if outcome else "The provider answered HTTP 404",
                 "resolution": "1920x1080" if outcome else "", "codec": "h264", "bytes": 1, "seconds": 0.1}
 
     return fake
 
 
-@mock.patch.object(stream_check, "QUIET_POLL", 0.02)
-@mock.patch.object(stream_check, "SLOT_WAIT", 0.5)
 class RunTests(_Setup):
     def setUp(self):
         super().setUp()
@@ -360,28 +375,126 @@ class RunTests(_Setup):
             self.assertEqual(int(self.redis.get(f"profile_connections:{profile.id}") or 0), 0)
         self.assertFalse(self.redis.exists(stream_check.RUN_KEY))
 
-    def test_a_provider_that_is_full_is_not_gone_past(self):
-        """Its only connection is a viewer's: nothing from it is looked at."""
-        profile = self.a.profiles.get()
-        self.redis.set(f"profile_connections:{profile.id}", 1)
-        final, probe = self._run({})
-        looked_at = {c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}
-        self.assertEqual(looked_at, {"ORF1B"})
-        self.assertEqual(int(self.redis.get(f"profile_connections:{profile.id}")), 1)
-
-    def test_nothing_is_looked_at_while_someone_watches(self):
+    def _watching(self, profile):
+        """A viewer on a login, as the proxy leaves it in Redis."""
         self.redis.set("live:channel:abc:metadata", "1")
+        self.redis.set("stream_profile:999", profile.id)
+        self.redis.set(f"profile_connections:{profile.id}", 1)
+
+    def _done_watching(self, profile):
+        self.redis.delete("live:channel:abc:metadata", "stream_profile:999")
+        self.redis.set(f"profile_connections:{profile.id}", 0)
+
+    def test_a_provider_someone_is_using_waits_while_the_others_go_on(self):
+        login = self.a.profiles.get()
+        self._watching(login)
         stream_check.start_round(self.redis, force=True)
         with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
             self.assertEqual(stream_check.run(self.redis), "waiting")
-        self.assertEqual(probe.call_count, 0)
-        self.assertTrue(stream_check.progress(self.redis)["waiting"])
-        # The round waits, and carries on once they are done
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+        # Not a single connection of the viewer's login was taken
+        self.assertEqual(int(self.redis.get(f"profile_connections:{login.id}")), 1)
+        self.assertEqual(stream_check.progress(self.redis)["accounts"][str(self.a.id)]["status"], "in use")
+
+        # The round waits for it, and carries on once they are done
         self.assertTrue(stream_check.is_running(self.redis))
-        self.redis.delete("live:channel:abc:metadata")
+        self._done_watching(login)
         with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
             self.assertEqual(stream_check.run(self.redis), "done")
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1A", "ORF1A2"})
+
+    def test_another_login_of_the_same_provider_is_used_when_one_is_in_use(self):
+        default = self.a.profiles.get()
+        M3UAccountProfile.objects.create(m3u_account=self.a, name="second login", is_default=False, max_streams=1)
+        self._watching(default)
+        final, probe = self._run({})
+        self.assertEqual(final["ended"], "done")
         self.assertEqual(probe.call_count, 3)
+        self.assertEqual(int(self.redis.get(f"profile_connections:{default.id}")), 1)
+
+    def test_a_count_left_behind_with_nothing_playing_is_not_a_viewer(self):
+        """A stream that ended badly can leave its count; trusting it would skip the login for good."""
+        login = self.a.profiles.get()
+        login.max_streams = 2
+        login.save()
+        self.redis.set(f"profile_connections:{login.id}", 1)
+        final, probe = self._run({})
+        self.assertEqual(probe.call_count, 3)
+
+    def test_a_viewer_coming_onto_the_login_being_checked_with_stops_the_check(self):
+        login = self.b.profiles.get()
+        calls = {"n": 0}
+
+        def viewer_arrives(should_stop):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                self._watching(login)
+                time.sleep(0.6)  # past what the usage remembers
+                self.assertTrue(should_stop())
+                raise stream_check.Stopped()
+            return {"ok": True, "reason": "", "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
+
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": viewer_arrives})):
+            self.assertEqual(stream_check.run(self.redis), "waiting")
+            self.assertNotIn(str(self.second.id), stream_check.load_results()["streams"])
+            self._done_watching(login)
+            self.assertEqual(stream_check.run(self.redis), "done")
+        self.assertTrue(stream_check.load_results()["streams"][str(self.second.id)]["ok"])
+
+    def _as_xc(self, account):
+        account.account_type = "XC"
+        account.username, account.password = "user", "pass"
+        account.save()
+
+    def test_a_provider_that_refuses_the_login_is_left_and_nothing_counts_against_it(self):
+        self._as_xc(self.a)
+        with mock.patch.object(stream_check, "_xc_user_info", return_value={"auth": 0}):
+            final, probe = self._run({})
+        self.assertEqual(final["ended"], "done")
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+        results = stream_check.load_results()
+        self.assertNotIn(str(self.first.id), results["streams"])
+        self.assertEqual(results["last_run"]["unavailable"], [{"name": "Provider A", "reason": "the provider refused the login"}])
+
+    def test_a_login_the_provider_says_is_active_is_used(self):
+        self._as_xc(self.a)
+        with mock.patch.object(stream_check, "_xc_user_info", return_value={"auth": 1, "status": "Active"}):
+            final, probe = self._run({})
+        self.assertEqual(probe.call_count, 3)
+
+    def test_a_provider_that_does_not_answer_is_left(self):
+        import requests
+
+        self._as_xc(self.a)
+        with mock.patch.object(stream_check, "_xc_user_info", side_effect=requests.exceptions.ConnectionError()):
+            final, probe = self._run({})
+        self.assertIn("did not answer", stream_check.load_results()["last_run"]["unavailable"][0]["reason"])
+
+    def test_an_expired_login_is_left(self):
+        from datetime import datetime, timedelta, timezone
+
+        login = self.a.profiles.get()
+        login.exp_date = datetime.now(timezone.utc) - timedelta(days=2)
+        login.save()
+        final, probe = self._run({})
+        self.assertIn("expired", stream_check.load_results()["last_run"]["unavailable"][0]["reason"])
+
+    def test_a_provider_whose_first_streams_all_fail_is_down_not_its_streams(self):
+        stream_check.save_settings({"account_failures": 2})
+        final, probe = self._run({"ORF1A": False, "ORF1A2": False})
+        results = stream_check.load_results()
+        self.assertEqual(results["last_run"]["unavailable"][0]["name"], "Provider A")
+        for stream in (self.first, self.third):
+            record = results["streams"][str(stream.id)]
+            self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
+
+    def test_failures_after_something_played_are_the_streams(self):
+        stream_check.save_settings({"account_failures": 2})
+        final, probe = self._run({"ORF1A": True, "ORF1A2": False})
+        record = stream_check.load_results()["streams"][str(self.third.id)]
+        self.assertEqual(record["state"], "failing")
+        self.assertEqual(stream_check.load_results()["last_run"]["unavailable"], [])
 
     def test_a_round_goes_in_batches(self):
         """Each ends after its time, with the next queued; all of them look at every stream once."""
@@ -400,7 +513,7 @@ class RunTests(_Setup):
     def test_a_check_cut_short_for_a_viewer_does_not_count_against_the_stream(self):
         calls = {"n": 0}
 
-        def cut_once():
+        def cut_once(should_stop):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise stream_check.Stopped()
@@ -415,14 +528,6 @@ class RunTests(_Setup):
         self.redis.set(stream_check.RUN_KEY, "1")
         self.assertEqual(stream_check.run(self.redis), "already running")
         self.assertIsNone(stream_check.start_round(self.redis, force=True))
-
-    def test_a_provider_full_the_whole_time_is_moved_past_and_not_called_broken(self):
-        profile = self.a.profiles.get()
-        self.redis.set(f"profile_connections:{profile.id}", 1)
-        self._run({})
-        self._run({})
-        record = stream_check.load_results()["streams"][str(self.first.id)]
-        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
 
     def test_a_parked_stream_is_looked_at_again_and_can_come_back_by_itself(self):
         stream_check.park(self.second.id)

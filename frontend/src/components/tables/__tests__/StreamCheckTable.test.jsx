@@ -153,10 +153,13 @@ describe('StreamCheckTable', () => {
     await waitFor(() => expect(API.runStreamCheck).toHaveBeenCalledWith());
 
     API.getStreamCheck.mockResolvedValue(
-      overview({ running: true, progress: { done: 1, total: 3, waiting: true, accounts: {} } })
+      overview({
+        running: true,
+        progress: { done: 1, total: 3, waiting: true, message: 'Waiting for viewers to finish', accounts: {} },
+      })
     );
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
-    expect(await screen.findByText(/Checking: 1 of 3 streams · waiting for viewers/)).toBeInTheDocument();
+    expect(await screen.findByText(/Checking: 1 of 3 streams · Waiting for viewers to finish/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
     await waitFor(() => expect(API.stopStreamCheck).toHaveBeenCalled());
   });
@@ -171,6 +174,37 @@ describe('StreamCheckTable', () => {
         expect.objectContaining({ enabled: true, every_hours: 24 })
       )
     );
+  });
+
+  it('shows how each provider is getting on, and which one is in use', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({
+        running: true,
+        progress: {
+          done: 4, total: 9, accounts: {
+            1: { name: 'Provider A', done: 4, left: 2, status: 'checking', now: 'ORF 2', reason: '' },
+            2: { name: 'Provider B', done: 0, left: 3, status: 'in use', reason: 'a viewer is on every login of it' },
+          },
+        },
+      })
+    );
+    draw();
+    expect(await screen.findByText(/Provider A: 4 checked, 2 left · ORF 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Provider B: 0 checked, 3 left · in use \(a viewer is on every login of it\)/)).toBeInTheDocument();
+  });
+
+  it('says which providers the last run left alone, and that their streams were not counted', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({
+        last_run: {
+          finished_at: '2026-09-18T22:30:00+00:00', checked: 3, total: 5,
+          unavailable: [{ name: 'Provider C', reason: 'the provider refused the login' }],
+        },
+      })
+    );
+    draw();
+    expect(await screen.findByText(/Provider C: the provider refused the login/)).toBeInTheDocument();
+    expect(screen.getByText(/not counted as failing/)).toBeInTheDocument();
   });
 
   it('says so when ffprobe is missing', async () => {

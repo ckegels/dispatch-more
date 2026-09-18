@@ -37,7 +37,7 @@ const StreamCheckSettings = ({ value, groups, onSave, saving }) => {
           <Switch
             size="xs"
             label="Check streams by itself"
-            description="Off, it only runs when started here. It never runs while anyone is watching."
+            description="Off, it only runs when started here. It never uses a login someone is watching on."
             checked={!!draft.enabled}
             onChange={(e) => set({ enabled: e.currentTarget.checked })}
           />
@@ -98,6 +98,14 @@ const StreamCheckSettings = ({ value, groups, onSave, saving }) => {
             value={draft.broken_after}
             onChange={number('broken_after')}
           />
+          <NumberInput
+            size="xs"
+            label="Provider down after (failures in a row)"
+            description="When a provider's first streams in a run all fail, it is the provider that is down: it is left for the run, and those streams are not counted against."
+            min={2}
+            value={draft.account_failures}
+            onChange={number('account_failures')}
+          />
         </Section>
 
         <Section title="What">
@@ -127,11 +135,13 @@ const StreamCheckSettings = ({ value, groups, onSave, saving }) => {
       </SimpleGrid>
       <Alert color="gray" p="xs">
         <Text size="xs">
-          Each check takes one of the provider&apos;s connections, the way a
-          viewer does, so a provider is never asked for more than it allows.
-          When someone starts watching, the check in progress is dropped and
-          gives its connection to them at once; the run carries on once nobody
-          is watching.
+          Before a provider&apos;s streams, its logins are looked at: an expired
+          login, or one an Xtream Codes provider refuses, is not used. Before
+          every stream, a login nobody is watching on is picked, and a
+          connection taken the way a viewer takes one, so a provider is never
+          asked for more than it allows. A viewer who comes onto that login has
+          the check dropped at once; a provider with every login in use waits
+          while the others go on.
         </Text>
       </Alert>
       <Group justify="flex-end">

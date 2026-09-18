@@ -90,7 +90,7 @@ def _channel_names(uuids):
 def _usernames(user_ids):
     from apps.accounts.models import User
 
-    user_ids = {int(user_id) for user_id in user_ids if user_id and user_id.isdigit()}
+    user_ids = {int(user_id) for user_id in user_ids if user_id and str(user_id).isdigit()}
     if not user_ids:
         return {}
     return {
@@ -115,34 +115,82 @@ def _phases(value):
     return phases
 
 
+def _number(value, default=0.0):
+    """A number out of a record Redis holds as text, where a field can be empty or half written."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _section(name, read, empty):
+    """
+    One part of the page, read on its own. The page is where someone goes when something
+    is wrong: one record it cannot read is logged and left out, rather than taking every
+    other part of the page down with it.
+    """
+    try:
+        return read()
+    except Exception:
+        logger.exception(f"Diagnostics: could not read {name}, left out")
+        return empty
+
+
 def _starts(redis_client):
     """Recent channel starts with each phase: how far in it was reached, and how long it took."""
     starts = []
     for record in timing.recent_starts(redis_client):
-        phases = _phases(record.get("phases"))
-        starts.append({
-            "time": float(record.get("time", 0)),
-            "channel": record.get("channel", ""),
-            "client": probation.app_name(
-                record.get("client"), record.get("client_ip")
-            ) or "media server",
-            "total": float(record.get("total", 0)),
-            "slowest": record.get("slowest", ""),
-            "phases": phases,
-            # What the media server did with it afterwards, when one is configured
-            "server_user": record.get("server_user", ""),
-            "server_player": record.get("server_player", ""),
-            "server_title": record.get("server_title", ""),
-            "server_name": record.get("server_name", ""),
-            "server_decision": record.get("server_decision", ""),
-            "server_speed": record.get("server_speed", ""),
-            "server_buffering": float(record.get("server_buffering", 0) or 0),
-            # What the server itself did, stage by stage, once it has a session
-            "server_phases": _phases(record.get("server_phases")),
-            "server_gave_up": record.get("server_gave_up") == "1",
-            "server_playing_is_certain": record.get("server_playing_is_certain") == "1",
-        })
+        try:
+            starts.append(_start(record))
+        except Exception:
+            logger.exception(f"Diagnostics: skipped a channel start it could not read: {record}")
     return starts
+
+
+def _start(record):
+    phases = _phases(record.get("phases"))
+    return {
+        "time": _number(record.get("time")),
+        "channel": record.get("channel", ""),
+        "client": probation.app_name(
+            record.get("client"), record.get("client_ip")
+        ) or "media server",
+        "total": _number(record.get("total")),
+        "slowest": record.get("slowest", ""),
+        "phases": phases,
+        # What the media server did with it afterwards, when one is configured
+        "server_user": record.get("server_user", ""),
+        "server_player": record.get("server_player", ""),
+        "server_title": record.get("server_title", ""),
+        "server_name": record.get("server_name", ""),
+        "server_decision": record.get("server_decision", ""),
+        "server_speed": record.get("server_speed", ""),
+        "server_buffering": _number(record.get("server_buffering")),
+        # What the server itself did, stage by stage, once it has a session
+        "server_phases": _phases(record.get("server_phases")),
+        "server_gave_up": record.get("server_gave_up") == "1",
+        "server_playing_is_certain": record.get("server_playing_is_certain") == "1",
+    }
+
+
+def _events(redis_client):
+    events = probation.recent_events(redis_client)
+    channels = _channel_names(
+        [event.get("channel") for event in events] + [event.get("from_channel") for event in events]
+    )
+    usernames = _usernames([event.get("user_id") for event in events])
+    return [
+        {
+            "time": _number(event.get("time")),
+            "viewer": _viewer_name(event, usernames, redis_client),
+            "from_channel": channels.get(event.get("from_channel", ""), ""),
+            "channel": channels.get(event.get("channel", ""), ""),
+            "account": event.get("account", ""),
+            "action": event.get("action", ""),
+            "result": event.get("result", ""),
+        }
+        for event in events
+    ]
 
 
 @api_view(["GET", "POST"])
@@ -172,36 +220,22 @@ def diagnostics(request):
             return JsonResponse({"error": str(e)}, status=400)
 
     enabled = probation.in_use()
-    events = probation.recent_events(redis_client) if enabled else []
-    channels = _channel_names(
-        [event.get("channel") for event in events] + [event.get("from_channel") for event in events]
-    )
-    usernames = _usernames([event.get("user_id") for event in events])
 
     return JsonResponse({
-        "starts": _starts(redis_client),
+        "starts": _section("channel starts", lambda: _starts(redis_client), []),
         # What has happened to the channels themselves (see recovery.py)
-        "health": recovery.recent_events(redis_client),
+        "health": _section("channel events", lambda: recovery.recent_events(redis_client), []),
         # What the channels are doing now, and what the ones that stopped ended on
-        "running": health.running_now(redis_client),
-        "stopped": health.stopped_lately(
-            redis_client, probation.event_ttl(redis_client)
+        "running": _section("running channels", lambda: health.running_now(redis_client), []),
+        "stopped": _section(
+            "stopped channels",
+            lambda: health.stopped_lately(redis_client, probation.event_ttl(redis_client)),
+            [],
         ),
-        "channel_health": health.settings(),
+        "channel_health": _section("channel health settings", health.settings, dict(health.DEFAULTS)),
         "enabled": enabled,
-        "accounts": _account_rows(redis_client) if enabled else [],
-        "events": [
-            {
-                "time": float(event.get("time", 0)),
-                "viewer": _viewer_name(event, usernames, redis_client),
-                "from_channel": channels.get(event.get("from_channel", ""), ""),
-                "channel": channels.get(event.get("channel", ""), ""),
-                "account": event.get("account", ""),
-                "action": event.get("action", ""),
-                "result": event.get("result", ""),
-            }
-            for event in events
-        ],
+        "accounts": _section("accounts", lambda: _account_rows(redis_client), []) if enabled else [],
+        "events": _section("switches", lambda: _events(redis_client), []) if enabled else [],
         "keep_seconds": probation.event_ttl(redis_client),
         "keep_choices": list(probation.EVENT_TTL_CHOICES),
         "timestamp": time.time(),
