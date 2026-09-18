@@ -623,25 +623,64 @@ def _guide_for(uri, lineups, fallback) -> str:
     return fallback
 
 
-def move_tuner(server, device, uri, guide_url=None, title=None, tuner_count=None):
+# A server changing its tuners needs a moment between one change and the next. Measured the
+# hard way: a Plex told to add a tuner, name it, give a DVR its guide and attach it, all as
+# fast as they could be sent, and then asked to do it again eight seconds later, segfaulted.
+MOVE_SETTLE = 2.0
+MOVE_LOCK_KEY = "live:media_servers:moving"
+MOVE_LOCK_SECONDS = 120
+
+
+def _settle():
+    """Let the server finish what it was just told to do before telling it the next thing."""
+    gevent.sleep(MOVE_SETTLE)
+
+
+def move_tuner(server, device, uri, guide_url=None, title=None, tuner_count=None,
+               redis_client=None):
     """
     Point a registered tuner at another address by putting a new one there in its place.
 
     Plex has no way to change the address of a tuner it already has: it takes the request
-    and keeps what it had (measured, not assumed -- the address is read back afterwards).
-    So the change is made the only way it can be, which is the way its own settings do it:
-    a tuner at the new address, named and switched on, its guide put in the DVR, attached
+    and keeps what it had (measured, not assumed -- the address is read back afterwards). So
+    the change is made the only way it can be, which is the way its own settings do it: a
+    tuner at the new address, named and switched on, its guide put in the DVR, attached
     where the old one was, and only then the old one removed.
 
-    The old one goes last on purpose. Anything that fails before that leaves the server
-    exactly as it was apart from a tuner that could not be attached, which is removed again,
-    and says so. Returns (moved, what went wrong).
+    It is done slowly and one at a time, because a server doing this is fragile. Told to add
+    a tuner, name it, add a guide and attach it as fast as the calls could be sent, and then
+    told to do it again while it was still busy with the first, a Plex crashed outright and
+    took its rollback with it -- leaving a tuner registered and in nothing. So each step
+    waits, the new tuner is not scanned here at all (Sync does that, when you are ready),
+    and a second move is refused while one is running.
+
+    Returns (moved, what went wrong).
     """
+    if redis_client is not None:
+        if not redis_client.set(
+            MOVE_LOCK_KEY, "1", nx=True, ex=MOVE_LOCK_SECONDS
+        ):
+            return False, (
+                "Another tuner is being moved. Wait for that to finish: a server asked to "
+                "change two at once is how one of them ends up in nothing."
+            )
+    try:
+        return _move_tuner(server, device, uri, guide_url, title, tuner_count)
+    finally:
+        if redis_client is not None:
+            try:
+                redis_client.delete(MOVE_LOCK_KEY)
+            except Exception:
+                pass
+
+
+def _move_tuner(server, device, uri, guide_url, title, tuner_count):
     was_in = device.get("dvr_id")
     name = title or device.get("title") or ""
 
     if not add_tuner(server, uri, name, tuner_count):
         return False, f"The server would not add a tuner at {uri}"
+    _settle()
 
     replacement = next(
         (t for t in tuners(server) if t["uri"] == uri and t["id"] != device["id"]), None
@@ -650,15 +689,18 @@ def move_tuner(server, device, uri, guide_url=None, title=None, tuner_count=None
         return False, "The server took the new tuner but did not list it afterwards"
 
     name_device(server, replacement["id"], name)
+    _settle()
 
     if was_in:
         # Its guide first, then the tuner, which is the order the server's settings use
         if guide_url:
             add_lineup(server, was_in, guide_url, name)
+            _settle()
         if not attach_tuner(server, was_in, replacement["id"]):
             # Put the server back as it was rather than leave a tuner in no DVR
             delete_tuner(server, replacement["id"])
             return False, "The server would not put the moved tuner back in its DVR"
+        _settle()
 
     if not delete_tuner(server, device["id"]):
         # The new one works; the old one is still there and would be a second copy
@@ -668,10 +710,10 @@ def move_tuner(server, device, uri, guide_url=None, title=None, tuner_count=None
         )
         return True, "The tuner was moved, but the old one could not be removed"
 
-    if was_in:
-        sync_tuner(server, replacement["id"], was_in)
+    # Deliberately not scanned here. A tuner scanned the moment it arrives answers 500, and
+    # a server in the middle of all this is the last thing to give more work to.
     logger.info(f"Moved tuner {device.get('id')} to {uri} as {replacement['id']}")
-    return True, ""
+    return True, "Moved. Press Sync when you are ready to scan its channels."
 
 
 def set_tuner_uri(server, device_id, uri, title=None, tuner_count=None) -> bool:

@@ -18,6 +18,7 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 
 from apps.accounts.permissions import IsAdmin
+from core.utils import RedisClient
 
 from . import media_servers
 from .hdhr_tuner_views import MAX_TUNERS
@@ -334,6 +335,7 @@ def media_server_tuners(request):
                 _epg_url(base_url, profile, skip_cached_logos) if profile else None,
                 device.get("title") or profile,
                 wanted_tuners,
+                RedisClient.get_client(),
             )
             if not moved:
                 return JsonResponse({"error": warning}, status=400)

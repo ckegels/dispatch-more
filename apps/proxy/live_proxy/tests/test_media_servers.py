@@ -1077,7 +1077,7 @@ class TunerTests(TestCase):
             "apps.proxy.live_proxy.media_servers.requests.post"
         ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put, patch(
             "apps.proxy.live_proxy.media_servers.requests.delete"
-        ) as delete:
+        ) as delete, patch("apps.proxy.live_proxy.media_servers._settle"):
             get.side_effect = keeps_the_old_address
             post.return_value = fake_response({})
             put.return_value = fake_response({})
@@ -1109,6 +1109,62 @@ class TunerTests(TestCase):
             "http://192.168.2.141:32400/media/grabbers/devices/22",
         )
 
+    def test_a_second_move_is_refused_while_one_is_running(self):
+        """
+        Measured the hard way: a server told to do this twice at once crashed outright.
+
+        It took its own rollback with it, leaving a tuner registered and in nothing. One at
+        a time, and each step waits, because a server changing its tuners is fragile.
+        """
+        redis = FakeRedis()
+        server = {"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}
+        device = {"id": "22", "title": "Austria", "dvr_id": "32", "uuid": "old"}
+
+        def while_the_first_is_running(*_args, **_kwargs):
+            moved, why = media_servers.move_tuner(
+                server, device, "http://second", redis_client=redis
+            )
+            self.assertFalse(moved)
+            self.assertIn("Another tuner is being moved", why)
+            return False  # and the first one gives up, having changed nothing
+
+        with patch("apps.proxy.live_proxy.media_servers.add_tuner") as add:
+            add.side_effect = while_the_first_is_running
+            media_servers.move_tuner(
+                server, device, "http://first", redis_client=redis
+            )
+
+        # And once it is over, the next one may go ahead
+        with patch("apps.proxy.live_proxy.media_servers.add_tuner") as add:
+            add.return_value = False
+            _moved, why = media_servers.move_tuner(
+                server, device, "http://third", redis_client=redis
+            )
+        self.assertNotIn("Another tuner is being moved", why)
+
+    def test_a_moved_tuner_is_not_scanned_on_the_way(self):
+        """A tuner scanned the moment it arrives answers 500, and the server is already busy."""
+        server = {"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}
+        device = {"id": "22", "title": "Austria", "dvr_id": "32", "uuid": "old"}
+        with patch("apps.proxy.live_proxy.media_servers.add_tuner") as add, patch(
+            "apps.proxy.live_proxy.media_servers.tuners"
+        ) as listed, patch("apps.proxy.live_proxy.media_servers.name_device"), patch(
+            "apps.proxy.live_proxy.media_servers.add_lineup"
+        ), patch("apps.proxy.live_proxy.media_servers.attach_tuner") as attach, patch(
+            "apps.proxy.live_proxy.media_servers.delete_tuner"
+        ) as remove, patch(
+            "apps.proxy.live_proxy.media_servers.sync_tuner"
+        ) as scan, patch("apps.proxy.live_proxy.media_servers._settle"):
+            add.return_value = True
+            listed.return_value = [{"id": "77", "uri": "http://new"}]
+            attach.return_value = True
+            remove.return_value = True
+            moved, why = media_servers.move_tuner(server, device, "http://new")
+
+        self.assertTrue(moved)
+        scan.assert_not_called()
+        self.assertIn("Press Sync", why)
+
     def test_a_tuner_that_could_not_be_attached_does_not_stay_behind(self):
         """The server goes back as it was rather than keeping a tuner in no DVR."""
         server = {"id": "a1", "url": "http://192.168.2.141:32400", "token": "t"}
@@ -1121,7 +1177,7 @@ class TunerTests(TestCase):
             "apps.proxy.live_proxy.media_servers.attach_tuner"
         ) as attach, patch(
             "apps.proxy.live_proxy.media_servers.delete_tuner"
-        ) as remove:
+        ) as remove, patch("apps.proxy.live_proxy.media_servers._settle"):
             add.return_value = True
             listed.return_value = [{"id": "77", "uri": "http://new"}]
             attach.return_value = False
