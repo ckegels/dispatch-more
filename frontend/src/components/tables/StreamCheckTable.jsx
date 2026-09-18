@@ -557,10 +557,9 @@ const StreamCheckTable = () => {
 
   const progress = data?.progress || {};
   const lastRun = data?.last_run || {};
-  const rule =
-    data?.settings?.only_when_idle === false
-      ? 'and never on a login someone is using'
-      : 'and only while nothing is playing';
+  const rule = data?.settings?.only_when_idle
+    ? 'and only while nothing is playing'
+    : 'and never on a provider someone is using';
   // Providers the last finished run left alone: expired, refused the login, or down
   const skipped = !data?.running ? lastRun.unavailable || [] : [];
   const first = rows.length ? pageIndex * pageSize + 1 : 0;

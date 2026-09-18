@@ -38,8 +38,8 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             size="xs"
             color="green"
             label="Only while nothing is playing"
-            description="On: no check runs while anyone watches anything through Dispatcharr, and one in progress stops the moment someone starts. Off: checks go on beside viewers, on logins no one is using -- but a provider can see viewers Dispatcharr cannot, such as the same login in another app."
-            checked={draft.only_when_idle !== false}
+            description="Off: checks go on while people watch, but never on a provider anyone is using -- every account on the same server, login or server group counts as one provider. On: nothing is checked while anyone watches anything."
+            checked={!!draft.only_when_idle}
             onChange={(e) => set({ only_when_idle: e.currentTarget.checked })}
           />
           <Switch
@@ -145,11 +145,11 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
         <Text size="xs">
           Before a provider&apos;s streams, its logins are looked at: an expired
           login, or one an Xtream Codes provider refuses, is not used. Before
-          every stream, a login nobody is watching on is picked, and a
-          connection taken the way a viewer takes one, so a provider is never
-          asked for more than it allows. A viewer who comes onto that login has
-          the check dropped at once; a provider with every login in use waits
-          while the others go on.
+          every stream, it looks whether anyone watches through that provider
+          (and asks Xtream Codes providers, which see other apps too); a
+          provider in use is left alone while the others are checked. Someone
+          who starts watching through the provider being checked has the check
+          dropped at once.
         </Text>
       </Alert>
       <Group justify="space-between">

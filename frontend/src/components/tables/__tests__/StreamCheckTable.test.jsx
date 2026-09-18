@@ -208,12 +208,12 @@ describe('StreamCheckTable', () => {
     expect(screen.getByText(/not counted as failing/)).toBeInTheDocument();
   });
 
-  it('by default only checks while nothing is playing, and can forget wrong results', async () => {
+  it('by default checks beside viewers but not their providers, and can forget wrong results', async () => {
     API.clearStreamCheck.mockResolvedValue({ cleared: true });
     draw();
-    expect(await screen.findByText(/only while nothing is playing/)).toBeInTheDocument();
+    expect(await screen.findByText(/never on a provider someone is using/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(screen.getByRole('switch', { name: /Only while nothing is playing/ })).toBeChecked();
+    expect(screen.getByRole('switch', { name: /Only while nothing is playing/ })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: 'Forget all results' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Forget them' }));

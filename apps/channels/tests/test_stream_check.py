@@ -125,6 +125,10 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             good = "username=user&password=pass" in self.path
             body = b'{"user_info": {"auth": 1, "status": "Active", "active_cons": "0", "max_connections": "1"}}' if good else b'{"user_info": {"auth": 0}}'
             self._send(body, "application/json")
+        elif self.path == "/full.m3u8":
+            self._send(b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nfull-variant.m3u8\n", "application/vnd.apple.mpegurl")
+        elif self.path == "/full-variant.m3u8":
+            self._send(b"too many connections", "text/plain", 458)
         elif self.path == "/empty.m3u8":
             self._send(b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n", "application/vnd.apple.mpegurl")
         else:
@@ -174,6 +178,12 @@ class ProbeTests(TestCase):
     def test_a_playlist_is_followed_to_its_video(self):
         found = stream_check.probe(f"{self.base}/master.m3u8", timeout=5)
         self.assertTrue(found["ok"], found)
+
+    def test_a_playlist_whose_provider_is_full_is_a_refusal_not_a_failure(self):
+        found = stream_check.probe(f"{self.base}/full.m3u8", timeout=5)
+        self.assertFalse(found["ok"])
+        self.assertTrue(found["refused"])
+        self.assertIn("458", found["reason"])
 
     def test_a_playlist_with_nothing_in_it(self):
         found = stream_check.probe(f"{self.base}/empty.m3u8", timeout=5)
@@ -378,6 +388,10 @@ class RunTests(_Setup):
             self.assertEqual(int(self.redis.get(f"profile_connections:{profile.id}") or 0), 0)
         self.assertFalse(self.redis.exists(stream_check.RUN_KEY))
 
+    def _status(self, name):
+        """How a provider is getting on, by the name the page shows."""
+        return next(e for e in stream_check.progress(self.redis)["accounts"].values() if name in e["name"])
+
     def _watching(self, profile):
         """A viewer on a login, as the proxy leaves it in Redis."""
         self.redis.set("live:channel:abc:metadata", "1")
@@ -397,7 +411,7 @@ class RunTests(_Setup):
         self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
         # Not a single connection of the viewer's login was taken
         self.assertEqual(int(self.redis.get(f"profile_connections:{login.id}")), 1)
-        self.assertEqual(stream_check.progress(self.redis)["accounts"][str(self.a.id)]["status"], "in use")
+        self.assertEqual(self._status("Provider A")["status"], "in use")
 
         # The round waits for it, and carries on once they are done
         self.assertTrue(stream_check.is_running(self.redis))
@@ -406,14 +420,36 @@ class RunTests(_Setup):
             self.assertEqual(stream_check.run(self.redis), "done")
         self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1A", "ORF1A2"})
 
-    def test_another_login_of_the_same_provider_is_used_when_one_is_in_use(self):
+    def test_a_provider_someone_watches_through_one_login_is_left_alone_on_every_login(self):
         default = self.a.profiles.get()
         M3UAccountProfile.objects.create(m3u_account=self.a, name="second login", is_default=False, max_streams=1)
         self._watching(default)
         final, probe = self._run({})
-        self.assertEqual(final["ended"], "done")
-        self.assertEqual(probe.call_count, 3)
-        self.assertEqual(int(self.redis.get(f"profile_connections:{default.id}")), 1)
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+
+    def test_two_accounts_on_one_server_are_one_provider(self):
+        """A viewer on either leaves both alone, and they are never checked at the same time."""
+        twin = M3UAccount.objects.create(name="Provider A backup", account_type="STD", server_url="http://a:8080/x", is_active=True)
+        M3UAccountProfile.objects.filter(m3u_account=twin).delete()
+        twin_login = M3UAccountProfile.objects.create(m3u_account=twin, name="default", is_default=True, max_streams=1)
+        self._attach(Channel.objects.create(name="┃AT┃ ORF 3", channel_number=3, channel_group=self.group), [self._stream("ORF 3 A", twin)])
+        self._watching(twin_login)
+        final, probe = self._run({})
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+
+        self._done_watching(twin_login)
+        at_once, most = {"now": 0}, {"n": 0}
+
+        def one_at_a_time(should_stop):
+            at_once["now"] += 1
+            most["n"] = max(most["n"], at_once["now"])
+            time.sleep(0.05)
+            at_once["now"] -= 1
+            return {"ok": True, "reason": "", "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
+
+        stream_check.clear_results()
+        self._run({"ORF1A": one_at_a_time, "ORF1A2": one_at_a_time, "ORF3A": one_at_a_time})
+        self.assertEqual(most["n"], 1)
 
     def test_a_count_left_behind_with_nothing_playing_is_not_a_viewer(self):
         """A stream that ended badly can leave its count; trusting it would skip the login for good."""
@@ -495,7 +531,7 @@ class RunTests(_Setup):
                 mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
             self.assertEqual(stream_check.run(self.redis), "waiting")
         self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
-        self.assertEqual(stream_check.progress(self.redis)["accounts"][str(self.a.id)]["status"], "in use")
+        self.assertEqual(self._status("Provider A")["status"], "in use")
 
     def test_the_check_just_closed_is_waited_out_not_taken_for_a_viewer(self):
         """A provider can go on counting a closed connection for a while."""
@@ -520,7 +556,16 @@ class RunTests(_Setup):
             stream_check.run(self.redis)
         record = stream_check.load_results()["streams"][str(self.second.id)]
         self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
-        self.assertIn("refused", stream_check.progress(self.redis)["accounts"][str(self.b.id)]["reason"])
+        self.assertIn("refused", self._status("Provider B")["reason"])
+
+    def test_the_saved_on_from_before_goes_back_to_off(self):
+        """Checking beside viewers is the default now; a setting saved before it is not kept."""
+        stream_check._store(stream_check.SETTINGS_KEY, "Stream Check", {"only_when_idle": True, "every_hours": 12})
+        loaded = stream_check.load_settings()
+        self.assertFalse(loaded["only_when_idle"])
+        self.assertEqual(loaded["every_hours"], 12)
+        stream_check.save_settings({"only_when_idle": True})
+        self.assertTrue(stream_check.load_settings()["only_when_idle"])
 
     def _as_xc(self, account):
         account.account_type = "XC"
