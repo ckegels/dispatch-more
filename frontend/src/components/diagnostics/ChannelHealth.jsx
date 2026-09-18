@@ -125,8 +125,8 @@ const RunningNow = ({ running }) => {
             <Table.Th w={80}>Playing</Table.Th>
             <Table.Th w={70}>Watching</Table.Th>
             <Table.Th w={90}>Speed</Table.Th>
+            <Table.Th w={110}>Carrying</Table.Th>
             <Table.Th w={110}>Source</Table.Th>
-            <Table.Th w={110}>Out</Table.Th>
             <Table.Th>Last minutes</Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -150,12 +150,16 @@ const RunningNow = ({ running }) => {
               <Table.Td>
                 <Speed speed={channel.now.speed} />
               </Table.Td>
-              <Table.Td c="dimmed">{rate(channel.now.source_kbps)}</Table.Td>
-              <Table.Td c="dimmed">{rate(channel.now.output_kbps)}</Table.Td>
+              {/* What is actually arriving, which is the only measure on a channel with
+                  no ffmpeg behind it to report a speed */}
+              <Table.Td c="dimmed">{rate(channel.now.kbps)}</Table.Td>
+              <Table.Td c="dimmed">
+                {rate(channel.now.source_kbps || channel.now.output_kbps)}
+              </Table.Td>
               <Table.Td>
                 <Trend
                   samples={channel.samples}
-                  pick={(sample) => sample.speed || null}
+                  pick={(sample) => sample.speed || sample.kbps || null}
                 />
               </Table.Td>
             </Table.Tr>
@@ -198,7 +202,7 @@ const Stopped = ({ stopped }) => {
               <Speed speed={last.speed} />
               <Trend
                 samples={channel.samples}
-                pick={(sample) => sample.speed || null}
+                pick={(sample) => sample.speed || sample.kbps || null}
               />
               <Button
                 size="compact-xs"
@@ -215,8 +219,8 @@ const Stopped = ({ stopped }) => {
                     <Table.Th w={90}>Time</Table.Th>
                     <Table.Th w={90}>State</Table.Th>
                     <Table.Th w={80}>Speed</Table.Th>
+                    <Table.Th w={110}>Carrying</Table.Th>
                     <Table.Th w={110}>Source</Table.Th>
-                    <Table.Th w={110}>Out</Table.Th>
                     <Table.Th>Watching</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
@@ -228,8 +232,10 @@ const Stopped = ({ stopped }) => {
                       <Table.Td>
                         <Speed speed={sample.speed} />
                       </Table.Td>
-                      <Table.Td c="dimmed">{rate(sample.source_kbps)}</Table.Td>
-                      <Table.Td c="dimmed">{rate(sample.output_kbps)}</Table.Td>
+                      <Table.Td c="dimmed">{rate(sample.kbps)}</Table.Td>
+                      <Table.Td c="dimmed">
+                        {rate(sample.source_kbps || sample.output_kbps)}
+                      </Table.Td>
                       <Table.Td c="dimmed">{sample.clients}</Table.Td>
                     </Table.Tr>
                   ))}

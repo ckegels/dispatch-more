@@ -201,7 +201,7 @@ def _put_away_the_stopped(redis_client, running):
         record = {
             "channel": recovery._channel_name(channel_id),
             "stopped_at": samples[-1].get("at", time.time()),
-            "samples": samples,
+            "samples": with_rates(samples),
         }
         redis_client.lpush(STOPPED_KEY, json.dumps(record))
         redis_client.ltrim(STOPPED_KEY, 0, STOPPED_KEPT - 1)
@@ -217,6 +217,28 @@ def _read_samples(redis_client, key):
             samples.append(json.loads(raw))
         except ValueError:
             continue
+    return with_rates(samples)
+
+
+def with_rates(samples):
+    """
+    Work out what each reading actually carried, from how many bytes arrived since the last.
+
+    ffmpeg's own speed and bitrate are only written while a stream profile is running one,
+    so on a channel proxied straight through they are never there and every column about how
+    well it is going would be empty. The bytes are always counted, and the rate between two
+    readings is the honest measure of whether data is still arriving and how much.
+    """
+    previous = None
+    for reading in samples:
+        rate = 0.0
+        if previous:
+            seconds = reading.get("at", 0) - previous.get("at", 0)
+            arrived = reading.get("bytes", 0) - previous.get("bytes", 0)
+            if seconds > 0 and arrived >= 0:
+                rate = arrived * 8 / seconds / 1000
+        reading["kbps"] = round(rate, 1)
+        previous = reading
     return samples
 
 
@@ -233,6 +255,9 @@ def running_now(redis_client):
             latest = sample(redis_client, channel_id)
             if not latest:
                 continue
+            # What it is carrying now, which on a channel with no ffmpeg behind it is the
+            # only measure there is
+            latest["kbps"] = samples[-1]["kbps"] if samples else 0.0
             channels.append({
                 "channel": recovery._channel_name(channel_id),
                 "now": latest,

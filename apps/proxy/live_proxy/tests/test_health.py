@@ -161,6 +161,40 @@ class SamplingTests(TestCase):
 
         self.assertEqual(health.sweep(Broken()), 0)
 
+    def test_what_a_channel_carries_is_worked_out_from_the_bytes(self):
+        """
+        ffmpeg's speed and bitrate are only written where a stream profile is running one.
+
+        A channel proxied straight through has neither, so every column about how well it is
+        going would be empty. The bytes are always counted, and the rate between two readings
+        says whether data is still arriving and how much.
+        """
+        samples = health.with_rates([
+            {"at": 100.0, "bytes": 0},
+            {"at": 105.0, "bytes": 2_500_000},
+            {"at": 110.0, "bytes": 5_000_000},
+        ])
+
+        self.assertEqual(samples[0]["kbps"], 0.0)  # nothing to compare the first with
+        self.assertEqual(samples[1]["kbps"], 4000.0)  # 2.5 MB in 5s is 4 Mbps
+        self.assertEqual(samples[2]["kbps"], 4000.0)
+
+    def test_a_channel_that_stopped_carrying_anything_reads_as_zero(self):
+        """Which is the difference between a slow stream and a stopped one."""
+        samples = health.with_rates([
+            {"at": 100.0, "bytes": 5_000_000},
+            {"at": 105.0, "bytes": 5_000_000},
+        ])
+        self.assertEqual(samples[1]["kbps"], 0.0)
+
+    def test_a_counter_that_went_backwards_is_not_a_negative_rate(self):
+        """The channel restarted behind it; nothing arrived that can be measured."""
+        samples = health.with_rates([
+            {"at": 100.0, "bytes": 5_000_000},
+            {"at": 105.0, "bytes": 10},
+        ])
+        self.assertEqual(samples[1]["kbps"], 0.0)
+
     def test_what_is_running_is_reported_with_its_readings(self):
         self._a_running_channel()
         health.sweep(self.redis)
