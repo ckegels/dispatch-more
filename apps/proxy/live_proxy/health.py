@@ -281,13 +281,101 @@ def with_rates(samples):
     return samples
 
 
+# What the page shows about a running channel beyond its readings: what it is playing, from
+# where, what the picture is, and who is watching. Read when the page asks, never recorded:
+# none of it is needed to tell afterwards how a channel ended.
+DETAIL_FIELDS = (
+    "stream_name", "stream_type", "resolution", "video_codec", "source_fps", "actual_fps",
+    "ffmpeg_fps", "pixel_format", "audio_codec", "audio_channels", "sample_rate",
+    "video_bitrate", "audio_bitrate", "source_bitrate", "stream_switch_reason",
+    "stream_switch_time", "error_message", "error_time", "buffer_chunks",
+)
+
+
+def _profile_names(profile_ids):
+    """{m3u profile id: (account name, profile name)}, in one query for every channel."""
+    from apps.m3u.models import M3UAccountProfile
+
+    ids = {int(i) for i in profile_ids if str(i).isdigit()}
+    if not ids:
+        return {}
+    return {
+        profile_id: (account, name)
+        for profile_id, account, name in M3UAccountProfile.objects.filter(id__in=ids).values_list(
+            "id", "m3u_account__name", "name"
+        )
+    }
+
+
+def _stream_profile_name(value):
+    """A stream profile by name ("Proxy", "FFmpeg"...), whether kept as its id or its name."""
+    if not str(value or "").isdigit():
+        return str(value or "")
+    try:
+        from core.models import StreamProfile
+
+        return StreamProfile.objects.filter(id=int(value)).values_list("name", flat=True).first() or str(value)
+    except Exception:
+        return str(value)
+
+
+def details(redis_client, channel_id, profile_names=None):
+    """What a running channel is playing and who is watching it, for the page."""
+    from .redis_keys import RedisKeys
+
+    metadata = redis_client.hgetall(RedisKeys.channel_metadata(channel_id)) or {}
+    if not metadata:
+        return {}
+    found = {field: _text(metadata, field) for field in DETAIL_FIELDS}
+    profile_id = _text(metadata, "m3u_profile")
+    account, profile = (profile_names or {}).get(int(profile_id), ("", "")) if profile_id.isdigit() else ("", "")
+    found.update(
+        account=account,
+        profile=profile,
+        stream_profile=_stream_profile_name(_text(metadata, "stream_profile")),
+    )
+
+    viewers = []
+    now = time.time()
+    try:
+        from . import probation
+
+        for client_id in redis_client.smembers(RedisKeys.clients(channel_id)) or ():
+            client_id = client_id.decode() if isinstance(client_id, bytes) else str(client_id)
+            client = redis_client.hgetall(RedisKeys.client_metadata(channel_id, client_id)) or {}
+            if not client:
+                continue
+            agent = _text(client, "user_agent")
+            ip = _text(client, "ip_address")
+            connected = _number(client, "connected_at")
+            viewers.append({
+                "ip": ip,
+                # The app, without its version; a media server or recording by its own name
+                "app": probation.app_name(agent, ip) or agent[:60],
+                "watching_for": round(now - connected, 1) if connected else 0,
+                # What Dispatcharr is sending it, in kilobits
+                "kbps": round(_number(client, "current_rate_KBps") * 8, 1),
+                "format": _text(client, "output_format", "mpegts"),
+            })
+    except Exception as e:
+        logger.debug(f"Could not read who is watching {channel_id}: {e}")
+    found["viewers"] = sorted(viewers, key=lambda viewer: -viewer["watching_for"])
+    return found
+
+
 def running_now(redis_client):
     """Every channel that is running, with its readings, newest last."""
     channels = []
     try:
         from . import recovery
+        from .redis_keys import RedisKeys
 
-        for channel_id in _channel_ids(redis_client):
+        ids = _channel_ids(redis_client)
+        profile_names = _profile_names(
+            _text(redis_client.hgetall(RedisKeys.channel_metadata(channel_id)) or {}, "m3u_profile")
+            for channel_id in ids
+        )
+        for channel_id in ids:
             samples = _read_samples(
                 redis_client, LIVE_KEY.format(channel_id=channel_id)
             )
@@ -301,6 +389,7 @@ def running_now(redis_client):
                 "channel": recovery._channel_name(channel_id),
                 "now": latest,
                 "samples": samples,
+                "details": details(redis_client, channel_id, profile_names),
             })
     except Exception as e:
         logger.debug(f"Could not read what is running: {e}")

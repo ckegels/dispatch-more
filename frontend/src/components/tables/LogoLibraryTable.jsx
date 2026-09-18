@@ -75,7 +75,7 @@ const About = ({ suggestion, byHand }) => {
     );
   }
   return (
-    <Group gap={4} wrap="nowrap">
+    <Group gap={4} wrap="wrap">
       <Badge size="xs" variant="light" color={sourceColor(suggestion.source)}>
         {suggestion.source}
       </Badge>
@@ -305,14 +305,17 @@ const LogoLibraryTable = () => {
           }
           const current = picked[original.channel_id] || 0;
           return (
-            <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+            <Group gap="sm" wrap="nowrap" align="flex-start" style={{ minWidth: 0, width: '100%' }}>
               <Center style={{ width: 40, flexShrink: 0 }}>
                 <Preview url={chosen.url} alt={chosen.name} />
               </Center>
-              <About suggestion={chosen} byHand={!!custom[original.channel_id]} />
-              {/* The others, small, to be chosen instead */}
+              <Box style={{ flexShrink: 0, maxWidth: '40%' }}>
+                <About suggestion={chosen} byHand={!!custom[original.channel_id]} />
+              </Box>
+              {/* The others, small, to be chosen instead. They take what room is left and
+                  go on to the next line, rather than running under the search button */}
               {!custom[original.channel_id] && original.suggestions.length > 1 && (
-                <Group gap={4} wrap="nowrap">
+                <Group gap={4} wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
                   {original.suggestions.map((suggestion, index) => (
                     <Box
                       key={suggestion.url}
@@ -416,7 +419,6 @@ const LogoLibraryTable = () => {
           justifyContent: 'center',
           padding: '0px',
           minHeight: 'calc(100vh - 200px)',
-          minWidth: '900px',
         }}
       >
         <Stack gap="md" style={{ maxWidth: '1200px', width: '100%' }}>
@@ -433,6 +435,8 @@ const LogoLibraryTable = () => {
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
                 padding: '16px',
                 borderBottom: '1px solid #3f3f46',
               }}
@@ -553,7 +557,7 @@ const LogoLibraryTable = () => {
               }}
             >
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
-                <div>
+                <div style={{ minWidth: 760 }}>
                   <LoadingOverlay visible={loading} />
                   {rows.length === 0 && !loading ? (
                     <Center p="xl">

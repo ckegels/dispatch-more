@@ -526,7 +526,6 @@ const ChannelManagerTable = () => {
           justifyContent: 'center',
           padding: '0px',
           minHeight: 'calc(100vh - 200px)',
-          minWidth: '900px',
         }}
       >
         <Stack gap="md" style={{ maxWidth: '1200px', width: '100%' }}>
@@ -543,6 +542,8 @@ const ChannelManagerTable = () => {
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
                 padding: '16px',
                 borderBottom: '1px solid #3f3f46',
               }}
@@ -683,7 +684,7 @@ const ChannelManagerTable = () => {
               }}
             >
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
-                <div>
+                <div style={{ minWidth: 760 }}>
                   <LoadingOverlay visible={loading} />
                   {rows.length === 0 && !loading ? (
                     <Center p="xl">

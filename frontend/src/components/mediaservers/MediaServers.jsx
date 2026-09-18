@@ -188,69 +188,72 @@ const MediaServers = ({ active }) => {
                   Nothing is playing.
                 </Text>
               ) : (
-                <Table mt="xs" fz="sm" verticalSpacing={4}>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Watching</Table.Th>
-                      <Table.Th>Who</Table.Th>
-                      <Table.Th>Player</Table.Th>
-                      <Table.Th>How</Table.Th>
-                      <Table.Th w={80} />
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {server.sessions.map((session) => (
-                      <Table.Tr key={`${session.user}-${session.title}`}>
-                        <Table.Td>{session.title}</Table.Td>
-                        <Table.Td>{session.user}</Table.Td>
-                        <Table.Td c="dimmed">{session.player}</Table.Td>
-                        <Table.Td>
-                          <Badge
-                            size="sm"
-                            variant="light"
-                            color={
-                              session.decision === 'direct play'
-                                ? 'teal'
-                                : 'orange'
-                            }
-                          >
-                            {session.decision}
-                            {session.speed
-                              ? ` ${session.speed.toFixed(1)}×`
-                              : ''}
-                          </Badge>
-                          {session.state === 'buffering' && (
+                // On a phone it scrolls sideways rather than squeezing every column
+                <Table.ScrollContainer minWidth={560} type="native" mt="xs">
+                  <Table fz="sm" verticalSpacing={4}>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Watching</Table.Th>
+                        <Table.Th>Who</Table.Th>
+                        <Table.Th>Player</Table.Th>
+                        <Table.Th>How</Table.Th>
+                        <Table.Th w={80} />
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {server.sessions.map((session) => (
+                        <Table.Tr key={`${session.user}-${session.title}`}>
+                          <Table.Td>{session.title}</Table.Td>
+                          <Table.Td>{session.user}</Table.Td>
+                          <Table.Td c="dimmed">{session.player}</Table.Td>
+                          <Table.Td>
                             <Badge
                               size="sm"
-                              color="yellow"
                               variant="light"
-                              ml={6}
-                            >
-                              buffering
-                            </Badge>
-                          )}
-                        </Table.Td>
-                        <Table.Td>
-                          {/* A player holding a slot is the thing worth doing
-                              something about, and the server's own screens are
-                              the slow way to reach it */}
-                          {session.session_id && (
-                            <Button
-                              size="compact-xs"
-                              variant="subtle"
-                              color="red"
-                              onClick={() =>
-                                setConfirmingStop({ server, session })
+                              color={
+                                session.decision === 'direct play'
+                                  ? 'teal'
+                                  : 'orange'
                               }
                             >
-                              Stop
-                            </Button>
-                          )}
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
+                              {session.decision}
+                              {session.speed
+                                ? ` ${session.speed.toFixed(1)}×`
+                                : ''}
+                            </Badge>
+                            {session.state === 'buffering' && (
+                              <Badge
+                                size="sm"
+                                color="yellow"
+                                variant="light"
+                                ml={6}
+                              >
+                                buffering
+                              </Badge>
+                            )}
+                          </Table.Td>
+                          <Table.Td>
+                            {/* A player holding a slot is the thing worth doing
+                              something about, and the server's own screens are
+                              the slow way to reach it */}
+                            {session.session_id && (
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="red"
+                                onClick={() =>
+                                  setConfirmingStop({ server, session })
+                                }
+                              >
+                                Stop
+                              </Button>
+                            )}
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </Table.ScrollContainer>
               ))}
 
             {openServers[server.id] && (
@@ -347,7 +350,9 @@ const MediaServers = ({ active }) => {
             );
             setError(null);
           } catch (e) {
-            setError(e?.body?.error || 'The server would not stop that session.');
+            setError(
+              e?.body?.error || 'The server would not stop that session.'
+            );
           }
         }}
         title="Stop this session?"

@@ -13,6 +13,7 @@ import {
   Table,
   Text,
 } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import { Copy } from 'lucide-react';
 import API from '../../api';
 import { allAsText, copy } from './copyText';
@@ -43,6 +44,9 @@ const Diagnostics = ({ active }) => {
   const [legendOpen, setLegendOpen] = useState(false);
   const [tab, setTab] = useState('starts');
   const [copied, setCopied] = useState(null);
+  // On a phone the three tabs side by side run off the screen and the last cannot be
+  // reached, so they stack, with shorter names
+  const phone = useMediaQuery('(max-width: 48em)');
 
   // One place for every copy button: it says whether it worked, and forgets after a moment
   const copyToClipboard = async (text) => {
@@ -98,19 +102,21 @@ const Diagnostics = ({ active }) => {
         value={tab}
         onChange={setTab}
         aria-label="What to show"
+        fullWidth={phone}
+        orientation={phone ? 'vertical' : 'horizontal'}
         data={[
           {
             value: 'starts',
-            label: `Channel starts (${activity.starts.length})`,
+            label: `${phone ? 'Starts' : 'Channel starts'} (${activity.starts.length})`,
           },
           {
             value: 'switches',
-            label: `Channel switches (${activity.events.length})`,
+            label: `${phone ? 'Switches' : 'Channel switches'} (${activity.events.length})`,
           },
           {
             value: 'health',
             // What is running now, not what has gone wrong: the count that matters
-            label: `Channel health (${(activity.running || []).length})`,
+            label: `${phone ? 'Health' : 'Channel health'} (${(activity.running || []).length})`,
           },
         ]}
       />
@@ -176,6 +182,7 @@ const Diagnostics = ({ active }) => {
         onClose={() => setLegendOpen(false)}
         title="What this page shows"
         size="lg"
+        fullScreen={phone}
         centered
       >
         <Stack gap="sm">

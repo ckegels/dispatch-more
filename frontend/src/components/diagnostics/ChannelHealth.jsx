@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import {
   Badge,
+  Box,
   Button,
   Group,
+  Paper,
+  SimpleGrid,
   Stack,
   Switch,
   Table,
@@ -58,7 +61,11 @@ const forHowLong = (seconds) => {
 };
 
 const rate = (kbps) =>
-  !kbps ? '—' : kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kbps`;
+  !kbps
+    ? '—'
+    : kbps >= 1000
+      ? `${(kbps / 1000).toFixed(1)} Mbps`
+      : `${Math.round(kbps)} kbps`;
 
 // Under 1.0 means ffmpeg is not keeping up with real time, which is what a stall looks
 // like before it becomes one. Worth colouring rather than leaving to be noticed.
@@ -107,6 +114,143 @@ const Trend = ({ samples, pick, height = 18, width = 90 }) => {
   );
 };
 
+// One fact about a running channel, left out when there is nothing to say
+const Fact = ({ label, children }) =>
+  children ? (
+    <Box style={{ minWidth: 0 }}>
+      <Text size="xs" c="dimmed">
+        {label}
+      </Text>
+      <Text size="sm" style={{ wordBreak: 'break-word' }}>
+        {children}
+      </Text>
+    </Box>
+  ) : null;
+
+const joined = (...parts) => parts.filter(Boolean).join(' · ');
+
+// A running channel as a card rather than a table row: there is too much worth knowing to
+// fit a row, and a card reads on a phone where a wide table cannot.
+const RunningChannel = ({ channel }) => {
+  const d = channel.details || {};
+  const viewers = d.viewers || [];
+  const fps = d.actual_fps || d.source_fps || d.ffmpeg_fps;
+  return (
+    <Paper withBorder p="sm" radius="md">
+      <Stack gap="xs">
+        <Group gap="xs" wrap="wrap">
+          <Text fw={600} style={{ wordBreak: 'break-word' }}>
+            {channel.channel}
+          </Text>
+          <Badge
+            size="sm"
+            variant="light"
+            color={channel.now.state === 'active' ? 'teal' : 'yellow'}
+          >
+            {channel.now.state}
+          </Badge>
+          <Text size="xs" c="dimmed">
+            playing for {forHowLong(channel.now.uptime)} · {channel.now.clients}{' '}
+            watching
+          </Text>
+        </Group>
+
+        <SimpleGrid
+          cols={{ base: 1, xs: 2, md: 3 }}
+          spacing="sm"
+          verticalSpacing={6}
+        >
+          <Fact label="From">
+            {joined(
+              d.account,
+              d.profile && d.profile !== 'Default' ? d.profile : ''
+            )}
+          </Fact>
+          <Fact label="Stream">
+            {joined(
+              d.stream_name,
+              d.stream_type && d.stream_type.toUpperCase()
+            )}
+          </Fact>
+          <Fact label="Stream profile">{d.stream_profile}</Fact>
+          <Fact label="Picture">
+            {joined(
+              d.resolution,
+              d.video_codec && d.video_codec.toUpperCase(),
+              fps && `${Math.round(Number(fps))} fps`,
+              d.video_bitrate && rate(Number(d.video_bitrate))
+            )}
+          </Fact>
+          <Fact label="Sound">
+            {joined(
+              d.audio_codec && d.audio_codec.toUpperCase(),
+              d.audio_channels,
+              d.sample_rate && `${Math.round(Number(d.sample_rate) / 1000)} kHz`
+            )}
+          </Fact>
+          <Box style={{ minWidth: 0 }}>
+            <Text size="xs" c="dimmed">
+              Arriving now
+            </Text>
+            <Group gap="xs" wrap="wrap">
+              {/* What is actually arriving: the one measure there is on a channel
+                  with no ffmpeg behind it to report a speed */}
+              <Text size="sm">{rate(channel.now.kbps)}</Text>
+              {channel.now.speed ? <Speed speed={channel.now.speed} /> : null}
+              <Trend
+                samples={channel.samples}
+                pick={(sample) => sample.kbps || null}
+              />
+            </Group>
+          </Box>
+          <Fact label="Source says">
+            {channel.now.source_kbps ? rate(channel.now.source_kbps) : ''}
+          </Fact>
+          <Fact label="Last stream switch">
+            {d.stream_switch_reason &&
+              joined(
+                d.stream_switch_time && shortTime(Number(d.stream_switch_time)),
+                d.stream_switch_reason
+              )}
+          </Fact>
+        </SimpleGrid>
+
+        {d.error_message && (
+          <Text size="sm" c="red.4" style={{ wordBreak: 'break-word' }}>
+            {d.error_time ? `${shortTime(Number(d.error_time))}: ` : ''}
+            {d.error_message}
+          </Text>
+        )}
+
+        {viewers.length > 0 && (
+          <Stack gap={2}>
+            <Text size="xs" c="dimmed">
+              Watching
+            </Text>
+            {viewers.map((viewer, index) => (
+              <Text
+                key={`${viewer.ip}-${index}`}
+                size="sm"
+                style={{ wordBreak: 'break-word' }}
+              >
+                {joined(
+                  viewer.ip,
+                  viewer.app,
+                  `for ${forHowLong(viewer.watching_for)}`,
+                  viewer.kbps ? rate(viewer.kbps) : '',
+                  viewer.format && viewer.format !== 'mpegts'
+                    ? viewer.format
+                    : ''
+                )}
+              </Text>
+            ))}
+          </Stack>
+        )}
+      </Stack>
+    </Paper>
+  );
+};
+
 const RunningNow = ({ running }) => {
   if (!running || running.length === 0) {
     return (
@@ -116,57 +260,11 @@ const RunningNow = ({ running }) => {
     );
   }
   return (
-    <Table.ScrollContainer minWidth={760} type="native">
-      <Table striped highlightOnHover withTableBorder verticalSpacing={4} fz="sm">
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th w="24%">Channel</Table.Th>
-            <Table.Th w={90}>State</Table.Th>
-            <Table.Th w={80}>Playing</Table.Th>
-            <Table.Th w={70}>Watching</Table.Th>
-            <Table.Th w={90}>Speed</Table.Th>
-            <Table.Th w={110}>Carrying</Table.Th>
-            <Table.Th w={110}>Source</Table.Th>
-            <Table.Th>Last minutes</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {running.map((channel) => (
-            <Table.Tr key={channel.channel}>
-              <Table.Td style={{ wordBreak: 'break-word' }}>
-                {channel.channel}
-              </Table.Td>
-              <Table.Td>
-                <Badge
-                  size="sm"
-                  variant="light"
-                  color={channel.now.state === 'active' ? 'teal' : 'yellow'}
-                >
-                  {channel.now.state}
-                </Badge>
-              </Table.Td>
-              <Table.Td c="dimmed">{forHowLong(channel.now.uptime)}</Table.Td>
-              <Table.Td c="dimmed">{channel.now.clients}</Table.Td>
-              <Table.Td>
-                <Speed speed={channel.now.speed} />
-              </Table.Td>
-              {/* What is actually arriving, which is the only measure on a channel with
-                  no ffmpeg behind it to report a speed */}
-              <Table.Td c="dimmed">{rate(channel.now.kbps)}</Table.Td>
-              <Table.Td c="dimmed">
-                {rate(channel.now.source_kbps || channel.now.output_kbps)}
-              </Table.Td>
-              <Table.Td>
-                <Trend
-                  samples={channel.samples}
-                  pick={(sample) => sample.speed || sample.kbps || null}
-                />
-              </Table.Td>
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
-    </Table.ScrollContainer>
+    <Stack gap="sm">
+      {running.map((channel) => (
+        <RunningChannel key={channel.channel} channel={channel} />
+      ))}
+    </Stack>
   );
 };
 
@@ -213,34 +311,36 @@ const Stopped = ({ stopped }) => {
               </Button>
             </Group>
             {showing && (
-              <Table fz="xs" verticalSpacing={2} withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th w={90}>Time</Table.Th>
-                    <Table.Th w={90}>State</Table.Th>
-                    <Table.Th w={80}>Speed</Table.Th>
-                    <Table.Th w={110}>Carrying</Table.Th>
-                    <Table.Th w={110}>Source</Table.Th>
-                    <Table.Th>Watching</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {channel.samples.map((sample) => (
-                    <Table.Tr key={sample.at}>
-                      <Table.Td c="dimmed">{shortTime(sample.at)}</Table.Td>
-                      <Table.Td c="dimmed">{sample.state}</Table.Td>
-                      <Table.Td>
-                        <Speed speed={sample.speed} />
-                      </Table.Td>
-                      <Table.Td c="dimmed">{rate(sample.kbps)}</Table.Td>
-                      <Table.Td c="dimmed">
-                        {rate(sample.source_kbps || sample.output_kbps)}
-                      </Table.Td>
-                      <Table.Td c="dimmed">{sample.clients}</Table.Td>
+              <Table.ScrollContainer minWidth={520} type="native">
+                <Table fz="xs" verticalSpacing={2} withTableBorder>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th w={90}>Time</Table.Th>
+                      <Table.Th w={90}>State</Table.Th>
+                      <Table.Th w={80}>Speed</Table.Th>
+                      <Table.Th w={110}>Carrying</Table.Th>
+                      <Table.Th w={110}>Source</Table.Th>
+                      <Table.Th>Watching</Table.Th>
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {channel.samples.map((sample) => (
+                      <Table.Tr key={sample.at}>
+                        <Table.Td c="dimmed">{shortTime(sample.at)}</Table.Td>
+                        <Table.Td c="dimmed">{sample.state}</Table.Td>
+                        <Table.Td>
+                          <Speed speed={sample.speed} />
+                        </Table.Td>
+                        <Table.Td c="dimmed">{rate(sample.kbps)}</Table.Td>
+                        <Table.Td c="dimmed">
+                          {rate(sample.source_kbps || sample.output_kbps)}
+                        </Table.Td>
+                        <Table.Td c="dimmed">{sample.clients}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
             )}
           </Stack>
         );
@@ -261,7 +361,13 @@ const Events = ({ events }) => {
   }
   return (
     <Table.ScrollContainer minWidth={620} type="native">
-      <Table striped highlightOnHover withTableBorder verticalSpacing={4} fz="sm">
+      <Table
+        striped
+        highlightOnHover
+        withTableBorder
+        verticalSpacing={4}
+        fz="sm"
+      >
         <Table.Thead>
           <Table.Tr>
             <Table.Th w={90}>Time</Table.Th>
@@ -319,19 +425,21 @@ const ChannelHealth = ({ events, running, stopped, settings, onSettings }) => (
     <RunningNow running={running} />
 
     <Text size="sm" fw={600}>
-      Stopped
-    </Text>
-    <Stopped stopped={stopped} />
-
-    <Text size="sm" fw={600}>
       What happened
     </Text>
     <Events events={events} />
 
+    <Text size="sm" fw={600}>
+      Stopped
+    </Text>
+    <Stopped stopped={stopped} />
+
     <Text size="xs" c="dimmed">
       Every running channel is read every few seconds, and when one stops the
-      last few minutes of readings are kept for as long as switches are. Speed
-      is how well ffmpeg is keeping up with real time: under 1.00× for any
+      last few minutes of readings are kept for as long as switches are.
+      Arriving now is what the provider is actually sending. Speed only shows
+      when ffmpeg is working on the channel (a stream profile other than Proxy):
+      it is how well ffmpeg keeps up with real time, and under 1.00× for any
       length of time is a stream falling behind, which is what a stall looks
       like before it becomes one. Turning recording off leaves everything else
       working; only the readings stop.

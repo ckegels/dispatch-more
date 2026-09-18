@@ -6,6 +6,7 @@ recording and nothing more: it never decides anything about a stream.
 """
 
 import json
+import time
 
 from django.test import TestCase
 
@@ -34,6 +35,9 @@ class FakeRedis:
 
     def scard(self, key):
         return len(self.sets.get(key, ()))
+
+    def smembers(self, key):
+        return set(self.sets.get(key, ()))
 
     def sadd(self, key, *values):
         self.sets.setdefault(key, set()).update(values)
@@ -110,6 +114,35 @@ class SamplingTests(TestCase):
         self.assertEqual(reading["speed"], 1.0)
         self.assertEqual(reading["clients"], 2)
         self.assertEqual(reading["source_kbps"], 4500)
+
+    def test_a_running_channel_says_what_it_plays_from_where_and_to_whom(self):
+        from apps.m3u.models import M3UAccount, M3UAccountProfile
+
+        account = M3UAccount.objects.create(name="Provider A", account_type="STD", server_url="http://a")
+        login = account.profiles.first() or M3UAccountProfile.objects.create(m3u_account=account, name="Default", is_default=True)
+        self._a_running_channel(clients=0)
+        self.redis.hset("live:channel:abc:metadata", mapping={
+            "m3u_profile": str(login.id), "stream_name": "ORF 1 FHD", "stream_type": "ts",
+            "resolution": "1920x1080", "video_codec": "h264", "source_fps": "50",
+            "audio_codec": "aac", "stream_profile": "Proxy",
+            "stream_switch_reason": "the stream stopped sending",
+        })
+        self.redis.sadd("live:channel:abc:clients", "tv")
+        self.redis.hset("live:channel:abc:clients:tv", mapping={
+            "ip_address": "192.168.2.30", "user_agent": "TiviMate/5.1.6 (Android 11)",
+            "connected_at": str(time.time() - 60), "current_rate_KBps": "500",
+        })
+
+        (channel,) = health.running_now(self.redis)
+        found = channel["details"]
+        self.assertEqual((found["account"], found["profile"]), ("Provider A", login.name))
+        self.assertEqual((found["stream_name"], found["resolution"], found["video_codec"]), ("ORF 1 FHD", "1920x1080", "h264"))
+        self.assertEqual(found["stream_switch_reason"], "the stream stopped sending")
+        (viewer,) = found["viewers"]
+        self.assertEqual(viewer["ip"], "192.168.2.30")
+        self.assertIn("TiviMate", viewer["app"])
+        self.assertEqual(viewer["kbps"], 4000)
+        self.assertGreaterEqual(viewer["watching_for"], 59)
 
     def test_a_channel_that_is_not_running_reads_as_nothing(self):
         self.assertEqual(health.sample(self.redis, "gone"), {})

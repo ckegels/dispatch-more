@@ -32,8 +32,11 @@ const ChannelManagerPage = () => {
           w={'100%'}
           maw={'1200px'}
           pb={10}
+          px={{ base: 'xs', md: 0 }}
+          wrap="wrap"
+          gap="sm"
         >
-          <Flex gap={8} align="center">
+          <Flex gap={8} align="center" wrap="wrap">
             <Text
               ff={'Inter, sans-serif'}
               fz={'20px'}
@@ -66,6 +69,7 @@ const ChannelManagerPage = () => {
           title="Make a backup before you apply anything"
           w="100%"
           maw="1200px"
+          mx={{ base: 'xs', md: 0 }}
         >
           <Text size="sm">
             Applying a merge, removing or parking streams changes many channels
