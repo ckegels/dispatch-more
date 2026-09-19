@@ -771,6 +771,9 @@ const StreamCheckTable = () => {
                         ? ` · ${account.status}`
                         : ''}
                       {account.reason ? ` (${account.reason})` : ''}
+                      {account.until
+                        ? ` · until ${new Date(account.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                        : ''}
                       {account.status === 'checking' && account.now
                         ? ` · ${account.now}`
                         : ''}

@@ -191,6 +191,10 @@ describe('StreamCheckTable', () => {
           done: 4, total: 9, accounts: {
             1: { name: 'Provider A', done: 4, left: 2, status: 'checking', now: 'ORF 2', reason: '' },
             2: { name: 'Provider B', done: 0, left: 3, status: 'in use', reason: 'a viewer is on every login of it' },
+            3: {
+              name: 'Provider C', done: 9, left: 1, status: 'resting', reason: 'allows 5 streams every 60 min (learned)',
+              until: '2026-09-19T09:03:00+00:00',
+            },
           },
         },
       })
@@ -198,6 +202,9 @@ describe('StreamCheckTable', () => {
     draw();
     expect(await screen.findByText(/Provider A: 4 checked, 2 left · ORF 2/)).toBeInTheDocument();
     expect(screen.getByText(/Provider B: 0 checked, 3 left · in use \(a viewer is on every login of it\)/)).toBeInTheDocument();
+    // In the viewer's own time zone, not the server's
+    const local = new Date('2026-09-19T09:03:00+00:00').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    expect(screen.getByText(new RegExp(`Provider C: .* until ${local}`))).toBeInTheDocument();
   });
 
   it('says which providers the last run left alone, and that their streams were not counted', async () => {

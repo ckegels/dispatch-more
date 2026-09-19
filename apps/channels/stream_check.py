@@ -618,7 +618,7 @@ class _Budget:
 
     def describe(self):
         if self.state.get("blocked_since"):
-            return f"hit its limit after {self.state.get('count')} streams; trying again at {_clock(self.state.get('next_try'))}"
+            return f"hit its limit after {self.state.get('count')} streams; finding out how long it lasts"
         if self.state.get("limit"):
             return f"allows {self.state['limit']} streams every {max(1, int(self.state['window']) // 60)} min ({self.state.get('how')})"
         return ""
@@ -644,10 +644,6 @@ def provider_limits(redis_client):
             "said": budget.describe() or "no limit found yet",
         })
     return sorted(rows, key=lambda row: row["name"].lower())
-
-
-def _clock(seconds):
-    return datetime.fromtimestamp(float(seconds or 0)).strftime("%H:%M")
 
 
 # ── Is an account working at all ─────────────────────────────────────────────
@@ -1345,6 +1341,12 @@ def run(redis_client, only=None, batch_seconds=None):
                 waiting.add(key)
                 if seconds is not None:
                     resume_in[key] = seconds
+                # When it goes on, as a moment rather than a clock time: the page shows it in
+                # the viewer's own time zone, where the server's would read hours off
+                entry["until"] = (
+                    datetime.fromtimestamp(time.time() + seconds, timezone.utc).isoformat(timespec="seconds")
+                    if seconds else ""
+                )
                 set_status(entry, status, reason)
 
             def logins_of(account_id, account):
@@ -1387,7 +1389,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     return "busy"
                 redis_client.expire(RUN_KEY, RUN_TTL)
                 with lock:
-                    entry.update(now=stream.name, status="checking", reason="")
+                    entry.update(now=stream.name, status="checking", reason="", until="")
                     _progress(redis_client, accounts=accounts)
 
                 def should_stop():
@@ -1472,7 +1474,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     wait = budget.wait()
                     if wait > 0:
                         if wait > 30:
-                            rest("resting", f"{budget.describe()}; next at {_clock(time.time() + wait)}", wait)
+                            rest("resting", budget.describe(), wait)
                             return
                         _pause(wait, lambda: stop_asked() or someone_watching())
                         if not ready():
