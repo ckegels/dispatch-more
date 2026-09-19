@@ -123,6 +123,22 @@ version, this repository's automation tries the changes against it and reports w
 still apply; a new release follows. Until then, keep the Dispatcharr version you have, or
 uninstall first and update to stock.
 
+---
+
+# Screenshots
+
+<div align="center">
+<img width="1588" height="1089" alt="Screenshot_20260919_180716" src="https://github.com/user-attachments/assets/1289637a-7385-4ec4-ae0c-3fc35ef7b1e0" />
+<img width="1217" height="709" alt="Screenshot_20260919_180638" src="https://github.com/user-attachments/assets/5a6fe98f-bd69-4c95-86ba-669b483c23e5" />
+<img width="1323" height="1351" alt="Screenshot_20260919_180445" src="https://github.com/user-attachments/assets/4d8c196a-221f-4891-b3e7-decd1af62802" />
+<img width="1136" height="1339" alt="Screenshot_20260919_180332" src="https://github.com/user-attachments/assets/03b597f7-26fc-4852-9173-ebe21297b1aa" />
+<img width="917" height="1011" alt="Screenshot_20260919_180252" src="https://github.com/user-attachments/assets/0c1a4038-f12e-43b4-959c-51eed60ad6ba" />
+<img width="2558" height="1347" alt="Screenshot_20260919_180216" src="https://github.com/user-attachments/assets/b5f287db-c63b-4f1a-87f7-5f53490e0fd8" />
+
+</div>
+
+---
+
 ## License and source
 
 Dispatcharr is licensed under the [GNU AGPL v3](LICENSE), and so is Dispatch More. This
