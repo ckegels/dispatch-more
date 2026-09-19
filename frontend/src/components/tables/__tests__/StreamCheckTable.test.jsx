@@ -229,7 +229,7 @@ describe('StreamCheckTable', () => {
     expect(screen.getByRole('switch', { name: /Only while nothing is playing/ })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: 'Forget all results' }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Forget them' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clear' }));
     await waitFor(() => expect(API.clearStreamCheck).toHaveBeenCalled());
   });
 
@@ -274,6 +274,54 @@ describe('StreamCheckTable', () => {
     await open();
     expect(screen.getByText('Black picture')).toBeInTheDocument();
     expect(screen.getByText(/Black picture \(6 of 6 s\)/)).toBeInTheDocument();
+  });
+
+  it('clears the list from the page, changing nothing on the channels', async () => {
+    API.clearStreamCheck.mockResolvedValue({ cleared: true });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear list' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Nothing on your channels changes/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(API.clearStreamCheck).toHaveBeenCalled());
+    expect(API.streamCheckAction).not.toHaveBeenCalled();
+  });
+
+  it('ignores a failing stream, and stops ignoring it', async () => {
+    API.streamCheckAction.mockResolvedValue({});
+    draw();
+    await open();
+    // What the page gets once the stream is ignored
+    API.getStreamCheck.mockResolvedValue(
+      overview({ ignored: [{ id: 7, name: 'ORF 1 B', account: 'Provider B', ignored_at: '2026-09-19T10:00:00+00:00', ignore_reason: 'Black picture' }] })
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: 'Ignore' })[0]);
+    await waitFor(() =>
+      expect(API.streamCheckAction).toHaveBeenCalledWith('ignore', expect.any(Number), null)
+    );
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which channels' }));
+    fireEvent.click(await screen.findByText('Ignored (1)'));
+    expect(await screen.findByText(/Black picture/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop ignoring' }));
+    await waitFor(() => expect(API.streamCheckAction).toHaveBeenLastCalledWith('unignore', 7, null));
+  });
+
+  it('says a picture is being looked at again, not that it failed', async () => {
+    const looking = {
+      ...channelRow,
+      suspects: 1,
+      streams: [
+        { ...channelRow.streams[0], state: 'suspect', result: { ...result(true), suspect: { reason: 'Black picture (6 of 6 s)', clean: 1 } } },
+        ...channelRow.streams.slice(1),
+      ],
+    };
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [looking] }));
+    draw();
+    await open();
+    expect(screen.getAllByText('Checking again').length).toBeGreaterThan(0);
+    expect(screen.getByText('1 checking again')).toBeInTheDocument();
+    expect(screen.getByText(/looked at again later in this run to be sure \(1 clean look so far\)/)).toBeInTheDocument();
   });
 
   it('turns autopark on, off by default', async () => {

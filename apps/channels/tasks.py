@@ -4497,7 +4497,7 @@ def build_logo_library():
 
 
 @shared_task
-def run_stream_check(only=None):
+def run_stream_check(only=None, looks=0):
     """
     A batch of the Stream Check round going, or a check of the streams given (see
     stream_check.run). A batch that ends with more to do queues the next at once, so other
@@ -4510,6 +4510,18 @@ def run_stream_check(only=None):
 
     redis_client = RedisClient.get_client()
     ended = run(redis_client, only=only)
+    if only is not None:
+        # A check asked for by hand is not part of a round, so what it suspects of a picture
+        # is looked at again from here -- a few times at most, should its provider stay busy
+        from .stream_check import RELOOK_GAP, RELOOKS, load_results
+
+        results = load_results()["streams"]
+        again = [
+            i for i in only
+            if ((results.get(str(i)) or {}).get("suspect") or {}).get("round") == "only"
+        ]
+        if again and looks < RELOOKS * 3:
+            run_stream_check.apply_async(kwargs={"only": again, "looks": looks + 1}, countdown=RELOOK_GAP)
     if only is None:
         if ended == "more":
             queue_next(redis_client, run_stream_check, 1, ended)

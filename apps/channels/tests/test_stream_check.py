@@ -1084,6 +1084,8 @@ class RecheckTests(_Setup):
         return answer
 
     def test_autopark_never_parks_a_refused_black_or_frozen_stream(self):
+        # One look decides here: what is tested is what follows a picture fault
+        stream_check.save_settings({"relook_pictures": False})
         stream_check.save_settings({"autopark": True, "autopark_after": 2, "account_failures": 99})
         kinds = {"ORF1B": self._kind(stream_check.BLACK), "ORF1A2": self._kind(stream_check.REFUSED)}
         for _ in range(4):
@@ -1110,6 +1112,8 @@ class RecheckTests(_Setup):
         self.assertEqual(stream_check.rechecks_due(stream_check.load_settings()), [self.second.id])
 
     def test_the_same_still_picture_on_three_channels_is_the_providers_card(self):
+        # One look decides here: what is tested is what follows a picture fault
+        stream_check.save_settings({"relook_pictures": False})
         extra = []
         for number, name in ((2, "ORF 2"), (3, "ORF 3")):
             channel = Channel.objects.create(name=f"┃AT┃ {name}", channel_number=number, channel_group=self.group)
@@ -1126,6 +1130,8 @@ class RecheckTests(_Setup):
         self.assertIn("no stream", results[str(self.second.id)]["reason"])
 
     def test_the_same_still_picture_on_two_channels_is_only_frozen(self):
+        # One look decides here: what is tested is what follows a picture fault
+        stream_check.save_settings({"relook_pictures": False})
         channel = Channel.objects.create(name="┃AT┃ ORF 2", channel_number=2, channel_group=self.group)
         stream = self._stream("ORF 2 B", self.b)
         self._attach(channel, [stream])
@@ -1135,6 +1141,65 @@ class RecheckTests(_Setup):
         with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": card, "ORF2B": card})):
             stream_check.run(self.redis)
         self.assertEqual(stream_check.load_results()["streams"][str(stream.id)]["kind"], stream_check.FROZEN)
+
+    def _round(self, answers):
+        stream_check.start_round(self.redis, force=True) if stream_check.current_round(self.redis) is None else None
+        with mock.patch.object(stream_check, "probe", side_effect=_answers(answers)):
+            return stream_check.run(self.redis)
+
+    def _later(self):
+        """Every re-look of this round due now, as if RELOOK_GAP had passed."""
+        results = stream_check.load_results()
+        for record in results["streams"].values():
+            if record.get("suspect"):
+                record["suspect"]["next_at"] = 0
+        stream_check._store(stream_check.RESULTS_KEY, "x", results)
+
+    def test_a_picture_fault_is_a_suspicion_until_seen_again(self):
+        stream_check.save_settings({"account_failures": 99})
+        black = self._kind(stream_check.BLACK)
+        self.assertEqual(self._round({"ORF1B": black}), "waiting")
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "suspect")
+        self.assertEqual(record.get("failures", 0), 0)
+        self.assertTrue(stream_check.is_running(self.redis))
+
+        self._later()
+        self.assertEqual(self._round({"ORF1B": black}), "done")
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual((record["kind"], record["failures"]), ("black", 1))
+        self.assertIn("again when looked at later", record["reason"])
+
+    def test_three_clean_looks_and_it_plays(self):
+        stream_check.save_settings({"account_failures": 99})
+        self._round({"ORF1B": self._kind(stream_check.FROZEN)})
+        for _ in range(stream_check.RELOOKS):
+            self._later()
+            ended = self._round({})
+        self.assertEqual(ended, "done")
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertTrue(record["ok"])
+        self.assertNotIn("suspect", record)
+
+    def test_a_re_look_waits_its_turn(self):
+        stream_check.save_settings({"account_failures": 99})
+        self._round({"ORF1B": self._kind(stream_check.BLACK)})
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            self.assertEqual(stream_check.run(self.redis), "waiting")
+        probe.assert_not_called()
+        self.assertGreaterEqual(stream_check.progress(self.redis)["resume_in"], stream_check.RETRY_WAITING)
+
+    def test_an_ignored_stream_is_off_the_list_and_not_checked(self):
+        stream_check.save_settings({"account_failures": 99})
+        stream_check.ignore(self.second.id)
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            stream_check.run(self.redis)
+        self.assertNotIn("ORF1B", [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list])
+        found = stream_check.issues(self.redis, "all")
+        self.assertEqual([r["name"] for r in found["ignored"]], ["ORF 1 B"])
+        stream_check.unignore(self.second.id)
+        self.assertEqual(stream_check.load_ignored(), {})
 
     def test_without_autopark_nothing_is_parked(self):
         stream_check.save_settings({"autopark": False, "account_failures": 99})

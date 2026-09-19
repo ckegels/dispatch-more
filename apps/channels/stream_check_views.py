@@ -122,6 +122,9 @@ ACTIONS = {
     "restore": lambda data: stream_check.restore(data["stream_id"]),
     # A parked stream no longer kept: it stays off its channels
     "forget": lambda data: stream_check.forget(data["stream_id"]),
+    # Leave alone: off the list and not checked again; nothing on the channels changes
+    "ignore": lambda data: stream_check.ignore(data["stream_id"]),
+    "unignore": lambda data: stream_check.unignore(data["stream_id"]),
 }
 
 

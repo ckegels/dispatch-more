@@ -46,6 +46,9 @@ const STATE = {
   unchecked: { label: 'Not checked', color: 'gray' },
   fallback: { label: 'fallback', color: 'yellow' },
   gone: { label: 'Gone', color: 'gray' },
+  // A picture that looked wrong once, looked at again later in the run before it counts
+  suspect: { label: 'Checking again', color: 'cyan' },
+  ignored: { label: 'Ignored', color: 'gray' },
 };
 
 // How each provider is getting on, while a run goes
@@ -128,6 +131,17 @@ const Finding = ({ result }) => {
   if (!result) return null;
   // Looked at but never really checked: the provider would not give a connection
   const skipped = result.skipped;
+  const suspect = result.suspect;
+  if (suspect) {
+    return (
+      <Text size="xs" c="cyan.4" style={{ wordBreak: 'break-word' }}>
+        {suspect.reason}: looked at again later in this run to be sure
+        {suspect.clean
+          ? ` (${suspect.clean} clean look${suspect.clean === 1 ? '' : 's'} so far)`
+          : ''}
+      </Text>
+    );
+  }
   const text = skipped
     ? `Not checked: ${result.refused || 'the provider gave no connection'}`
     : result.ok
@@ -191,6 +205,18 @@ const StreamLine = ({ stream, channel, onAct }) => (
         >
           Remove
         </Button>
+        {['failing', 'broken', 'suspect'].includes(stream.state) && (
+          <Tooltip label="Off this list and not checked again. Nothing on the channel changes.">
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              color="gray"
+              onClick={() => onAct('ignore', stream)}
+            >
+              Ignore
+            </Button>
+          </Tooltip>
+        )}
       </Group>
     )}
   </Group>
@@ -223,10 +249,10 @@ const ACT_TEXT = {
     confirmLabel: 'Remove',
   }),
   clear: () => ({
-    title: 'Forget all results?',
+    title: 'Clear the list?',
     message:
-      'Every stream goes back to not checked, as if no run had happened. Nothing on your channels changes, and parked streams stay parked.',
-    confirmLabel: 'Forget them',
+      'Every result is forgotten and the list is empty, as if no run had happened. Nothing on your channels changes: no stream is parked, removed or put back. Parked and ignored streams stay as they are.',
+    confirmLabel: 'Clear',
   }),
   forget: (stream) => ({
     title: 'Stop keeping this stream?',
@@ -255,7 +281,9 @@ const StreamCheckTable = () => {
         // Parked streams come with every answer; the channels shown depend on the filter
         setData(
           await API.getStreamCheck(
-            show === 'parked' || show === 'needs_you' ? 'problems' : show
+            ['parked', 'needs_you', 'ignored'].includes(show)
+              ? 'problems'
+              : show
           )
         );
         setError(null);
@@ -285,7 +313,7 @@ const StreamCheckTable = () => {
     try {
       if (action === 'clear') {
         await API.clearStreamCheck();
-        setNotice('Every result was forgotten.');
+        setNotice('The list is clear. Nothing on your channels changed.');
       } else if (action === 'check') {
         await API.runStreamCheck([stream.id]);
         setNotice(
@@ -299,6 +327,8 @@ const StreamCheckTable = () => {
             remove: `"${stream.name}" was removed.`,
             restore: `"${stream.name}" is back where it was.`,
             forget: `"${stream.name}" is no longer kept.`,
+            ignore: `"${stream.name}" is ignored: off the list and not checked again. Nothing on its channels changed.`,
+            unignore: `"${stream.name}" is checked again.`,
           }[action]
         );
       }
@@ -408,12 +438,17 @@ const StreamCheckTable = () => {
                   {r.failing} failing
                 </Badge>
               )}
+              {r.suspects > 0 && (
+                <Badge size="xs" variant="outline" color="cyan">
+                  {r.suspects} checking again
+                </Badge>
+              )}
               {r.needs_you > 0 && (
                 <Badge size="xs" variant="outline" color="orange">
                   {r.needs_you} need{r.needs_you === 1 ? 's' : ''} you
                 </Badge>
               )}
-              {!r.broken && !r.failing && (
+              {!r.broken && !r.failing && !r.suspects && (
                 <Badge size="xs" variant="light" color="green">
                   Plays
                 </Badge>
@@ -679,6 +714,10 @@ const StreamCheckTable = () => {
                       value: 'parked',
                       label: `Parked (${data?.parked?.length ?? 0})`,
                     },
+                    {
+                      value: 'ignored',
+                      label: `Ignored (${data?.ignored?.length ?? 0})`,
+                    },
                     { value: 'all', label: 'Every channel checked' },
                   ]}
                   size="xs"
@@ -687,6 +726,22 @@ const StreamCheckTable = () => {
               </Group>
 
               <Group gap="sm">
+                <Tooltip
+                  label={
+                    data?.running
+                      ? 'Stop the check first'
+                      : 'Empty the list. Nothing on your channels changes.'
+                  }
+                >
+                  <Button
+                    variant="default"
+                    size="xs"
+                    disabled={!!data?.running}
+                    onClick={() => setAsking({ action: 'clear', stream: {} })}
+                  >
+                    Clear list
+                  </Button>
+                </Tooltip>
                 <Button
                   leftSection={<Settings size={16} />}
                   variant="default"
@@ -881,7 +936,56 @@ const StreamCheckTable = () => {
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
                 <div style={{ minWidth: 760 }}>
                   <LoadingOverlay visible={loading} />
-                  {rows.length === 0 && !loading ? (
+                  {show === 'ignored' ? (
+                    <Stack gap={6} p="sm">
+                      {(data?.ignored || []).length === 0 && (
+                        <Text size="sm" c="dimmed" ta="center" p="xl">
+                          No stream is ignored.
+                        </Text>
+                      )}
+                      {(data?.ignored || []).map((stream) => (
+                        <Group
+                          key={stream.id}
+                          gap={6}
+                          wrap="nowrap"
+                          align="flex-start"
+                        >
+                          <Box style={{ minWidth: 0, flex: 1 }}>
+                            <Group gap={6} wrap="wrap">
+                              <Text
+                                size="xs"
+                                style={{ wordBreak: 'break-word' }}
+                              >
+                                {stream.name}
+                              </Text>
+                              {stream.account && (
+                                <Badge size="xs" variant="outline" color="gray">
+                                  {stream.account}
+                                </Badge>
+                              )}
+                            </Group>
+                            <Text
+                              size="xs"
+                              c="dimmed"
+                              style={{ wordBreak: 'break-word' }}
+                            >
+                              Ignored {when(stream.ignored_at)}
+                              {stream.ignore_reason
+                                ? ` · ${stream.ignore_reason}`
+                                : ''}
+                            </Text>
+                          </Box>
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            onClick={() => act('unignore', stream)}
+                          >
+                            Stop ignoring
+                          </Button>
+                        </Group>
+                      ))}
+                    </Stack>
+                  ) : rows.length === 0 && !loading ? (
                     <Center p="xl">
                       <Text size="sm" c="dimmed">
                         {!data

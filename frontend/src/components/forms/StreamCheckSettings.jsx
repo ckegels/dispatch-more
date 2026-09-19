@@ -136,14 +136,14 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             />
           )}
           {draft.picture_check && (
-            <NumberInput
+            <Switch
               size="xs"
-              label="Watch a still picture for (seconds)"
-              description="A picture that looks frozen is watched this much longer, and only called frozen if it stays still throughout. A news desk or a slide can be still for a few seconds."
-              min={10}
-              max={120}
-              value={draft.frozen_confirm_seconds ?? 25}
-              onChange={number('frozen_confirm_seconds')}
+              label="Look again before calling a picture wrong"
+              description="A black, frozen or 'no stream' picture is looked at again later in the same run. Seen again, it counts; three clean looks, and it plays. A news desk or a dark scene can look wrong for a moment."
+              checked={draft.relook_pictures !== false}
+              onChange={(e) =>
+                set({ relook_pictures: e.currentTarget.checked })
+              }
             />
           )}
           <Switch

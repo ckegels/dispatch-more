@@ -78,6 +78,9 @@ RECHECK_KEY = "stream-check-recheck"
 # those: a channel hidden by a person is never shown again by Stream Check
 HIDDEN_KEY = "stream-check-hidden"
 PARKED_KEY = "stream-check-parked"
+# Streams a person said to leave alone: off the list, and not checked again until they say
+# otherwise. Nothing on the channels changes.
+IGNORED_KEY = "stream-check-ignored"
 
 DEFAULTS = {
     # Off unless turned on: a check takes provider connections
@@ -109,8 +112,8 @@ DEFAULTS = {
     # the provider's "no stream" card. Each check takes that much longer.
     "picture_check": True,
     "picture_seconds": 6,
-    # A picture that looks frozen is watched this much longer before it is called so
-    "frozen_confirm_seconds": 25,
+    # A picture fault is looked at again later in the same run before it counts (see RELOOKS)
+    "relook_pictures": True,
     # A channel whose every real stream is parked is hidden from what TVs and media servers
     # get -- the playlist, the guide, the HDHomeRun lineup, Xtream Codes -- rather than shown
     # with nothing but its fallback to play; shown again when a stream of it is put back
@@ -199,11 +202,17 @@ FROZEN_CONFIRM_SHARE = 0.9
 SNAPSHOT_EVERY = 5
 SNAPSHOT_SAME_BITS = 8
 CONFIRM_BYTES = 96 * 1024 * 1024
+# A picture fault found by the quick check is only a suspicion: a news desk sits still, a
+# scene goes dark. The same run opens the stream again, RELOOK_GAP seconds apart. Seen again,
+# it is a failure; RELOOKS clean looks in a row, and it plays.
+RELOOKS = 3
+RELOOK_GAP = 90
 
 # What kind of failure a check found. Only "dead" -- it does not play at all -- may ever be
 # parked by autopark; the others play something, or are the provider's refusal, and are left
 # for a person to decide.
 DEAD, REFUSED, BLACK, FROZEN, PLACEHOLDER = "dead", "refused", "black", "frozen", "placeholder"
+PICTURE_KINDS = (BLACK, FROZEN, PLACEHOLDER)
 KIND_TEXT = {
     DEAD: "does not play",
     REFUSED: "refused by the provider",
@@ -268,7 +277,6 @@ def save_settings(given):
         values["recheck_hours"] = min(168, max(0.5, float(values["recheck_hours"])))
         values["autopark_after"] = max(2, int(values["autopark_after"]))
         values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
-        values["frozen_confirm_seconds"] = min(120, max(10, float(values["frozen_confirm_seconds"])))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     if values["recheck_mode"] not in ("hours", "refresh"):
@@ -284,6 +292,45 @@ def load_results():
     """{"streams": {stream id: result}, "last_run": {...}}, as the last run left them."""
     stored = _load(RESULTS_KEY, {})
     return {"streams": dict(stored.get("streams") or {}), "last_run": stored.get("last_run") or {}}
+
+
+def load_ignored():
+    """{stream id: {"name", "ignored_at", "reason"}}: streams a person said to leave alone."""
+    return dict(_load(IGNORED_KEY, {}))
+
+
+def ignore(stream_id):
+    """
+    Leave a stream alone: off the list, and not checked again, until a person says otherwise.
+    Nothing on its channels changes -- it is not parked, not removed.
+    """
+    from .models import Stream
+
+    stream = Stream.objects.filter(id=stream_id).first()
+    if stream is None or stream.is_custom:
+        raise ValueError("Only a provider's stream can be ignored")
+    result = load_results()["streams"].get(str(stream_id)) or {}
+
+    def change(ignored):
+        ignored[str(stream_id)] = {
+            "name": stream.name,
+            "ignored_at": _now(),
+            "reason": (result.get("suspect") or {}).get("reason") or result.get("reason", ""),
+        }
+
+    _change_key(IGNORED_KEY, "Stream Check ignored streams", change)
+    return 1
+
+
+def unignore(stream_id):
+    """Check a stream again, and show it again when it fails."""
+    found = {}
+
+    def change(ignored):
+        found["was"] = ignored.pop(str(stream_id), None)
+
+    _change_key(IGNORED_KEY, "Stream Check ignored streams", change)
+    return 1 if found.get("was") else 0
 
 
 def load_parked():
@@ -1105,11 +1152,15 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
 # ── Which streams, and a provider connection for each ────────────────────────
 
 
-def _targets(settings, only=None, due_before=None, skip_accounts=()):
+def _targets(settings, only=None, due_before=None, skip_accounts=(), waiting_too=False, now=None):
     """
     The streams to look at, by account: those on channels (in the groups chosen), and
     every parked one. Custom streams are made by hand -- a fallback screen -- and are not
-    a provider's to lose.
+    a provider's to lose, and ignored ones a person has said to leave alone.
+
+    Within a round, a stream it suspects of a picture fault is due again once its next look
+    is (see _record); waiting_too counts those not due yet, so the round is not over while
+    it still has one to decide.
     """
     from .models import ChannelStream, Stream
 
@@ -1118,13 +1169,21 @@ def _targets(settings, only=None, due_before=None, skip_accounts=()):
     if groups:
         links = links.filter(channel__channel_group_id__in=groups)
     wanted = set(links.values_list("stream_id", flat=True)) | parked_ids()
+    wanted -= {int(i) for i in load_ignored()}
     if only is not None:
         wanted &= {int(i) for i in only}
     if due_before is not None:
         # A run that stopped part way goes on where it was: what was looked at lately is
-        # not looked at again
+        # not looked at again -- but for a suspect whose next look has come
         results = load_results()["streams"]
-        wanted = {i for i in wanted if (results.get(str(i)) or {}).get("checked_at", "") < due_before}
+        now = now if now is not None else time.time()
+
+        def due(record):
+            if _relook(record, due_before):
+                return waiting_too or float(record["suspect"].get("next_at") or 0) <= now
+            return record.get("checked_at", "") < due_before
+
+        wanted = {i for i in wanted if due(results.get(str(i)) or {})}
 
     by_account = {}
     for stream in (
@@ -1173,9 +1232,34 @@ def _url_for(stream, profile):
 # ── A run ────────────────────────────────────────────────────────────────────
 
 
-def _record(redis_client, results, stream, outcome, settings):
-    """What a check found, onto what earlier runs found."""
+def _relook(record, round_id):
+    """The suspicion this round has of a stream's picture, or None."""
+    suspect = (record or {}).get("suspect")
+    return suspect if suspect and suspect.get("round") == round_id else None
+
+
+def _record(redis_client, results, stream, outcome, settings, round_id=None):
+    """
+    What a check found, onto what earlier runs found.
+
+    A picture fault is a suspicion first: kept beside the record as it was, not counted, and
+    looked at again later in the same round (round_id). Seen again, it is recorded as the
+    failure it is; RELOOKS clean looks in a row, and the stream plays.
+    """
     previous = results.get(str(stream.id)) or {}
+    suspect = _relook(previous, round_id)
+    picture_fault = not outcome["ok"] and outcome.get("kind") in PICTURE_KINDS
+    if suspect and outcome["ok"] and int(suspect.get("clean") or 0) + 1 < RELOOKS:
+        record = {**previous, "checked_at": _now(), "suspect": {
+            **suspect, "clean": int(suspect.get("clean") or 0) + 1, "next_at": time.time() + RELOOK_GAP,
+        }}
+        return _keep_record(redis_client, results, stream, record, settings)
+    if picture_fault and not suspect and settings.get("relook_pictures", True):
+        record = {**previous, "name": stream.name, "checked_at": _now(), "suspect": {
+            "round": round_id, "kind": outcome["kind"], "reason": outcome["reason"],
+            "clean": 0, "next_at": time.time() + RELOOK_GAP,
+        }}
+        return _keep_record(redis_client, results, stream, record, settings)
     history = ([1 if outcome["ok"] else 0] + list(previous.get("history") or []))[:HISTORY_KEPT]
     failures = 0 if outcome["ok"] else int(previous.get("failures") or 0) + 1
     kind = "" if outcome["ok"] else outcome.get("kind") or DEAD
@@ -1197,6 +1281,12 @@ def _record(redis_client, results, stream, outcome, settings):
         "history": history,
         "name": stream.name,
     }
+    if suspect and picture_fault:
+        record["reason"] = f"{outcome['reason']}, again when looked at later"
+    return _keep_record(redis_client, results, stream, record, settings)
+
+
+def _keep_record(redis_client, results, stream, record, settings):
     record["state"] = state_of(record, settings)
     results[str(stream.id)] = record
     redis_client.hset(LIVE_RESULTS_KEY, str(stream.id), json.dumps(record))
@@ -1208,6 +1298,9 @@ def state_of(record, settings):
     if not record or record.get("skipped"):
         # Looked at, but nothing could be learned: the provider was full the whole time
         return "unchecked"
+    if record.get("suspect"):
+        # A picture fault seen once, to be looked at again before it counts
+        return "suspect"
     if record.get("ok"):
         return "ok"
     return "broken" if int(record.get("failures") or 0) >= int(settings.get("broken_after") or 1) else "failing"
@@ -1323,6 +1416,9 @@ def run(redis_client, only=None, batch_seconds=None):
         round_ = None if only is not None else current_round(redis_client)
         if only is None and round_ is None:
             return "done"
+        # What a suspicion of a stream's picture belongs to: this round, or a check asked for
+        # by hand, which looks again by itself (see tasks.run_stream_check)
+        round_id = round_["since"] if round_ else "only"
         scheduled = round_ is not None and not round_.get("forced")
         if scheduled and not in_window(settings):
             _progress(redis_client, waiting=True, message="Waiting for its window")
@@ -1344,7 +1440,14 @@ def run(redis_client, only=None, batch_seconds=None):
             due_before=round_["since"] if round_ else None, skip_accounts=unavailable,
         )
         if not by_account:
-            return _finish(redis_client, round_) if round_ else "done"
+            if round_ is None:
+                return "done"
+            # Nothing due now; streams whose picture is to be looked at again may still be
+            pending = _targets(
+                settings, only=round_.get("only"), due_before=round_["since"],
+                skip_accounts=unavailable, waiting_too=True,
+            )
+            return _relook_wait(redis_client, round_, pending) if pending else _finish(redis_client, round_)
         deadline = time.monotonic() + float(batch_seconds or BATCH_SECONDS)
         results = load_results()["streams"]
         lock = threading.Lock()
@@ -1408,10 +1511,10 @@ def run(redis_client, only=None, batch_seconds=None):
 
         def count(stream, outcome):
             """What was found kept, under the lock."""
-            record = _record(redis_client, results, stream, outcome, settings)
+            record = _record(redis_client, results, stream, outcome, settings, round_id)
             if record["state"] == "broken":
                 _progress(redis_client, broken=progress(redis_client).get("broken", 0) + 1)
-            if outcome["ok"] and str(stream.id) in was_parked:
+            if record["state"] == "ok" and str(stream.id) in was_parked:
                 recovered.append(stream.id)
             elif (
                 settings.get("autopark")
@@ -1505,7 +1608,6 @@ def run(redis_client, only=None, batch_seconds=None):
                     return probe(
                         url, agents[account_id], settings["timeout_seconds"], should_stop,
                         picture_seconds=settings["picture_seconds"] if settings.get("picture_check") else 0,
-                        frozen_confirm_seconds=settings.get("frozen_confirm_seconds", 25) if settings.get("picture_check") else 0,
                     )
                 except Stopped:
                     # Looked at again once the viewer is done, and not counted
@@ -1561,7 +1663,11 @@ def run(redis_client, only=None, batch_seconds=None):
                     account_id = stream.m3u_account_id
                     if account_id in given_up:
                         continue
-                    if str(stream.id) in results and results[str(stream.id)].get("checked_at", "") >= (round_ or {}).get("since", "~"):
+                    if (
+                        str(stream.id) in results
+                        and results[str(stream.id)].get("checked_at", "") >= (round_ or {}).get("since", "~")
+                        and not _relook(results[str(stream.id)], round_id)
+                    ):
                         # Already looked at in this round (the stream tried to learn the limit)
                         continue
                     if not ready():
@@ -1728,10 +1834,15 @@ def run(redis_client, only=None, batch_seconds=None):
         round_ = current_round(redis_client) or round_
         left = _targets(
             settings, only=round_.get("only"), due_before=round_["since"],
-            skip_accounts=round_.get("unavailable") or {},
+            skip_accounts=round_.get("unavailable") or {}, waiting_too=True,
         )
         if not left:
             return _finish(redis_client, round_)
+        if not _targets(
+            settings, only=round_.get("only"), due_before=round_["since"],
+            skip_accounts=round_.get("unavailable") or {},
+        ):
+            return _relook_wait(redis_client, round_, left)
         if {providers.provider_of(a) for a in left} <= waiting:
             # Everything left is on providers that cannot be used now: in use, or refusing
             reasons = "; ".join(
@@ -1749,6 +1860,22 @@ def run(redis_client, only=None, batch_seconds=None):
         return "more"
     finally:
         redis_client.delete(RUN_KEY)
+
+
+def _relook_wait(redis_client, round_, left):
+    """All that is left of the round is pictures to look at again: wait for the first of them."""
+    results = load_results()["streams"]
+    waits = [
+        float(_relook(results.get(str(s.id)), round_["since"])["next_at"]) - time.time()
+        for streams in left.values() for s in streams
+        if _relook(results.get(str(s.id)), round_["since"])
+    ]
+    _progress(
+        redis_client, waiting=True,
+        message="Looking again at pictures that looked wrong, to be sure",
+        resume_in=int(min(3600, max(RETRY_WAITING, min(waits, default=RETRY_WAITING)))),
+    )
+    return "waiting"
 
 
 def _key_text(key):
@@ -2221,8 +2348,11 @@ def issues(redis_client, show="problems"):
     settings = load_settings()
     results = current_results(redis_client)["streams"]
     parked = load_parked()
+    ignored = load_ignored()
 
     def state(stream_id):
+        if str(stream_id) in ignored:
+            return "ignored"
         return state_of(results.get(str(stream_id)), settings) if str(stream_id) in results else "unchecked"
 
     links = list(
@@ -2239,13 +2369,15 @@ def issues(redis_client, show="problems"):
         streams = [_stream_row(link.stream, results, state(link.stream_id)) for link in found["links"]]
         real = [s for s in streams if not s["custom"]]
         bad = [s for s in real if s["state"] in ("failing", "broken")]
+        # Picture faults being looked at again: shown, not yet counted
+        suspects = [s for s in real if s["state"] == "suspect"]
         # Failing in a way autopark never acts on: refused, or playing the wrong picture
         needs_you = [s for s in bad if (s.get("result") or {}).get("kind") not in ("", None, DEAD)]
         broken = [s for s in real if s["state"] == "broken"]
         working = [s for s in real if s["state"] == "ok"]
         if show == "broken" and not broken:
             continue
-        if show == "problems" and not bad:
+        if show == "problems" and not bad and not suspects:
             continue
         if show == "all" and all(s["state"] == "unchecked" for s in real):
             continue
@@ -2264,6 +2396,7 @@ def issues(redis_client, show="problems"):
             "failing": len(bad) - len(broken),
             "working": len(working),
             "needs_you": len(needs_you),
+            "suspects": len(suspects),
             # Nothing left that plays: a viewer gets the fallback or nothing
             "dead": bool(real) and not working and len(broken) == len(real),
         })
@@ -2297,7 +2430,22 @@ def issues(redis_client, show="problems"):
         ({"id": int(i), **entry} for i, entry in hidden.items() if int(i) in still_hidden),
         key=lambda row: (row.get("number") or 0),
     )
-    return {"rows": rows, "parked": parked_rows, "hidden_channels": hidden_rows}
+    known_ignored = {
+        s.id: s for s in Stream.objects.select_related("m3u_account").filter(id__in=[int(i) for i in ignored])
+    }
+    ignored_rows = sorted(
+        (
+            {
+                **(_stream_row(known_ignored[int(i)], results, "ignored") if int(i) in known_ignored
+                   else {"id": int(i), "name": entry.get("name", ""), "account": "", "gone": True}),
+                "ignored_at": entry.get("ignored_at", ""),
+                "ignore_reason": entry.get("reason", ""),
+            }
+            for i, entry in ignored.items()
+        ),
+        key=lambda row: row["name"].lower(),
+    )
+    return {"rows": rows, "parked": parked_rows, "hidden_channels": hidden_rows, "ignored": ignored_rows}
 
 
 def _stream_row(stream, results, state):
