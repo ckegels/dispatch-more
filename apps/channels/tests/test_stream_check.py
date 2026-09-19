@@ -281,6 +281,12 @@ class ProbeTests(TestCase):
     def test_without_the_picture_check_a_still_picture_plays(self):
         self.assertTrue(stream_check.probe(f"{self.base}/still.ts", timeout=12)["ok"])
 
+    def test_an_error_page_is_told_by_its_title(self):
+        page = (b'<!DOCTYPE html><html><head><title>one-zone.cc | 502: Bad gateway</title>'
+                b'<meta charset="UTF-8" /><meta http-equiv="X-UA-Compatible" content="IE=E')
+        self.assertEqual(stream_check._said(page), "one-zone.cc | 502: Bad gateway")
+        self.assertEqual(stream_check._said(b"Forbidden <b>here</b> <meta a="), "Forbidden here")
+
     def test_a_connection_error_is_told_in_words_without_the_login_in_it(self):
         import requests
 

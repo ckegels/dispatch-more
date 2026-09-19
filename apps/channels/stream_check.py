@@ -874,7 +874,13 @@ def _said(data):
     text = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data or "")
     if "\ufffd" in text[:100]:
         return ""
+    # A page (Cloudflare's, a panel's) says it best in its title; only its start was read,
+    # so a tag cut off at the end is dropped rather than shown
+    title = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+    if title:
+        text = title.group(1)
     text = re.sub(r"<[^>]*>", " ", text)
+    text = re.sub(r"<[^>]*$", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:120]
 
