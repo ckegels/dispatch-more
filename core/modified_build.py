@@ -42,7 +42,7 @@ def status():
         "installed": bool(record),
         "record": {
             key: record.get(key)
-            for key in ("release", "for_dispatcharr", "layout", "installed_at", "repository")
+            for key in ("release", "for_dispatcharr", "layout", "via", "installed_at", "repository")
         },
         "uninstall_requested": bool(request and request.exists()),
     }
@@ -67,7 +67,7 @@ def request_uninstall(user=""):
         raise ValueError(f"Could not leave the request at {target}: {e}")
     logger.warning(f"Uninstall of the modified build requested by {user or 'an admin'}")
     forget_schedules()
-    return record.get("layout", "")
+    return record
 
 
 # What the build registers with Celery beat. Beat keeps its schedule in the database, where

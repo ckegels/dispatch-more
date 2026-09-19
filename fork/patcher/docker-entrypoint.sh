@@ -18,7 +18,7 @@ if [ -f "$STATE/requests/uninstall" ]; then
 fi
 if [ -f "$STATE/uninstalled" ]; then
   echo "Dispatch More: uninstalled, starting stock Dispatcharr."
-elif ! STATE="$STATE" bash "$STATE/install.sh" --docker --app "$APP"; then
+elif ! STATE="$STATE" DISPATCH_MORE_VIA=entrypoint bash "$STATE/install.sh" --docker --app "$APP"; then
   echo "Dispatch More: not applied (see above), starting stock Dispatcharr."
 fi
 exec "$ORIGINAL" "$@"

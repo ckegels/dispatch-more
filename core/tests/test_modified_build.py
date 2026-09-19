@@ -19,10 +19,10 @@ class ModifiedBuildTests(TestCase):
         patcher.enable()
         self.addCleanup(patcher.disable)
 
-    def _installed(self, layout="systemd"):
+    def _installed(self, layout="systemd", via=""):
         request = self.folder / "requests" / "uninstall"
         (self.folder / ".fork-install.json").write_text(json.dumps({
-            "release": "v99", "for_dispatcharr": "0.31.0", "layout": layout,
+            "release": "v99", "for_dispatcharr": "0.31.0", "layout": layout, "via": via,
             "installed_at": "2026-09-19T10:00:00+00:00", "uninstall_request": str(request),
         }))
         return request
@@ -56,9 +56,14 @@ class ModifiedBuildTests(TestCase):
         self.assertIn("scan-files", names)
 
     def test_in_docker_it_says_to_restart_the_container(self):
-        self._installed(layout="docker")
+        self._installed(layout="docker", via="entrypoint")
         answer = self.api.post("/api/core/modified-build/uninstall/").json()
         self.assertIn("Restart the container", answer["how"])
+
+    def test_installed_by_hand_in_docker_it_says_to_recreate_it(self):
+        self._installed(layout="docker", via="exec")
+        answer = self.api.post("/api/core/modified-build/uninstall/").json()
+        self.assertIn("force-recreate", answer["how"])
 
     def test_not_installed_by_the_installer_cannot_be_uninstalled_from_here(self):
         response = self.api.post("/api/core/modified-build/uninstall/")

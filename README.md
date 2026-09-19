@@ -54,45 +54,48 @@ Each release is built for one Dispatcharr version, and its installer refuses any
 Dispatcharr it was not built for, nothing is changed. Download the release for **your**
 Dispatcharr version from [Releases](../../releases).
 
-### Linux or LXC (systemd)
+### One command
+
+On **Linux or an LXC**:
 
 ```bash
-tar -xzf dispatch-more-<release>-dispatcharr-<version>.tar.gz
-sudo bash dispatch-more/install.sh              # Dispatcharr in /opt/dispatcharr
-sudo bash dispatch-more/install.sh --app /path/to/dispatcharr   # anywhere else
+curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash
 ```
 
-The installer checks that every file it replaces is the stock one (and stops if not), keeps the
-originals, copies the release in — backend and an already-built frontend, so nothing is built
-on your server — and restarts Dispatcharr's services.
-
-### Docker
-
-The release goes in your `/data` volume and is put over the official image every time the
-container starts, so pulling a new image does not lose it (an image of another Dispatcharr
-version simply starts as stock, and the log says why):
+In **Docker** (use your container's name instead of `dispatcharr`):
 
 ```bash
-docker exec dispatcharr mkdir -p /data/dispatch-more
-docker cp dispatch-more-<release>-dispatcharr-<version>.tar.gz dispatcharr:/tmp/dm.tar.gz
-docker exec dispatcharr tar -xzf /tmp/dm.tar.gz -C /data/dispatch-more --strip-components=1
+docker exec dispatcharr bash -c "curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | bash" && docker restart dispatcharr
 ```
 
-Then in `docker-compose.yml`, for the Dispatcharr container:
+It finds which Dispatcharr you have, downloads the Dispatch More release made for it, checks that
+every file it replaces is the stock one (and stops if not), keeps the originals, and installs --
+backend and an already-built frontend, so nothing is built on your server.
+
+In Docker, a restart keeps it, but **recreating** the container (a new image, or a changed
+compose file) starts stock Dispatcharr again: run the command again then. Or have it put back
+at every start, by adding this to the Dispatcharr container in `docker-compose.yml`:
 
 ```yaml
     entrypoint: ["/bin/bash", "/data/dispatch-more/docker-entrypoint.sh"]
 ```
 
-and `docker compose up -d`. With separate Celery containers, give them the same `entrypoint`
-and `environment: DISPATCHARR_ENTRYPOINT=/app/docker/entrypoint.celery.sh`.
+With separate Celery containers, give them the same `entrypoint` and
+`environment: DISPATCHARR_ENTRYPOINT=/app/docker/entrypoint.celery.sh`.
+
+### By hand
+
+Download `dispatch-more-<release>-dispatcharr-<version>.tar.gz` from [Releases](../../releases)
+and run `sudo bash dispatch-more/install.sh` (add `--app /path/to/dispatcharr` if it is not in
+`/opt/dispatcharr`).
 
 ## Uninstall
 
 - **From the page:** Settings → System → Modified build → *Uninstall and go back to stock
   Dispatcharr*. On Linux it happens right away; in Docker on the next restart of the container.
-- **By hand:** `sudo bash /var/lib/dispatch-more/uninstall.sh` (Linux), or in Docker remove the
-  `entrypoint` line and recreate the container.
+- **By hand:** `sudo bash /var/lib/dispatch-more/uninstall.sh` (Linux). In Docker, recreate the
+  container (`docker compose up -d --force-recreate`), without the `entrypoint` line if you added
+  it: a new container is stock Dispatcharr.
 
 Every file is put back as it was. Your channels, streams and settings stay: stock Dispatcharr
 simply ignores the settings only Dispatch More uses.

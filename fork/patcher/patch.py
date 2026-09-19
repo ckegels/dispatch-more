@@ -172,6 +172,9 @@ def install(app, state, package, layout, force=False):
         "release": release,
         "for_dispatcharr": version,
         "layout": layout,
+        # In Docker: "entrypoint" (put back at every start) or "exec" (by hand, until the
+        # container is recreated)
+        "via": os.environ.get("DISPATCH_MORE_VIA", ""),
         "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "repository": manifest.get("repository", ""),
         "built_from": manifest.get("built_from", ""),

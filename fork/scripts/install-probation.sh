@@ -116,6 +116,8 @@ BACKUP="/root/dispatcharr-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
 EXISTING=$(for f in $RESET; do if [ -e "$f" ]; then echo "$f"; fi; done)
 if [ -n "$EXISTING" ]; then
   tar czf "$BACKUP" $EXISTING || { echo "Could not write backup $BACKUP, stopping."; exit 1; }
+  # Only the last three: one per install filled a 20 GB disk on a real server
+  ls -1t /root/dispatcharr-backup-*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
   echo "Backup of current files: $BACKUP"
 fi
 

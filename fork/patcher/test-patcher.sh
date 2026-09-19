@@ -110,6 +110,15 @@ sed -i "s/^__version__ = .*/__version__ = '9.9.9'/" "$T/app/version.py"
 out="$(start)"
 check "an image of another Dispatcharr starts as stock, and says why" "echo \"\$out\" | grep -q 'not applied' && echo \"\$out\" | tail -1 | grep -q started"
 
+echo "One command (quick-install.sh, from a local archive rather than GitHub):"
+fresh
+QUICK_STATE="$T/quick-state"
+out="$(DISPATCH_MORE_ARCHIVE="$ARCHIVE" DISPATCHARR_APP="$T/app" STATE="$QUICK_STATE" \
+  DISPATCH_MORE_INSTALL_ARGS="--no-systemd" bash "$REPO/fork/patcher/quick-install.sh" 2>&1)"; code=$?
+check "installs in one command" "[ $code = 0 ] && [ -f '$T/app/.fork-install.json' ]"
+STATE="$QUICK_STATE" bash "$QUICK_STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+check "and uninstalls back to stock" "same_as_stock"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

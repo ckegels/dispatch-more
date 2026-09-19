@@ -536,11 +536,17 @@ def modified_build_uninstall(request):
     from core import modified_build as build
 
     try:
-        layout = build.request_uninstall(getattr(request.user, "username", ""))
+        record = build.request_uninstall(getattr(request.user, "username", ""))
     except ValueError as e:
         return Response({"error": str(e)}, status=409)
-    if layout == "docker":
+    layout = record.get("layout", "")
+    if layout == "docker" and record.get("via") == "entrypoint":
         how = "Restart the container to finish: it starts as stock Dispatcharr."
+    elif layout == "docker":
+        how = (
+            "Recreate the container to finish (docker compose up -d --force-recreate): "
+            "a new container is stock Dispatcharr."
+        )
     else:
         how = "Stock Dispatcharr is being put back; the page will be gone for a minute while it restarts."
     return Response({"requested": True, "layout": layout, "how": how})

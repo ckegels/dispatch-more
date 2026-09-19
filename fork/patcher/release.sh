@@ -24,7 +24,10 @@ ARCHIVE="fork/patcher/out/dispatch-more-$RELEASE-dispatcharr-$DISPATCHARR.tar.gz
 BASE="$BASE" bash fork/patcher/test-patcher.sh "$ARCHIVE"
 
 if [ "${2:-}" = "--publish" ]; then
-  gh release create "$RELEASE" "$ARCHIVE" --repo "$SLUG_REPO" \
+  # The one-command installer rides along as a download of its own, so
+  # releases/latest/download/quick-install.sh always gives the newest
+  cp fork/patcher/quick-install.sh fork/patcher/out/quick-install.sh
+  gh release create "$RELEASE" "$ARCHIVE" fork/patcher/out/quick-install.sh --repo "$SLUG_REPO" \
     --target "$(git rev-parse HEAD)" \
     --title "Dispatch More $RELEASE (for Dispatcharr $DISPATCHARR)" \
     --notes "An unofficial, modified build of Dispatcharr $DISPATCHARR — see the README for installing, uninstalling, and where to report problems (not the official Dispatcharr GitHub or Discord).
