@@ -1456,13 +1456,13 @@ class StopSkippedChannelsTests(TestCase):
         account.save()
 
     def _channel(self, channel_uuid, profile=None, clients=()):
-        """clients: (client_id, ip, user_id, user_agent, seconds_ago)"""
+        """clients: (client_id, ip, user_id, user_agent, seconds_ago[, media server device])"""
         profile = profile or self.profile
         self.redis.hset(
             RedisKeys.channel_metadata(channel_uuid),
             mapping={ChannelMetadataField.M3U_PROFILE: profile.id},
         )
-        for client_id, ip, user_id, device_id, seconds_ago in clients:
+        for client_id, ip, user_id, device_id, seconds_ago, *server in clients:
             self.redis.sadd(RedisKeys.clients(channel_uuid), client_id)
             client = {
                 "ip_address": ip,
@@ -1471,14 +1471,16 @@ class StopSkippedChannelsTests(TestCase):
             }
             if device_id:
                 client["user_agent"] = device_id
+            if server:
+                client["server_device"] = server[0]
             self.redis.hset(RedisKeys.client_metadata(channel_uuid, client_id), mapping=client)
 
-    def _stop(self, viewer=None, requested="channel-new"):
+    def _stop(self, viewer=None, requested="channel-new", certain=None):
         return probation.stop_skipped_channels(
-            self.redis, viewer or self.viewer, requested, now=self.NOW
+            self.redis, viewer or self.viewer, requested, now=self.NOW, certain=certain
         )
 
-    def test_surfing_stops_skipped_channels_but_keeps_watched_one(self, mock_stop, _mock_spawn):
+    def test_switching_closes_every_other_channel_of_the_player(self, mock_stop, _mock_spawn):
         self._channel("watched", clients=[("c1", self.IP, "0", "TiviMate", 600)])
         self._channel("skipped-1", clients=[("c2", self.IP, "0", "TiviMate", 2)])
         self._channel("skipped-2", clients=[("c3", self.IP, "0", "TiviMate", 1)])
@@ -1486,9 +1488,11 @@ class StopSkippedChannelsTests(TestCase):
         with self.assertLogs("live_proxy", level="INFO") as logs:
             stopped = self._stop()
 
-        self.assertEqual(sorted(stopped), ["skipped-1", "skipped-2"])
-        self.assertEqual(sorted(c.args[0] for c in mock_stop.call_args_list), ["skipped-1", "skipped-2"])
-        self.assertTrue(any("Probation: stopping skipped channel" in line for line in logs.output))
+        self.assertEqual(sorted(stopped), ["skipped-1", "skipped-2", "watched"])
+        self.assertEqual(
+            sorted(c.args[0] for c in mock_stop.call_args_list), ["skipped-1", "skipped-2", "watched"]
+        )
+        self.assertTrue(any("Force close: stopping channel" in line for line in logs.output))
 
     def test_a_media_server_viewer_is_settled_once_its_server_names_them(
         self, mock_stop, _mock_spawn
@@ -1590,14 +1594,14 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self._stop(), [])
         mock_stop.assert_not_called()
 
-    def test_reconnect_on_watched_channel_does_not_count_as_skipped(self, mock_stop, _mock_spawn):
+    def test_a_channel_watched_for_long_is_closed_too(self, mock_stop, _mock_spawn):
+        """Force close: every viewer is one device, so a channel it left is closed, however long it was on."""
         self._channel(
             "watched",
             clients=[("c1", self.IP, "0", "TiviMate", 600), ("c2", self.IP, "0", "TiviMate", 1)],
         )
 
-        self.assertEqual(self._stop(), [])
-        mock_stop.assert_not_called()
+        self.assertEqual(self._stop(), ["watched"])
 
     def test_other_device_or_user_channels_are_never_stopped(self, mock_stop, _mock_spawn):
         self._channel("other-device", clients=[("c1", self.IP, "0", "Smarters", 1)])
@@ -1632,16 +1636,14 @@ class StopSkippedChannelsTests(TestCase):
         probation.forget_in_use()
         self.assertEqual(self._stop(), ["skipped"])
 
-    def test_the_skip_window_is_its_own(self, mock_stop, _mock_spawn):
-        self._channel("inside", clients=[("c1", self.IP, "0", "TiviMate", 4)])
-        self._channel("outside", clients=[("c2", self.IP, "0", "TiviMate", 6)])
-        self._set_props(self.account, probation_skip_seconds=5, probation_seconds=60)
-        self.assertEqual(self._stop(), ["inside"])
-
-    def test_an_account_saved_before_keeps_the_window_it_used(self, mock_stop, _mock_spawn):
-        account = self.account
-        account.custom_properties = {"probation_stop_skipped": True, "probation_seconds": 30}
-        self.assertEqual(probation.account_skip_seconds(account), 30)
+    def test_a_guessed_media_server_player_only_closes_what_it_just_opened(self, mock_stop, _mock_spawn):
+        """A guess must not close a channel someone else has watched for an hour."""
+        player = probation.Viewer(self.IP, server_device="server|living-room")
+        self._channel("just-opened", clients=[("c1", self.IP, "0", None, 2, "server|living-room")])
+        self._channel("long-ago", clients=[("c2", self.IP, "0", None, 600, "server|living-room")])
+        self.assertEqual(self._stop(viewer=player), ["just-opened"])
+        # Once the server has said who it is, the rest goes too
+        self.assertIn("long-ago", self._stop(viewer=player, certain=True))
 
     def test_only_accounts_with_the_option_are_affected(self, mock_stop, _mock_spawn):
         _other_account, other_profile = _make_account("no-stop", probation_enabled=True)
@@ -1760,11 +1762,11 @@ class StopSkippedChannelsTests(TestCase):
             [probation.identity_key(self.viewer, self.account)],
         )
 
-    def test_window_limits_what_counts_as_skipped(self, mock_stop, _mock_spawn):
+    def test_there_is_no_window_for_an_identified_player(self, mock_stop, _mock_spawn):
         self._channel("inside", clients=[("c1", self.IP, "0", "TiviMate", 9)])
-        self._channel("outside", clients=[("c2", self.IP, "0", "TiviMate", 11)])
+        self._channel("outside", clients=[("c2", self.IP, "0", "TiviMate", 3600)])
 
-        self.assertEqual(self._stop(), ["inside"])
+        self.assertEqual(sorted(self._stop()), ["inside", "outside"])
 
 
 class NotUsedLoggingTests(SimpleTestCase):

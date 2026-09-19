@@ -753,7 +753,7 @@ describe('M3U', () => {
       ).not.toBeInTheDocument();
       // Its own feature now, not one of the overlap's settings
       expect(
-        screen.getByRole('switch', { name: /stop skipped channels/i })
+        screen.getByRole('switch', { name: /force close on identified traffic/i })
       ).toBeInTheDocument();
       expect(
         screen.queryByRole('combobox', { name: /when switching channels/i })
@@ -777,7 +777,7 @@ describe('M3U', () => {
         screen.getByRole('spinbutton', { name: /surfing delay/i })
       ).toHaveValue(500);
       expect(
-        screen.getByRole('switch', { name: /stop skipped channels/i })
+        screen.getByRole('switch', { name: /force close on identified traffic/i })
       ).toBeInTheDocument();
       expect(
         screen.getByRole('combobox', { name: /when switching channels/i })
@@ -805,7 +805,7 @@ describe('M3U', () => {
       );
 
       expect(
-        screen.getByRole('switch', { name: /stop skipped channels/i })
+        screen.getByRole('switch', { name: /force close on identified traffic/i })
       ).toBeChecked();
       expect(
         screen.getByRole('combobox', { name: /when switching channels/i })
@@ -815,25 +815,28 @@ describe('M3U', () => {
       ).not.toBeInTheDocument();
     });
 
-    it('stops skipped channels on an account without the overlap', () => {
+    it('force closes on an account without the overlap, after a warning', () => {
       setupStores();
       render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
 
-      // Not tucked away behind the overlap any more: there, and on its own
-      const stop = screen.getByRole('switch', { name: /stop skipped channels/i });
+      const force = screen.getByRole('switch', {
+        name: /force close on identified traffic/i,
+      });
       expect(overlapSwitch()).not.toBeChecked();
-      fireEvent.click(stop);
+      fireEvent.click(force);
+      // Not on until the warning is accepted
+      expect(force).not.toBeChecked();
+      expect(screen.getByText(/All traffic needs to be identified/)).toBeInTheDocument();
+      expect(screen.getByText(/One login is one device/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm dialog' }));
 
-      expect(stop).toBeChecked();
+      expect(force).toBeChecked();
+      // No seconds any more: it closes whatever the player left
       expect(
-        screen.getByRole('spinbutton', { name: /skipped within/i })
-      ).toHaveValue(10);
+        screen.queryByRole('spinbutton', { name: /skipped within/i })
+      ).not.toBeInTheDocument();
       // Players are told apart the same way as for the overlap, so the subnets come too
       expect(screen.getByText('192.168.9.0/24')).toBeInTheDocument();
-      // And no confirmation: it asks nothing extra of the provider
-      expect(
-        screen.queryByRole('button', { name: 'Confirm dialog' })
-      ).not.toBeInTheDocument();
     });
 
     it('shows the LAN subnets of an account that has them', () => {

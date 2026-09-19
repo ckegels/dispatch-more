@@ -179,14 +179,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         max_value=probation.MAX_PROBATION_SECONDS,
     )
     probation_stop_skipped = serializers.BooleanField(required=False, write_only=True)
-    # How long a channel may be watched and still count as skipped past: its own window, as
-    # Stop Skipped Channels no longer needs the overlap
-    probation_skip_seconds = serializers.IntegerField(
-        required=False,
-        write_only=True,
-        min_value=probation.MIN_PROBATION_SECONDS,
-        max_value=probation.MAX_PROBATION_SECONDS,
-    )
     probation_surf_delay_ms = serializers.IntegerField(
         required=False, write_only=True, min_value=0, max_value=probation.MAX_SURF_DELAY_MS
     )
@@ -230,7 +222,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "probation_enabled",
             "probation_seconds",
             "probation_stop_skipped",
-            "probation_skip_seconds",
             "probation_surf_delay_ms",
             "probation_account_preference",
             "probation_lan_subnets",
@@ -286,7 +277,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             "probation_seconds", probation.DEFAULT_PROBATION_SECONDS
         )
         data["probation_stop_skipped"] = custom_props.get("probation_stop_skipped", False)
-        data["probation_skip_seconds"] = probation.account_skip_seconds(instance)
         data["probation_surf_delay_ms"] = custom_props.get(
             "probation_surf_delay_ms", probation.DEFAULT_SURF_DELAY_MS
         )
@@ -342,7 +332,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         probation_enabled = validated_data.pop("probation_enabled", None)
         probation_seconds = validated_data.pop("probation_seconds", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
-        probation_skip_seconds = validated_data.pop("probation_skip_seconds", None)
         probation_surf_delay_ms = validated_data.pop("probation_surf_delay_ms", None)
         probation_account_preference = validated_data.pop("probation_account_preference", None)
         probation_lan_subnets = validated_data.pop("probation_lan_subnets", None)
@@ -376,8 +365,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_seconds"] = probation_seconds
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
-        if probation_skip_seconds is not None:
-            custom_props["probation_skip_seconds"] = probation_skip_seconds
         if probation_surf_delay_ms is not None:
             custom_props["probation_surf_delay_ms"] = probation_surf_delay_ms
         if probation_lan_subnets is not None:
@@ -449,7 +436,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
         probation_enabled = validated_data.pop("probation_enabled", None)
         probation_seconds = validated_data.pop("probation_seconds", None)
         probation_stop_skipped = validated_data.pop("probation_stop_skipped", None)
-        probation_skip_seconds = validated_data.pop("probation_skip_seconds", None)
         probation_surf_delay_ms = validated_data.pop("probation_surf_delay_ms", None)
         probation_account_preference = validated_data.pop("probation_account_preference", None)
         probation_lan_subnets = validated_data.pop("probation_lan_subnets", None)
@@ -472,8 +458,6 @@ class M3UAccountSerializer(serializers.ModelSerializer):
             custom_props["probation_seconds"] = probation_seconds
         if probation_stop_skipped is not None:
             custom_props["probation_stop_skipped"] = probation_stop_skipped
-        if probation_skip_seconds is not None:
-            custom_props["probation_skip_seconds"] = probation_skip_seconds
         if probation_surf_delay_ms is not None:
             custom_props["probation_surf_delay_ms"] = probation_surf_delay_ms
         if probation_lan_subnets is not None:

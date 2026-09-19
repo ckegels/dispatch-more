@@ -10,9 +10,12 @@ skipped channels -- which needs no extra slot from the provider, so it works on 
   of them may start the new channel at once on one extra slot. If a stream on that profile
   ends within the window it was a channel switch and nothing else happens; otherwise the
   channel moves to a profile with a free slot, or this new channel is stopped.
-- Stop Skipped Channels ("probation_stop_skipped", window "probation_skip_seconds"): channels
-  a viewer only watched for a moment are stopped when it requests the next one, so fast
-  surfing frees slots. Only for viewers that can be told apart; the overlap need not be on.
+- Force Close on Identified Traffic ("probation_stop_skipped", the name it had as Stop
+  Skipped Channels): when an identified viewer asks for a channel, every other channel it is
+  the only viewer of is stopped at once, however long it was watched, so its slot is free
+  for the switch. Every viewer is one device -- an Xtream login, a player on the LAN
+  Subnets, or a media server's player -- so another channel of theirs is one they left.
+  The overlap need not be on.
 - When Switching Channels ("probation_account_preference"): "same" keeps a viewer's next
   channel on the account it is on or just left, "alternate" starts it on another account
   with a free slot first, "order" (default) follows the channel's stream order.
@@ -445,17 +448,12 @@ def account_stops_skipped_channels(m3u_account) -> bool:
     return _account_props(m3u_account).get("probation_stop_skipped") is True
 
 
-def account_skip_seconds(m3u_account) -> int:
-    """
-    How long a viewer may watch a channel and still have only skipped past it. Its own
-    setting now; an account saved before it existed keeps the overlap window it used.
-    """
-    props = _account_props(m3u_account)
-    try:
-        seconds = int(props.get("probation_skip_seconds", props.get("probation_seconds", DEFAULT_PROBATION_SECONDS)))
-    except (TypeError, ValueError):
-        return DEFAULT_PROBATION_SECONDS
-    return min(max(seconds, MIN_PROBATION_SECONDS), MAX_PROBATION_SECONDS)
+# When a media server asks for a stream, which of its players it is can only be guessed until
+# the server says, a second or two later (see _server_device). A guess must not stop a
+# channel someone else has watched for an hour: until then, only channels the guessed player
+# opened this long ago are closed; the rest are once the server has said (see
+# settle_media_server_start).
+GUESSED_WINDOW_SECONDS = 10
 
 
 def account_identifies_viewers(m3u_account) -> bool:
@@ -767,7 +765,8 @@ def settle_media_server_start(redis_client, channel_uuid, device, previous_chann
         if not skipping_in_use():
             return []
         viewer = Viewer("", server_device=device)
-        stopped = stop_skipped_channels(redis_client, viewer, channel_uuid)
+        # The server has named its player: no guess, so every channel it left goes
+        stopped = stop_skipped_channels(redis_client, viewer, channel_uuid, certain=True)
         if stopped:
             logger.info(
                 f"Media server: stopped {len(stopped)} channel(s) {device} had left, "
@@ -1443,12 +1442,15 @@ def _is_being_recorded(redis_client, channel_uuid, recorded) -> bool:
         return False
 
 
-def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None, hold_slots=False):
+def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None, hold_slots=False, certain=None):
     """
-    Stop the channels this viewer surfed past, so their slots are free again.
+    Force Close on Identified Traffic: stop the other channels of the viewer asking for a
+    channel, so their slots are free again.
 
-    A channel counts as skipped when the viewer is its only client and joined it within the
-    account's skip window. Only needs Stop Skipped Channels on the account, not the overlap. Dispatcharr would otherwise keep it until it notices the
+    A channel is stopped when this viewer is its only client, however long it was watched:
+    every viewer is one device, so another channel of its own is one it has left. Only a
+    media server's player named by a guess (certain is not True) is held to channels it
+    opened within GUESSED_WINDOW_SECONDS -- the server says who it really is a moment later. Dispatcharr would otherwise keep it until it notices the
     player left, which fills every slot while surfing.
 
     stream_ts calls this once the requested channel has its slot (so switching can use the
@@ -1523,10 +1525,11 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
             if not (account_stops_skipped_channels(account) and is_identified(viewer, account)):
                 continue
             watched_for = now - joined_at
-            if watched_for > account_skip_seconds(account):
+            guessed = viewer.server_device is not None and certain is not True
+            if guessed and watched_for > GUESSED_WINDOW_SECONDS:
                 continue
             logger.info(
-                f"Probation: stopping skipped channel {channel_uuid} (watched {watched_for:.1f}s) "
+                f"Force close: stopping channel {channel_uuid} (watched {watched_for:.1f}s) "
                 f"for {viewer}, who requested channel {requested_channel_uuid}"
             )
             record_event(

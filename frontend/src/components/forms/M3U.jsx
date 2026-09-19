@@ -99,7 +99,7 @@ Everyone else takes no part in any of this and is served exactly as they are wit
     <OverlapSection title="The settings">
       {`Overlap Window — how long the extra connection may last, and how long a slot is kept for a viewer whose channel ended mid-switch so nobody else takes it in between.
 
-Stop Skipped Channels (a switch of its own, which works without the overlap) — a channel a player watched for less than its Skipped Within time is closed as soon as its next one has started, so surfing does not fill every slot.
+Force Close on Identified Traffic (a switch of its own, which works without the overlap) — a player's other channels are closed as soon as it asks for a new one, however long they were watched, so its connection is free at once.
 
 Surfing Delay — when a player switches again within the Overlap Window, Dispatcharr waits this long before asking the provider, so channels passed on the way are never requested. The first switch after actually watching something happens at once. Not applied to Plex, Jellyfin or Emby.
 
@@ -112,10 +112,30 @@ Channel Shutdown Delay — a channel nobody is watching any more is closed early
 
     <OverlapSection title="Worth knowing before you switch it on">
       {`• Players on your network are told apart by address, so each device needs its own. Not for an address shared by several: a Docker network, a second router, or an untrusted reverse proxy.
-• A login used by two devices at once is not supported. The overlap can go to the wrong one, and Stop Skipped Channels can close a channel the other is watching.
-• Stop Skipped Channels does not understand multiview or picture-in-picture: a second channel opened within its Skipped Within time closes the first.
+• A login used by two devices at once is not supported. The overlap can go to the wrong one, and Force Close can close a channel the other is watching.
+• Force Close does not understand multiview or picture-in-picture: opening a second channel closes the first.
 • When a provider refuses a new connection without sending any video, Dispatcharr waits longer before trying again (1.5s, then 3s) rather than retrying straight away.`}
     </OverlapSection>
+  </div>
+);
+
+// Force Close on Identified Traffic closes a player's channel the moment it asks for another,
+// however long it was watched. That is only safe when every player is one device, so what
+// that takes, and where it goes wrong, is said before it is switched on.
+const FORCE_CLOSE_CONFIRM = (
+  <div style={{ whiteSpace: 'pre-line' }}>
+    {`When a player asks for a channel, every other channel that player is the only viewer of is closed at once, however long it was watched. Its connection is free straight away, so switching is quick even when the account allows one stream. The overlap does not have to be on.
+
+All traffic needs to be identified. Give every device its own Dispatcharr user (an Xtream Codes login), or set the LAN Subnets of your local network, or watch through a media server (Plex, Jellyfin, Emby). Traffic that cannot be told apart is left alone, and gets nothing from this.
+
+Limitations:
+• One login is one device. A login used on two devices at once makes them close each other's channels.
+• On the LAN a device is its address plus its app. Several devices behind one address (a second router, a Docker network, a VPN, or a reverse proxy that does not pass the real address) look like one device and close each other's channels. Do not put such addresses in the LAN Subnets.
+• Multiview, picture-in-picture, or two windows of the same app on one device: opening a second channel closes the first.
+• A media server's player is certain only once the server says who it is, a second or two after it asks. Until then only a channel it opened in the last 10 seconds is closed; the one it left follows once the server has said.
+• A channel someone else is also watching, and a channel being recorded, are never closed.
+
+It takes effect after you save the account.`}
   </div>
 );
 
@@ -144,6 +164,7 @@ const M3U = ({
   // Channel Switch Overlap is only enabled after its explanation is confirmed;
   // its sub-settings are only shown while it is enabled.
   const [overlapConfirmOpen, setOverlapConfirmOpen] = useState(false);
+  const [forceCloseConfirmOpen, setForceCloseConfirmOpen] = useState(false);
   const [overlapInfoOpen, setOverlapInfoOpen] = useState(false);
   const [overlapEnabled, setOverlapEnabled] = useState(false);
   const [skippingEnabled, setSkippingEnabled] = useState(false);
@@ -188,7 +209,6 @@ const M3U = ({
       probation_enabled: false,
       probation_seconds: 10,
       probation_stop_skipped: false,
-      probation_skip_seconds: 10,
       probation_surf_delay_ms: 500,
       probation_account_preference: 'order',
       probation_lan_subnets: [],
@@ -230,7 +250,6 @@ const M3U = ({
         probation_enabled: m3uAccount.probation_enabled || false,
         probation_seconds: m3uAccount.probation_seconds ?? 10,
         probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
-        probation_skip_seconds: m3uAccount.probation_skip_seconds ?? 10,
         probation_surf_delay_ms: m3uAccount.probation_surf_delay_ms ?? 500,
         probation_account_preference:
           m3uAccount.probation_account_preference || 'order',
@@ -528,40 +547,27 @@ const M3U = ({
                   </Stack>
                 </Collapse>
               </Box>
-              {/* Its own feature: stopping a channel a player surfed past needs no extra slot
-                  from the provider, so it works whether or not the overlap is allowed */}
-              <Box>
-                <Switch
-                  id="probation_stop_skipped"
-                  name="probation_stop_skipped"
-                  label="Stop Skipped Channels"
-                  description="Close a channel as soon as the player that only glanced at it asks for the next one, so fast surfing does not fill every slot. Only for players Dispatcharr can tell apart: a login, a media server player, or an address in the LAN Subnets below."
-                  key={form.key('probation_stop_skipped')}
-                  {...form.getInputProps('probation_stop_skipped', {
-                    type: 'checkbox',
-                  })}
-                  onChange={(event) => {
-                    const on = event.currentTarget.checked;
-                    form.setFieldValue('probation_stop_skipped', on);
-                    setSkippingEnabled(on);
-                    if (on) suggestSubnet();
-                  }}
-                />
-                <Collapse in={skippingEnabled}>
-                  <Stack gap="xs" pl="md" pt="xs">
-                    <NumberInput
-                      id="probation_skip_seconds"
-                      name="probation_skip_seconds"
-                      label="Skipped Within (seconds)"
-                      description="A channel watched for less than this counts as skipped past."
-                      min={1}
-                      max={120}
-                      {...form.getInputProps('probation_skip_seconds')}
-                      key={form.key('probation_skip_seconds')}
-                    />
-                  </Stack>
-                </Collapse>
-              </Box>
+              {/* Its own feature: closing the channel a player left needs no extra slot from the
+                  provider, so it works whether or not the overlap is allowed. The setting keeps
+                  its old name, probation_stop_skipped, so saved accounts carry over */}
+              <Switch
+                id="probation_stop_skipped"
+                name="probation_stop_skipped"
+                label="Force Close on Identified Traffic"
+                description="Close a player's other channels as soon as it asks for a new one, so its connection is free at once. Only for identified players: a login, an address in the LAN Subnets, or a media server's player."
+                key={form.key('probation_stop_skipped')}
+                {...form.getInputProps('probation_stop_skipped', {
+                  type: 'checkbox',
+                })}
+                onChange={(event) => {
+                  if (event.currentTarget.checked) {
+                    setForceCloseConfirmOpen(true);
+                  } else {
+                    form.setFieldValue('probation_stop_skipped', false);
+                    setSkippingEnabled(false);
+                  }
+                }}
+              />
               {/* Who the viewers are is needed by both features above, so it belongs to
                   neither: shown while either is on */}
               <Collapse in={overlapEnabled || skippingEnabled}>
@@ -790,6 +796,21 @@ const M3U = ({
           />
         </>
       )}
+
+      <ConfirmationDialog
+        opened={forceCloseConfirmOpen}
+        onClose={() => setForceCloseConfirmOpen(false)}
+        onConfirm={() => {
+          form.setFieldValue('probation_stop_skipped', true);
+          suggestSubnet();
+          setSkippingEnabled(true);
+          setForceCloseConfirmOpen(false);
+        }}
+        title="Force close on identified traffic?"
+        confirmLabel="Enable"
+        size="lg"
+        message={FORCE_CLOSE_CONFIRM}
+      />
 
       <ConfirmationDialog
         opened={overlapConfirmOpen}

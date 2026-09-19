@@ -49,7 +49,7 @@ export const ACTION_MEANINGS = [
   ],
   [
     'stopped skipped channel',
-    'A channel it had only watched for a moment was closed, so its slot was free for the new channel.',
+    'Force close: a channel the player left was closed as it asked for the new one, so its slot was free at once.',
   ],
   [
     'skipped while surfing',
