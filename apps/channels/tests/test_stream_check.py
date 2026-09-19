@@ -248,6 +248,19 @@ class ProbeTests(TestCase):
         self.assertIn("stopped sending", found["reason"])
         self.assertNotEqual(found["kind"], stream_check.UNREACHABLE)
 
+    def test_a_few_black_seconds_in_a_long_look_are_a_fade_not_a_black_channel(self):
+        """What flagged "Black picture (3 of 29 s)": three seconds anywhere, however long the look."""
+        with mock.patch.object(stream_check, "_picture", return_value={
+            "length": 29.0, "black": 3.0, "frozen": 0.0, "frame": "ab",
+        }):
+            found = stream_check.probe(f"{self.base}/moving.ts", timeout=12, picture_seconds=6)
+        self.assertTrue(found["ok"], found)
+        with mock.patch.object(stream_check, "_picture", return_value={
+            "length": 29.0, "black": 27.0, "frozen": 27.0, "frame": "ab",
+        }):
+            found = stream_check.probe(f"{self.base}/moving.ts", timeout=12, picture_seconds=6)
+        self.assertEqual(found["kind"], stream_check.BLACK)
+
     def test_a_moving_picture_plays(self):
         found = stream_check.probe(f"{self.base}/moving.ts", timeout=12, picture_seconds=6)
         self.assertTrue(found["ok"], found)

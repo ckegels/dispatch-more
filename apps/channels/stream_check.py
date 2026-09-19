@@ -197,6 +197,9 @@ PICTURE_BYTES = 40 * 1024 * 1024
 # looked at); a recording shorter than PICTURE_LEAST says nothing either way
 BLACK_SECONDS = 3
 FROZEN_SECONDS = 4
+# ...and for most of what was seen: a burst can hold thirty seconds, and three black or four
+# still ones in there are a fade, a scene change or an ad break, not a channel gone
+PICTURE_FAULT_SHARE = 0.8
 PICTURE_LEAST = 3
 # The same frozen picture on this many channels of one provider is the provider's own card
 PLACEHOLDER_CHANNELS = 3
@@ -1231,15 +1234,16 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
             if picture and picture["length"] >= PICTURE_LEAST:
                 result["frame"] = picture["frame"]
                 result["picture_looked"] = True
-                if picture["black"] >= BLACK_SECONDS:
+                most = PICTURE_FAULT_SHARE * picture["length"]
+                if picture["black"] >= max(BLACK_SECONDS, most):
                     result.update(ok=False, kind=BLACK, reason=f"Black picture ({picture['black']:.0f} of {picture['length']:.0f} s)")
-                elif picture["frozen"] >= FROZEN_SECONDS and not frozen_confirm_seconds:
+                elif picture["frozen"] >= max(FROZEN_SECONDS, most) and not frozen_confirm_seconds:
                     result.update(
                         ok=False, kind=FROZEN,
                         reason=f"The picture does not move ({picture['frozen']:.0f} of {picture['length']:.0f} s)",
                         frozen_frame=picture["frame"],
                     )
-                elif picture["frozen"] >= FROZEN_SECONDS:
+                elif picture["frozen"] >= max(FROZEN_SECONDS, most):
                     # Only a suspicion yet: watched longer, and it has to stay still throughout
                     longer = _still(
                         _watch_longer(session, url, playlist, headers, float(frozen_confirm_seconds), should_stop),
