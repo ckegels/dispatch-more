@@ -112,6 +112,10 @@ DEFAULTS = {
     # the provider's "no stream" card. Each check takes that much longer.
     "picture_check": True,
     "picture_seconds": 6,
+    # A stream that played last time and whose picture was looked at within this many days gets
+    # the quick check (does video come) rather than the picture look: most of a run's time.
+    # 0 looks at every picture on every run.
+    "picture_every_days": 3,
     # A picture fault is looked at again later in the same run before it counts (see RELOOKS)
     "relook_pictures": True,
     # A channel whose every real stream is parked is hidden from what TVs and media servers
@@ -284,6 +288,7 @@ def save_settings(given):
         values["recheck_hours"] = min(168, max(0.5, float(values["recheck_hours"])))
         values["autopark_after"] = max(2, int(values["autopark_after"]))
         values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
+        values["picture_every_days"] = min(60, max(0, float(values["picture_every_days"])))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     if values["recheck_mode"] not in ("hours", "refresh"):
@@ -1045,11 +1050,23 @@ class _Stalled(Exception):
 READ_PAUSE_SECONDS = 10
 
 
+# Once a stream has sent something, a pause this long ends the read and what came is judged.
+# Providers send a burst -- ten seconds of video in under one -- and then nothing until real
+# time catches up; waiting that out cost every check on them seconds. A stream sending in real
+# time never pauses this long, and is read for as long as asked.
+PAUSE_ENDS_READ = 1.5
+
+
 def _read(session, url, headers, deadline, should_stop, limit=READ_BYTES):
     """
-    Up to limit bytes of url, before the deadline; (response, bytes). A stream that pauses
-    after sending something keeps what it sent; one that sends nothing at all raises _Stalled.
+    Up to limit bytes of url, before the deadline; (response, bytes). The body is pumped by a
+    thread, so the wait for each piece can be decided here: up to READ_PAUSE_SECONDS for the
+    first, PAUSE_ENDS_READ once something has come. What came before a pause, or before the
+    connection broke, is kept; a stream that sends nothing at all raises _Stalled.
     """
+    import queue
+    import threading
+
     import requests
 
     left = max(1.0, deadline - time.monotonic())
@@ -1064,20 +1081,70 @@ def _read(session, url, headers, deadline, should_stop, limit=READ_BYTES):
             except Exception:
                 pass
             return response, bytes(data)
-        try:
-            for chunk in response.iter_content(chunk_size=32 * 1024):
-                if should_stop():
-                    raise Stopped()
-                data.extend(chunk)
-                if len(data) >= limit or time.monotonic() > deadline:
+
+        pieces = queue.Queue()
+
+        def pump():
+            try:
+                for chunk in response.iter_content(chunk_size=32 * 1024):
+                    pieces.put(chunk)
+                pieces.put(None)
+            except Exception as e:
+                # Also how it ends when the read below is done and the response closed
+                pieces.put(e)
+
+        threading.Thread(target=pump, daemon=True, name="stream-check-read").start()
+        while True:
+            if should_stop():
+                raise Stopped()
+            now = time.monotonic()
+            if data and now > deadline:
+                break
+            wait = READ_PAUSE_SECONDS if not data else min(PAUSE_ENDS_READ, max(0.05, deadline - now))
+            try:
+                piece = pieces.get(timeout=wait)
+            except queue.Empty:
+                if not data:
+                    raise _Stalled()
+                break
+            if piece is None:
+                break
+            if isinstance(piece, Exception):
+                if isinstance(piece, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)):
+                    # The data stopped, or the connection broke, part way: what came is judged
+                    if not data:
+                        raise _Stalled()
                     break
-        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
-            # The data stopped, or the connection broke, part way: what came is judged
-            if not data:
-                raise _Stalled()
+                raise piece
+            data.extend(piece)
+            if len(data) >= limit:
+                break
     finally:
+        _hang_up(response)
         response.close()
     return response, bytes(data)
+
+
+def _hang_up(response):
+    """
+    Shut the connection's socket, so a read still waiting on it (the pump's) returns at once.
+    Closing alone waits for that read to finish -- out to the read timeout, the very pause
+    the reader stopped to avoid.
+    """
+    import socket
+
+    for path in (("raw", "_connection", "sock"), ("raw", "_fp", "fp", "raw", "_sock")):
+        found = response
+        for name in path:
+            found = getattr(found, name, None)
+            if found is None:
+                break
+        if isinstance(found, socket.socket):
+            try:
+                found.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            return
 
 
 def _hls_segment(session, url, text, headers, deadline, should_stop, depth=0):
@@ -1157,6 +1224,7 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
             picture = _picture(data) if picture_seconds else None
             if picture and picture["length"] >= PICTURE_LEAST:
                 result["frame"] = picture["frame"]
+                result["picture_looked"] = True
                 if picture["black"] >= BLACK_SECONDS:
                     result.update(ok=False, kind=BLACK, reason=f"Black picture ({picture['black']:.0f} of {picture['length']:.0f} s)")
                 elif picture["frozen"] >= FROZEN_SECONDS and not frozen_confirm_seconds:
@@ -1292,6 +1360,22 @@ def _url_for(stream, profile):
 # ── A run ────────────────────────────────────────────────────────────────────
 
 
+def _picture_due(record, settings, round_id=None):
+    """
+    Whether this check should look at the picture: on, and the stream did not play last time,
+    or is being looked at again, or its picture was not looked at within picture_every_days.
+    """
+    if not settings.get("picture_check"):
+        return False
+    record = record or {}
+    days = float(settings.get("picture_every_days", 3) or 0)
+    if days <= 0 or not record.get("ok") or record.get("suspect") or _relook(record, round_id):
+        return True
+    looked = record.get("picture_at") or ""
+    cutoff = datetime.fromtimestamp(time.time() - days * 86400, timezone.utc).isoformat(timespec="milliseconds")
+    return looked < cutoff
+
+
 def _relook(record, round_id):
     """The suspicion this round has of a stream's picture, or None."""
     suspect = (record or {}).get("suspect")
@@ -1362,6 +1446,8 @@ def _record(redis_client, results, stream, outcome, settings, round_id=None):
         "codec": outcome["codec"],
         "seconds": outcome["seconds"],
         "checked_at": _now(),
+        # When the picture was last really looked at (see _picture_due)
+        "picture_at": _now() if outcome.get("picture_looked") else previous.get("picture_at", ""),
         "last_ok": _now() if outcome["ok"] else previous.get("last_ok", ""),
         "failures": failures,
         "history": history,
@@ -1404,9 +1490,41 @@ def _progress(redis_client, **changes):
 
 def progress(redis_client):
     try:
-        return json.loads(redis_client.get(PROGRESS_KEY) or "{}")
+        found = json.loads(redis_client.get(PROGRESS_KEY) or "{}")
     except (ValueError, TypeError):
         return {}
+    found["eta_seconds"] = _eta(found)
+    return found
+
+
+# The pace of a run is judged over this long: long enough to take in the waits a provider's
+# limit brings, short enough to follow a run that speeds up or slows down
+PACE_WINDOW = 3600
+
+
+def _note_pace(redis_client):
+    """A (time, streams done) sample, for the estimate of how long a run has left."""
+    current = progress(redis_client)
+    samples = [s for s in current.get("samples") or [] if s[0] > time.time() - 6 * 3600][-60:]
+    samples.append([time.time(), int(current.get("done") or 0)])
+    _progress(redis_client, samples=samples)
+
+
+def _eta(found):
+    """Seconds a running round has left at the pace of the last hour, or None to say nothing."""
+    samples = found.get("samples") or []
+    left = int(found.get("total") or 0) - int(found.get("done") or 0)
+    if found.get("state") != "running" or left <= 0 or len(samples) < 2:
+        return None
+    now = time.time()
+    since = next((s for s in samples if s[0] >= now - PACE_WINDOW), samples[0])
+    last = samples[-1]
+    if since is last:
+        since = samples[-2]
+    took, done = last[0] - since[0], last[1] - since[1]
+    if took < 60 or done <= 0:
+        return None
+    return int(left * took / done)
 
 
 def start_round(redis_client, force=False, only=None):
@@ -1434,6 +1552,8 @@ def start_round(redis_client, force=False, only=None):
     _progress(
         redis_client, state="running", started_at=_now(), finished_at="", total=total,
         done=0, broken=0, accounts={}, waiting=False, message="",
+        # Where the pace is measured from (see _eta)
+        samples=[[time.time(), 0]],
     )
     logger.info(f"Stream Check: a round of {total} streams begins")
     return total
@@ -1693,7 +1813,9 @@ def run(redis_client, only=None, batch_seconds=None):
                     budget.note_open()
                     return probe(
                         url, agents[account_id], settings["timeout_seconds"], should_stop,
-                        picture_seconds=settings["picture_seconds"] if settings.get("picture_check") else 0,
+                        picture_seconds=settings["picture_seconds"]
+                        if (only is not None and settings.get("picture_check"))
+                        or _picture_due(results.get(str(stream.id)), settings, round_id) else 0,
                     )
                 except Stopped:
                     # Looked at again once the viewer is done, and not counted
@@ -1905,6 +2027,9 @@ def run(redis_client, only=None, batch_seconds=None):
                     logger.info(f"Stream Check: autopark could not park stream {stream_id}: {e}")
             _placeholders(results, providers.provider_of)
             _keep_results(results)
+            if only is None:
+                # How far this batch got, for how long the round has left
+                _note_pace(redis_client)
             redis_client.delete(LIVE_RESULTS_KEY)
             # What each provider allows, learned in this batch
             for budget in budgets.values():

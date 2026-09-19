@@ -276,6 +276,17 @@ describe('StreamCheckTable', () => {
     expect(screen.getByText(/Black picture \(6 of 6 s\)/)).toBeInTheDocument();
   });
 
+  it('says how long a run has left', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({
+        running: true,
+        progress: { state: 'running', done: 300, total: 1000, eta_seconds: 9600, accounts: {} },
+      })
+    );
+    draw();
+    expect(await screen.findByText(/about 2 h 40 min left \(done around/)).toBeInTheDocument();
+  });
+
   it('clears the list from the page, changing nothing on the channels', async () => {
     API.clearStreamCheck.mockResolvedValue({ cleared: true });
     draw();

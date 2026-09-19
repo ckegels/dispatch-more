@@ -56,6 +56,20 @@ const ACCOUNT_COLOR = { 'in use': 'yellow.5', unavailable: 'orange.5' };
 
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
 
+// How long a run has left, at the pace of its last hour: "about 2 h 40 min left (done around 23:10)"
+const timeLeft = (seconds) => {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  const span =
+    minutes < 60
+      ? `${minutes} min`
+      : `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+  const doneAt = new Date(Date.now() + seconds * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `about ${span} left (done around ${doneAt})`;
+};
+
 const StateBadge = ({ state }) => (
   <Badge
     size="xs"
@@ -790,6 +804,10 @@ const StreamCheckTable = () => {
               <Text size="xs" c="dimmed">
                 {data?.running
                   ? `Checking: ${progress.done || 0} of ${progress.total || 0} streams${
+                      progress.eta_seconds
+                        ? ` · ${timeLeft(progress.eta_seconds)}`
+                        : ''
+                    }${
                       progress.broken
                         ? ` · ${progress.broken} broken so far`
                         : ''

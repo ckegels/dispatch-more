@@ -140,18 +140,20 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             self._send(self.still)
         elif self.path == "/still.m3u8":
             self._send(b"#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nstill.ts\n", "application/vnd.apple.mpegurl")
+        elif self.path == "/burst.ts":
+            # All of it at once, then nothing for a long while: a provider's burst
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp2t")
+            self.end_headers()
+            self.wfile.write(self.long_video)
+            self.wfile.flush()
+            time.sleep(6)
         elif self.path == "/pauses.ts":
             # A second of video, then the data stops for longer than a read waits
             self.send_response(200)
             self.send_header("Content-Type", "video/mp2t")
             self.end_headers()
             self.wfile.write(self.long_video[: len(self.long_video) // 2])
-            self.wfile.flush()
-            time.sleep(1.5)
-        elif self.path == "/silent.ts":
-            self.send_response(200)
-            self.send_header("Content-Type", "video/mp2t")
-            self.end_headers()
             self.wfile.flush()
             time.sleep(1.5)
         elif self.path == "/quiet-then-moving.ts":
@@ -229,6 +231,14 @@ class ProbeTests(TestCase):
         with mock.patch.object(stream_check, "READ_PAUSE_SECONDS", 0.5):
             found = stream_check.probe(f"{self.base}/pauses.ts", timeout=12)
         self.assertTrue(found["ok"], found)
+
+    def test_a_burst_then_a_pause_is_judged_at_once_not_waited_out(self):
+        """What made checks slow: waiting out a provider's pause after a burst of ten seconds."""
+        started = time.monotonic()
+        found = stream_check.probe(f"{self.base}/burst.ts", timeout=12, picture_seconds=6)
+        self.assertTrue(found["ok"], found)
+        self.assertTrue(found.get("picture_looked"))
+        self.assertLess(time.monotonic() - started, 4)
 
     def test_an_answer_with_nothing_after_it_is_a_stall_to_look_at_again(self):
         with mock.patch.object(stream_check, "READ_PAUSE_SECONDS", 0.5):
@@ -1291,6 +1301,31 @@ class RecheckTests(_Setup):
         self.assertIn("not counted", record["refused"])
         self.assertEqual(record.get("failures", 0), 0)
         self.assertEqual(stream_check.load_parked(), {})
+
+    def test_a_stream_that_played_gets_the_quick_check_until_its_picture_is_due(self):
+        stream_check.save_settings({"account_failures": 99, "picture_check": True, "picture_every_days": 3})
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            stream_check.run(self.redis)
+        # Never checked: every picture looked at
+        self.assertTrue(all(c.kwargs.get("picture_seconds") for c in probe.call_args_list))
+        results = stream_check.load_results()
+        for record in results["streams"].values():
+            record["picture_at"] = stream_check._now()
+        stream_check._store(stream_check.RESULTS_KEY, "x", results)
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            stream_check.run(self.redis)
+        # Played, and looked at today: the quick check
+        self.assertFalse(any(c.kwargs.get("picture_seconds") for c in probe.call_args_list))
+
+    def test_how_long_a_round_has_left_follows_its_pace(self):
+        now = time.time()
+        found = {"state": "running", "total": 1000, "done": 400, "samples": [[now - 1800, 100], [now, 400]]}
+        # 300 streams in half an hour: 600 more take an hour
+        self.assertAlmostEqual(stream_check._eta(found), 3600, delta=5)
+        self.assertIsNone(stream_check._eta({**found, "samples": [[now, 400]]}))
+        self.assertIsNone(stream_check._eta({**found, "state": "done"}))
 
     def test_an_ignored_stream_is_off_the_list_and_not_checked(self):
         stream_check.save_settings({"account_failures": 99})

@@ -136,6 +136,17 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             />
           )}
           {draft.picture_check && (
+            <NumberInput
+              size="xs"
+              label="Look at a working stream's picture every (days)"
+              description="A stream that played last time gets the quick check until then, which is most of what makes a run fast. 0 looks at every picture on every run."
+              min={0}
+              max={60}
+              value={draft.picture_every_days ?? 3}
+              onChange={number('picture_every_days')}
+            />
+          )}
+          {draft.picture_check && (
             <Switch
               size="xs"
               label="Look again before calling a picture wrong"
