@@ -16,6 +16,10 @@ the mistakes not to repeat.
 - **No fake provider** for testing; the user tests with real providers.
 - **Never disturb a viewer.** Background work that opens provider connections (Stream Check)
   must never cost anyone their stream, and never touches a provider someone is using.
+- **Never flag a stream for something that is not the stream's.** No connection, a timeout, a
+  server error, a refusal while others play, a fade: each is looked at again in the same run
+  before it counts, or never counted. A working channel called broken is the worst bug this
+  fork can have — it has happened, more than once (handover §7).
 - **Every channel ends in a custom fallback stream** ("Could Not Dispatch"): keep it last,
   never remove it, insert new streams before it.
 - **Channel Manager defaults reproduce DispatcharrUtils**; anything smarter is a lever.
@@ -29,9 +33,13 @@ the mistakes not to repeat.
 2. Commit. Ship it as a release of the patcher (the way it is installed now):
 
    ```bash
-   fork/patcher/release.sh v100             # builds the overlay and runs fork/patcher/test-patcher.sh
-   fork/patcher/release.sh v100 --publish   # and makes the GitHub release (needs `gh auth login`)
+   fork/patcher/release.sh vNN             # builds the overlay and runs fork/patcher/test-patcher.sh
+   fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
+
+   Releases run from v99; v116 is the latest. Users install one with
+   `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
+   or the same inside `docker exec` for Docker.
 
    The user installs a release with `sudo bash dispatch-more/install.sh` (Linux/LXC) or the
    Docker entrypoint; see README.md. The old patch file still works for the user's own server

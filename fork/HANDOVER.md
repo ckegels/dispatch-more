@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, at patch v98 (commit `f0ceb68a`). The commit messages on the branch
+Written 2026-09-19, kept current to **release v116** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -20,11 +20,14 @@ one user for their own installation.
 - **Branch:** `feature/probation-slots`
 - **Based on:** upstream **v0.31.0**, commit `bcbb68c4`. Every patch is the full diff from
   there.
-- **Delivered as:** releases of the patcher, **Dispatch More vNN** (§4.4) — until 2026-09-19 a
-  patch file, `~/probation-slots-vNN.patch`, installed with `fork/scripts/install-probation.sh`
-  (the user's server is still on that; latest patch v98, first patcher release v99).
+- **Delivered as:** releases of the patcher, **Dispatch More vNN** (§4.4), public at
+  https://github.com/ckegels/dispatch-more. One command installs one:
+  `curl -fsSL .../releases/latest/download/quick-install.sh | sudo bash` (Linux/LXC), or the
+  same inside `docker exec` (Docker keeps it over a restart, not over a recreate). A patch file
+  (`~/probation-slots-vNN.patch`, `fork/scripts/install-probation.sh`) is still built for the
+  user's own server while it is on that older way.
 - **Shows itself as:** "v0.31.0 · patched" in the sidebar, "v0.31.0 · patched (Dispatch More
-  v99)" in About, a notice on every Settings page, and Settings → System → Modified build.
+  vNN)" in About, a notice on every Settings page, and Settings → System → Modified build.
 
 The user's setup (matters for almost every decision):
 
@@ -114,6 +117,7 @@ When `fork/scripts/install-probation.sh` or `uninstall-probation.sh` changes, co
 | `dispatcharr-shell.sh` | Runs `manage.py` with the service's environment. **Needed**: the Debian install keeps the DB password in the systemd unit's `Environment=` lines, so a plain `manage.py shell` over SSH fails with "password authentication failed for user dispatch". Use: `bash /root/dispatcharr-shell.sh shell < script.py` |
 | `check-channel.py` | `NAME=euronews bash dispatcharr-shell.sh shell < check-channel.py`: every stream of every channel matching NAME — what Stream Check has on record, a fresh check, a 10 s recording judged for black/frozen/silent. Viewer-safe. |
 | `probe-provider.py`, `probe-pace.py`, `probe-recovery.py`, `compare-stream-url.py` | The measurements of §6.4. |
+| `trace-stream.py` | `NAME="WELT FHD" ACCOUNT=TiviBridge2 bash dispatcharr-shell.sh shell < trace-stream.py`: every step of opening one stream (DNS, TCP, each redirect hop, first bytes, the longest pause in the data, the provider's connection count before and after), then Stream Check's own check. How the burst in §6.6 was found. |
 | `verify-probation.sh` | Read-only verification of the tuner, guide, fork endpoints, Redis, Plex and Jellyfin (`DISP_PASS=… PLEX_TOKEN=… bash verify-probation.sh`). |
 
 When regenerating the install script's `EVER` list, use
@@ -190,7 +194,7 @@ npx eslint <files>                 # api.js has 14 errors that are stock's own
 All backend fork code is in `apps/proxy/live_proxy/` and `apps/channels/`; frontend in
 `frontend/src/components/{mediaservers,diagnostics,tables,forms}` and `frontend/src/pages`.
 
-### 5.1 Channel Switch Overlap ("probation slots") — `apps/proxy/live_proxy/probation.py`
+### 5.1 Channel Switch Overlap and Force Close — `apps/proxy/live_proxy/probation.py`
 
 The original feature. The user's provider allows 1 stream per account but tolerates 2
 briefly. With `max_streams=1` switching channels is slow (the new request waits for the old
@@ -208,6 +212,17 @@ devices, a settings page and switch log. Identity: IP + Dispatcharr user + devic
 media servers the device the server reports (`bind_device`, with `wait_for_device`,
 `device_a_moment_ago`, … as fallbacks). The user rejected identity-based "grace" and
 "sticky accounts".
+
+**Force Close on Identified Traffic** (`probation_stop_skipped`, the old "Stop Skipped
+Channels") is a switch of its own since v104: when an identified viewer asks for a channel,
+every other channel it is the only viewer of is closed at once, however long it was watched —
+no window any more, because every viewer is one device. The overlap need not be on. Only a
+media server's player named by a guess is held to `GUESSED_WINDOW_SECONDS` (10) until its
+server says who it is (`settle_media_server_start`, `certain=True`). It has its own cached flag
+(`skipping_in_use`), so the stream request checks it and not the overlap's; LAN Subnets serve
+both (`account_identifies_viewers`). Switching it on warns: all traffic must be identified, one
+login is one device, several devices behind one address look like one, multiview closes the
+first channel.
 
 Upstream issues: #1694 (the user's own "probation-slots" request), #1600 (configurable retry
 budget, a simpler related idea). CONTRIBUTING.md: PRs target `dev`, need an agreed issue.
@@ -263,7 +278,7 @@ A tab of the Logo Manager: each channel's logo next to suggestions from public c
 guide's icons — collections first, guides last. Search every logo by hand, use a link or a
 file. Matching uses `match_key` (accents folded, "+"/"&" as words, box removed).
 
-### 5.6 Channel Manager: Merge — `apps/channels/channel_manager.py`, `ChannelManagerTable.jsx`
+### 5.6 Channel Manager: Lineup (was "Merge") — `apps/channels/channel_manager.py`, `ChannelManagerTable.jsx`
 
 Merges the same channel from every provider and quality into one, with a before/after table
 and a Watch button per stream. **Defaults reproduce DispatcharrUtils** (kpirnie's tool, and
@@ -271,8 +286,20 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
-`DEFAULTS_VERSION` resets saved settings when defaults change. A backup warning with a link
-to Settings → Backup & Restore sits above both tabs.
+`DEFAULTS_VERSION` resets saved settings when defaults change (`CHANGED_IN` keeps the rest). A
+backup warning with a link to Settings → Backup & Restore sits above both tabs.
+
+**New channels are suggested** (`create_new`, on; only suggested — nothing is made until a row
+is ticked and applied). From the stream groups your channels already come from (`new_from`
+"followed"; "all" is tens of thousands). Each gets a group (`_NewHomes`: where your channels
+from the same stream group are → the country's usual group → the stream's own), the next free
+number **after the last channel of that group** (never one taken), a logo from the collections
+(`new_logo`) and the custom fallback most channels end in (`new_fallback`, `_usual_fallback`).
+The group can be changed per row (`groups` on apply, renumbered there). A stream can be taken
+out of a row (`drops` on apply: not added, or off the channel; never the fallback), and a
+suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
+you have only those streams, so a stream added later is still suggested), with an Ignored view
+and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
 
 ### 5.7 Channel Manager: Stream Check — `apps/channels/stream_check.py` (+ `stream_check_views.py`, `StreamCheckTable.jsx`, `StreamCheckSettings.jsx`, `ProviderLimits.jsx`)
 
@@ -295,14 +322,31 @@ no longer play. Summary of how it works now:
 - **Opens the stream exactly as the proxy does** (`url_utils._resolve_live_stream_url`: for
   Xtream, current credentials + stream id, not the saved URL), with the account's User-Agent,
   taking a connection slot like a viewer (`reserve_profile_slot`), 3 s apart per provider.
-- **A picture, not an answer.** Reads the stream, follows HLS to a segment, ffprobe for
-  video; with the picture check (on, 6 s) ffmpeg `blackdetect`/`freezedetect` and a 16×9 grey
-  fingerprint of one frame.
+- **A picture, not an answer.** Reads the stream, follows HLS to a segment, ffprobe for video;
+  with the picture check (on) ffmpeg `blackdetect`/`freezedetect` over `picture_seconds` (6) and
+  a 16×9 grey fingerprint of one frame. The body is pumped by a thread (`_read`), so the wait is
+  decided as it goes: `READ_PAUSE_SECONDS` (10) for the first piece, `PAUSE_ENDS_READ` (1.5) once
+  something has come — a provider's burst is judged at once instead of waiting out its pause, and
+  the socket is shut (`_hang_up`) before closing, or the close waits for that read. What came
+  before a pause is always judged; nothing at all raises `_Stalled`.
+- **Not every check looks at the picture.** A stream that played last time and whose picture was
+  looked at within `picture_every_days` (3) gets the quick check; a failing one, a re-look and a
+  check by hand always get the full look (`_picture_due`). This is most of a run's speed.
+- **A picture fault is most of what was seen:** black or frozen for `PICTURE_FAULT_SHARE` (0.8)
+  of the seconds read, and at least `BLACK_SECONDS` (3) / `FROZEN_SECONDS` (4). A burst can hold
+  thirty seconds, in which three black ones are a fade.
+- **Nothing is counted on one look.** A picture fault, a timeout, a server error (500/502/504/
+  520-524) and no connection at all are suspicions: the same round opens the stream again
+  `RELOOK_GAP` (90 s) later, up to `RELOOKS` (3) times (`_record`, `_relook`, `suspect` on the
+  record, state "suspect"). Seen again → the failure it is; three clean looks → it plays; never
+  reached at all → "not checked", counted nowhere. A round is not over while a re-look is due
+  (`_relook_wait`), and a check by hand re-looks from the task.
 - **Failure kinds:** `dead` (does not play), `refused` (the provider refuses this stream while
   giving others — e.g. HTTP 407 for Euronews HD), `black`, `frozen`, `placeholder` (the same
-  frozen frame on ≥3 channels of one provider: its "no stream" card). Broken after
-  `broken_after` failures in a row. **Only `dead` may be autoparked**; the rest show as
-  "needs you".
+  frozen frame on ≥3 channels of one provider: its "no stream" card), `unreachable` (no
+  connection at all: never counted, `_why_no_connection` says which way it failed). Broken after
+  `broken_after` failures in a row. **Only `dead` may be autoparked** (`dead_streak`); the rest
+  show as "needs you".
 - **Accounts first:** expired logins (exp_date), Xtream login refused/not active → account
   left for the round; the first 5 streams of an account all failing → provider down, not
   counted.
@@ -321,8 +365,14 @@ no longer play. Summary of how it works now:
   and shown again when a stream is put back — only channels Stream Check hid itself
   (`stream-check-hidden`); on by default (`hide_emptied_channels`). The Merge leaves parked streams out. Remove = off the channel only (the stream is
   the provider's). The fallback is never checked, parked or removed.
+- **Ignored and cleared:** a stream can be ignored (`stream-check-ignored`): off the list, not
+  checked, nothing on its channels changed, with an Ignored view and Stop ignoring. Clear list
+  forgets every result (a button on the page; blocked while a run is going).
+- **The page says how long a run has left** ("about 2 h 40 min left, done around 23:10"), from
+  pace samples in progress (`_note_pace`, `_eta`, `PACE_WINDOW` one hour, waits included).
 - **Stored:** CoreSettings `stream-check` (settings, `SETTINGS_VERSION`), `stream-check-results`,
-  `stream-check-parked`, `stream-check-providers` (limits), `stream-check-recheck`; Redis
+  `stream-check-parked`, `stream-check-providers` (limits), `stream-check-recheck`,
+  `stream-check-ignored`, `stream-check-hidden`; Redis
   `stream-check:*` (round, progress, run lock, stop, make-way, queued, live results, opens).
   Times are sent to the page as ISO moments and shown in the viewer's zone (server is UTC).
 
@@ -357,6 +407,17 @@ no longer play. Summary of how it works now:
    454 per 186 min kept) with a known-good stream refused too; plausible but not independently
    confirmed.
 5. **The Debian install's DB password** is only in the systemd unit (see `dispatcharr-shell.sh`).
+6. **TiviBridge2 / `line.azerty-live.cc`** (traced with `fork/scripts/trace-stream.py`,
+   2026-09-19): `line.*` sits behind Cloudflare and answers a stream with a 302 to an edge
+   server (192.142.x.x). DNS, connect and first video all inside 0.3 s, every try. Its edge
+   **sends about 20 MB — ten seconds of video — in under a second, then nothing for 7–9 s**
+   until real time catches up. That burst is why a five-second read timeout made working
+   channels fail, why `_read` stops at a pause once something has come, and why a picture look
+   can hold thirty seconds of video.
+7. **`requests` reports a read timeout inside a body as `ConnectionError`** — which is why
+   "could not connect to the provider" was shown for streams that had connected and sent video.
+8. **Cloudflare 502s** ("one-zone.cc | 502: Bad gateway") happen now and then mid-run: the
+   provider's own server behind Cloudflare, not the channel.
 
 ---
 
@@ -377,13 +438,31 @@ no longer play. Summary of how it works now:
   declared missing from a 404; a fast tuner move crashed Plex. → measure first, move slowly.
 - **Times in the server's zone** on the page looked two hours off. → send moments, format in
   the browser.
+- **A failed connection counted as "does not play"** (to v109): a working SBS 6 4K went Broken
+  after two moments the provider was unreachable, minutes before the server's disk filled.
+  → `unreachable` is never counted.
+- **A five-second read timeout threw away video already read** (to v111), on a provider that
+  bursts. → keep what came, wait up to ten seconds, and never call that "could not connect".
+- **Black/frozen measured as seconds anywhere** (to v115): "Black picture (3 of 29 s)" on a
+  fade. → most of what was seen.
+- **The settings store dropped the build field** (to v102), so nothing on the page ever said it
+  was a modified build, while every component test passed. → test through the store, not past it.
+- **The install script kept a backup per install** in `/root`; ~100 of them helped fill a 20 GB
+  disk until PostgreSQL stopped and every page 500'd. → keep the last three (the patcher keeps
+  one set of originals). Check `df -h /` when something breaks oddly.
+- **"Check again" looked like it did nothing** (to v114): the page asked once, before the check
+  had started; Stop's signal ended a check by hand; a batch still going dropped it. → keep
+  looking for five minutes, Stop ends rounds only, wait your turn.
 
 ---
 
 ## 8. Open / possible next
 
-- Stream Check has not yet completed a full real round on v97/v98 with the picture check;
-  watch the first one (runtime is ~6× longer per stream with it).
+- Stream Check has not yet completed a full real round since the speed work (v113+); watch the
+  pace and the estimate. The learned provider limits (483 per 101 min, 454 per 186 min) are the
+  main brake and were learned under the old 407 handling: worth forgetting once to see whether
+  they are learned again.
+- A check by hand can only start when no batch is running (it waits up to five minutes).
 - Viewer channel opens are not counted against a learned provider limit (a 20 % margin covers
   normal zapping).
 - An animated "no stream" card is not recognised (would need OCR or known-card fingerprints).
@@ -392,13 +471,15 @@ no longer play. Summary of how it works now:
 - Channel Manager phase 2 ideas: fuzzy matching, East/West, rule sets per group, run after M3U
   refresh, undo.
 - Offered earlier, not built: stream reliability ranking, fd-leak check (#1674), channel-death
-  notifications.
+  notifications, silent-audio and low-framerate checks (the IPTV Checker plugin has both),
+  counting viewers' channel opens against a provider's learned limit, and a prebuilt Docker
+  image (so Docker would need no patcher at all).
 
 ---
 
 ## 9. Where the rest of the history is
 
-- `git log bcbb68c4..HEAD` — 89+ commits, each message a full explanation.
+- `git log bcbb68c4..HEAD` — 110+ commits, each message a full explanation.
 - `docs/channel-switch-overlap.md` — the overlap's design.
 - The original conversations with Claude Code are kept on the user's machine under
   `~/.claude/projects/-home-ckegels-Documents-github-dispatcharr-tsi/` (`*.jsonl`), with
