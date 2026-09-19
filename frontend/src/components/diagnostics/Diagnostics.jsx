@@ -28,6 +28,7 @@ import ChannelSwitches, {
   ACTION_MEANINGS,
 } from './ChannelSwitches';
 import ChannelHealth, { HEALTH_COLORS, HEALTH_MEANINGS } from './ChannelHealth';
+import LogViewer from './LogViewer';
 
 const REFRESH_MS = 5000;
 
@@ -118,6 +119,7 @@ const Diagnostics = ({ active }) => {
             // What is running now, not what has gone wrong: the count that matters
             label: `${phone ? 'Health' : 'Channel health'} (${(activity.running || []).length})`,
           },
+          { value: 'logs', label: 'Logs' },
         ]}
       />
 
@@ -127,6 +129,7 @@ const Diagnostics = ({ active }) => {
       {tab === 'switches' && (
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
+      {tab === 'logs' && <LogViewer />}
       {tab === 'health' && (
         <ChannelHealth
           events={activity.health}
@@ -137,45 +140,47 @@ const Diagnostics = ({ active }) => {
         />
       )}
 
-      <Group gap="xs" align="center">
-        <Text size="xs" c="dimmed">
-          Keep for
-        </Text>
-        <Select
-          size="xs"
-          w={130}
-          aria-label="Keep for"
-          value={String(activity.keep_seconds)}
-          onChange={changeRetention}
-          data={(activity.keep_choices || []).map((seconds) => ({
-            value: String(seconds),
-            label: KEEP_LABELS[seconds] || `${seconds}s`,
-          }))}
-        />
-        <Text size="xs" c="dimmed">
-          Refreshes every {REFRESH_MS / 1000} seconds.
-        </Text>
-        <Button
-          variant="subtle"
-          size="compact-xs"
-          onClick={() => setLegendOpen(true)}
-        >
-          What do these mean?
-        </Button>
-        <Button
-          variant="subtle"
-          size="compact-xs"
-          leftSection={<Copy size={13} />}
-          onClick={() => copyToClipboard(allAsText(activity, tab))}
-        >
-          Copy all as text
-        </Button>
-        {copied && (
+      {tab !== 'logs' && (
+        <Group gap="xs" align="center">
           <Text size="xs" c="dimmed">
-            {copied}
+            Keep for
           </Text>
-        )}
-      </Group>
+          <Select
+            size="xs"
+            w={130}
+            aria-label="Keep for"
+            value={String(activity.keep_seconds)}
+            onChange={changeRetention}
+            data={(activity.keep_choices || []).map((seconds) => ({
+              value: String(seconds),
+              label: KEEP_LABELS[seconds] || `${seconds}s`,
+            }))}
+          />
+          <Text size="xs" c="dimmed">
+            Refreshes every {REFRESH_MS / 1000} seconds.
+          </Text>
+          <Button
+            variant="subtle"
+            size="compact-xs"
+            onClick={() => setLegendOpen(true)}
+          >
+            What do these mean?
+          </Button>
+          <Button
+            variant="subtle"
+            size="compact-xs"
+            leftSection={<Copy size={13} />}
+            onClick={() => copyToClipboard(allAsText(activity, tab))}
+          >
+            Copy all as text
+          </Button>
+          {copied && (
+            <Text size="xs" c="dimmed">
+              {copied}
+            </Text>
+          )}
+        </Group>
+      )}
 
       <Modal
         opened={legendOpen}

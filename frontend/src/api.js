@@ -4101,6 +4101,31 @@ export default class API {
     }
   }
 
+  // The Diagnostics page's Logs tab: every log, wherever this installation writes it
+  static async getLogSources() {
+    return await request(`${host}/api/core/log-center/`);
+  }
+
+  static async readLogs(query) {
+    return await request(`${host}/api/core/log-center/read/?${new URLSearchParams(query)}`);
+  }
+
+  // The whole log for what is chosen, or the zip of everything; saved by the browser
+  static async downloadLogs(kind, query, filename) {
+    const response = await request(
+      `${host}/api/core/log-center/${kind}/?${new URLSearchParams(query || {})}`,
+      { raw: true }
+    );
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   static async getLogFiles() {
     try {
       return await request(`${host}/api/core/logs/`);

@@ -453,6 +453,73 @@ def version(request):
     )
 
 
+def _log_choice(request):
+    """What the Logs tab asked for, held to what it can ask for."""
+    from core import log_center
+
+    since = request.GET.get("since", "1h")
+    level = request.GET.get("level", "ALL").upper()
+    topic = request.GET.get("topic", "")
+    return {
+        "source_ids": [s for s in request.GET.get("sources", "").split(",") if s],
+        "since": since if since in log_center.SINCE else "1h",
+        "level": level if level in log_center.LEVELS or level == "ALL" else "ALL",
+        "topic": topic if topic in log_center.TOPICS else "",
+        "text": request.GET.get("text", "")[:200],
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def log_center_sources(request):
+    """Where the logs are on this installation, and whether they can be read."""
+    from core import log_center
+
+    return Response({
+        "sources": log_center.sources(),
+        "journal_readable": log_center.journal_readable(),
+        "topics": list(log_center.TOPICS),
+        "since": list(log_center.SINCE),
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def log_center_read(request):
+    from core import log_center
+
+    return Response(log_center.read(**_log_choice(request)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def log_center_download(request):
+    """The whole log for what is chosen, as a file."""
+    from django.http import HttpResponse
+
+    from core import log_center
+
+    choice = _log_choice(request)
+    response = HttpResponse(log_center.download(**choice), content_type="text/plain; charset=utf-8")
+    stamp = time.strftime("%Y%m%d-%H%M", time.gmtime())
+    response["Content-Disposition"] = f'attachment; filename="dispatcharr-logs-{stamp}.log"'
+    return response
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def log_center_bundle(request):
+    """Every log of the last day and what this installation is, zipped, to send on."""
+    from django.http import HttpResponse
+
+    from core import log_center
+
+    response = HttpResponse(log_center.bundle(), content_type="application/zip")
+    stamp = time.strftime("%Y%m%d-%H%M", time.gmtime())
+    response["Content-Disposition"] = f'attachment; filename="dispatcharr-diagnostics-{stamp}.zip"'
+    return response
+
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def modified_build(request):

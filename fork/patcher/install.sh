@@ -79,6 +79,15 @@ UNIT
   systemctl daemon-reload
   systemctl enable --now "$SLUG-uninstall.path" >/dev/null 2>&1 || echo "Note: the uninstall watcher could not be started; the page's button will not work."
 
+  # Diagnostics -> Logs reads the systemd journal; the user Dispatcharr runs as needs to be in
+  # the systemd-journal group for that (root needs nothing). Noted, so uninstalling undoes it.
+  RUNS_AS="$(systemctl show dispatcharr -p User --value 2>/dev/null || true)"
+  if [ -n "$RUNS_AS" ] && [ "$RUNS_AS" != root ] && getent group systemd-journal >/dev/null \
+     && ! id -nG "$RUNS_AS" 2>/dev/null | tr ' ' '\n' | grep -qx systemd-journal; then
+    usermod -aG systemd-journal "$RUNS_AS" && echo "$RUNS_AS" > "$STATE/journal-group-added" \
+      && echo "Let $RUNS_AS read the system journal, for Diagnostics -> Logs."
+  fi
+
   if [ "$RESTART" = 1 ]; then
     SERVICES="$(systemctl list-units --type=service --all --no-legend 'dispatcharr*' | awk '{print $1}' | grep -v "^$SLUG" || true)"
     if [ -n "$SERVICES" ]; then

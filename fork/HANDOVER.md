@@ -247,6 +247,15 @@ Speed only exists when ffmpeg runs (a stream profile other than Proxy). Every se
 on its own: one bad record is logged and left out rather than 500-ing the page (it did,
 because switch records sometimes carry a channel id or "None" instead of a UUID).
 
+### 5.4b Logs — `core/log_center.py`, `LogViewer.jsx` (Diagnostics → Logs)
+
+Stock's Logs page shows the log collector's files, which only Docker writes; on Linux/LXC the
+logs are in the systemd journal per `dispatcharr*` service. This tab reads either, narrows by
+service, time, level, topic (Stream Check, proxy, overlap, M3U, EPG, media servers, VOD,
+Celery) and text, keeps a traceback with the ERROR line that reported it, follows live, and
+downloads the whole log or a diagnostics bundle (every log of 24 h + version). The web app's
+user needs the `systemd-journal` group; the patcher's installer adds it and uninstall removes it.
+
 ### 5.5 Find Logos — `apps/channels/logo_library.py`, `logo_library_views.py`, `LogoLibraryTable.jsx`
 
 A tab of the Logo Manager: each channel's logo next to suggestions from public collections

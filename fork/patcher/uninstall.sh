@@ -50,6 +50,11 @@ fi
 "$PY" "$STATE/patch.py" uninstall --app "$APP" --state "$STATE"
 
 if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
+  # Reading the journal was only for Diagnostics -> Logs: taken away again if it was given
+  if [ -f "$STATE/journal-group-added" ]; then
+    gpasswd -d "$(cat "$STATE/journal-group-added")" systemd-journal >/dev/null 2>&1 || true
+    rm -f "$STATE/journal-group-added"
+  fi
   systemctl disable "$SLUG-uninstall.path" --no-block >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$SLUG-uninstall.path" "/etc/systemd/system/$SLUG-uninstall.service"
   systemctl daemon-reload || true
