@@ -21,6 +21,7 @@ vi.mock('../../../api', () => ({
     getChannelManagerOptions: vi.fn(),
     previewChannelManager: vi.fn(),
     applyChannelManager: vi.fn(),
+    ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
   },
 }));
@@ -117,7 +118,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
 
     await waitFor(() =>
-      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {}, {})
+      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {}, {}, {})
     );
   });
 
@@ -141,6 +142,7 @@ describe('ChannelManagerTable', () => {
         { order: 'quality' },
         ['ch:1'],
         { 'ch:1': [2, 1] },
+        {},
         {}
       )
     );
@@ -205,9 +207,44 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }
+        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }, {}
       )
     );
+  });
+
+  it('takes a wrong stream out of a row, but never the fallback', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(screen.queryByRole('button', { name: 'Drop could not dispatch' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Drop ┃AT┃ ORF 1 FHD' }));
+    // Undoable, and the row is ticked
+    expect(screen.getByRole('button', { name: 'Keep ┃AT┃ ORF 1 FHD' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['ch:1'], {}, {}, { 'ch:1': [2] }
+      )
+    );
+  });
+
+  it('ignores a suggestion, lists it, and clears the list', async () => {
+    API.ignoreChannelManager.mockResolvedValue({});
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Ignore ┃AT┃ ORF 1' }));
+    await waitFor(() =>
+      expect(API.ignoreChannelManager).toHaveBeenCalledWith('ignore', {
+        key: 'ch:1', name: '┃AT┃ ORF 1', kind: 'merge', streams: [2],
+      })
+    );
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which channels' }));
+    fireEvent.click(await screen.findByText('Ignored (1)'));
+    expect(await screen.findByText('┃AT┃ ORF 1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear ignored list' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(API.ignoreChannelManager).toHaveBeenLastCalledWith('clear'));
   });
 
   it('asks for a fresh preview before applying after the levers move', async () => {

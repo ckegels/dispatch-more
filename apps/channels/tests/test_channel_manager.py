@@ -435,6 +435,51 @@ class NewChannelTests(_Setup):
         self.assertFalse(ChannelProfileMembership.objects.filter(channel=made).exists())
 
 
+class PageChoiceTests(_Setup):
+    """What is chosen on the page: streams dropped from a row, and suggestions ignored."""
+
+    def test_a_stream_dropped_on_the_page_is_not_added(self):
+        good = self._stream("┃AT┃ ORF 1 FHD", self.b)
+        wrong = self._stream("┃AT┃ ORF 1 HD", self.b)
+        plan = channel_manager.build_plan(settings())
+        channel_manager.apply_plan(settings(), ["ch:%d" % self.orf1.id], drops={"ch:%d" % self.orf1.id: [wrong.id]})
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "┃AT┃ ORF 1 FHD", "could not dispatch"])
+        self.assertIn(good.id, [s["id"] for s in self._row(plan, "ch:%d" % self.orf1.id)["streams"]])
+
+    def test_a_stream_the_channel_has_can_be_dropped_but_never_the_fallback(self):
+        key = "ch:%d" % self.orf1.id
+        channel_manager.apply_plan(settings(), [key], drops={key: [self.existing.id, self.fallback.id]})
+        # Dropping a stream a channel has takes it off; the fallback stays
+        self.assertEqual(self._order(self.orf1), ["could not dispatch"])
+
+    def test_an_ignored_new_channel_is_not_suggested_again(self):
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        (row,) = [r for r in channel_manager.build_plan(settings())["rows"] if r["status"] == "new"]
+        channel_manager.ignore(row["key"], name=row["channel"]["name"], kind="new")
+        plan = channel_manager.build_plan(settings())
+        self.assertFalse(any(r["status"] == "new" for r in plan["rows"]))
+        self.assertEqual([i["name"] for i in plan["ignored"]], ["┃AT┃ PULS 4"])
+        channel_manager.unignore()
+        self.assertTrue(any(r["status"] == "new" for r in channel_manager.build_plan(settings())["rows"]))
+
+    def test_ignoring_a_merge_leaves_only_those_streams_alone(self):
+        """A stream the provider adds later is still suggested."""
+        first = self._stream("┃AT┃ ORF 1 FHD", self.b)
+        key = "ch:%d" % self.orf1.id
+        channel_manager.ignore(key, name="┃AT┃ ORF 1", kind="merge", streams=[first.id])
+        self.assertEqual(self._row(channel_manager.build_plan(settings()), key)["status"], "unchanged")
+        later = self._stream("┃AT┃ ORF 1 HD", self.a)
+        row = self._row(channel_manager.build_plan(settings()), key)
+        self.assertEqual([s["id"] for s in row["streams"] if s["added"]], [later.id])
+
+    def test_new_channels_take_a_logo_from_the_collections_by_default(self):
+        self.assertEqual(channel_manager.DEFAULTS["new_logo"], "collections")
+        self._stream("┃AT┃ PULS 4 HD", self.a, logo_url="http://logos/puls4.png")
+        levers = settings(new_logo="stream")
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "new"]
+        self.assertEqual(row["channel"]["logo_url"], "http://logos/puls4.png")
+
+
 class ViewTests(_Setup):
     def setUp(self):
         super().setUp()
@@ -448,6 +493,17 @@ class ViewTests(_Setup):
         self.assertTrue({"Provider A", "Provider B"} <= {a["name"] for a in data["accounts"]})
         self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
         self.assertEqual(data["defaults"]["create_new"], True)
+
+    def test_ignoring_through_the_page(self):
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        url = "/api/channels/channel-manager/ignore/"
+        self.client_api.post(url, {"action": "ignore", "key": "new:at:x", "name": "X", "kind": "new"}, format="json")
+        self.assertIn("new:at:x", channel_manager.load_ignored())
+        self.client_api.post(url, {"action": "unignore", "key": "new:at:x"}, format="json")
+        self.assertEqual(channel_manager.load_ignored(), {})
+        self.client_api.post(url, {"action": "ignore", "key": "new:at:y"}, format="json")
+        self.client_api.post(url, {"action": "clear"}, format="json")
+        self.assertEqual(channel_manager.load_ignored(), {})
 
     def test_preview_and_apply(self):
         self._stream("┃AT┃ ORF 1 FHD", self.b)

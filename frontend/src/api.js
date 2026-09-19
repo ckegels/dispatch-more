@@ -2885,11 +2885,20 @@ export default class API {
     });
   }
 
-  static async applyChannelManager(settings, keys, orders = {}, groups = {}) {
-    // groups: {row key: channel group id} for new channels put in another group
+  static async applyChannelManager(settings, keys, orders = {}, groups = {}, drops = {}) {
+    // groups: {row key: channel group id} for new channels put in another group;
+    // drops: {row key: [stream ids]} taken out of a row on the page
     return await request(`${host}/api/channels/channel-manager/apply/`, {
       method: 'POST',
-      body: { settings, keys, orders, groups },
+      body: { settings, keys, orders, groups, drops },
+    });
+  }
+
+  // Stop suggesting a Lineup row ("ignore"), suggest it again ("unignore"), or all ("clear")
+  static async ignoreChannelManager(action, row = {}) {
+    return await request(`${host}/api/channels/channel-manager/ignore/`, {
+      method: 'POST',
+      body: { action, ...row },
     });
   }
 

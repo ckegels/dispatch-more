@@ -290,6 +290,21 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
                   },
                 ]}
               />
+              <Select
+                size="xs"
+                label="Logo"
+                allowDeselect={false}
+                value={value.new_logo || 'collections'}
+                onChange={(logo) => logo && set({ new_logo: logo })}
+                data={[
+                  {
+                    value: 'collections',
+                    label: 'From the logo collections, else the stream',
+                  },
+                  { value: 'stream', label: "The stream's own" },
+                  { value: 'none', label: 'None' },
+                ]}
+              />
               <Switch
                 size="xs"
                 label="End each in your fallback stream"

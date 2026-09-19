@@ -74,6 +74,7 @@ urlpatterns = [
     path('channel-manager/', channel_manager_views.channel_manager_options, name='channel_manager_options'),
     path('channel-manager/preview/', channel_manager_views.channel_manager_preview, name='channel_manager_preview'),
     path('channel-manager/apply/', channel_manager_views.channel_manager_apply, name='channel_manager_apply'),
+    path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
     path('stream-check/', stream_check_views.stream_check_overview, name='stream_check_overview'),
     path('stream-check/run/', stream_check_views.stream_check_run, name='stream_check_run'),

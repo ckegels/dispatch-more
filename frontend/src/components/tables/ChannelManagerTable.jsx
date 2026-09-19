@@ -11,9 +11,12 @@ import {
   Check,
   ChevronsDownUp,
   ChevronsUpDown,
+  EyeOff,
   Play,
   RotateCcw,
   SlidersHorizontal,
+  Undo2,
+  X,
 } from 'lucide-react';
 import {
   ActionIcon,
@@ -110,7 +113,7 @@ const Move = ({ stream, onMove, first, last }) => (
 // One stream, with everything worth knowing about it on one line
 // The name first; what it is and where it is from underneath, on as many lines as it takes,
 // so a long one grows the row downwards rather than running off to the right
-const StreamLine = ({ stream, move }) => (
+const StreamLine = ({ stream, move, onDrop }) => (
   <Group
     gap={6}
     wrap="nowrap"
@@ -118,7 +121,8 @@ const StreamLine = ({ stream, move }) => (
     style={{
       minWidth: 0,
       opacity: stream.in_scope === false && !stream.custom ? 0.6 : 1,
-      textDecoration: stream.removed ? 'line-through' : 'none',
+      textDecoration:
+        stream.removed || stream.dropped ? 'line-through' : 'none',
     }}
   >
     {move}
@@ -154,13 +158,30 @@ const StreamLine = ({ stream, move }) => (
         )}
       </Group>
     </Box>
+    {/* Taken out of this row: not added, or taken off the channel. Never the fallback. */}
+    {onDrop && !stream.custom && !stream.removed && (
+      <Tooltip
+        label={stream.dropped ? 'Keep it after all' : 'Take this stream out'}
+      >
+        <ActionIcon
+          size="xs"
+          variant={stream.dropped ? 'filled' : 'subtle'}
+          color="red"
+          aria-label={`${stream.dropped ? 'Keep' : 'Drop'} ${stream.name}`}
+          onClick={() => onDrop(stream.id)}
+          style={{ flexShrink: 0 }}
+        >
+          {stream.dropped ? <Undo2 size={12} /> : <X size={12} />}
+        </ActionIcon>
+      </Tooltip>
+    )}
   </Group>
 );
 
 // The streams that can be moved: not one taken off, and not the fallback, which stays last
 const movable = (stream) => !stream.removed && !stream.custom;
 
-const Expanded = ({ row, onMove, groups, chosenGroup, onGroup }) => {
+const Expanded = ({ row, onMove, groups, chosenGroup, onGroup, onDrop }) => {
   const moving = row.streams.filter(movable);
   return (
     <Box
@@ -233,6 +254,7 @@ const Expanded = ({ row, onMove, groups, chosenGroup, onGroup }) => {
               return (
                 <StreamLine
                   key={`${stream.id}-${stream.removed}`}
+                  onDrop={(id) => onDrop(row.key, id)}
                   stream={stream}
                   move={
                     at === -1 ? (
@@ -279,6 +301,9 @@ const ChannelManagerTable = () => {
   // New channels put in another group than suggested, by row: {key: group id}
   const [groupChoice, setGroupChoice] = useState({});
   const [expandAll, setExpandAll] = useState(false);
+  // Streams taken out of a row on the page: {key: [stream ids]}
+  const [drops, setDrops] = useState({});
+  const [clearing, setClearing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const tableRef = useRef(null);
@@ -295,6 +320,7 @@ const ChannelManagerTable = () => {
       setTicked(new Set());
       setOrders({});
       setGroupChoice({});
+      setDrops({});
       tableRef.current?.setSelectedTableIds?.([]);
       // Kept, so the page opens the way it was left
       API.saveChannelManagerSettings(withLevers).catch(() => {});
@@ -338,7 +364,17 @@ const ChannelManagerTable = () => {
   );
 
   const rows = useMemo(() => {
-    const all = (plan?.rows || []).map((raw) => {
+    const all = (plan?.rows || []).map((given) => {
+      const out = drops[given.key];
+      const raw = out?.length
+        ? {
+            ...given,
+            dropped: out.length,
+            streams: given.streams.map((s) =>
+              out.includes(s.id) ? { ...s, dropped: true } : s
+            ),
+          }
+        : given;
       const chosen = groupChoice[raw.key];
       const row =
         chosen && chosen !== raw.channel?.group_id
@@ -379,7 +415,7 @@ const ChannelManagerTable = () => {
         .filter(Boolean)
         .some((name) => name.toLowerCase().includes(wanted))
     );
-  }, [plan, show, search, orders, groupChoice, groupNames]);
+  }, [plan, show, search, orders, groupChoice, groupNames, drops]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const paginatedRows = useMemo(
@@ -394,7 +430,10 @@ const ChannelManagerTable = () => {
         .filter(
           (row) =>
             ticked.has(row.key) &&
-            (row.status === 'new' || row.status === 'merge' || row.reordered)
+            (row.status === 'new' ||
+              row.status === 'merge' ||
+              row.reordered ||
+              row.dropped)
         )
         .map((row) => row.key),
     [rows, ticked]
@@ -413,7 +452,12 @@ const ChannelManagerTable = () => {
           .filter((key) => groupChoice[key])
           .map((key) => [key, groupChoice[key]])
       );
-      await API.applyChannelManager(levers, tickedKeys, given, groups);
+      const dropped = Object.fromEntries(
+        tickedKeys
+          .filter((key) => drops[key]?.length)
+          .map((key) => [key, drops[key]])
+      );
+      await API.applyChannelManager(levers, tickedKeys, given, groups, dropped);
       await preview(levers);
     } catch (e) {
       setError(e?.body?.error || 'Could not apply those channels.');
@@ -445,6 +489,72 @@ const ChannelManagerTable = () => {
     [plan, orders]
   );
 
+  const tick = useCallback((key) => {
+    setTicked((all) => {
+      const now = new Set(all).add(key);
+      tableRef.current?.setSelectedTableIds?.([...now]);
+      return now;
+    });
+  }, []);
+
+  // A stream out of a row, or back in; the row is ticked, as a change to apply
+  const dropStream = useCallback(
+    (key, id) => {
+      setDrops((all) => {
+        const now = new Set(all[key] || []);
+        if (now.has(id)) now.delete(id);
+        else now.add(id);
+        return { ...all, [key]: [...now] };
+      });
+      tick(key);
+    },
+    [tick]
+  );
+
+  // Not suggested again: a new channel or a conflict whole, a channel's +/- streams only
+  const ignoreRow = useCallback(async (row) => {
+    setError(null);
+    try {
+      await API.ignoreChannelManager('ignore', {
+        key: row.key,
+        name:
+          row.channel?.name ||
+          row.before?.channel?.name ||
+          row.before?.streams?.[0]?.name ||
+          row.key,
+        kind: row.status,
+        streams:
+          row.status === 'merge'
+            ? row.streams.filter((s) => s.added || s.removed).map((s) => s.id)
+            : [],
+      });
+      setPlan((current) => ({
+        ...current,
+        rows: current.rows.filter((r) => r.key !== row.key),
+        ignored: [
+          ...(current.ignored || []).filter((i) => i.key !== row.key),
+          {
+            key: row.key,
+            name: row.channel?.name || row.key,
+            kind: row.status,
+            at: new Date().toISOString(),
+          },
+        ],
+      }));
+      setTicked((all) => {
+        const now = new Set(all);
+        now.delete(row.key);
+        tableRef.current?.setSelectedTableIds?.([...now]);
+        return now;
+      });
+    } catch (e) {
+      setError(e?.body?.error || 'Could not ignore that.');
+    }
+  }, []);
+
+  const ignoreRowRef = useRef(ignoreRow);
+  ignoreRowRef.current = ignoreRow;
+
   const chooseGroup = useCallback((key, group) => {
     setGroupChoice((all) => ({ ...all, [key]: group }));
     setTicked((all) => {
@@ -461,7 +571,7 @@ const ChannelManagerTable = () => {
       {
         header: 'Status',
         accessorKey: 'status',
-        size: 120,
+        size: 150,
         cell: ({ row }) => {
           const r = row.original;
           return (
@@ -483,6 +593,27 @@ const ChannelManagerTable = () => {
                 <Text size="xs" c="red">
                   −{r.removes}
                 </Text>
+              )}
+              {r.dropped > 0 && (
+                <Text size="xs" c="red">
+                  ✕{r.dropped}
+                </Text>
+              )}
+              {r.status !== 'unchanged' && (
+                <Tooltip label="Don't suggest this again">
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color="gray"
+                    aria-label={`Ignore ${r.channel?.name || r.key}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      ignoreRowRef.current(r);
+                    }}
+                  >
+                    <EyeOff size={12} />
+                  </ActionIcon>
+                </Tooltip>
               )}
             </Group>
           );
@@ -629,6 +760,7 @@ const ChannelManagerTable = () => {
         groups={groupOptions}
         chosenGroup={groupChoice[row.original.key]}
         onGroup={chooseGroup}
+        onDrop={dropStream}
       />
     ),
     headerCellRenderFns: {
@@ -704,6 +836,10 @@ const ChannelManagerTable = () => {
                     { value: 'conflict', label: 'Conflicts' },
                     { value: 'unchanged', label: 'Unchanged' },
                     { value: 'all', label: 'Everything' },
+                    {
+                      value: 'ignored',
+                      label: `Ignored (${plan?.ignored?.length ?? 0})`,
+                    },
                   ]}
                   size="xs"
                   style={{ width: 170 }}
@@ -836,7 +972,71 @@ const ChannelManagerTable = () => {
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
                 <div style={{ minWidth: 760 }}>
                   <LoadingOverlay visible={loading} />
-                  {rows.length === 0 && !loading ? (
+                  {show === 'ignored' ? (
+                    <Stack gap={6} p="sm">
+                      <Group justify="space-between" wrap="wrap">
+                        <Text
+                          size="xs"
+                          c="dimmed"
+                          style={{ flex: 1, minWidth: 200 }}
+                        >
+                          Suggestions you said not to make again. For a channel
+                          you have, only the streams shown then are left out;
+                          one the provider adds later is still suggested.
+                        </Text>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          disabled={!(plan?.ignored || []).length}
+                          onClick={() => setClearing(true)}
+                        >
+                          Clear ignored list
+                        </Button>
+                      </Group>
+                      {(plan?.ignored || []).length === 0 && (
+                        <Text size="sm" c="dimmed" ta="center" p="xl">
+                          Nothing is ignored.
+                        </Text>
+                      )}
+                      {(plan?.ignored || []).map((item) => (
+                        <Group key={item.key} gap={6} wrap="nowrap">
+                          <Badge
+                            size="xs"
+                            variant="light"
+                            color={STATUS[item.kind]?.color || 'gray'}
+                          >
+                            {STATUS[item.kind]?.label || item.kind || '?'}
+                          </Badge>
+                          <Text
+                            size="xs"
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {item.name}
+                            {item.streams?.length
+                              ? ` · ${item.streams.length} stream${item.streams.length === 1 ? '' : 's'}`
+                              : ''}
+                          </Text>
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            onClick={async () => {
+                              await API.ignoreChannelManager('unignore', {
+                                key: item.key,
+                              });
+                              await preview(levers);
+                            }}
+                          >
+                            Stop ignoring
+                          </Button>
+                        </Group>
+                      ))}
+                    </Stack>
+                  ) : rows.length === 0 && !loading ? (
                     <Center p="xl">
                       <Text size="sm" c="dimmed">
                         {plan ? 'Nothing to show.' : ''}
@@ -891,11 +1091,24 @@ const ChannelManagerTable = () => {
       </Box>
 
       <ConfirmationDialog
+        opened={clearing}
+        onClose={() => setClearing(false)}
+        onConfirm={async () => {
+          setClearing(false);
+          await API.ignoreChannelManager('clear');
+          await preview(levers);
+        }}
+        title="Clear the ignored list?"
+        message="Everything you ignored is suggested again. Nothing on your channels changes."
+        confirmLabel="Clear"
+      />
+
+      <ConfirmationDialog
         opened={confirming}
         onClose={() => setConfirming(false)}
         onConfirm={apply}
         title={`Apply ${tickedKeys.length} channel${tickedKeys.length === 1 ? '' : 's'}?`}
-        message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
+        message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. Streams you took out are not added, or come off the channel. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
         confirmLabel="Apply"
       />
     </>

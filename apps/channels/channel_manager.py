@@ -35,6 +35,10 @@ from . import logo_library
 logger = logging.getLogger(__name__)
 
 SETTINGS_KEY = "channel-manager"
+# Suggestions a person said not to make again: {row key: {"name", "kind", "streams", "at"}}.
+# A new channel or a conflict is ignored whole; for a channel you have, only the streams it
+# would have gained or lost, so a stream the provider adds later is still suggested.
+IGNORED_KEY = "channel-manager-ignored"
 
 DEFAULTS = {
     # ── Scope ──
@@ -90,6 +94,9 @@ DEFAULTS = {
     "new_from": "followed",
     # Give a new channel the custom fallback stream most of your channels end in
     "new_fallback": True,
+    # A new channel's logo: "collections" (the Find Logos collections, then the stream's),
+    # "stream", or "none". A channel you have keeps its logo unless "logo" below says
+    "new_logo": "collections",
     "min_streams_new": 1,
     "keep_country_prefix": True,
     # None numbers each new channel after the last one in its group, on a number nobody has
@@ -525,13 +532,51 @@ class _Guides:
 
 
 def _logo_for(name, streams, mode, index):
-    if mode == "keep":
+    if mode in ("keep", "none"):
         return ""
     if mode == "collections" and index:
         found = logo_library.suggestions_for(name, index, limit=1)
         if found:
             return found[0]["url"]
     return next((s["logo_url"] for s in streams if s["logo_url"].startswith("http")), "")
+
+
+def load_ignored():
+    from core.models import CoreSettings
+
+    row = CoreSettings.objects.filter(key=IGNORED_KEY).first()
+    return dict(row.value) if row and isinstance(row.value, dict) else {}
+
+
+def _save_ignored(ignored):
+    from core.models import CoreSettings
+
+    CoreSettings.objects.update_or_create(
+        key=IGNORED_KEY, defaults={"name": "Channel Manager ignored", "value": ignored}
+    )
+
+
+def ignore(key, name="", kind="", streams=()):
+    """Stop suggesting this row: a new channel or conflict whole, a channel's streams only."""
+    from datetime import datetime, timezone
+
+    ignored = load_ignored()
+    before = set((ignored.get(key) or {}).get("streams") or ())
+    ignored[key] = {
+        "name": name,
+        "kind": kind,
+        "streams": sorted(before | {int(i) for i in streams or ()}),
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    _save_ignored(ignored)
+    return ignored[key]
+
+
+def unignore(key=None):
+    """Suggest it again; without a key, every ignored suggestion."""
+    ignored = {} if key is None else {k: v for k, v in load_ignored().items() if k != key}
+    _save_ignored(ignored)
+    return len(ignored)
 
 
 def _followed_groups():
@@ -633,6 +678,7 @@ def build_plan(settings):
     streams = _stream_rows(settings)
     by_id = {s["id"]: s for s in streams}
     existing = _existing_channels(settings, aliases)
+    ignored = load_ignored()
     # What is on those channels already but outside the scope, so it can be shown and kept
     attached = {i for r in existing.values() for i in r["stream_ids"]} - set(by_id)
     for stream in _attached_rows(attached, settings):
@@ -684,7 +730,8 @@ def build_plan(settings):
         if stream["key"] and stream["id"] not in belongs:
             homeless.setdefault((stream["country"], stream["key"]), []).append(stream)
 
-    index = logo_library.load_index() if settings.get("logo") == "collections" else None
+    wants_collections = "collections" in (settings.get("logo"), settings.get("new_logo", "collections"))
+    index = logo_library.load_index() if wants_collections else None
     guides = _Guides()
     rows = []
 
@@ -697,7 +744,9 @@ def build_plan(settings):
         # added goes in before it, or it would never be tried before the fallback.
         custom = [s for s in attached_now if s["custom"]]
         normal = [s for s in attached_now if not s["custom"]]
-        added = additions.get(channel_id, [])
+        # Streams a person said not to suggest for this channel again, either way
+        left_alone = set((ignored.get(f"ch:{channel_id}") or {}).get("streams") or ())
+        added = [s for s in additions.get(channel_id, []) if s["id"] not in left_alone]
         if settings.get("drop_sd_when_hd"):
             if any(s["quality_rank"] < 3 for s in normal + added):
                 added = [s for s in added if s["quality"] != "SD"]
@@ -710,6 +759,7 @@ def build_plan(settings):
             wrong = [s for s in judged if not (s["key"] == record["key"] or (
                 s["tvg_id"] and s["tvg_id"].lower() == (channel.tvg_id or "").lower()))]
             # Never empties a channel: with nothing of its own left it keeps what it has
+            wrong = [s for s in wrong if s["id"] not in left_alone]
             if len(normal) - len(wrong) + len(added) > 0:
                 removed = wrong
 
@@ -757,6 +807,8 @@ def build_plan(settings):
 
     # ── Two channels that could both be it ──
     for (country, key), conflict in conflicts.items():
+        if f"conflict:{country}:{key}" in ignored:
+            continue
         rows.append({
             "key": f"conflict:{country}:{key}",
             "status": "conflict",
@@ -787,6 +839,8 @@ def build_plan(settings):
 
         planned = []
         for (country, key), found in homeless.items():
+            if f"new:{country}:{key}" in ignored:
+                continue
             if followed is not None:
                 found = [s for s in found if s["group_id"] in followed]
             if len(found) < int(settings.get("min_streams_new") or 1) or not found:
@@ -807,7 +861,7 @@ def build_plan(settings):
             planned, key=lambda p: (homes.names.get(p[4], "").lower(), p[0].lower())
         ):
             epg = guides.find(ordered, _strip_country_box(name), settings.get("epg"))
-            logo = _logo_for(name, ordered, settings.get("logo"), index)
+            logo = _logo_for(name, ordered, settings.get("new_logo", "collections"), index)
             if number is not None:
                 channel_number = number
                 number += 1
@@ -842,7 +896,14 @@ def build_plan(settings):
     summary = {status: sum(1 for r in rows if r["status"] == status) for status in order}
     summary["streams"] = len(streams)
     summary["streams_added"] = sum(r["adds"] for r in rows)
-    return {"rows": rows, "summary": summary}
+    summary["ignored"] = len(ignored)
+    return {
+        "rows": rows,
+        "summary": summary,
+        "ignored": [
+            {"key": k, **v} for k, v in sorted(ignored.items(), key=lambda kv: (kv[1].get("name") or "").lower())
+        ],
+    }
 
 
 # ── Applying ─────────────────────────────────────────────────────────────────
@@ -873,7 +934,7 @@ def _in_the_order_given(final_ids, given, custom_ids):
     return [i for i in given if i not in custom_ids] + [i for i in given if i in custom_ids]
 
 
-def apply_plan(settings, keys, orders=None, groups=None):
+def apply_plan(settings, keys, orders=None, groups=None, drops=None):
     """
     Carry out the chosen rows of the plan, worked out again now rather than trusted from the
     page: if the streams have changed since it was looked at, what is applied is what is
@@ -882,7 +943,9 @@ def apply_plan(settings, keys, orders=None, groups=None):
     orders is {row key: [stream ids]} for rows whose streams were put in another order on
     the page; a channel with nothing else to change is applied for its order alone. groups
     is {row key: channel group id} for new channels put in another group than suggested,
-    which are then numbered in that group.
+    which are then numbered in that group. drops is {row key: [stream ids]}: streams taken
+    out of a row on the page -- not added, or taken off a channel that has them. A custom
+    fallback is never dropped.
     """
     from django.db import transaction
 
@@ -891,6 +954,7 @@ def apply_plan(settings, keys, orders=None, groups=None):
     wanted = set(keys or ())
     orders = orders if isinstance(orders, dict) else {}
     groups = groups if isinstance(groups, dict) else {}
+    drops = {k: {int(i) for i in v} for k, v in (drops if isinstance(drops, dict) else {}).items()}
     plan = build_plan(settings)
     homes = _NewHomes() if groups else None
     if homes:
@@ -899,13 +963,16 @@ def apply_plan(settings, keys, orders=None, groups=None):
     rows = [
         r for r in plan["rows"]
         if r["key"] in wanted
-        and (r["status"] in ("new", "merge") or (r["status"] == "unchanged" and r["key"] in orders))
+        and (r["status"] in ("new", "merge") or (r["status"] == "unchanged" and (r["key"] in orders or r["key"] in drops)))
     ]
     created = updated = streams_added = 0
 
     with transaction.atomic():
         for row in rows:
-            final_ids = [s["id"] for s in row["streams"] if not s["removed"]]
+            dropped = {
+                s["id"] for s in row["streams"] if s["id"] in drops.get(row["key"], ()) and not s.get("custom")
+            }
+            final_ids = [s["id"] for s in row["streams"] if not s["removed"] and s["id"] not in dropped]
             if row["key"] in orders:
                 custom_ids = {s["id"] for s in row["streams"] if s.get("custom")}
                 final_ids = _in_the_order_given(final_ids, orders[row["key"]], custom_ids)
@@ -951,7 +1018,7 @@ def apply_plan(settings, keys, orders=None, groups=None):
                 updated += 1
 
             # Only what the plan names as removed goes; anything it did not look at stays
-            removed_ids = [s["id"] for s in row["streams"] if s["removed"]]
+            removed_ids = [s["id"] for s in row["streams"] if s["removed"] or s["id"] in dropped]
             if removed_ids:
                 ChannelStream.objects.filter(channel=channel, stream_id__in=removed_ids).delete()
             present = set(ChannelStream.objects.filter(channel=channel).values_list("stream_id", flat=True))

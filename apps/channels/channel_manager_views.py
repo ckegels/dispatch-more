@@ -79,8 +79,36 @@ def channel_manager_apply(request):
         return JsonResponse({"error": "Choose at least one channel to apply"}, status=400)
     settings = channel_manager.settings_from(request.data.get("settings"))
     return JsonResponse(channel_manager.apply_plan(
-        settings, keys, request.data.get("orders"), request.data.get("groups"),
+        settings, keys, request.data.get("orders"), request.data.get("groups"), request.data.get("drops"),
     ))
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def channel_manager_ignore(request):
+    """
+    Stop suggesting a row ("ignore"), suggest one again ("unignore"), or everything ignored
+    again ("clear").
+    """
+    action = request.data.get("action")
+    key = str(request.data.get("key") or "")
+    if action == "clear":
+        channel_manager.unignore()
+        return JsonResponse({"ignored": 0})
+    if not key:
+        return JsonResponse({"error": "Which suggestion?"}, status=400)
+    if action == "unignore":
+        return JsonResponse({"ignored": channel_manager.unignore(key)})
+    if action != "ignore":
+        return JsonResponse({"error": f"Unknown action: {action}"}, status=400)
+    try:
+        streams = [int(i) for i in request.data.get("streams") or ()]
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Streams are given by id"}, status=400)
+    entry = channel_manager.ignore(
+        key, str(request.data.get("name") or ""), str(request.data.get("kind") or ""), streams
+    )
+    return JsonResponse({"ignored": entry})
 
 
 @api_view(["PUT"])
