@@ -1710,7 +1710,8 @@ def run(redis_client, only=None, batch_seconds=None):
             entry.update(name=names[key], left=len(streams), now="", status="checking", reason="")
 
         def stop_asked():
-            return bool(redis_client.exists(STOP_KEY)) or (scheduled and not in_window(settings))
+            # Stop ends a round; a stream checked by hand is not part of one and goes on
+            return (only is None and bool(redis_client.exists(STOP_KEY))) or (scheduled and not in_window(settings))
 
         def someone_watching():
             # With only_when_idle, anything playing anywhere ends every provider's part

@@ -1061,6 +1061,24 @@ class ChainTests(_Setup):
         self.assertTrue(stream_check.progress(self.redis)["next_batch_at"])
         self.assertIn("someone is watching through it", stream_check.progress(self.redis)["message"])
 
+    def test_a_stream_checked_by_hand_right_after_stop_is_checked(self):
+        """Stop ends a round; the stop signal left set must not end a check asked for by hand."""
+        from apps.channels.tasks import run_stream_check
+
+        self.redis.set(stream_check.STOP_KEY, "1")
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe, \
+                mock.patch.object(run_stream_check, "apply_async"):
+            run_stream_check(only=[self.first.id])
+        self.assertEqual(probe.call_count, 1)
+
+    def test_a_check_by_hand_waits_its_turn_behind_a_batch(self):
+        from apps.channels.tasks import run_stream_check
+
+        self.redis.set(stream_check.RUN_KEY, "1")
+        with mock.patch.object(run_stream_check, "apply_async") as queued:
+            self.assertEqual(run_stream_check(only=[self.first.id]), "already running")
+        queued.assert_called_once_with(kwargs={"only": [self.first.id], "looks": 0, "waits": 1}, countdown=5)
+
     def test_a_full_batch_queues_the_next_at_once(self):
         from apps.channels.tasks import run_stream_check
 

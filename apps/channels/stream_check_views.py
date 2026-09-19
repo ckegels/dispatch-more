@@ -52,11 +52,11 @@ def stream_check_run(request):
     from .tasks import run_stream_check
 
     redis_client = RedisClient.get_client()
-    if stream_check.is_running(redis_client):
+    only = request.data.get("only")
+    if stream_check.is_running(redis_client) and only is None:
         return JsonResponse(
             {"error": "A check is already running. Try again once it is done."}, status=409
         )
-    only = request.data.get("only")
     if only is not None:
         try:
             only = [int(i) for i in only]

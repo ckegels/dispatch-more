@@ -315,11 +315,15 @@ const StreamCheckTable = () => {
   }, [load]);
 
   // While a run is going, what it has found so far comes in as it finds it
+  // A stream checked by hand: the page keeps looking until its result is in -- it starts a
+  // moment later, and a picture looked at again comes back minutes later still
+  const [watchUntil, setWatchUntil] = useState(0);
+
   useEffect(() => {
-    if (!data?.running) return undefined;
+    if (!data?.running && Date.now() > watchUntil) return undefined;
     const timer = setInterval(() => load(true), POLL_MS);
     return () => clearInterval(timer);
-  }, [data?.running, load]);
+  }, [data?.running, watchUntil, load]);
 
   const act = async (action, stream, channel = null) => {
     setError(null);
@@ -330,8 +334,9 @@ const StreamCheckTable = () => {
         setNotice('The list is clear. Nothing on your channels changed.');
       } else if (action === 'check') {
         await API.runStreamCheck([stream.id]);
+        setWatchUntil(Date.now() + 5 * 60 * 1000);
         setNotice(
-          `Checking "${stream.name}" now, if a login of its provider is free.`
+          `Checking "${stream.name}" now, once a login of its provider is free. Its result shows here when it is in.`
         );
       } else {
         await API.streamCheckAction(action, stream.id, channel?.id ?? null);
