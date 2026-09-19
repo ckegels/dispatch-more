@@ -1,9 +1,9 @@
-
+# Dispatch More
 <p align="center">
 <img width="200" height="200" alt="DispatchMore" src="https://github.com/user-attachments/assets/8c3a0b64-f10b-4463-8d91-e1beccfc5738" />
 </p>
 
-# Dispatch More
+
 
 **An unofficial, modified build of [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr).**
 It is not made, reviewed or supported by the Dispatcharr developers.
@@ -23,10 +23,10 @@ switched off Dispatcharr behaves as stock.
 ## What issues it fixes
 
 - **Media servers** — When using a media server like plex or jellyfin they would leave open streams too long, with the channel overlap on this is solved. It also adds one place where all your media server are managed, so you can add and delete tuners.
-- **channel loading times** — When only one provider is available streams take very long to load because it has to close the old stream and reopen the new one, this recognizes streams by login and allows streams to be closed immidiatly and allows channels to overlap if allowed by the provider.
-- **Diagnostics and Logs** — Dispatcharr doesnt have an easy way to see at a glance what is going wrong and why things take long, the diagnostics page aims to resolve that.
+- **channel loading times** — When only one provider is available streams take very long to load because it has to close the old stream and reopen the new one, this recognizes streams by login and allows streams to be closed immediately and allows channels to overlap if allowed by the provider.
+- **Diagnostics and Logs** — Dispatcharr doesn't have an easy way to see at a glance what is going wrong and why things take long, the diagnostics page aims to resolve that.
 - **Find Logo** — Finding and adding logos to channels is not easy, the new Find logos tab inside the logo Manager uses collections and epg sources to make this easier.
-- **Channel Manager** — There is allready plugins that help with merging and creating channels however these have no easy way of seeing exactly what is happening, this should give you all the tools you need.
+- **Channel Manager** — There is already plugins that help with merging and creating channels however these have no easy way of seeing exactly what is happening, this should give you all the tools you need.
   
 ## What it adds
 
@@ -42,6 +42,11 @@ switched off Dispatcharr behaves as stock.
   (matching the way DispatcharrUtils does by default), and **Stream Check**: finds the streams
   on your channels that no longer play — dead, refused, black, frozen, or showing the
   provider's "no stream" picture — without ever touching a provider someone is watching.
+
+## Disadvantages
+- **Registered Devices** — For this to work each device has to be unique, so each device needs its own login when external, and on local network it will use the ip adress to recognize the device. (you have to add the local lan in the m3u settings)
+
+
 
 ## Install
 
