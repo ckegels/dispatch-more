@@ -128,6 +128,21 @@ for attempt in range(1, TIMES + 1):
             time.sleep(gap)
             print(f"    after the pause: {provider_count(login)}")
         open_like_a_check(stream_check._url_for(stream, login), "this stream")
+        # Reading as long as the picture look does, and where the data paused
+        url = stream_check._url_for(stream, login)
+        seconds = float(settings["picture_seconds"]) + 3 if settings.get("picture_check") else 3
+        with requests.get(url, headers={"User-Agent": agent} if agent else {}, stream=True, timeout=(5, 30)) as answer:
+            started = last = time.monotonic()
+            total, longest = 0, 0.0
+            for chunk in answer.iter_content(32 * 1024):
+                now = time.monotonic()
+                longest = max(longest, now - last)
+                last, total = now, total + len(chunk)
+                if now - started > seconds:
+                    break
+        print(f"    reading {seconds:.0f} s like the picture look: {total // 1024} KB, "
+              f"longest pause in the data {longest:.1f} s"
+              f"{'  <-- over the 5 s the check used to wait' if longest > 5 else ''}")
         found = stream_check.probe(
             stream_check._url_for(stream, login), agent, settings["timeout_seconds"],
             picture_seconds=settings["picture_seconds"] if settings.get("picture_check") else 0,

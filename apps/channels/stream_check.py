@@ -1034,10 +1034,26 @@ def _looks_like_ts(data):
     return False
 
 
+class _Stalled(Exception):
+    """Connected and answered, then no data came for the whole read timeout."""
+
+
+# How long the data may pause once a stream is reading, before the read gives up. Live streams
+# come in bursts; a picture look reads for seconds, and a pause of five in there threw away a
+# stream that played (and was reported as "could not connect", which is what requests calls a
+# read timeout in the middle of a body).
+READ_PAUSE_SECONDS = 10
+
+
 def _read(session, url, headers, deadline, should_stop, limit=READ_BYTES):
-    """Up to limit bytes of url, before the deadline; (response, bytes)."""
+    """
+    Up to limit bytes of url, before the deadline; (response, bytes). A stream that pauses
+    after sending something keeps what it sent; one that sends nothing at all raises _Stalled.
+    """
+    import requests
+
     left = max(1.0, deadline - time.monotonic())
-    response = session.get(url, headers=headers, stream=True, timeout=(min(5.0, left), min(5.0, left)))
+    response = session.get(url, headers=headers, stream=True, timeout=(min(5.0, left), READ_PAUSE_SECONDS))
     data = bytearray()
     try:
         if response.status_code >= 400:
@@ -1048,12 +1064,17 @@ def _read(session, url, headers, deadline, should_stop, limit=READ_BYTES):
             except Exception:
                 pass
             return response, bytes(data)
-        for chunk in response.iter_content(chunk_size=32 * 1024):
-            if should_stop():
-                raise Stopped()
-            data.extend(chunk)
-            if len(data) >= limit or time.monotonic() > deadline:
-                break
+        try:
+            for chunk in response.iter_content(chunk_size=32 * 1024):
+                if should_stop():
+                    raise Stopped()
+                data.extend(chunk)
+                if len(data) >= limit or time.monotonic() > deadline:
+                    break
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
+            # The data stopped, or the connection broke, part way: what came is judged
+            if not data:
+                raise _Stalled()
     finally:
         response.close()
     return response, bytes(data)
@@ -1170,10 +1191,16 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
         result["transient"] = e.status in TRANSIENT_STATUS
     except requests.exceptions.ConnectTimeout:
         result.update(reason="The provider did not answer (no connection within the time)", kind=UNREACHABLE)
+    except _Stalled:
+        result.update(reason="Its server answered, then stopped sending", transient=True)
     except requests.exceptions.ReadTimeout:
         result.update(reason="The provider answered, then sent nothing", transient=True)
     except requests.exceptions.ConnectionError as e:
-        result.update(reason=f"Could not connect to the provider ({_why_no_connection(e)})", kind=UNREACHABLE)
+        if "Read timed out" in repr(e):
+            # requests' name for a read timeout inside a body: connected, then silence
+            result.update(reason="Its server answered, then stopped sending", transient=True)
+        else:
+            result.update(reason=f"Could not connect to the provider ({_why_no_connection(e)})", kind=UNREACHABLE)
     except requests.exceptions.RequestException as e:
         result["reason"] = f"Could not be opened: {type(e).__name__}"
     finally:

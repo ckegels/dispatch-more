@@ -140,6 +140,20 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             self._send(self.still)
         elif self.path == "/still.m3u8":
             self._send(b"#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nstill.ts\n", "application/vnd.apple.mpegurl")
+        elif self.path == "/pauses.ts":
+            # A second of video, then the data stops for longer than a read waits
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp2t")
+            self.end_headers()
+            self.wfile.write(self.long_video[: len(self.long_video) // 2])
+            self.wfile.flush()
+            time.sleep(1.5)
+        elif self.path == "/silent.ts":
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp2t")
+            self.end_headers()
+            self.wfile.flush()
+            time.sleep(1.5)
         elif self.path == "/quiet-then-moving.ts":
             self._send(self.quiet_then_moving)
         elif self.path == "/gone.ts":
@@ -209,6 +223,20 @@ class ProbeTests(TestCase):
         found = stream_check.probe(f"{self.base}/live.ts", timeout=5)
         self.assertTrue(found["ok"], found)
         self.assertEqual(found["resolution"], "320x240")
+
+    def test_a_pause_part_way_keeps_what_came(self):
+        """What made WELT FHD 'could not connect': a pause while reading threw the video away."""
+        with mock.patch.object(stream_check, "READ_PAUSE_SECONDS", 0.5):
+            found = stream_check.probe(f"{self.base}/pauses.ts", timeout=12)
+        self.assertTrue(found["ok"], found)
+
+    def test_an_answer_with_nothing_after_it_is_a_stall_to_look_at_again(self):
+        with mock.patch.object(stream_check, "READ_PAUSE_SECONDS", 0.5):
+            found = stream_check.probe(f"{self.base}/silent.ts", timeout=12)
+        self.assertFalse(found["ok"])
+        self.assertTrue(found["transient"])
+        self.assertIn("stopped sending", found["reason"])
+        self.assertNotEqual(found["kind"], stream_check.UNREACHABLE)
 
     def test_a_moving_picture_plays(self):
         found = stream_check.probe(f"{self.base}/moving.ts", timeout=12, picture_seconds=6)
