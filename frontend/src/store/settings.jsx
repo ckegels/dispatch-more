@@ -17,6 +17,7 @@ const useSettingsStore = create((set, get) => ({
   version: {
     version: '',
     timestamp: null,
+    build: null,
   },
   isLoading: false,
   error: null,
@@ -57,6 +58,8 @@ const useSettingsStore = create((set, get) => ({
         newState.version = {
           version: versionData?.version || '',
           timestamp: versionData?.timestamp || null,
+          // Set on a modified build: what makes the page say it is not official Dispatcharr
+          build: versionData?.build || null,
         };
       }
 
@@ -77,6 +80,7 @@ const useSettingsStore = create((set, get) => ({
       const version = {
         version: versionData?.version || '',
         timestamp: versionData?.timestamp || null,
+        build: versionData?.build || null,
       };
       set({ version });
       return version;

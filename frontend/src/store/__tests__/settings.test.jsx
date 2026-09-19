@@ -241,11 +241,22 @@ describe('useSettingsStore', () => {
     expect(result.current.version).toEqual({
       version: '1.2.3',
       timestamp: '2024-01-01T00:00:00Z',
+      build: null,
     });
     expect(versionResult).toEqual({
       version: '1.2.3',
       timestamp: '2024-01-01T00:00:00Z',
+      build: null,
     });
+  });
+
+  it('keeps what a modified build says it is, so the page can say so', async () => {
+    api.getVersion.mockResolvedValue({ version: '0.31.0', timestamp: null, build: 'Dispatch More v103' });
+    const { result } = renderHook(() => useSettingsStore());
+    await act(async () => {
+      await result.current.fetchVersion();
+    });
+    expect(result.current.version.build).toBe('Dispatch More v103');
   });
 
   it('should skip fetching version if already loaded', async () => {
@@ -291,6 +302,7 @@ describe('useSettingsStore', () => {
     expect(result.current.version).toEqual({
       version: '',
       timestamp: null,
+      build: null,
     });
   });
 
@@ -330,6 +342,7 @@ describe('useSettingsStore', () => {
     expect(result.current.version).toEqual({
       version: '1.0.0',
       timestamp: '2024-01-01T00:00:00Z',
+      build: null,
     });
   });
 
