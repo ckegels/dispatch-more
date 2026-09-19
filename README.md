@@ -1,4 +1,8 @@
-<img width="1254" height="1254" alt="DispatchMore" src="https://github.com/user-attachments/assets/8c3a0b64-f10b-4463-8d91-e1beccfc5738" />
+
+<p align="center">
+<img width="200" height="200" alt="DispatchMore" src="https://github.com/user-attachments/assets/8c3a0b64-f10b-4463-8d91-e1beccfc5738" />
+</p>
+
 # Dispatch More
 
 **An unofficial, modified build of [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr).**
