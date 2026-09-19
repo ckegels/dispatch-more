@@ -50,7 +50,10 @@ the mistakes not to repeat.
   uninstalled and tested (§4 of the handover). `fork/scripts/` — the old patch-based install
   scripts and the server-side diagnostics (`dispatcharr-shell.sh` runs `manage.py` over SSH).
 - The public name is **Dispatch More** (a working name, in `version.py` `__build__` and the
-  patcher's `NAME`/`SLUG`); the repository is meant to be a public GitHub fork (AGPL-3.0).
+  patcher's `NAME`/`SLUG`). Public repository: **https://github.com/ckegels/dispatch-more**, a
+  GitHub fork of Dispatcharr, remote `origin`, default branch `feature/probation-slots`.
+  Releases go there with `fork/patcher/release.sh vNN --publish` (it names the fork in every gh
+  command). Only the `fork-*` workflow is enabled there; upstream's are disabled on purpose.
 - `docs/channel-switch-overlap.md` — design of the first feature.
 - Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health, recovery,
   diagnostics) and `apps/channels/` (logo_library, channel_manager, stream_check).

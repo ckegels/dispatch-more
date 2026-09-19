@@ -150,6 +150,12 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   apply or which files conflict. (On 2026-09-19 they applied cleanly to upstream `dev`.) In the
   GitHub fork, disable upstream's own workflows (docker builds, releases) so only `fork-*` run.
 
+Published 2026-09-19: **https://github.com/ckegels/dispatch-more** (public fork, remote
+`origin`, default branch `feature/probation-slots`, `gh repo set-default` points at it). First
+release **v100**. Upstream's workflows (tests, Docker builds, releases, PR checks) are disabled
+in the fork so pushes do not build or publish images; only `fork-upstream-check` runs (checked:
+it ran green on GitHub). Never push to `upstream`.
+
 Moving the user's own server from the patch-based install to the patcher: run
 `fork/scripts/uninstall-probation.sh` (back to stock), then the release's `install.sh`.
 
