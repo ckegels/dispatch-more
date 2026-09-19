@@ -117,6 +117,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
     long_video = b""
     black = b""
     still = b""
+    quiet_then_moving = b""
 
     def log_message(self, *args):
         pass
@@ -137,6 +138,10 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             self._send(self.black)
         elif self.path == "/still.ts":
             self._send(self.still)
+        elif self.path == "/still.m3u8":
+            self._send(b"#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nstill.ts\n", "application/vnd.apple.mpegurl")
+        elif self.path == "/quiet-then-moving.ts":
+            self._send(self.quiet_then_moving)
         elif self.path == "/gone.ts":
             self._send(b"not found", "text/plain", 404)
         elif self.path == "/page.ts":
@@ -180,6 +185,15 @@ class ProbeTests(TestCase):
         _Provider.long_video = _video(8)
         _Provider.black = _video(8, "color=c=black:size=320x240:rate=25")
         _Provider.still = _video(8, "color=c=0x3050a0:size=320x240:rate=25")
+        # Six seconds of a still scene -- a news desk, a slide -- and then it moves
+        _Provider.quiet_then_moving = subprocess.run(
+            ["ffmpeg", "-v", "error",
+             "-f", "lavfi", "-i", "color=c=0x3050a0:size=320x240:rate=25:duration=6",
+             "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=6",
+             "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]", "-map", "[v]",
+             "-c:v", "mpeg2video", "-f", "mpegts", "pipe:1"],
+            capture_output=True, check=True,
+        ).stdout
         cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
         cls.server.daemon_threads = True
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -211,6 +225,20 @@ class ProbeTests(TestCase):
         self.assertFalse(found["ok"])
         self.assertEqual(found["kind"], stream_check.FROZEN)
         self.assertTrue(found["frozen_frame"])
+
+    def test_a_still_picture_is_watched_longer_before_it_is_called_frozen(self):
+        found = stream_check.probe(f"{self.base}/still.ts", timeout=12, picture_seconds=6, frozen_confirm_seconds=6)
+        self.assertEqual(found["kind"], stream_check.FROZEN)
+        self.assertIn("watched to be sure", found["reason"])
+
+    def test_a_still_hls_stream_is_watched_longer_segment_by_segment(self):
+        found = stream_check.probe(f"{self.base}/still.m3u8", timeout=12, picture_seconds=6, frozen_confirm_seconds=6)
+        self.assertEqual(found["kind"], stream_check.FROZEN)
+
+    def test_a_picture_still_for_a_while_and_then_moving_plays(self):
+        """What false frozen pictures were: a scene that is quiet for the first seconds looked at."""
+        found = stream_check.probe(f"{self.base}/quiet-then-moving.ts", timeout=12, picture_seconds=6, frozen_confirm_seconds=6)
+        self.assertTrue(found["ok"], found)
 
     def test_without_the_picture_check_a_still_picture_plays(self):
         self.assertTrue(stream_check.probe(f"{self.base}/still.ts", timeout=12)["ok"])
@@ -393,7 +421,7 @@ class ParkTests(_Setup):
 def _answers(by_name):
     """A probe that answers from a table, by the stream's URL."""
 
-    def fake(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0):
+    def fake(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0, frozen_confirm_seconds=0):
         outcome = by_name.get(url.rsplit("/", 1)[-1], True)
         if isinstance(outcome, Exception):
             raise outcome

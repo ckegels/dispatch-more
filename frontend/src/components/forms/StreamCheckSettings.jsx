@@ -135,6 +135,17 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
               onChange={number('picture_seconds')}
             />
           )}
+          {draft.picture_check && (
+            <NumberInput
+              size="xs"
+              label="Watch a still picture for (seconds)"
+              description="A picture that looks frozen is watched this much longer, and only called frozen if it stays still throughout. A news desk or a slide can be still for a few seconds."
+              min={10}
+              max={120}
+              value={draft.frozen_confirm_seconds ?? 25}
+              onChange={number('frozen_confirm_seconds')}
+            />
+          )}
           <Switch
             size="xs"
             label="Check failing streams again"

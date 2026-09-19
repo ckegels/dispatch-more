@@ -106,6 +106,8 @@ DEFAULTS = {
     # the provider's "no stream" card. Each check takes that much longer.
     "picture_check": True,
     "picture_seconds": 6,
+    # A picture that looks frozen is watched this much longer before it is called so
+    "frozen_confirm_seconds": 25,
     # Park a stream by itself once it has failed this many checks in a row -- only a stream
     # that does not play at all; one refused, black, frozen or showing the provider's card is
     # left for a person. Off unless turned on. After a refresh, three checks means at least
@@ -181,6 +183,15 @@ FROZEN_SECONDS = 4
 PICTURE_LEAST = 3
 # The same frozen picture on this many channels of one provider is the provider's own card
 PLACEHOLDER_CHANNELS = 3
+# A picture still for a few seconds is only a suspicion: a news desk, a slide or a quiet
+# scene can be. It is watched longer before it is called frozen -- still for this share of
+# that time, and snapshots taken every SNAPSHOT_EVERY seconds all the same picture (no more
+# than SNAPSHOT_SAME_BITS of the 144 in their fingerprints different). Anything moving, and it
+# plays.
+FROZEN_CONFIRM_SHARE = 0.9
+SNAPSHOT_EVERY = 5
+SNAPSHOT_SAME_BITS = 8
+CONFIRM_BYTES = 96 * 1024 * 1024
 
 # What kind of failure a check found. Only "dead" -- it does not play at all -- may ever be
 # parked by autopark; the others play something, or are the provider's refusal, and are left
@@ -250,6 +261,7 @@ def save_settings(given):
         values["recheck_hours"] = min(168, max(0.5, float(values["recheck_hours"])))
         values["autopark_after"] = max(2, int(values["autopark_after"]))
         values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
+        values["frozen_confirm_seconds"] = min(120, max(10, float(values["frozen_confirm_seconds"])))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     if values["recheck_mode"] not in ("hours", "refresh"):
@@ -868,6 +880,67 @@ def _picture(data):
     }
 
 
+def _snapshots(data, every=SNAPSHOT_EVERY):
+    """A fingerprint of one frame every few seconds (see _picture), in order."""
+    try:
+        done = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-an",
+             "-vf", f"fps=1/{every},scale=16:9,format=gray", "-f", "rawvideo", "-"],
+            input=data, capture_output=True, timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    raw = done.stdout or b""
+    prints = []
+    for start in range(0, len(raw) - 143, 144):
+        pixels = list(raw[start:start + 144])
+        mean = sum(pixels) / 144
+        prints.append(int("".join("1" if p > mean else "0" for p in pixels), 2))
+    return prints
+
+
+def _still(data, seconds):
+    """
+    Whether a longer look confirms a picture that does not move: {"frozen", "length",
+    "still", "frame"}, or None when too little came to say.
+    """
+    picture = _picture(data)
+    if not picture or picture["length"] < seconds / 2:
+        return None
+    prints = _snapshots(data)
+    same = len(prints) >= 2 and all(bin(p ^ prints[0]).count("1") <= SNAPSHOT_SAME_BITS for p in prints)
+    return {
+        "frozen": picture["frozen"] >= FROZEN_CONFIRM_SHARE * picture["length"] and same,
+        "length": picture["length"],
+        "still": picture["frozen"],
+        "frame": picture["frame"],
+    }
+
+
+def _watch_longer(session, url, playlist, headers, seconds, should_stop):
+    """
+    More of the stream, for seconds: one long read of a plain stream, or the newest segment of
+    an HLS playlist fetched again and again for that long.
+    """
+    until = time.monotonic() + seconds
+    if playlist is None:
+        _, data = _read(session, url, headers, until, should_stop, limit=CONFIRM_BYTES)
+        return data
+    seen, gathered = set(), bytearray()
+    while time.monotonic() < until and len(gathered) < CONFIRM_BYTES:
+        response, text = _read(session, playlist, headers, time.monotonic() + 10, should_stop, limit=256 * 1024)
+        if response.status_code >= 400:
+            break
+        segment = _hls_segment(session, response.url or playlist, text.decode("utf-8", "replace"), headers, time.monotonic() + 10, should_stop)
+        if segment and segment not in seen:
+            seen.add(segment)
+            _, piece = _read(session, segment, headers, time.monotonic() + 15, should_stop, limit=CONFIRM_BYTES)
+            gathered.extend(piece)
+        if not _pause(2, should_stop):
+            raise Stopped()
+    return bytes(gathered)
+
+
 def _looks_like_ts(data):
     """MPEG-TS: a sync byte every 188 bytes, three in a row somewhere near the start."""
     for start in range(min(188, len(data))):
@@ -917,13 +990,14 @@ def _hls_segment(session, url, text, headers, deadline, should_stop, depth=0):
     return urljoin(url, uris[-1])
 
 
-def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0):
+def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0, frozen_confirm_seconds=0):
     """
     Whether url plays: {"ok", "reason", "kind", "resolution", "codec", "bytes", "seconds"}.
 
     With picture_seconds, that many seconds are read and the picture itself is judged: black,
     or not moving, is a failure of its own kind (see KIND_TEXT), and "frame" is kept, so the
-    same card on many channels can be recognised as the provider's (see _placeholders).
+    same card on many channels can be recognised as the provider's (see _placeholders). A
+    picture that looks frozen is watched frozen_confirm_seconds longer before it is called so.
 
     Raises Stopped if should_stop says so part way: a check cut short says nothing about
     the stream, and must not count against it.
@@ -938,6 +1012,7 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
     # Reading stops at the limit or the deadline: for a live stream, that is a few seconds of it
     read_until = min(deadline, started + float(picture_seconds) + 3) if picture_seconds else deadline
     session = requests.Session()
+    playlist = None
     try:
         response, data = _read(session, url, headers, read_until, should_stop, limit=limit)
         if response.status_code >= 400:
@@ -947,6 +1022,7 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
             return result
         kind = (response.headers.get("Content-Type") or "").lower()
         if data[:7] == b"#EXTM3U" or "mpegurl" in kind:
+            playlist = response.url or url
             segment = _hls_segment(session, response.url or url, data.decode("utf-8", "replace"), headers, deadline, should_stop)
             if not segment:
                 result["reason"] = "The playlist lists nothing to play"
@@ -976,12 +1052,24 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
                 result["frame"] = picture["frame"]
                 if picture["black"] >= BLACK_SECONDS:
                     result.update(ok=False, kind=BLACK, reason=f"Black picture ({picture['black']:.0f} of {picture['length']:.0f} s)")
-                elif picture["frozen"] >= FROZEN_SECONDS:
+                elif picture["frozen"] >= FROZEN_SECONDS and not frozen_confirm_seconds:
                     result.update(
                         ok=False, kind=FROZEN,
                         reason=f"The picture does not move ({picture['frozen']:.0f} of {picture['length']:.0f} s)",
                         frozen_frame=picture["frame"],
                     )
+                elif picture["frozen"] >= FROZEN_SECONDS:
+                    # Only a suspicion yet: watched longer, and it has to stay still throughout
+                    longer = _still(
+                        _watch_longer(session, url, playlist, headers, float(frozen_confirm_seconds), should_stop),
+                        float(frozen_confirm_seconds),
+                    )
+                    if longer and longer["frozen"]:
+                        result.update(
+                            ok=False, kind=FROZEN,
+                            reason=f"The picture does not move ({longer['still']:.0f} of {longer['length']:.0f} s, watched to be sure)",
+                            frozen_frame=longer["frame"],
+                        )
         elif found["audio"]:
             # A radio channel is a channel that works
             result.update(ok=True, codec="audio only")
@@ -1410,6 +1498,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     return probe(
                         url, agents[account_id], settings["timeout_seconds"], should_stop,
                         picture_seconds=settings["picture_seconds"] if settings.get("picture_check") else 0,
+                        frozen_confirm_seconds=settings.get("frozen_confirm_seconds", 25) if settings.get("picture_check") else 0,
                     )
                 except Stopped:
                     # Looked at again once the viewer is done, and not counted
