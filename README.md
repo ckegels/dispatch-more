@@ -30,18 +30,34 @@ switched off Dispatcharr behaves as stock.
   
 ## What it adds
 
-- **Channel Switch Overlap** — switching channels on an account that allows one stream no
-  longer waits for the old stream to let go (per M3U account, off by default).
-- **Media Servers** — Plex and Jellyfin: who is watching what, stop a session, and manage
-  Dispatcharr's HDHomeRun tuners and guides on the server.
-- **Stream Recovery** and **Channel health** — a provider rotating a working connection is not
-  a failure; what every running channel is doing, and how stopped ones ended.
-- **Diagnostics** — where the time goes when a channel starts.
+Everything is off, or only suggests, until you turn it on or apply it.
+
+- **Channel Switch Overlap** (per M3U account) — switching channels on an account that allows
+  one stream no longer waits for the old stream to let go: the new channel may use one extra
+  connection for a few seconds.
+- **Force Close on Identified Traffic** (per M3U account, works without the overlap) — when a
+  player asks for a channel, the channel it was watching is closed at once, so its connection is
+  free straight away. Only for players Dispatcharr can tell apart (see Disadvantages).
+- **Media Servers** — Plex and Jellyfin: who is watching what, stop a session, and add, move and
+  remove Dispatcharr's HDHomeRun tuners and guides on the server.
+- **Diagnostics** — where the time goes when a channel starts, every channel switch, **Channel
+  health** (what each running channel plays, from where and to whom, and how stopped ones ended),
+  and **Logs**: every log Dispatcharr writes, filtered by part, level and text, downloadable
+  whole or as a bundle to send to whoever helps.
+- **Stream Recovery** — a provider rotating a working connection is not counted as a failure.
 - **Find Logos** — logos from public collections, your playlists and your guides, side by side.
-- **Channel Manager** — merge the same channel from every provider and quality into one
-  (matching the way DispatcharrUtils does by default), and **Stream Check**: finds the streams
-  on your channels that no longer play — dead, refused, black, frozen, or showing the
-  provider's "no stream" picture — without ever touching a provider someone is watching.
+- **Channel Manager → Lineup** — every copy of a channel from every provider and quality merged
+  into one (matching the way DispatcharrUtils does by default), and new streams suggested as new
+  channels: in the group your other channels from that provider group are in, on the next free
+  number of that group, with a logo from the collections and your fallback stream last. Take a
+  wrong stream out of a row, change the group, or ignore a suggestion for good.
+- **Channel Manager → Stream Check** — finds the streams on your channels that no longer play:
+  dead, refused by the provider, black, frozen, or showing the provider's "no stream" picture
+  (a picture fault is looked at again later in the same run before it counts). Never touches a
+  provider someone is watching, learns how many streams each provider allows, rechecks failing
+  streams by itself, and can park dead ones automatically (autopark) and hide a channel with
+  nothing left. Streams can be ignored, and the list cleared.
+- **Modified build** (Settings → System) — what is installed, and a button to go back to stock.
 
 ## Disadvantages
 - **Registered Devices** — For this to work each device has to be unique, so each device needs its own login when external, and on local network it will use the ip adress to recognize the device. (you have to add the local lan in the m3u settings)
@@ -50,9 +66,9 @@ switched off Dispatcharr behaves as stock.
 
 ## Install
 
-Each release is built for one Dispatcharr version, and its installer refuses any other: on a
-Dispatcharr it was not built for, nothing is changed. Download the release for **your**
-Dispatcharr version from [Releases](../../releases).
+Each release is built for one Dispatcharr version. The command below picks the one for **your**
+Dispatcharr by itself, and on a version no release was built for it changes nothing. Make a
+backup first (Settings → Backup & Restore).
 
 ### One command
 
