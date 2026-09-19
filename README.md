@@ -9,10 +9,18 @@ It is not made, reviewed or supported by the Dispatcharr developers.
 > happen on stock Dispatcharr belong there. Problems with Dispatch More go to
 > [this repository's issues](../../issues).
 
+> This is what i Wish Dispatcharr could be, however due to the big amount of changes and the heavy usage of llms i decided to not try and add it to the official repo.
+> if people could test this and tell me their findings and maybe some of these features could be added to the official repo. 
+
 Dispatch More installs over an existing Dispatcharr, on Linux, in an LXC or in Docker, and
 takes itself off again with one button. It changes no database tables, and with its features
 switched off Dispatcharr behaves as stock.
-
+## What issues it fixes
+- **Media servers** — When using a media server like plex or jellyfin they would leave open streams too long, with the channel overlap on this is solved.
+- **channel loading times** — When only one provider is available streams take very long to load because it has to close the old stream and reopen the new one, this recognizes streams by login and allows streams to be closed immidiatly and allows channels to overlap if allowed by the provider.
+- **Diagnostics and Logs** — Dispatcharr doesnt have an easy way to see at a glance what is going wrong and why things take long, the diagnostics page aims to resolve that.
+- **Find Logo** — Finding and adding logos to channels is not easy, the new Find logos tab inside the logo Manager uses collections and epg sources to make this easier.
+- **Channel Manager** — There is allready plugins that help with merging and creating channels however these have no easy way of seeing exactly what is happening, this should give you all the tools you need.
 ## What it adds
 
 - **Channel Switch Overlap** — switching channels on an account that allows one stream no
