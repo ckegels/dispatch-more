@@ -26,25 +26,31 @@ the mistakes not to repeat.
 
 1. Tests for it; full backend suite (baseline: `FAILED (errors=26)`, all `/data`
    PermissionErrors) and frontend `npx vitest run` green.
-2. Commit, then build and check the patch:
+2. Commit. Ship it as a release of the patcher (the way it is installed now):
 
    ```bash
-   git diff bcbb68c4..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' > ~/probation-slots-vNN.patch
-   git checkout -q bcbb68c4 && git apply --check ~/probation-slots-vNN.patch && echo APPLIES_CLEANLY
-   git checkout -q feature/probation-slots
+   fork/patcher/release.sh v100             # builds the overlay and runs fork/patcher/test-patcher.sh
+   fork/patcher/release.sh v100 --publish   # and makes the GitHub release (needs `gh auth login`)
    ```
 
-3. Give the user the install commands:
+   The user installs a release with `sudo bash dispatch-more/install.sh` (Linux/LXC) or the
+   Docker entrypoint; see README.md. The old patch file still works for the user's own server
+   while it is on the patch-based install:
 
    ```bash
-   scp ~/probation-slots-vNN.patch root@192.168.2.142:/root/
-   ssh root@192.168.2.142 'bash /root/install-probation.sh /root/probation-slots-vNN.patch'
+   git diff bcbb68c4..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' ':(exclude)README.md' ':(exclude).github' > ~/probation-slots-vNN.patch
    ```
+
+3. Never let the overlay or a patch carry `CLAUDE.md`, `README.md`, `fork/` or `.github/`: they
+   are for the repository, not for servers.
 
 ## Where things are
 
-- `fork/HANDOVER.md` — the full context. `fork/scripts/` — install/uninstall scripts and the
-  server-side diagnostics (`dispatcharr-shell.sh` is needed to run `manage.py` over SSH).
+- `fork/HANDOVER.md` — the full context. `fork/patcher/` — how it is built, installed,
+  uninstalled and tested (§4 of the handover). `fork/scripts/` — the old patch-based install
+  scripts and the server-side diagnostics (`dispatcharr-shell.sh` runs `manage.py` over SSH).
+- The public name is **Dispatch More** (a working name, in `version.py` `__build__` and the
+  patcher's `NAME`/`SLUG`); the repository is meant to be a public GitHub fork (AGPL-3.0).
 - `docs/channel-switch-overlap.md` — design of the first feature.
 - Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health, recovery,
   diagnostics) and `apps/channels/` (logo_library, channel_manager, stream_check).

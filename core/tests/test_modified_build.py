@@ -42,6 +42,19 @@ class ModifiedBuildTests(TestCase):
         self.assertTrue(request.exists())
         self.assertTrue(self.api.get("/api/core/modified-build/").json()["uninstall_requested"])
 
+    def test_uninstalling_takes_the_builds_schedule_out_of_celery_beat(self):
+        """Stock Dispatcharr would otherwise be sent a task it does not have, every 5 minutes."""
+        from django_celery_beat.models import IntervalSchedule, PeriodicTask
+
+        every = IntervalSchedule.objects.create(every=300, period=IntervalSchedule.SECONDS)
+        PeriodicTask.objects.create(name="stream-check-tick", task="apps.channels.tasks.stream_check_tick", interval=every)
+        PeriodicTask.objects.create(name="scan-files", task="core.tasks.scan_and_process_files", interval=every)
+        self._installed()
+        self.api.post("/api/core/modified-build/uninstall/")
+        names = set(PeriodicTask.objects.values_list("name", flat=True))
+        self.assertNotIn("stream-check-tick", names)
+        self.assertIn("scan-files", names)
+
     def test_in_docker_it_says_to_restart_the_container(self):
         self._installed(layout="docker")
         answer = self.api.post("/api/core/modified-build/uninstall/").json()

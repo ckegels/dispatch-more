@@ -20,9 +20,11 @@ one user for their own installation.
 - **Branch:** `feature/probation-slots`
 - **Based on:** upstream **v0.31.0**, commit `bcbb68c4`. Every patch is the full diff from
   there.
-- **Delivered as:** a patch file, `~/probation-slots-vNN.patch`, installed on the user's
-  server with `fork/scripts/install-probation.sh`. Latest: **v98**.
-- **Shows itself as:** `v0.31.0+mod` in the sidebar and About (see §5.9).
+- **Delivered as:** releases of the patcher, **Dispatch More vNN** (§4.4) — until 2026-09-19 a
+  patch file, `~/probation-slots-vNN.patch`, installed with `fork/scripts/install-probation.sh`
+  (the user's server is still on that; latest patch v98, first patcher release v99).
+- **Shows itself as:** "v0.31.0 · patched" in the sidebar, "v0.31.0 · patched (Dispatch More
+  v99)" in About, a notice on every Settings page, and Settings → System → Modified build.
 
 The user's setup (matters for almost every decision):
 
@@ -82,10 +84,10 @@ The user's setup (matters for almost every decision):
 
 ## 4. Working on it
 
-### 4.1 Building a patch
+### 4.1 Building a patch (the older way, still used on the user's server until it moves to the patcher)
 
 ```bash
-git diff bcbb68c4..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' > ~/probation-slots-vNN.patch
+git diff bcbb68c4..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' ':(exclude)README.md' ':(exclude).github' > ~/probation-slots-vNN.patch
 git checkout -q bcbb68c4 && git apply --check ~/probation-slots-vNN.patch && echo APPLIES_CLEANLY
 git checkout -q feature/probation-slots
 ```
@@ -117,7 +119,41 @@ When `fork/scripts/install-probation.sh` or `uninstall-probation.sh` changes, co
 When regenerating the install script's `EVER` list, use
 `git log --name-only --pretty=format: bcbb68c4..HEAD | sort -u | grep -v '^fork/' | grep -v '^CLAUDE.md$'`.
 
-### 4.4 Tests
+### 4.4 The patcher (`fork/patcher/`) — how it is shipped now
+
+The fork is published as **Dispatch More**, a public GitHub fork (AGPL-3.0, like Dispatcharr),
+installed over an existing Dispatcharr by a patcher rather than a `.patch`:
+
+- `build-overlay.sh vNN` — from a clean worktree of HEAD: stamps `__build__` with the release,
+  builds the frontend, and packs every backend file the fork changes/adds/removes (not tests,
+  frontend sources, `fork/`, `CLAUDE.md`, `README.md`, `.github/`), the built frontend, and a
+  manifest with the **stock checksum** of every file it replaces.
+- `patch.py` (called by `install.sh`/`uninstall.sh`) — refuses another Dispatcharr version
+  (exit 3) or a file that is not stock (exit 4, `--force` overrides); keeps the originals in
+  the state folder (`/var/lib/dispatch-more`, or `/data/dispatch-more` in Docker); upgrades by
+  putting stock back first; writes `.fork-install.json` into the Dispatcharr folder for the page.
+- `install.sh` — finds Dispatcharr (`/opt/dispatcharr` or `/app`, `--app` otherwise) and its
+  own Python, installs a root-owned **systemd path unit** that carries out the page's Uninstall
+  request, restarts the `dispatcharr*` services and clears leftover connection slots.
+- `docker-entrypoint.sh` — the compose `entrypoint`: installs at every container start (so a new
+  image keeps it, and an image of another version starts as stock), and carries out an
+  uninstall request at the next start.
+- `uninstall.sh` — puts every file back, removes added ones, restores the stock frontend, and
+  takes the build's Celery beat entry (`stream-check-tick`) out of the database; the page's
+  button does that last part itself (`core/modified_build.py`), since stock would otherwise log
+  "unregistered task" every five minutes.
+- `test-patcher.sh <release.tar.gz>` — 25 checks on real stock copies: install, again,
+  refusals, `--force`, upgrade, uninstall byte-for-byte, no frontend before, and the Docker
+  start script. `release.sh vNN [--publish]` builds, tests, and publishes.
+- `.github/workflows/fork-upstream-check.yml` — daily: if Dispatcharr has a newer release than
+  `fork/patcher/BASE`, tries the fork's changes on it and opens an issue saying whether they
+  apply or which files conflict. (On 2026-09-19 they applied cleanly to upstream `dev`.) In the
+  GitHub fork, disable upstream's own workflows (docker builds, releases) so only `fork-*` run.
+
+Moving the user's own server from the patch-based install to the patcher: run
+`fork/scripts/uninstall-probation.sh` (back to stock), then the release's `install.sh`.
+
+### 4.5 Tests
 
 A local environment was set up in a session scratch directory (not in the repo): a Python
 venv with the backend requirements, Postgres on **127.0.0.1:55432** (via the `pgserver`
@@ -274,11 +310,12 @@ no longer play. Summary of how it works now:
 
 ### 5.8 Misc
 
-- **Modified-build label:** `version.py` has `__build__ = "mod"`; `/api/core/version/` returns
-  it; sidebar/About show `v0.31.0+mod`. `__version__` stays `0.31.0` (it is in the default
-  User-Agent sent to providers and compared by the update check).
-- **About box** says: not official Dispatcharr, uninstall with `bash /root/uninstall-probation.sh`
-  and try stock first, do not report on the official GitHub/Discord.
+- **Modified-build label:** `version.py` `__build__` ("Dispatch More dev", stamped "Dispatch
+  More vNN" per release); `/api/core/version/` returns it. `__version__` stays `0.31.0` (it is
+  in the default User-Agent sent to providers and compared by the update check).
+- **Not-official warnings:** About, a notice on every Settings page, Settings → System →
+  Modified build (what it is, where it comes from, the Uninstall button; `core/modified_build.py`),
+  and the README. All say: try stock first, do not report on the official GitHub/Discord.
 - **Phone layout:** our tables scroll inside their own box with wrapping toolbars instead of
   forcing the page 900 px wide; Diagnostics tabs stack on narrow screens.
 

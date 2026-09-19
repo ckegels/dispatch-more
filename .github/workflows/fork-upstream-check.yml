@@ -1,0 +1,72 @@
+# Dispatch More: does the fork still apply to Dispatcharr's newest release?
+#
+# Every day, and when started by hand: finds Dispatcharr's newest release, and if it is newer
+# than the one the fork is built on, tries the fork's changes on it. Opens (or updates) an
+# issue saying whether they apply cleanly -- then a release for it can be built -- or which
+# files conflict and need moving by hand. Changes nothing itself.
+name: Fork - check new Dispatcharr releases
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/probation-slots
+          fetch-depth: 0
+
+      - name: Compare with Dispatcharr's newest release
+        id: compare
+        run: |
+          git remote add official https://github.com/Dispatcharr/Dispatcharr.git
+          git fetch --quiet --tags official
+          BASE_COMMIT="$(cat fork/patcher/BASE)"
+          BASE_VERSION="$(git show "$BASE_COMMIT:version.py" | sed -n "s/^__version__ = '\(.*\)'.*/\1/p")"
+          NEWEST="$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -v -e '-' | head -1)"
+          echo "base=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "newest=${NEWEST#v}" >> "$GITHUB_OUTPUT"
+          if [ "v$BASE_VERSION" = "$NEWEST" ]; then
+            echo "state=current" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git config user.email "ci@example.invalid"; git config user.name "CI"
+          git checkout --quiet -b try "$NEWEST"
+          # The fork's changes, without its notes and tools, onto the new release
+          git diff "$BASE_COMMIT" feature/probation-slots -- . ':(exclude)fork' ':(exclude)CLAUDE.md' \
+            ':(exclude)README.md' ':(exclude).github' > fork.patch
+          if git apply --3way fork.patch 2> apply.log; then
+            echo "state=applies" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=conflicts" >> "$GITHUB_OUTPUT"
+          fi
+          { echo 'files<<EOF'; grep -E "^(error|warning): " apply.log | sed 's/^/    /' | head -60; git diff --name-only --diff-filter=U | sed 's/^/    conflict: /'; echo EOF; } >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        if: steps.compare.outputs.state != 'current'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEWEST: ${{ steps.compare.outputs.newest }}
+          BASE: ${{ steps.compare.outputs.base }}
+          STATE: ${{ steps.compare.outputs.state }}
+          FILES: ${{ steps.compare.outputs.files }}
+        run: |
+          TITLE="Dispatcharr $NEWEST is out (Dispatch More is on $BASE)"
+          if [ "$STATE" = applies ]; then
+            BODY="Dispatch More's changes apply cleanly to Dispatcharr $NEWEST. Rebase the branch onto v$NEWEST, run the tests, and build a release for it (fork/patcher/release.sh)."
+          else
+            BODY=$(printf 'Dispatch More'"'"'s changes do **not** apply cleanly to Dispatcharr %s. These need moving by hand:\n\n```\n%s\n```' "$NEWEST" "$FILES")
+          fi
+          EXISTING="$(gh issue list --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi

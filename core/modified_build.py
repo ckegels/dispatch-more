@@ -66,4 +66,21 @@ def request_uninstall(user=""):
     except OSError as e:
         raise ValueError(f"Could not leave the request at {target}: {e}")
     logger.warning(f"Uninstall of the modified build requested by {user or 'an admin'}")
+    forget_schedules()
     return record.get("layout", "")
+
+
+# What the build registers with Celery beat. Beat keeps its schedule in the database, where
+# the files being put back would leave it -- and stock Dispatcharr would then send a task it
+# does not have every five minutes, and log it as an error. Taken out while the database is
+# still at hand; beat sees the row go and drops it.
+SCHEDULES = ("stream-check-tick",)
+
+
+def forget_schedules():
+    try:
+        from django_celery_beat.models import PeriodicTask
+
+        PeriodicTask.objects.filter(name__in=SCHEDULES).delete()
+    except Exception as e:
+        logger.warning(f"Could not take the build's schedules out of Celery beat: {e}")
