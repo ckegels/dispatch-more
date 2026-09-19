@@ -99,11 +99,11 @@ class FakeRedis:
         return iter([key for key in list(self.data) if fnmatch.fnmatch(key, match)])
 
 
-def _video(seconds=2):
-    """A few seconds of real MPEG-TS, 320x240, made by ffmpeg."""
+def _video(seconds=2, source="testsrc=size=320x240:rate=25"):
+    """A few seconds of real MPEG-TS, made by ffmpeg: moving by default."""
     return subprocess.run(
         [
-            "ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=25:duration={seconds}",
+            "ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"{source}:duration={seconds}",
             "-c:v", "mpeg2video", "-f", "mpegts", "pipe:1",
         ],
         capture_output=True, check=True,
@@ -114,6 +114,9 @@ class _Provider(http.server.BaseHTTPRequestHandler):
     """A provider: one path per way a stream can be."""
 
     video = b""
+    long_video = b""
+    black = b""
+    still = b""
 
     def log_message(self, *args):
         pass
@@ -128,6 +131,12 @@ class _Provider(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/live.ts":
             self._send(self.video)
+        elif self.path == "/moving.ts":
+            self._send(self.long_video)
+        elif self.path == "/black.ts":
+            self._send(self.black)
+        elif self.path == "/still.ts":
+            self._send(self.still)
         elif self.path == "/gone.ts":
             self._send(b"not found", "text/plain", 404)
         elif self.path == "/page.ts":
@@ -168,6 +177,9 @@ class ProbeTests(TestCase):
     def setUpClass(cls):
         super().setUpClass()
         _Provider.video = _video()
+        _Provider.long_video = _video(8)
+        _Provider.black = _video(8, "color=c=black:size=320x240:rate=25")
+        _Provider.still = _video(8, "color=c=0x3050a0:size=320x240:rate=25")
         cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
         cls.server.daemon_threads = True
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -183,6 +195,25 @@ class ProbeTests(TestCase):
         found = stream_check.probe(f"{self.base}/live.ts", timeout=5)
         self.assertTrue(found["ok"], found)
         self.assertEqual(found["resolution"], "320x240")
+
+    def test_a_moving_picture_plays(self):
+        found = stream_check.probe(f"{self.base}/moving.ts", timeout=12, picture_seconds=6)
+        self.assertTrue(found["ok"], found)
+
+    def test_a_black_picture_is_its_own_failure(self):
+        found = stream_check.probe(f"{self.base}/black.ts", timeout=12, picture_seconds=6)
+        self.assertFalse(found["ok"])
+        self.assertEqual(found["kind"], stream_check.BLACK)
+        self.assertIn("Black picture", found["reason"])
+
+    def test_a_picture_that_does_not_move_is_its_own_failure(self):
+        found = stream_check.probe(f"{self.base}/still.ts", timeout=12, picture_seconds=6)
+        self.assertFalse(found["ok"])
+        self.assertEqual(found["kind"], stream_check.FROZEN)
+        self.assertTrue(found["frozen_frame"])
+
+    def test_without_the_picture_check_a_still_picture_plays(self):
+        self.assertTrue(stream_check.probe(f"{self.base}/still.ts", timeout=12)["ok"])
 
     def test_a_stream_the_provider_no_longer_has(self):
         found = stream_check.probe(f"{self.base}/gone.ts", timeout=5)
@@ -362,7 +393,7 @@ class ParkTests(_Setup):
 def _answers(by_name):
     """A probe that answers from a table, by the stream's URL."""
 
-    def fake(url, user_agent="", timeout=12, should_stop=lambda: False):
+    def fake(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0):
         outcome = by_name.get(url.rsplit("/", 1)[-1], True)
         if isinstance(outcome, Exception):
             raise outcome
@@ -966,6 +997,65 @@ class RecheckTests(_Setup):
         with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": True})):
             stream_check.run(self.redis)
         self.assertEqual(self._order(self.orf1), ["ORF 1 A", "ORF 1 B", "ORF 1 A2", "could not dispatch"])
+
+    def _kind(self, kind, frame=""):
+        def answer(should_stop):
+            return {"ok": False, "kind": kind, "reason": kind, "frozen_frame": frame,
+                    "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
+        return answer
+
+    def test_autopark_never_parks_a_refused_black_or_frozen_stream(self):
+        stream_check.save_settings({"autopark": True, "autopark_after": 2, "account_failures": 99})
+        kinds = {"ORF1B": self._kind(stream_check.BLACK), "ORF1A2": self._kind(stream_check.REFUSED)}
+        for _ in range(4):
+            stream_check.start_round(self.redis, force=True)
+            with mock.patch.object(stream_check, "probe", side_effect=_answers(kinds)):
+                stream_check.run(self.redis)
+        self.assertEqual(stream_check.load_parked(), {})
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual((record["kind"], stream_check.state_of(record, stream_check.load_settings())), ("black", "broken"))
+
+    def test_a_different_failure_starts_the_count_to_autopark_again(self):
+        stream_check.save_settings({"autopark": True, "autopark_after": 2, "account_failures": 99})
+        for answer in (False, self._kind(stream_check.BLACK), False):
+            stream_check.start_round(self.redis, force=True)
+            with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": answer})):
+                stream_check.run(self.redis)
+        self.assertEqual(stream_check.load_parked(), {})
+        self.assertEqual(stream_check.load_results()["streams"][str(self.second.id)]["dead_streak"], 1)
+
+    def test_rechecks_include_every_kind_of_failure(self):
+        stream_check._store(stream_check.RESULTS_KEY, "x", {"streams": {
+            str(self.second.id): {"ok": False, "kind": "black", "failures": 1, "checked_at": "2000-01-01"},
+        }, "last_run": {"finished_at": stream_check._now()}})
+        self.assertEqual(stream_check.rechecks_due(stream_check.load_settings()), [self.second.id])
+
+    def test_the_same_still_picture_on_three_channels_is_the_providers_card(self):
+        extra = []
+        for number, name in ((2, "ORF 2"), (3, "ORF 3")):
+            channel = Channel.objects.create(name=f"┃AT┃ {name}", channel_number=number, channel_group=self.group)
+            stream = self._stream(f"{name} B", self.b)
+            self._attach(channel, [stream])
+            extra.append(stream)
+        card = self._kind(stream_check.FROZEN, frame="abc123")
+        stream_check.save_settings({"account_failures": 99})
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": card, "ORF2B": card, "ORF3B": card})):
+            stream_check.run(self.redis)
+        results = stream_check.load_results()["streams"]
+        self.assertEqual({results[str(s.id)]["kind"] for s in [self.second] + extra}, {stream_check.PLACEHOLDER})
+        self.assertIn("no stream", results[str(self.second.id)]["reason"])
+
+    def test_the_same_still_picture_on_two_channels_is_only_frozen(self):
+        channel = Channel.objects.create(name="┃AT┃ ORF 2", channel_number=2, channel_group=self.group)
+        stream = self._stream("ORF 2 B", self.b)
+        self._attach(channel, [stream])
+        card = self._kind(stream_check.FROZEN, frame="abc123")
+        stream_check.save_settings({"account_failures": 99})
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": card, "ORF2B": card})):
+            stream_check.run(self.redis)
+        self.assertEqual(stream_check.load_results()["streams"][str(stream.id)]["kind"], stream_check.FROZEN)
 
     def test_without_autopark_nothing_is_parked(self):
         stream_check.save_settings({"autopark": False, "account_failures": 99})

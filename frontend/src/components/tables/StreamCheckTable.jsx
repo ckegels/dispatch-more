@@ -86,6 +86,43 @@ const History = ({ history }) =>
     </Tooltip>
   ) : null;
 
+// What kind of failure: only one that does not play at all may ever be parked by autopark;
+// the others play something, or are the provider's refusal, and wait for a person
+const KIND = {
+  dead: { label: 'Does not play', color: 'red' },
+  refused: { label: 'Refused', color: 'orange', needsYou: true },
+  black: { label: 'Black picture', color: 'grape', needsYou: true },
+  frozen: { label: 'Frozen picture', color: 'cyan', needsYou: true },
+  placeholder: {
+    label: '"No stream" picture',
+    color: 'violet',
+    needsYou: true,
+  },
+};
+
+const KindBadge = ({ result }) => {
+  const kind = result && !result.ok && !result.skipped && KIND[result.kind];
+  if (!kind) return null;
+  return (
+    <Tooltip
+      label={
+        kind.needsYou
+          ? 'Autopark never parks this: it is left for you to decide'
+          : 'Autopark can park this, when it is turned on'
+      }
+    >
+      <Badge
+        size="xs"
+        variant="outline"
+        color={kind.color}
+        style={{ flexShrink: 0 }}
+      >
+        {kind.label}
+      </Badge>
+    </Tooltip>
+  );
+};
+
 // What was found, in words: why it failed, or the picture it showed
 const Finding = ({ result }) => {
   if (!result) return null;
@@ -124,6 +161,7 @@ const StreamLine = ({ stream, channel, onAct }) => (
         <Badge size="xs" variant="outline" color="gray">
           {stream.account}
         </Badge>
+        <KindBadge result={stream.result} />
         <History history={stream.result?.history} />
       </Group>
       <Finding result={stream.result} />
@@ -216,7 +254,9 @@ const StreamCheckTable = () => {
       try {
         // Parked streams come with every answer; the channels shown depend on the filter
         setData(
-          await API.getStreamCheck(show === 'parked' ? 'problems' : show)
+          await API.getStreamCheck(
+            show === 'parked' || show === 'needs_you' ? 'problems' : show
+          )
         );
         setError(null);
       } catch (e) {
@@ -317,7 +357,9 @@ const StreamCheckTable = () => {
             // The row's id becomes its key below; the stream keeps its own here
             stream: p,
           }))
-        : data?.rows || [];
+        : show === 'needs_you'
+          ? (data?.rows || []).filter((row) => row.needs_you > 0)
+          : data?.rows || [];
     const wanted = search.trim().toLowerCase();
     const found = wanted
       ? all.filter((row) =>
@@ -364,6 +406,11 @@ const StreamCheckTable = () => {
               {r.failing > 0 && (
                 <Badge size="xs" variant="light" color="yellow">
                   {r.failing} failing
+                </Badge>
+              )}
+              {r.needs_you > 0 && (
+                <Badge size="xs" variant="outline" color="orange">
+                  {r.needs_you} need{r.needs_you === 1 ? 's' : ''} you
                 </Badge>
               )}
               {!r.broken && !r.failing && (
@@ -627,6 +674,7 @@ const StreamCheckTable = () => {
                   data={[
                     { value: 'problems', label: 'Broken or failing' },
                     { value: 'broken', label: 'Broken only' },
+                    { value: 'needs_you', label: 'Needs you' },
                     {
                       value: 'parked',
                       label: `Parked (${data?.parked?.length ?? 0})`,

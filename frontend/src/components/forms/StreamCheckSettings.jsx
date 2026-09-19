@@ -120,6 +120,23 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
         <Section title="Failing streams">
           <Switch
             size="xs"
+            label="Look for black, frozen and 'no stream' pictures"
+            description="Looks a few seconds into every stream. A picture that is black, does not move, or is the provider's own 'no stream' card is a failure of its own. Each check takes that much longer."
+            checked={!!draft.picture_check}
+            onChange={(e) => set({ picture_check: e.currentTarget.checked })}
+          />
+          {draft.picture_check && (
+            <NumberInput
+              size="xs"
+              label="Seconds to look"
+              min={4}
+              max={20}
+              value={draft.picture_seconds}
+              onChange={number('picture_seconds')}
+            />
+          )}
+          <Switch
+            size="xs"
             label="Check failing streams again"
             description="Without waiting for the next full run."
             checked={!!draft.recheck_failed}
@@ -155,7 +172,7 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           <Switch
             size="xs"
             label="Park streams automatically after repeated failures (autopark)"
-            description="Off: nothing is ever parked unless you park it. On: a stream that fails this many checks in a row is parked by itself -- off its channels, still checked -- and goes back where it was as soon as it plays again."
+            description="Off: nothing is ever parked unless you park it. On: a stream that does not play at all, this many checks in a row, is parked by itself -- off its channels, still checked -- and goes back where it was as soon as it plays again. A stream the provider refuses, or with a black, frozen or 'no stream' picture, is never parked by itself: it is left for you."
             checked={!!draft.autopark}
             onChange={(e) => set({ autopark: e.currentTarget.checked })}
           />

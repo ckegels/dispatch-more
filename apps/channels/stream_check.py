@@ -41,6 +41,11 @@ How it goes about it, and why:
   asked anything -- and tried again after longer and longer waits, which says how long the
   block lasts, and from then on the checks stay under the limit with room to spare (see
   _Budget). A limit can be typed in instead, which spares the provider even the first.
+- Every failure has its kind (see KIND_TEXT): it does not play at all; the provider refuses
+  it while giving its other streams; or it plays, but the picture is black, does not move,
+  or is the provider's own "no stream" card -- the same still picture on several of its
+  channels. All are checked again; only the first may ever be parked by autopark. The
+  others play something, or are the provider's doing, and are left for a person.
 - One failure is not dead. Providers hiccup. A stream is "broken" only after failing a
   number of runs in a row (broken_after), and "failing" until then.
 
@@ -97,8 +102,14 @@ DEFAULTS = {
     "recheck_failed": True,
     "recheck_mode": "hours",
     "recheck_hours": 3,
-    # Park a stream by itself once it has failed this many checks in a row. Off unless
-    # turned on. After a refresh, three checks means at least two refreshes went by.
+    # Look a few seconds into every stream for a picture that is black, does not move, or is
+    # the provider's "no stream" card. Each check takes that much longer.
+    "picture_check": True,
+    "picture_seconds": 6,
+    # Park a stream by itself once it has failed this many checks in a row -- only a stream
+    # that does not play at all; one refused, black, frozen or showing the provider's card is
+    # left for a person. Off unless turned on. After a refresh, three checks means at least
+    # two refreshes went by.
     "autopark": False,
     "autopark_after": 3,
     # Only while nothing at all is playing through Dispatcharr. Off by default: checks go
@@ -160,6 +171,28 @@ PROVIDER_ASK_EVERY = 30
 
 # How much of a stream is read before it is judged: enough for ffprobe to find the picture
 READ_BYTES = 1024 * 1024
+# To judge the picture itself -- black, not moving, the provider's "no stream" card -- a few
+# seconds of it are needed: this much at most
+PICTURE_BYTES = 40 * 1024 * 1024
+# A picture black for this long, or not moving for this long, is a failure (of the seconds
+# looked at); a recording shorter than PICTURE_LEAST says nothing either way
+BLACK_SECONDS = 2
+FROZEN_SECONDS = 4
+PICTURE_LEAST = 3
+# The same frozen picture on this many channels of one provider is the provider's own card
+PLACEHOLDER_CHANNELS = 3
+
+# What kind of failure a check found. Only "dead" -- it does not play at all -- may ever be
+# parked by autopark; the others play something, or are the provider's refusal, and are left
+# for a person to decide.
+DEAD, REFUSED, BLACK, FROZEN, PLACEHOLDER = "dead", "refused", "black", "frozen", "placeholder"
+KIND_TEXT = {
+    DEAD: "does not play",
+    REFUSED: "refused by the provider",
+    BLACK: "black picture",
+    FROZEN: "picture does not move",
+    PLACEHOLDER: "shows the provider's \"no stream\" picture",
+}
 # Less than this, and a stream that ended by itself did not really start
 TOO_LITTLE = 16 * 1024
 # How often, while waiting for viewers to finish, it looks again
@@ -216,6 +249,7 @@ def save_settings(given):
         values["account_failures"] = max(2, int(values["account_failures"]))
         values["recheck_hours"] = min(168, max(0.5, float(values["recheck_hours"])))
         values["autopark_after"] = max(2, int(values["autopark_after"]))
+        values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     if values["recheck_mode"] not in ("hours", "refresh"):
@@ -771,6 +805,73 @@ def _said(data):
     return text[:120]
 
 
+def _picture(data):
+    """
+    What the picture does over the seconds read: {"length", "black", "frozen", "frame"}, or
+    None without ffmpeg. frame is a tiny fingerprint of one frame (16x9, grey, a bit each
+    for lighter or darker than the rest): the same card shown on many channels has the same
+    one, where a real channel's changes.
+    """
+    try:
+        pts = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time",
+             "-of", "csv=p=0", "-i", "pipe:0"],
+            input=data, capture_output=True, timeout=30,
+        )
+        times = []
+        for line in (pts.stdout or b"").decode().split():
+            try:
+                times.append(float(line.strip(",")))
+            except ValueError:
+                continue
+        length = (max(times) - min(times)) if len(times) > 1 else 0.0
+        detect = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostats", "-i", "pipe:0", "-an",
+             "-vf", f"blackdetect=d={BLACK_SECONDS}:pix_th=0.10,freezedetect=n=0.003:d={FROZEN_SECONDS}",
+             "-f", "null", "-"],
+            input=data, capture_output=True, timeout=60,
+        )
+        frame = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-an",
+             "-vf", "select=gte(n\\,10),scale=16:9,format=gray", "-frames:v", "1", "-f", "rawvideo", "-"],
+            input=data, capture_output=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        logger.debug(f"The picture could not be looked at: {e}")
+        return None
+    log = (detect.stderr or b"").decode("utf-8", "replace")
+    start = min(times) if times else 0.0
+
+    def spans(begin, end):
+        """Seconds covered by begin/end pairs in the log; one still going runs to the end."""
+        total = 0.0
+        opened = None
+        for match in re.finditer(rf"({re.escape(begin)}|{re.escape(end)})[:=]\s*(-?[\d.]+)", log):
+            what, value = match.group(1), float(match.group(2))
+            if what == begin:
+                opened = value
+            elif opened is not None:
+                total += value - opened
+                opened = None
+        if opened is not None:
+            total += max(0.0, start + length - opened)
+        return total
+
+    grey = frame.stdout or b""
+    fingerprint = ""
+    if len(grey) >= 144:
+        pixels = list(grey[:144])
+        mean = sum(pixels) / len(pixels)
+        bits = "".join("1" if p > mean else "0" for p in pixels)
+        fingerprint = f"{int(bits, 2):036x}"
+    return {
+        "length": round(length, 1),
+        "black": round(min(length, spans("black_start", "black_end")), 1),
+        "frozen": round(min(length, spans("lavfi.freezedetect.freeze_start", "lavfi.freezedetect.freeze_end")), 1),
+        "frame": fingerprint,
+    }
+
+
 def _looks_like_ts(data):
     """MPEG-TS: a sync byte every 188 bytes, three in a row somewhere near the start."""
     for start in range(min(188, len(data))):
@@ -820,9 +921,13 @@ def _hls_segment(session, url, text, headers, deadline, should_stop, depth=0):
     return urljoin(url, uris[-1])
 
 
-def probe(url, user_agent="", timeout=12, should_stop=lambda: False):
+def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0):
     """
-    Whether url plays: {"ok", "reason", "resolution", "codec", "bytes", "seconds"}.
+    Whether url plays: {"ok", "reason", "kind", "resolution", "codec", "bytes", "seconds"}.
+
+    With picture_seconds, that many seconds are read and the picture itself is judged: black,
+    or not moving, is a failure of its own kind (see KIND_TEXT), and "frame" is kept, so the
+    same card on many channels can be recognised as the provider's (see _placeholders).
 
     Raises Stopped if should_stop says so part way: a check cut short says nothing about
     the stream, and must not count against it.
@@ -832,10 +937,13 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False):
     started = time.monotonic()
     deadline = started + float(timeout)
     headers = {"User-Agent": user_agent} if user_agent else {}
-    result = {"ok": False, "reason": "", "resolution": "", "codec": "", "bytes": 0, "seconds": 0.0}
+    result = {"ok": False, "reason": "", "kind": DEAD, "resolution": "", "codec": "", "bytes": 0, "seconds": 0.0}
+    limit = PICTURE_BYTES if picture_seconds else READ_BYTES
+    # Reading stops at the limit or the deadline: for a live stream, that is a few seconds of it
+    read_until = min(deadline, started + float(picture_seconds) + 3) if picture_seconds else deadline
     session = requests.Session()
     try:
-        response, data = _read(session, url, headers, deadline, should_stop)
+        response, data = _read(session, url, headers, read_until, should_stop, limit=limit)
         if response.status_code >= 400:
             said = _said(data)
             result["reason"] = f"The provider answered HTTP {response.status_code}" + (f": {said}" if said else "")
@@ -847,7 +955,7 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False):
             if not segment:
                 result["reason"] = "The playlist lists nothing to play"
                 return result
-            response, data = _read(session, segment, headers, deadline, should_stop)
+            response, data = _read(session, segment, headers, max(read_until, time.monotonic() + 5), should_stop, limit=limit)
             if response.status_code >= 400:
                 raise _Answered(response.status_code, "The playlist's video")
         result["bytes"] = len(data)
@@ -867,6 +975,17 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False):
             result["reason"] = "" if result["ok"] else "What came is not video Dispatcharr knows"
         elif found["video"]:
             result.update(ok=True, resolution=found["resolution"], codec=found["codec"])
+            picture = _picture(data) if picture_seconds else None
+            if picture and picture["length"] >= PICTURE_LEAST:
+                result["frame"] = picture["frame"]
+                if picture["black"] >= BLACK_SECONDS:
+                    result.update(ok=False, kind=BLACK, reason=f"Black picture ({picture['black']:.0f} of {picture['length']:.0f} s)")
+                elif picture["frozen"] >= FROZEN_SECONDS:
+                    result.update(
+                        ok=False, kind=FROZEN,
+                        reason=f"The picture does not move ({picture['frozen']:.0f} of {picture['length']:.0f} s)",
+                        frozen_frame=picture["frame"],
+                    )
         elif found["audio"]:
             # A radio channel is a channel that works
             result.update(ok=True, codec="audio only")
@@ -968,8 +1087,15 @@ def _record(redis_client, results, stream, outcome, settings):
     previous = results.get(str(stream.id)) or {}
     history = ([1 if outcome["ok"] else 0] + list(previous.get("history") or []))[:HISTORY_KEPT]
     failures = 0 if outcome["ok"] else int(previous.get("failures") or 0) + 1
+    kind = "" if outcome["ok"] else outcome.get("kind") or DEAD
+    # Failures in a row of a stream that does not play at all: what autopark counts. Any other
+    # kind of failure, or playing, starts it again.
+    dead_streak = int(previous.get("dead_streak") or 0) + 1 if kind == DEAD else 0
     record = {
         "ok": outcome["ok"],
+        "kind": kind,
+        "dead_streak": dead_streak,
+        "frame": outcome.get("frozen_frame") or "",
         "reason": outcome["reason"],
         "resolution": outcome["resolution"],
         "codec": outcome["codec"],
@@ -1199,7 +1325,8 @@ def run(redis_client, only=None, batch_seconds=None):
             elif (
                 settings.get("autopark")
                 and not outcome["ok"]
-                and int(record.get("failures") or 0) >= int(settings.get("autopark_after") or 3)
+                and record.get("kind") == DEAD
+                and int(record.get("dead_streak") or 0) >= int(settings.get("autopark_after") or 3)
                 and str(stream.id) not in was_parked
             ):
                 to_park.append((stream.id, record["reason"], record["failures"]))
@@ -1278,7 +1405,10 @@ def run(redis_client, only=None, batch_seconds=None):
                     if not (url and url.startswith(("http://", "https://"))):
                         return None
                     budget.note_open()
-                    return probe(url, agents[account_id], settings["timeout_seconds"], should_stop)
+                    return probe(
+                        url, agents[account_id], settings["timeout_seconds"], should_stop,
+                        picture_seconds=settings["picture_seconds"] if settings.get("picture_check") else 0,
+                    )
                 except Stopped:
                     # Looked at again once the viewer is done, and not counted
                     rest("in use", "someone started watching through it")
@@ -1360,6 +1490,7 @@ def run(redis_client, only=None, batch_seconds=None):
                         # channel it no longer carries the same way it refuses when at its
                         # limit -- one answered every Euronews HD with HTTP 407 while playing
                         # everything around it -- and only the other stream tells them apart.
+                        other = None
                         compare = good_streams.get(key)
                         if compare is None or compare.id == stream.id:
                             compare = next(
@@ -1391,7 +1522,7 @@ def run(redis_client, only=None, batch_seconds=None):
                         # The provider gives other streams: this one it does not. A failure of
                         # the stream, counted like any other, so rechecks and autopark see it.
                         outcome = {
-                            **outcome, "refused": False,
+                            **outcome, "refused": False, "kind": REFUSED,
                             "reason": f"{outcome['reason']}, while the provider plays its other streams"
                             if compare is not None and other is not None and other.get("ok") else outcome["reason"],
                         }
@@ -1410,7 +1541,10 @@ def run(redis_client, only=None, batch_seconds=None):
                                 count(earlier, found)
                             account_held.clear()
                             count(stream, outcome)
-                        elif account_id in played:
+                        elif account_id in played or outcome.get("kind", DEAD) != DEAD:
+                            # Playing something, or refused while others play: the stream's own
+                            # failure. Only streams that do not play at all might be the
+                            # provider being down.
                             count(stream, outcome)
                         else:
                             account_held.append((stream, outcome))
@@ -1479,6 +1613,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     logger.info(f"Stream Check: autopark parked stream {stream_id} after {failures} failed checks")
                 except ValueError as e:
                     logger.info(f"Stream Check: autopark could not park stream {stream_id}: {e}")
+            _placeholders(results, providers.provider_of)
             _keep_results(results)
             redis_client.delete(LIVE_RESULTS_KEY)
             # What each provider allows, learned in this batch
@@ -1549,6 +1684,39 @@ def _refused(results, stream, reason):
     """A stream the provider would not give: looked at, not checked, and said why."""
     _touch(results, stream)
     results[str(stream.id)] = {**results[str(stream.id)], "refused": reason}
+
+
+def _placeholders(results, provider_of):
+    """
+    Frozen pictures that are the provider's own card rather than a channel's: the same still
+    picture on PLACEHOLDER_CHANNELS or more channels of one provider. A channel that has
+    stopped shows its last frame, which is its own; a provider's "no stream" card is the same
+    on every channel it stands in for. Changes the records in place.
+    """
+    from .models import ChannelStream, Stream
+
+    still = {sid: r for sid, r in results.items() if r.get("kind") in (FROZEN, PLACEHOLDER) and r.get("frame")}
+    if not still:
+        return
+    ids = [int(i) for i in still]
+    account_of = dict(Stream.objects.filter(id__in=ids).values_list("id", "m3u_account_id"))
+    channels = {}
+    for stream_id, channel_id in ChannelStream.objects.filter(stream_id__in=ids).values_list("stream_id", "channel_id"):
+        channels.setdefault(str(stream_id), set()).add(channel_id)
+    groups = {}
+    for stream_id, record in still.items():
+        groups.setdefault((provider_of(account_of.get(int(stream_id))), record["frame"]), []).append(stream_id)
+    for stream_ids in groups.values():
+        shown_on = set().union(*(channels.get(s, set()) for s in stream_ids))
+        for stream_id in stream_ids:
+            record = results[stream_id]
+            if len(shown_on) >= PLACEHOLDER_CHANNELS and record["kind"] != PLACEHOLDER:
+                record.update(
+                    kind=PLACEHOLDER,
+                    reason=f"Shows the same still picture as {len(shown_on) - 1} other channels of this provider: its \"no stream\" card",
+                )
+            elif len(shown_on) < PLACEHOLDER_CHANNELS and record["kind"] == PLACEHOLDER:
+                record["kind"] = FROZEN
 
 
 def _touch(results, stream):
@@ -1896,6 +2064,8 @@ def issues(redis_client, show="problems"):
         streams = [_stream_row(link.stream, results, state(link.stream_id)) for link in found["links"]]
         real = [s for s in streams if not s["custom"]]
         bad = [s for s in real if s["state"] in ("failing", "broken")]
+        # Failing in a way autopark never acts on: refused, or playing the wrong picture
+        needs_you = [s for s in bad if (s.get("result") or {}).get("kind") not in ("", None, DEAD)]
         broken = [s for s in real if s["state"] == "broken"]
         working = [s for s in real if s["state"] == "ok"]
         if show == "broken" and not broken:
@@ -1918,6 +2088,7 @@ def issues(redis_client, show="problems"):
             "broken": len(broken),
             "failing": len(bad) - len(broken),
             "working": len(working),
+            "needs_you": len(needs_you),
             # Nothing left that plays: a viewer gets the fallback or nothing
             "dead": bool(real) and not working and len(broken) == len(real),
         })

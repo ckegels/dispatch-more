@@ -70,6 +70,7 @@ const overview = (extra = {}) => ({
     enabled: false, every_hours: 24, window_from: '', window_to: '', timeout_seconds: 12,
     gap_seconds: 1, broken_after: 2, channel_groups: [], restore_recovered: false,
     recheck_failed: true, recheck_mode: 'hours', recheck_hours: 3, autopark: false, autopark_after: 3,
+    picture_check: true, picture_seconds: 6,
   },
   progress: {},
   running: false,
@@ -245,6 +246,27 @@ describe('StreamCheckTable', () => {
     fireEvent.click(name.closest('.tr').querySelector('.td:nth-child(1) > div > div'));
     expect(await screen.findByText(/Not checked: The provider answered HTTP 407/)).toBeInTheDocument();
     expect(screen.queryByText(/^plays/)).toBeNull();
+  });
+
+  it('says what kind of failure it is, and which need a person', async () => {
+    const black = {
+      ...channelRow,
+      needs_you: 1,
+      streams: [
+        channelRow.streams[0],
+        {
+          ...channelRow.streams[1],
+          result: { ...result(false), kind: 'black', reason: 'Black picture (6 of 6 s)' },
+        },
+        channelRow.streams[2],
+      ],
+    };
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [black] }));
+    draw();
+    expect(await screen.findByText('1 needs you')).toBeInTheDocument();
+    await open();
+    expect(screen.getByText('Black picture')).toBeInTheDocument();
+    expect(screen.getByText(/Black picture \(6 of 6 s\)/)).toBeInTheDocument();
   });
 
   it('turns autopark on, off by default', async () => {
