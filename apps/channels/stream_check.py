@@ -67,6 +67,8 @@ logger = logging.getLogger(__name__)
 
 SETTINGS_KEY = "stream-check"
 RESULTS_KEY = "stream-check-results"
+# Failing streams whose provider's playlist was refreshed since, to be looked at again
+RECHECK_KEY = "stream-check-recheck"
 PARKED_KEY = "stream-check-parked"
 
 DEFAULTS = {
@@ -87,8 +89,18 @@ DEFAULTS = {
     # Channel groups to check; empty is every channel
     "channel_groups": [],
     # Put a parked stream back by itself when it works again, rather than leaving it to a
-    # person to decide
+    # person to decide. One parked by autopark is always put back when it works again.
     "restore_recovered": False,
+    # A stream that failed is looked at again by itself, without waiting for the next full
+    # round: every recheck_hours ("hours"), or after each playlist refresh of its provider
+    # ("refresh") -- providers often mend a channel at their end, and it shows then
+    "recheck_failed": True,
+    "recheck_mode": "hours",
+    "recheck_hours": 3,
+    # Park a stream by itself once it has failed this many checks in a row. Off unless
+    # turned on. After a refresh, three checks means at least two refreshes went by.
+    "autopark": False,
+    "autopark_after": 3,
     # Only while nothing at all is playing through Dispatcharr. Off by default: checks go
     # on while people watch, but never on a provider any of them is using (see
     # _Providers). On, nothing is checked while anyone watches anything.
@@ -199,8 +211,12 @@ def save_settings(given):
         values["gap_seconds"] = min(60, max(0, float(values["gap_seconds"])))
         values["broken_after"] = max(1, int(values["broken_after"]))
         values["account_failures"] = max(2, int(values["account_failures"]))
+        values["recheck_hours"] = min(168, max(0.5, float(values["recheck_hours"])))
+        values["autopark_after"] = max(2, int(values["autopark_after"]))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
+    if values["recheck_mode"] not in ("hours", "refresh"):
+        raise ValueError("Recheck every so many hours, or after each playlist refresh")
     for field in ("window_from", "window_to"):
         if values[field] and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", str(values[field])):
             raise ValueError("Times as HH:MM, please")
@@ -984,7 +1000,7 @@ def progress(redis_client):
         return {}
 
 
-def start_round(redis_client, force=False):
+def start_round(redis_client, force=False, only=None):
     """
     Begin looking at every stream again. A round is worked through in batches (see run),
     so it can take as long as the providers make it without holding a worker all that time.
@@ -996,11 +1012,15 @@ def start_round(redis_client, force=False):
     if redis_client.exists(ROUND_KEY):
         return None
     settings = load_settings()
-    since = _now() if force else datetime.fromtimestamp(
+    since = _now() if force or only is not None else datetime.fromtimestamp(
         time.time() - float(settings["every_hours"]) * 3600 * 0.9, timezone.utc
     ).isoformat(timespec="milliseconds")
-    total = sum(len(s) for s in _targets(settings, due_before=since).values())
-    redis_client.set(ROUND_KEY, json.dumps({"since": since, "forced": bool(force), "total": total}), ex=ROUND_TTL)
+    total = sum(len(s) for s in _targets(settings, only=only, due_before=since).values())
+    round_ = {"since": since, "forced": bool(force), "total": total}
+    if only is not None:
+        # A recheck: only the failing streams due to be looked at again
+        round_.update(only=[int(i) for i in only], kind="recheck")
+    redis_client.set(ROUND_KEY, json.dumps(round_), ex=ROUND_TTL)
     redis_client.delete(STOP_KEY)
     _progress(
         redis_client, state="running", started_at=_now(), finished_at="", total=total,
@@ -1088,8 +1108,10 @@ def run(redis_client, only=None, batch_seconds=None):
         _progress(redis_client, waiting=False, message="", next_batch_at="")
 
         unavailable = dict((round_ or {}).get("unavailable") or {})
+        round_only = (round_ or {}).get("only")
         by_account = _targets(
-            settings, only=only, due_before=round_["since"] if round_ else None, skip_accounts=unavailable
+            settings, only=only if only is not None else round_only,
+            due_before=round_["since"] if round_ else None, skip_accounts=unavailable,
         )
         if not by_account:
             return _finish(redis_client, round_) if round_ else "done"
@@ -1101,7 +1123,9 @@ def run(redis_client, only=None, batch_seconds=None):
         providers = _Providers(redis_client)
         profiles = {a: _profiles_of(streams[0].m3u_account) for a, streams in by_account.items()}
         agents = {a: streams[0].m3u_account.get_user_agent_string() or "" for a, streams in by_account.items()}
-        was_parked = {str(i) for i in parked_ids()}
+        parked_now = load_parked()
+        was_parked = set(parked_now)
+        to_park = []
         own_connection = connections["default"]
         give_up_after = int(settings.get("account_failures") or 5)
         recovered = []
@@ -1159,6 +1183,13 @@ def run(redis_client, only=None, batch_seconds=None):
                 _progress(redis_client, broken=progress(redis_client).get("broken", 0) + 1)
             if outcome["ok"] and str(stream.id) in was_parked:
                 recovered.append(stream.id)
+            elif (
+                settings.get("autopark")
+                and not outcome["ok"]
+                and int(record.get("failures") or 0) >= int(settings.get("autopark_after") or 3)
+                and str(stream.id) not in was_parked
+            ):
+                to_park.append((stream.id, record["reason"], record["failures"]))
 
         def one_provider(key, streams):
             entry = accounts[_key_text(key)]
@@ -1401,13 +1432,22 @@ def run(redis_client, only=None, batch_seconds=None):
                 for thread in threads:
                     thread.join(timeout=5)
         finally:
-            if settings.get("restore_recovered"):
-                for stream_id in recovered:
-                    try:
-                        restore(stream_id)
-                        logger.info(f"Stream Check: parked stream {stream_id} works again and was put back")
-                    except ValueError as e:
-                        logger.info(f"Stream Check: parked stream {stream_id} works again, not put back: {e}")
+            for stream_id in recovered:
+                # Parked by autopark, it goes back by itself as it came; by a person, only
+                # when that is asked for
+                if not (settings.get("restore_recovered") or (parked_now.get(str(stream_id)) or {}).get("auto")):
+                    continue
+                try:
+                    restore(stream_id)
+                    logger.info(f"Stream Check: parked stream {stream_id} works again and was put back")
+                except ValueError as e:
+                    logger.info(f"Stream Check: parked stream {stream_id} works again, not put back: {e}")
+            for stream_id, reason, failures in to_park:
+                try:
+                    park(stream_id, f"{reason} ({failures} checks in a row)", auto=True)
+                    logger.info(f"Stream Check: autopark parked stream {stream_id} after {failures} failed checks")
+                except ValueError as e:
+                    logger.info(f"Stream Check: autopark could not park stream {stream_id}: {e}")
             _keep_results(results)
             redis_client.delete(LIVE_RESULTS_KEY)
             # What each provider allows, learned in this batch
@@ -1422,7 +1462,10 @@ def run(redis_client, only=None, batch_seconds=None):
         if stopped["asked"]:
             return _stopped(redis_client)
         round_ = current_round(redis_client) or round_
-        left = _targets(settings, due_before=round_["since"], skip_accounts=round_.get("unavailable") or {})
+        left = _targets(
+            settings, only=round_.get("only"), due_before=round_["since"],
+            skip_accounts=round_.get("unavailable") or {},
+        )
         if not left:
             return _finish(redis_client, round_)
         if {providers.provider_of(a) for a in left} <= waiting:
@@ -1492,6 +1535,13 @@ def _touch(results, stream):
 def _finish(redis_client, round_):
     redis_client.delete(QUEUED_KEY)
     done = progress(redis_client).get("done", 0)
+    if (round_ or {}).get("kind") == "recheck":
+        # Not a full run: when the next full one is due is left as it was
+        _rechecked(round_.get("only") or ())
+        redis_client.delete(ROUND_KEY)
+        _progress(redis_client, state="done", finished_at=_now(), waiting=False, message="", last_recheck=_now())
+        logger.info(f"Stream Check: recheck finished, {done} failing streams looked at again")
+        return "done"
     _keep_last_run({
         "finished_at": _now(), "checked": done, "total": (round_ or {}).get("total", done),
         # The providers whose streams were not looked at, and why
@@ -1545,6 +1595,79 @@ def is_running(redis_client):
     return bool(redis_client.exists(ROUND_KEY) or redis_client.exists(RUN_KEY))
 
 
+def _failing(results):
+    return {
+        stream_id: record for stream_id, record in results.items()
+        if record and not record.get("ok") and not record.get("skipped")
+    }
+
+
+def rechecks_due(settings, now=None):
+    """The failing streams due to be looked at again, by the rule chosen."""
+    if not settings.get("recheck_failed"):
+        return []
+    failing = _failing(load_results()["streams"])
+    if settings.get("recheck_mode") == "refresh":
+        refreshed = set(_load(RECHECK_KEY, {}).get("due") or ())
+        return sorted(int(i) for i in failing if i in refreshed)
+    cutoff = datetime.fromtimestamp(
+        (now or time.time()) - float(settings.get("recheck_hours") or 3) * 3600, timezone.utc
+    ).isoformat(timespec="milliseconds")
+    return sorted(int(i) for i, record in failing.items() if record.get("checked_at", "") < cutoff)
+
+
+def after_playlist_refresh(account_id):
+    """
+    A provider's playlist was refreshed: its failing streams are to be looked at again, when
+    rechecks follow refreshes. Called at the end of every successful M3U refresh, so it does
+    nothing at all unless Stream Check is on and set to it.
+    """
+    settings = load_settings()
+    if not (settings.get("enabled") and settings.get("recheck_failed") and settings.get("recheck_mode") == "refresh"):
+        return 0
+    from django.db import transaction
+
+    from core.models import CoreSettings
+
+    from .models import Stream
+
+    failing = _failing(load_results()["streams"])
+    if not failing:
+        return 0
+    of_account = {
+        str(i) for i in Stream.objects.filter(id__in=[int(i) for i in failing], m3u_account_id=account_id)
+        .values_list("id", flat=True)
+    }
+    if not of_account:
+        return 0
+    with transaction.atomic():
+        row, _ = CoreSettings.objects.select_for_update().get_or_create(
+            key=RECHECK_KEY, defaults={"name": "Stream Check rechecks", "value": {}}
+        )
+        due = set((row.value or {}).get("due") or ()) | of_account
+        row.value = {"due": sorted(due)}
+        row.save(update_fields=["value"])
+    logger.info(f"Stream Check: {len(of_account)} failing streams to look at again after a playlist refresh")
+    return len(of_account)
+
+
+def _rechecked(stream_ids):
+    """Streams looked at again: no longer waiting for a refresh to be looked at."""
+    done = {str(i) for i in stream_ids}
+    if not done:
+        return
+    from django.db import transaction
+
+    from core.models import CoreSettings
+
+    with transaction.atomic():
+        row = CoreSettings.objects.select_for_update().filter(key=RECHECK_KEY).first()
+        if row is None:
+            return
+        row.value = {"due": sorted(set((row.value or {}).get("due") or ()) - done)}
+        row.save(update_fields=["value"])
+
+
 def request_stop(redis_client):
     """End the round: the batch going stops within a second, and no other is started."""
     if redis_client.exists(RUN_KEY):
@@ -1592,7 +1715,7 @@ def _update_parked(change):
     return answer
 
 
-def park(stream_id, reason=""):
+def park(stream_id, reason="", auto=False):
     """
     Take a stream off every channel it is on, remembering where it was, so it can be put
     back. The streams after it close up, as they would had it been removed by hand.
@@ -1619,6 +1742,8 @@ def park(stream_id, reason=""):
                 "parked_at": (parked.get(str(stream_id)) or {}).get("parked_at") or _now(),
                 "name": stream.name,
                 "reason": reason,
+                # Parked by autopark rather than by a person: put back by itself when it plays
+                "auto": bool(auto),
             }
             return len(links)
 
@@ -1776,6 +1901,9 @@ def issues(redis_client, show="problems"):
             "state": "gone", "custom": False, "hash": "", "result": None,
         }
         row["parked_at"] = entry.get("parked_at", "")
+        # By autopark or by a person, and why
+        row["auto"] = bool(entry.get("auto"))
+        row["park_reason"] = entry.get("reason", "")
         row["from"] = [
             {"id": p["channel"], "name": names.get(p["channel"], "a deleted channel"), "order": p.get("order", 0)}
             for p in entry.get("channels") or []

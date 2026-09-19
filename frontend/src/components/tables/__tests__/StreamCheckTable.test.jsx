@@ -69,6 +69,7 @@ const overview = (extra = {}) => ({
   settings: {
     enabled: false, every_hours: 24, window_from: '', window_to: '', timeout_seconds: 12,
     gap_seconds: 1, broken_after: 2, channel_groups: [], restore_recovered: false,
+    recheck_failed: true, recheck_mode: 'hours', recheck_hours: 3, autopark: false, autopark_after: 3,
   },
   progress: {},
   running: false,
@@ -244,6 +245,32 @@ describe('StreamCheckTable', () => {
     fireEvent.click(name.closest('.tr').querySelector('.td:nth-child(1) > div > div'));
     expect(await screen.findByText(/Not checked: The provider answered HTTP 407/)).toBeInTheDocument();
     expect(screen.queryByText(/^plays/)).toBeNull();
+  });
+
+  it('turns autopark on, off by default', async () => {
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    const autopark = screen.getByRole('switch', { name: /Autopark/ });
+    expect(autopark).not.toBeChecked();
+    fireEvent.click(autopark);
+    fireEvent.change(await screen.findByLabelText(/Failed checks in a row/), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    await waitFor(() =>
+      expect(API.saveStreamCheckSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ autopark: true, autopark_after: 4, recheck_hours: 3 })
+      )
+    );
+  });
+
+  it('says a stream was parked by autopark, and why', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({ parked: [{ ...parkedRow, auto: true, park_reason: 'The provider answered HTTP 404 (3 checks in a row)' }] })
+    );
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which channels' }));
+    fireEvent.click(await screen.findByText('Parked (1)'));
+    expect(await screen.findByText(/Parked by autopark/)).toHaveTextContent(/3 checks in a row/);
   });
 
   it('shows what each provider allows, and lets it be set by hand', async () => {

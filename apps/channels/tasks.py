@@ -4528,7 +4528,9 @@ def stream_check_tick():
     """
     from core.utils import RedisClient
 
-    from .stream_check import QUEUED_KEY, RUN_KEY, current_round, due, load_settings, start_round
+    from .stream_check import (
+        QUEUED_KEY, RUN_KEY, current_round, due, in_window, load_settings, rechecks_due, start_round,
+    )
 
     redis_client = RedisClient.get_client()
     if current_round(redis_client) is not None:
@@ -4541,7 +4543,12 @@ def stream_check_tick():
     settings = load_settings()
     if not settings.get("enabled"):
         return "off"
-    if not due(settings, redis_client):
-        return "not due"
-    start_round(redis_client)
-    return run_stream_check(None)
+    if due(settings, redis_client):
+        start_round(redis_client)
+        return run_stream_check(None)
+    # Between full rounds, the failing streams due to be looked at again
+    recheck = rechecks_due(settings)
+    if recheck and in_window(settings):
+        start_round(redis_client, only=recheck)
+        return run_stream_check(None)
+    return "not due"

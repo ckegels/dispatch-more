@@ -5,6 +5,7 @@ import {
   Group,
   MultiSelect,
   NumberInput,
+  Select,
   SimpleGrid,
   Stack,
   Switch,
@@ -32,7 +33,7 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
 
   return (
     <Stack gap="md">
-      <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="lg">
         <Section title="When">
           <Switch
             size="xs"
@@ -114,6 +115,60 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             value={draft.account_failures}
             onChange={number('account_failures')}
           />
+        </Section>
+
+        <Section title="Failing streams">
+          <Switch
+            size="xs"
+            label="Check failing streams again"
+            description="Without waiting for the next full run."
+            checked={!!draft.recheck_failed}
+            onChange={(e) => set({ recheck_failed: e.currentTarget.checked })}
+          />
+          {draft.recheck_failed && (
+            <>
+              <Select
+                size="xs"
+                label="When"
+                allowDeselect={false}
+                value={draft.recheck_mode || 'hours'}
+                onChange={(mode) => mode && set({ recheck_mode: mode })}
+                data={[
+                  { value: 'hours', label: 'Every few hours' },
+                  {
+                    value: 'refresh',
+                    label: "After each refresh of its provider's playlist",
+                  },
+                ]}
+              />
+              {draft.recheck_mode !== 'refresh' && (
+                <NumberInput
+                  size="xs"
+                  label="Every (hours)"
+                  min={0.5}
+                  value={draft.recheck_hours}
+                  onChange={number('recheck_hours')}
+                />
+              )}
+            </>
+          )}
+          <Switch
+            size="xs"
+            label="Autopark"
+            description="Park a stream by itself once it has failed this many checks in a row. It stays checked, and goes back where it was as soon as it plays again."
+            checked={!!draft.autopark}
+            onChange={(e) => set({ autopark: e.currentTarget.checked })}
+          />
+          {draft.autopark && (
+            <NumberInput
+              size="xs"
+              label="Failed checks in a row"
+              description="After a refresh, three means at least two refreshes went by."
+              min={2}
+              value={draft.autopark_after}
+              onChange={number('autopark_after')}
+            />
+          )}
         </Section>
 
         <Section title="What">

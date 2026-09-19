@@ -459,8 +459,10 @@ const StreamCheckTable = () => {
                   )}
                 </Group>
                 <Text size="xs" c="dimmed" style={{ wordBreak: 'break-word' }}>
-                  Parked {when(r.parked_at)} from{' '}
+                  {r.auto ? 'Parked by autopark ' : 'Parked '}
+                  {when(r.parked_at)} from{' '}
                   {r.from.map((c) => c.name).join(', ') || 'no channel'}
+                  {r.auto && r.park_reason ? ` · ${r.park_reason}` : ''}
                 </Text>
               </Box>
             </Group>

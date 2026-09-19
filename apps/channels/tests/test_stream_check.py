@@ -872,6 +872,87 @@ class ChainTests(_Setup):
         self.assertFalse(self.redis.exists(stream_check.QUEUED_KEY))
 
 
+class RecheckTests(_Setup):
+    """A failing stream looked at again by itself, and parked by autopark if it stays dead."""
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        patcher = mock.patch("core.utils.RedisClient.get_client", return_value=self.redis)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        stream_check.save_settings({"enabled": True, "gap_seconds": 0})
+
+    def _results(self, **records):
+        stream_check._store(stream_check.RESULTS_KEY, "x", {
+            "streams": records,
+            # A full run just finished, so only rechecks can be due
+            "last_run": {"finished_at": stream_check._now(), "checked": 3, "total": 3},
+        })
+
+    def _ago(self, hours):
+        from datetime import datetime, timedelta, timezone
+
+        return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="milliseconds")
+
+    def _failed(self, hours_ago, failures=1):
+        return {"ok": False, "reason": "The provider answered HTTP 404", "failures": failures, "checked_at": self._ago(hours_ago), "history": [0]}
+
+    def test_a_failed_stream_is_due_again_after_the_hours_set(self):
+        self._results(**{
+            str(self.first.id): self._failed(4),
+            str(self.second.id): self._failed(1),
+            str(self.third.id): {"ok": True, "checked_at": self._ago(9)},
+        })
+        self.assertEqual(stream_check.rechecks_due(stream_check.load_settings()), [self.first.id])
+
+    def test_after_a_playlist_refresh_its_providers_failing_streams_are_due(self):
+        stream_check.save_settings({"recheck_mode": "refresh"})
+        self._results(**{str(self.first.id): self._failed(0.1), str(self.second.id): self._failed(0.1)})
+        self.assertEqual(stream_check.rechecks_due(stream_check.load_settings()), [])
+        self.assertEqual(stream_check.after_playlist_refresh(self.a.id), 1)
+        self.assertEqual(stream_check.rechecks_due(stream_check.load_settings()), [self.first.id])
+
+    def test_a_refresh_does_nothing_while_stream_check_is_off(self):
+        stream_check.save_settings({"enabled": False, "recheck_mode": "refresh"})
+        self._results(**{str(self.first.id): self._failed(0.1)})
+        self.assertEqual(stream_check.after_playlist_refresh(self.a.id), 0)
+
+    def test_the_tick_rechecks_only_the_failing_ones_and_leaves_the_full_run_as_it_was(self):
+        from apps.channels.tasks import stream_check_tick
+
+        self._results(**{str(self.first.id): self._failed(4)})
+        last_run = stream_check.load_results()["last_run"]
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            self.assertEqual(stream_check_tick(), "done")
+        self.assertEqual([c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list], ["ORF1A"])
+        self.assertTrue(stream_check.load_results()["streams"][str(self.first.id)]["ok"])
+        self.assertEqual(stream_check.load_results()["last_run"], last_run)
+
+    def test_autopark_parks_a_stream_dead_check_after_check_and_puts_it_back_when_it_plays(self):
+        stream_check.save_settings({"autopark": True, "autopark_after": 2, "account_failures": 99})
+        for _ in range(2):
+            stream_check.start_round(self.redis, force=True)
+            with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": False})):
+                stream_check.run(self.redis)
+        parked = stream_check.load_parked()
+        self.assertTrue(parked[str(self.second.id)]["auto"])
+        self.assertNotIn("ORF 1 B", self._order(self.orf1))
+
+        stream_check.start_round(self.redis, force=True)
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": True})):
+            stream_check.run(self.redis)
+        self.assertEqual(self._order(self.orf1), ["ORF 1 A", "ORF 1 B", "ORF 1 A2", "could not dispatch"])
+
+    def test_without_autopark_nothing_is_parked(self):
+        stream_check.save_settings({"autopark": False, "account_failures": 99})
+        for _ in range(4):
+            stream_check.start_round(self.redis, force=True)
+            with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1B": False})):
+                stream_check.run(self.redis)
+        self.assertEqual(stream_check.load_parked(), {})
+
+
 class ViewTests(_Setup):
     def setUp(self):
         super().setUp()

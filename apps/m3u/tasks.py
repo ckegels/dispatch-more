@@ -3939,6 +3939,15 @@ def _refresh_single_m3u_account_impl(account_id):
             total_processed=streams_processed,
         )
 
+        # Stream Check: this provider's failing streams are looked at again after a refresh,
+        # when that is how rechecks are set. Does nothing while Stream Check is off.
+        try:
+            from apps.channels.stream_check import after_playlist_refresh
+
+            after_playlist_refresh(account_id)
+        except Exception as e:
+            logger.debug(f"Stream Check could not note the refresh of account {account_id}: {e}")
+
         # Send final update with complete metrics and explicitly include success status
         send_m3u_update(
             account_id,
