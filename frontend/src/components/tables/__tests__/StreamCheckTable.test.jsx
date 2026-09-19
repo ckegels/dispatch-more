@@ -250,7 +250,7 @@ describe('StreamCheckTable', () => {
   it('turns autopark on, off by default', async () => {
     draw();
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
-    const autopark = screen.getByRole('switch', { name: /Autopark/ });
+    const autopark = screen.getByRole('switch', { name: /Park streams automatically after repeated failures/ });
     expect(autopark).not.toBeChecked();
     fireEvent.click(autopark);
     fireEvent.change(await screen.findByLabelText(/Failed checks in a row/), { target: { value: '4' } });

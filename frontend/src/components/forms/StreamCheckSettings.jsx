@@ -154,8 +154,8 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           )}
           <Switch
             size="xs"
-            label="Autopark"
-            description="Park a stream by itself once it has failed this many checks in a row. It stays checked, and goes back where it was as soon as it plays again."
+            label="Park streams automatically after repeated failures (autopark)"
+            description="Off: nothing is ever parked unless you park it. On: a stream that fails this many checks in a row is parked by itself -- off its channels, still checked -- and goes back where it was as soon as it plays again."
             checked={!!draft.autopark}
             onChange={(e) => set({ autopark: e.currentTarget.checked })}
           />
@@ -169,6 +169,15 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
               onChange={number('autopark_after')}
             />
           )}
+          <Switch
+            size="xs"
+            label="Also put streams I parked back when they work again"
+            description="Off, a parked stream that works again waits for you to put it back."
+            checked={!!draft.restore_recovered}
+            onChange={(e) =>
+              set({ restore_recovered: e.currentTarget.checked })
+            }
+          />
         </Section>
 
         <Section title="What">
@@ -184,15 +193,6 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             onChange={(picked) => set({ channel_groups: picked.map(Number) })}
             searchable
             clearable
-          />
-          <Switch
-            size="xs"
-            label="Put parked streams back when they work again"
-            description="Off, a parked stream that works again waits for you to put it back."
-            checked={!!draft.restore_recovered}
-            onChange={(e) =>
-              set({ restore_recovered: e.currentTarget.checked })
-            }
           />
         </Section>
       </SimpleGrid>
