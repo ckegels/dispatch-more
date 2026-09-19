@@ -99,11 +99,11 @@ describe('AboutModal', () => {
 
   describe('modified build', () => {
     it('says it is not official Dispatcharr, how to uninstall, and not to report upstream', () => {
-      setupStore({ version: '0.31.0', timestamp: null, build: 'mod' });
+      setupStore({ version: '0.31.0', timestamp: null, build: 'Dispatch More v99' });
       render(<AboutModal isOpen={true} onClose={vi.fn()} />);
-      expect(screen.getByText('v0.31.0+mod')).toBeInTheDocument();
+      expect(screen.getByText('v0.31.0 · patched (Dispatch More v99)')).toBeInTheDocument();
       expect(screen.getByText('A modified build, not official Dispatcharr')).toBeInTheDocument();
-      expect(screen.getByText('bash /root/uninstall-probation.sh')).toBeInTheDocument();
+      expect(screen.getByText(/Modified build has a button for it/)).toBeInTheDocument();
       expect(screen.getByText(/Do not report problems with this build/)).toBeInTheDocument();
     });
 

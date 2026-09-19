@@ -453,6 +453,32 @@ def version(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def modified_build(request):
+    """What this modified build is, as the installer recorded it (see core.modified_build)."""
+    from core import modified_build as build
+
+    return Response(build.status())
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def modified_build_uninstall(request):
+    """Ask for the modified build to be taken out, putting stock Dispatcharr back."""
+    from core import modified_build as build
+
+    try:
+        layout = build.request_uninstall(getattr(request.user, "username", ""))
+    except ValueError as e:
+        return Response({"error": str(e)}, status=409)
+    if layout == "docker":
+        how = "Restart the container to finish: it starts as stock Dispatcharr."
+    else:
+        how = "Stock Dispatcharr is being put back; the page will be gone for a minute while it restarts."
+    return Response({"requested": True, "layout": layout, "how": how})
+
+
 @extend_schema(
     description="Trigger rehashing of all streams",
 )

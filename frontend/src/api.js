@@ -2249,6 +2249,14 @@ export default class API {
     }
   }
 
+  static async getModifiedBuild() {
+    return await request(`${host}/api/core/modified-build/`);
+  }
+
+  static async uninstallModifiedBuild() {
+    return await request(`${host}/api/core/modified-build/uninstall/`, { method: 'POST' });
+  }
+
   static async getVersion() {
     try {
       const response = await request(`${host}/api/core/version/`, {

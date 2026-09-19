@@ -13,6 +13,7 @@ import {
   Tv,
   Users,
   Video,
+  TriangleAlert,
 } from 'lucide-react';
 
 const UiSettingsForm = lazy(() => import('../components/forms/settings/UiSettingsForm.jsx'));
@@ -29,6 +30,7 @@ const NetworkAccessForm = lazy(() => import('../components/forms/settings/Networ
 const SystemSettingsForm = lazy(() => import('../components/forms/settings/SystemSettingsForm.jsx'));
 const UserLimitsForm = lazy(() => import('../components/forms/settings/UserLimitsForm.jsx'));
 const BackupManager = lazy(() => import('../components/backups/BackupManager.jsx'));
+const ModifiedBuild = lazy(() => import('../components/ModifiedBuild.jsx'));
 
 // Component lives on each section so it can never drift out of sync with the
 // id used for routing/lookup (previously a separate COMPONENT_MAP keyed by
@@ -80,6 +82,8 @@ export const SETTINGS_GROUPS = [
     sections: [
       { id: 'system-settings', label: 'System Settings', icon: Settings2, Component: SystemSettingsForm },
       { id: 'user-limits', label: 'User Limits', icon: Users, Component: UserLimitsForm },
+      // Not official Dispatcharr: what this build is, and the way back to stock
+      { id: 'modified-build', label: 'Modified build', icon: TriangleAlert, Component: ModifiedBuild },
     ],
   },
   {

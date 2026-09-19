@@ -500,7 +500,7 @@ const Sidebar = ({ collapsed, toggleDrawer, drawerWidth, miniDrawerWidth }) => {
           <Tooltip
             label={
               appVersion?.build
-                ? `${versionLabel(appVersion)}: a modified build, not official Dispatcharr`
+                ? `${versionLabel(appVersion, { full: true })}: a modified build, not official Dispatcharr`
                 : versionLabel(appVersion)
             }
             position="top"

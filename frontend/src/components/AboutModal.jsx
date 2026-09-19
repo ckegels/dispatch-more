@@ -2,7 +2,6 @@ import React from 'react';
 import {
   Alert,
   Box,
-  Code,
   Button,
   Divider,
   Group,
@@ -20,7 +19,7 @@ import { versionLabel } from '../utils/versionLabel';
 
 const AboutModal = ({ isOpen, onClose }) => {
   const appVersion = useSettingsStore((s) => s.version);
-  const versionString = versionLabel(appVersion);
+  const versionString = versionLabel(appVersion, { full: true });
 
   return (
     <Modal
@@ -63,7 +62,10 @@ const AboutModal = ({ isOpen, onClose }) => {
                 If something goes wrong, first uninstall the changes and try the
                 same thing on stock Dispatcharr:
               </Text>
-              <Code block>bash /root/uninstall-probation.sh</Code>
+              <Text size="sm">
+                Settings → System → Modified build has a button for it; the
+                uninstall script does the same by hand.
+              </Text>
               <Text size="sm" fw={600}>
                 Do not report problems with this build on the official
                 Dispatcharr GitHub or Discord. Only a problem that also happens

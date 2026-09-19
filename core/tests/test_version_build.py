@@ -10,7 +10,7 @@ class VersionBuildTests(TestCase):
     def test_the_build_is_said(self):
         data = APIClient().get("/api/core/version/").json()
         self.assertEqual(data["version"], version.__version__)
-        self.assertEqual(data["build"], "mod")
+        self.assertTrue(data["build"].startswith("Dispatch More"))
 
     def test_the_version_itself_is_the_official_one(self):
         """It goes to providers in the User-Agent and is compared with official releases."""

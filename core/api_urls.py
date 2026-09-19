@@ -10,6 +10,8 @@ from .api_views import (
     SystemNotificationViewSet,
     environment,
     version,
+    modified_build,
+    modified_build_uninstall,
     rehash_streams_endpoint,
     TimezoneListView,
     get_system_events
@@ -29,6 +31,8 @@ router.register(r'notifications', SystemNotificationViewSet, basename='systemnot
 urlpatterns = [
     path('settings/env/', environment, name='token_refresh'),
     path('version/', version, name='version'),
+    path('modified-build/', modified_build, name='modified_build'),
+    path('modified-build/uninstall/', modified_build_uninstall, name='modified_build_uninstall'),
     path('rehash-streams/', rehash_streams_endpoint, name='rehash_streams'),
     path('timezones/', TimezoneListView.as_view(), name='timezones'),
     path('system-events/', get_system_events, name='system_events'),
