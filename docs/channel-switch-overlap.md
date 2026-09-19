@@ -104,7 +104,10 @@ A channel counts as skipped when all of these are true:
 - The requesting viewer is its only client (shared channels are never stopped).
 - The viewer joined it within the account's Overlap Window (the earliest join counts,
   so reconnecting to a channel watched for a while does not qualify).
-- Its account has both Allow Channel Switch Overlap and Stop Skipped Channels enabled.
+- Its account has Stop Skipped Channels enabled. The overlap need not be: stopping a skipped
+  channel asks no extra slot of the provider. Since 2026-09-19 it is a switch of its own, with
+  its own window (`probation_skip_seconds`, falling back to the overlap window on accounts
+  saved before).
 - It is not the channel being requested.
 
 Anonymous viewers never trigger it. Surfing A → B → C → D → E stops B, C and D as the
@@ -340,6 +343,7 @@ Per M3U account (stored in `M3UAccount.custom_properties`, no migration):
 | Allow Channel Switch Overlap | `probation_enabled` | off |
 | Overlap Window (seconds, 1–120) | `probation_seconds` | 10 |
 | Stop Skipped Channels | `probation_stop_skipped` | off |
+| Skipped Within (seconds) | `probation_skip_seconds` | 10 (or the account's overlap window) |
 | Surfing Delay (ms, 0–2000) | `probation_surf_delay_ms` | 500 |
 | When Switching Channels | `probation_account_preference` | `order` |
 | LAN Subnets | `probation_lan_subnets` | the detected /24 when the overlap is switched on |

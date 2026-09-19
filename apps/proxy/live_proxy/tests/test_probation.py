@@ -1410,7 +1410,9 @@ class FeatureNotInUseTests(TestCase):
         )
         before = (dict(redis.strings), {k: dict(v) for k, v in redis.hashes.items()}, dict(redis.sets))
         viewer = probation.Viewer(self.IP, app="TiviMate")
+        # Both switches are cached once a minute, like a running server has them
         probation.in_use()
+        probation.skipping_in_use()
 
         with self.assertNumQueries(0):
             probation.hold_slot_for_viewer(redis, uuid, self.profile.id)
@@ -1623,9 +1625,23 @@ class StopSkippedChannelsTests(TestCase):
             self.assertEqual(self._stop(), [])
         mock_scan.assert_not_called()
 
+    def test_stopping_skipped_channels_does_not_need_the_overlap(self, mock_stop, _mock_spawn):
+        """Its own feature: it asks no extra slot of the provider, so any account may use it."""
+        self._channel("skipped", clients=[("c1", self.IP, "0", "TiviMate", 1)])
         self._set_props(self.account, probation_stop_skipped=True, probation_enabled=False)
-        self.assertEqual(self._stop(), [])
-        mock_stop.assert_not_called()
+        probation.forget_in_use()
+        self.assertEqual(self._stop(), ["skipped"])
+
+    def test_the_skip_window_is_its_own(self, mock_stop, _mock_spawn):
+        self._channel("inside", clients=[("c1", self.IP, "0", "TiviMate", 4)])
+        self._channel("outside", clients=[("c2", self.IP, "0", "TiviMate", 6)])
+        self._set_props(self.account, probation_skip_seconds=5, probation_seconds=60)
+        self.assertEqual(self._stop(), ["inside"])
+
+    def test_an_account_saved_before_keeps_the_window_it_used(self, mock_stop, _mock_spawn):
+        account = self.account
+        account.custom_properties = {"probation_stop_skipped": True, "probation_seconds": 30}
+        self.assertEqual(probation.account_skip_seconds(account), 30)
 
     def test_only_accounts_with_the_option_are_affected(self, mock_stop, _mock_spawn):
         _other_account, other_profile = _make_account("no-stop", probation_enabled=True)

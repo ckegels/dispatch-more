@@ -99,7 +99,7 @@ Everyone else takes no part in any of this and is served exactly as they are wit
     <OverlapSection title="The settings">
       {`Overlap Window — how long the extra connection may last, and how long a slot is kept for a viewer whose channel ended mid-switch so nobody else takes it in between.
 
-Stop Skipped Channels — a channel a player watched for less than the Overlap Window is closed as soon as its next one has started, so surfing does not fill every slot.
+Stop Skipped Channels (a switch of its own, which works without the overlap) — a channel a player watched for less than its Skipped Within time is closed as soon as its next one has started, so surfing does not fill every slot.
 
 Surfing Delay — when a player switches again within the Overlap Window, Dispatcharr waits this long before asking the provider, so channels passed on the way are never requested. The first switch after actually watching something happens at once. Not applied to Plex, Jellyfin or Emby.
 
@@ -113,7 +113,7 @@ Channel Shutdown Delay — a channel nobody is watching any more is closed early
     <OverlapSection title="Worth knowing before you switch it on">
       {`• Players on your network are told apart by address, so each device needs its own. Not for an address shared by several: a Docker network, a second router, or an untrusted reverse proxy.
 • A login used by two devices at once is not supported. The overlap can go to the wrong one, and Stop Skipped Channels can close a channel the other is watching.
-• Stop Skipped Channels does not understand multiview or picture-in-picture: a second channel opened within the Overlap Window closes the first.
+• Stop Skipped Channels does not understand multiview or picture-in-picture: a second channel opened within its Skipped Within time closes the first.
 • When a provider refuses a new connection without sending any video, Dispatcharr waits longer before trying again (1.5s, then 3s) rather than retrying straight away.`}
     </OverlapSection>
   </div>
@@ -146,6 +146,16 @@ const M3U = ({
   const [overlapConfirmOpen, setOverlapConfirmOpen] = useState(false);
   const [overlapInfoOpen, setOverlapInfoOpen] = useState(false);
   const [overlapEnabled, setOverlapEnabled] = useState(false);
+  const [skippingEnabled, setSkippingEnabled] = useState(false);
+
+  // Start LAN Subnets with the network Dispatcharr is on, so players on the LAN are recognised
+  // without a login. Visible in the form, so it can be changed or cleared before saving.
+  const suggestSubnet = () => {
+    const suggestion = m3uAccount?.probation_lan_subnet_suggestion;
+    if (suggestion && form.getValues().probation_lan_subnets.length === 0) {
+      form.setFieldValue('probation_lan_subnets', [suggestion]);
+    }
+  };
 
   // Keep expiration in sync when the default profile is edited (store refreshes).
   // Do not rebind the whole form to the live playlist or unsaved edits are wiped.
@@ -178,6 +188,7 @@ const M3U = ({
       probation_enabled: false,
       probation_seconds: 10,
       probation_stop_skipped: false,
+      probation_skip_seconds: 10,
       probation_surf_delay_ms: 500,
       probation_account_preference: 'order',
       probation_lan_subnets: [],
@@ -219,12 +230,14 @@ const M3U = ({
         probation_enabled: m3uAccount.probation_enabled || false,
         probation_seconds: m3uAccount.probation_seconds ?? 10,
         probation_stop_skipped: m3uAccount.probation_stop_skipped || false,
+        probation_skip_seconds: m3uAccount.probation_skip_seconds ?? 10,
         probation_surf_delay_ms: m3uAccount.probation_surf_delay_ms ?? 500,
         probation_account_preference:
           m3uAccount.probation_account_preference || 'order',
         probation_lan_subnets: m3uAccount.probation_lan_subnets || [],
       });
       setOverlapEnabled(m3uAccount.probation_enabled || false);
+      setSkippingEnabled(m3uAccount.probation_stop_skipped || false);
       setExpDate(expDateFromPlaylist(m3uAccount.exp_date));
 
       // Determine schedule type from existing data
@@ -239,6 +252,7 @@ const M3U = ({
       setScheduleType('interval');
       setExpDate(null);
       setOverlapEnabled(false);
+      setSkippingEnabled(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [m3uAccount]);
@@ -290,6 +304,7 @@ const M3U = ({
       await updatePlaylist(playlist, values, file);
       form.reset();
       setOverlapEnabled(false);
+      setSkippingEnabled(false);
       setFile(null);
       onClose();
       return;
@@ -302,6 +317,7 @@ const M3U = ({
   const close = () => {
     form.reset();
     setOverlapEnabled(false);
+    setSkippingEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -312,6 +328,7 @@ const M3U = ({
     // After group filter setup for a new account, reset everything
     form.reset();
     setOverlapEnabled(false);
+    setSkippingEnabled(false);
     setFile(null);
     setPlaylist(null);
     onClose();
@@ -494,16 +511,6 @@ const M3U = ({
                       {...form.getInputProps('probation_surf_delay_ms')}
                       key={form.key('probation_surf_delay_ms')}
                     />
-                    <Switch
-                      id="probation_stop_skipped"
-                      name="probation_stop_skipped"
-                      label="Stop Skipped Channels"
-                      description="Close channels a player surfed past."
-                      key={form.key('probation_stop_skipped')}
-                      {...form.getInputProps('probation_stop_skipped', {
-                        type: 'checkbox',
-                      })}
-                    />
                     <Select
                       id="probation_account_preference"
                       name="probation_account_preference"
@@ -518,20 +525,58 @@ const M3U = ({
                       key={form.key('probation_account_preference')}
                       {...form.getInputProps('probation_account_preference')}
                     />
-                    <TagsInput
-                      id="probation_lan_subnets"
-                      name="probation_lan_subnets"
-                      label="LAN Subnets"
-                      description="Players with an IP address in these subnets are recognised by their address and app, so they need no login. Leave empty to recognise nobody without a login. Type an address and press Enter, comma or Tab."
-                      placeholder="e.g. 192.168.1.0/24"
-                      splitChars={[',', ' ']}
-                      acceptValueOnBlur
-                      key={form.key('probation_lan_subnets')}
-                      {...form.getInputProps('probation_lan_subnets')}
+                  </Stack>
+                </Collapse>
+              </Box>
+              {/* Its own feature: stopping a channel a player surfed past needs no extra slot
+                  from the provider, so it works whether or not the overlap is allowed */}
+              <Box>
+                <Switch
+                  id="probation_stop_skipped"
+                  name="probation_stop_skipped"
+                  label="Stop Skipped Channels"
+                  description="Close a channel as soon as the player that only glanced at it asks for the next one, so fast surfing does not fill every slot. Only for players Dispatcharr can tell apart: a login, a media server player, or an address in the LAN Subnets below."
+                  key={form.key('probation_stop_skipped')}
+                  {...form.getInputProps('probation_stop_skipped', {
+                    type: 'checkbox',
+                  })}
+                  onChange={(event) => {
+                    const on = event.currentTarget.checked;
+                    form.setFieldValue('probation_stop_skipped', on);
+                    setSkippingEnabled(on);
+                    if (on) suggestSubnet();
+                  }}
+                />
+                <Collapse in={skippingEnabled}>
+                  <Stack gap="xs" pl="md" pt="xs">
+                    <NumberInput
+                      id="probation_skip_seconds"
+                      name="probation_skip_seconds"
+                      label="Skipped Within (seconds)"
+                      description="A channel watched for less than this counts as skipped past."
+                      min={1}
+                      max={120}
+                      {...form.getInputProps('probation_skip_seconds')}
+                      key={form.key('probation_skip_seconds')}
                     />
                   </Stack>
                 </Collapse>
               </Box>
+              {/* Who the viewers are is needed by both features above, so it belongs to
+                  neither: shown while either is on */}
+              <Collapse in={overlapEnabled || skippingEnabled}>
+                <TagsInput
+                  id="probation_lan_subnets"
+                  name="probation_lan_subnets"
+                  label="LAN Subnets"
+                  description="Players with an IP address in these subnets are recognised by their address and app, so they need no login. Leave empty to recognise nobody without a login. Type an address and press Enter, comma or Tab."
+                  placeholder="e.g. 192.168.1.0/24"
+                  splitChars={[',', ' ']}
+                  acceptValueOnBlur
+                  key={form.key('probation_lan_subnets')}
+                  {...form.getInputProps('probation_lan_subnets')}
+                />
+              </Collapse>
               <Select
                 id="server_group"
                 name="server_group"
@@ -751,15 +796,7 @@ const M3U = ({
         onClose={() => setOverlapConfirmOpen(false)}
         onConfirm={() => {
           form.setFieldValue('probation_enabled', true);
-          // Start with the network Dispatcharr is on, so players on the LAN are recognised
-          // without a login. Visible in the form, so it can be changed or cleared before saving.
-          const suggestion = m3uAccount?.probation_lan_subnet_suggestion;
-          if (
-            suggestion &&
-            form.getValues().probation_lan_subnets.length === 0
-          ) {
-            form.setFieldValue('probation_lan_subnets', [suggestion]);
-          }
+          suggestSubnet();
           setOverlapEnabled(true);
           setOverlapConfirmOpen(false);
         }}

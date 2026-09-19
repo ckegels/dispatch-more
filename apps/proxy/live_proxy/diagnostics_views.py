@@ -60,7 +60,8 @@ def _account_rows(redis_client):
     )
     for profile in profiles:
         account = profile.m3u_account
-        if not probation.account_allows_probation(account):
+        # An account stopping skipped channels without the overlap makes switches too
+        if not probation.account_identifies_viewers(account):
             continue
         rows.append({
             "account": account.name,
@@ -250,7 +251,7 @@ def diagnostics(request):
         except (TypeError, ValueError) as e:
             return JsonResponse({"error": str(e)}, status=400)
 
-    enabled = probation.in_use()
+    enabled = probation.in_use() or probation.skipping_in_use()
 
     return JsonResponse({
         "starts": _section("channel starts", lambda: _starts(redis_client), []),

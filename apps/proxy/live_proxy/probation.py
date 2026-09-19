@@ -2,14 +2,17 @@
 Channel Switch Overlap ("probation slots") for live channels.
 
 Everything here is per M3U account (custom_properties) and does nothing unless the
-account has "probation_enabled":
+account has it switched on. Two switches, independent of each other: "probation_enabled" for
+the overlap and how a viewer's next account is chosen, "probation_stop_skipped" for stopping
+skipped channels -- which needs no extra slot from the provider, so it works on any account:
 
 - Overlap: when every profile a channel can use is full, a viewer already watching on one
   of them may start the new channel at once on one extra slot. If a stream on that profile
   ends within the window it was a channel switch and nothing else happens; otherwise the
   channel moves to a profile with a free slot, or this new channel is stopped.
-- Stop Skipped Channels ("probation_stop_skipped"): channels a viewer only watched for a
-  moment are stopped when it requests the next one, so fast surfing frees slots.
+- Stop Skipped Channels ("probation_stop_skipped", window "probation_skip_seconds"): channels
+  a viewer only watched for a moment are stopped when it requests the next one, so fast
+  surfing frees slots. Only for viewers that can be told apart; the overlap need not be on.
 - When Switching Channels ("probation_account_preference"): "same" keeps a viewer's next
   channel on the account it is on or just left, "alternate" starts it on another account
   with a free slot first, "order" (default) follows the channel's stream order.
@@ -144,6 +147,8 @@ IN_USE_CACHE_KEY = "live:probation:in_use"
 IN_USE_CACHE_TTL = 60
 # The same for LAN Device Tracking ("probation_lan_subnets"), cleared together with it.
 LAN_TRACKING_CACHE_KEY = "live:probation:lan_tracking"
+# The same for Stop Skipped Channels, which is switched on apart from the overlap
+SKIPPING_CACHE_KEY = "live:probation:stop_skipped"
 
 # Version numbers in a User-Agent, removed to recognise the app across updates
 # ("TiviMate/5.1.6 (Android 12)" -> "TiviMate/ (Android )")
@@ -436,12 +441,31 @@ def account_probation_seconds(m3u_account) -> int:
 
 
 def account_stops_skipped_channels(m3u_account) -> bool:
+    """Stop Skipped Channels, on for this account: on its own, the overlap need not be."""
     return _account_props(m3u_account).get("probation_stop_skipped") is True
+
+
+def account_skip_seconds(m3u_account) -> int:
+    """
+    How long a viewer may watch a channel and still have only skipped past it. Its own
+    setting now; an account saved before it existed keeps the overlap window it used.
+    """
+    props = _account_props(m3u_account)
+    try:
+        seconds = int(props.get("probation_skip_seconds", props.get("probation_seconds", DEFAULT_PROBATION_SECONDS)))
+    except (TypeError, ValueError):
+        return DEFAULT_PROBATION_SECONDS
+    return min(max(seconds, MIN_PROBATION_SECONDS), MAX_PROBATION_SECONDS)
+
+
+def account_identifies_viewers(m3u_account) -> bool:
+    """Whether anything on this account needs its viewers told apart: the overlap, or stopping skipped channels."""
+    return account_allows_probation(m3u_account) or account_stops_skipped_channels(m3u_account)
 
 
 def account_tracks_lan_devices(m3u_account) -> bool:
     """LAN Device Tracking is on when the account has LAN Subnets; an empty list is off."""
-    return account_allows_probation(m3u_account) and bool(account_lan_subnets(m3u_account))
+    return account_identifies_viewers(m3u_account) and bool(account_lan_subnets(m3u_account))
 
 
 @lru_cache(maxsize=256)
@@ -553,9 +577,7 @@ def any_account_stops_skipped_channels() -> bool:
     from apps.m3u.models import M3UAccount
 
     return M3UAccount.objects.filter(
-        is_active=True,
-        custom_properties__probation_enabled=True,
-        custom_properties__probation_stop_skipped=True,
+        is_active=True, custom_properties__probation_stop_skipped=True
     ).exists()
 
 
@@ -571,10 +593,8 @@ def any_account_tracks_lan_devices() -> bool:
     from apps.m3u.models import M3UAccount
 
     return any(
-        account_lan_subnets(account)
-        for account in M3UAccount.objects.filter(
-            is_active=True, custom_properties__probation_enabled=True
-        )
+        account_lan_subnets(account) and account_identifies_viewers(account)
+        for account in M3UAccount.objects.filter(is_active=True)
     )
 
 
@@ -614,9 +634,16 @@ def in_use() -> bool:
     return _cached_flag(IN_USE_CACHE_KEY, any_account_allows_probation, "Channel Switch Overlap")
 
 
+def skipping_in_use() -> bool:
+    """Whether any active account stops skipped channels (cached like in_use())."""
+    return _cached_flag(
+        SKIPPING_CACHE_KEY, any_account_stops_skipped_channels, "Stop Skipped Channels"
+    )
+
+
 def lan_tracking_in_use() -> bool:
     """Whether any active account uses LAN Device Tracking (cached like in_use())."""
-    return in_use() and _cached_flag(
+    return (in_use() or skipping_in_use()) and _cached_flag(
         LAN_TRACKING_CACHE_KEY, any_account_tracks_lan_devices, "LAN Device Tracking"
     )
 
@@ -626,7 +653,7 @@ def forget_in_use(**_kwargs):
     from django.core.cache import cache
 
     try:
-        cache.delete_many([IN_USE_CACHE_KEY, LAN_TRACKING_CACHE_KEY])
+        cache.delete_many([IN_USE_CACHE_KEY, LAN_TRACKING_CACHE_KEY, SKIPPING_CACHE_KEY])
     except Exception as e:
         logger.debug(f"Could not clear {IN_USE_CACHE_KEY}: {e}")
 
@@ -737,7 +764,7 @@ def settle_media_server_start(redis_client, channel_uuid, device, previous_chann
     if not redis_client or not device or not channel_uuid:
         return []
     try:
-        if not in_use():
+        if not skipping_in_use():
             return []
         viewer = Viewer("", server_device=device)
         stopped = stop_skipped_channels(redis_client, viewer, channel_uuid)
@@ -1421,7 +1448,7 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
     Stop the channels this viewer surfed past, so their slots are free again.
 
     A channel counts as skipped when the viewer is its only client and joined it within the
-    account's overlap window. Dispatcharr would otherwise keep it until it notices the
+    account's skip window. Only needs Stop Skipped Channels on the account, not the overlap. Dispatcharr would otherwise keep it until it notices the
     player left, which fills every slot while surfing.
 
     stream_ts calls this once the requested channel has its slot (so switching can use the
@@ -1434,7 +1461,8 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
         return []
 
     try:
-        if not in_use() or not any_account_stops_skipped_channels():
+        # Its own switch: stopping a skipped channel needs no overlap slot from the provider
+        if not skipping_in_use():
             return []
 
         from apps.m3u.models import M3UAccountProfile
@@ -1492,14 +1520,10 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
             if profile is None:
                 continue
             account = profile.m3u_account
-            if not (
-                account_allows_probation(account)
-                and account_stops_skipped_channels(account)
-                and is_identified(viewer, account)
-            ):
+            if not (account_stops_skipped_channels(account) and is_identified(viewer, account)):
                 continue
             watched_for = now - joined_at
-            if watched_for > account_probation_seconds(account):
+            if watched_for > account_skip_seconds(account):
                 continue
             logger.info(
                 f"Probation: stopping skipped channel {channel_uuid} (watched {watched_for:.1f}s) "

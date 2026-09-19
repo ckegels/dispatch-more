@@ -751,9 +751,10 @@ describe('M3U', () => {
       expect(
         screen.queryByRole('spinbutton', { name: /overlap window/i })
       ).not.toBeInTheDocument();
+      // Its own feature now, not one of the overlap's settings
       expect(
-        screen.queryByRole('switch', { name: /stop skipped channels/i })
-      ).not.toBeInTheDocument();
+        screen.getByRole('switch', { name: /stop skipped channels/i })
+      ).toBeInTheDocument();
       expect(
         screen.queryByRole('combobox', { name: /when switching channels/i })
       ).not.toBeInTheDocument();
@@ -811,6 +812,27 @@ describe('M3U', () => {
       ).toHaveValue('alternate');
       expect(
         screen.queryByRole('switch', { name: /anonymous connections/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it('stops skipped channels on an account without the overlap', () => {
+      setupStores();
+      render(<M3U {...defaultProps({ m3uAccount: makeM3uAccount() })} />);
+
+      // Not tucked away behind the overlap any more: there, and on its own
+      const stop = screen.getByRole('switch', { name: /stop skipped channels/i });
+      expect(overlapSwitch()).not.toBeChecked();
+      fireEvent.click(stop);
+
+      expect(stop).toBeChecked();
+      expect(
+        screen.getByRole('spinbutton', { name: /skipped within/i })
+      ).toHaveValue(10);
+      // Players are told apart the same way as for the overlap, so the subnets come too
+      expect(screen.getByText('192.168.9.0/24')).toBeInTheDocument();
+      // And no confirmation: it asks nothing extra of the provider
+      expect(
+        screen.queryByRole('button', { name: 'Confirm dialog' })
       ).not.toBeInTheDocument();
     });
 
