@@ -2885,10 +2885,11 @@ export default class API {
     });
   }
 
-  static async applyChannelManager(settings, keys, orders = {}) {
+  static async applyChannelManager(settings, keys, orders = {}, groups = {}) {
+    // groups: {row key: channel group id} for new channels put in another group
     return await request(`${host}/api/channels/channel-manager/apply/`, {
       method: 'POST',
-      body: { settings, keys, orders },
+      body: { settings, keys, orders, groups },
     });
   }
 

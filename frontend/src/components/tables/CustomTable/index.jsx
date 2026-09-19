@@ -25,12 +25,15 @@ const useTable = ({
   tableId,
   onResetColumnSizing,
   fillHeight = false,
+  // Every row open at once, for a page that asks for it; one at a time otherwise
+  expandAll = false,
   ...options
 }) => {
   const [selectedTableIds, setSelectedTableIds] = useState([]);
   const selectedTableIdsRef = useRef(selectedTableIds);
   selectedTableIdsRef.current = selectedTableIds;
-  const [expandedRowIds, setExpandedRowIds] = useState([]);
+  const [openRowIds, setExpandedRowIds] = useState([]);
+  const expandedRowIds = expandAll ? allRowIds : openRowIds;
   const [lastClickedId, setLastClickedId] = useState(null);
   const lastClickedIdRef = useRef(lastClickedId);
   lastClickedIdRef.current = lastClickedId;

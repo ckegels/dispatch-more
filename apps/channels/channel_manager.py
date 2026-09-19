@@ -81,10 +81,18 @@ DEFAULTS = {
     "skip_custom": True,
     "drop_sd_when_hd": False,
     # ── What to change ──
-    "create_new": False,
+    # Streams that match no channel are suggested as new ones. Only suggested: nothing is
+    # made unless its row is ticked and applied
+    "create_new": True,
+    # Which streams are suggested as new channels: "followed", from the stream groups you
+    # already take channels from (a provider adding a channel to a group you use), or "all"
+    # -- every stream, which on most setups is tens of thousands
+    "new_from": "followed",
+    # Give a new channel the custom fallback stream most of your channels end in
+    "new_fallback": True,
     "min_streams_new": 1,
     "keep_country_prefix": True,
-    # None numbers new channels after the highest number there is
+    # None numbers each new channel after the last one in its group, on a number nobody has
     "number_start": None,
     "reorder_existing": False,
     "replace_streams": False,
@@ -101,7 +109,10 @@ DEFAULTS = {
 # first defaults matched far more loosely than DispatcharrUtils, and a page opened once
 # saved them all, so they would have outlived the fix. What was chosen to look at is
 # kept; how matching is done goes back to the defaults.
-DEFAULTS_VERSION = 2
+DEFAULTS_VERSION = 3
+# What changed in each version, and so what a set saved before it takes from the defaults;
+# the rest of what was saved is kept. Version 3: new channels are suggested by default.
+CHANGED_IN = {3: ("create_new",)}
 SCOPE_SETTINGS = ("accounts", "stream_groups", "channel_groups", "target_group", "profiles")
 
 QUALITY_LABELS = ["4K", "FHD", "HD", "SD"]
@@ -127,7 +138,14 @@ def load_settings():
     try:
         stored = CoreSettings.objects.filter(key=SETTINGS_KEY).first()
         if stored and isinstance(stored.value, dict):
-            kept = DEFAULTS if stored.value.get("version") == DEFAULTS_VERSION else SCOPE_SETTINGS
+            version = stored.value.get("version")
+            if version == DEFAULTS_VERSION:
+                kept = set(DEFAULTS)
+            elif version in (2,):
+                changed = {k for v, keys in CHANGED_IN.items() if v > version for k in keys}
+                kept = set(DEFAULTS) - changed
+            else:
+                kept = set(SCOPE_SETTINGS)
             values.update({k: v for k, v in stored.value.items() if k in kept})
     except Exception as e:
         logger.debug(f"Could not read the channel manager settings: {e}")
@@ -516,6 +534,91 @@ def _logo_for(name, streams, mode, index):
     return next((s["logo_url"] for s in streams if s["logo_url"].startswith("http")), "")
 
 
+def _followed_groups():
+    """The stream groups at least one channel takes streams from: the ones in use."""
+    from .models import ChannelStream
+
+    return set(
+        ChannelStream.objects.filter(stream__is_custom=False, stream__channel_group_id__isnull=False)
+        .values_list("stream__channel_group_id", flat=True).distinct()
+    )
+
+
+class _NewHomes:
+    """
+    Where a new channel would go, and on which number.
+
+    Its group: the one your channels from the same stream group are in -- a provider's
+    "AT | AUSTRIA" streams feed your "┃AT┃ AUSTRIA" channels -- or else a group whose channels
+    carry the same country box, or else the stream's own group. Its number: the next one
+    after the last channel of that group that no channel has, so it lands with its group.
+    """
+
+    def __init__(self):
+        from collections import Counter
+
+        from .models import Channel, ChannelGroup, ChannelStream
+
+        self.names = dict(ChannelGroup.objects.values_list("id", "name"))
+        by_stream_group = {}
+        for stream_group, channel_group in ChannelStream.objects.filter(
+            stream__is_custom=False, channel__channel_group_id__isnull=False,
+        ).values_list("stream__channel_group_id", "channel__channel_group_id"):
+            by_stream_group.setdefault(stream_group, Counter())[channel_group] += 1
+        self.by_stream_group = {g: c.most_common(1)[0][0] for g, c in by_stream_group.items()}
+        by_country = {}
+        self.highest_in = {}
+        self.taken = set()
+        self.highest = 0
+        for number, group_id, name in Channel.objects.values_list("channel_number", "channel_group_id", "name"):
+            if number is not None:
+                self.taken.add(float(number))
+                self.highest = max(self.highest, float(number))
+                if group_id:
+                    self.highest_in[group_id] = max(self.highest_in.get(group_id, 0), float(number))
+            country = country_for(name, self.names.get(group_id, ""))
+            if country and group_id:
+                by_country.setdefault(country, Counter())[group_id] += 1
+        self.by_country = {c: counter.most_common(1)[0][0] for c, counter in by_country.items()}
+
+    def group_for(self, stream, country):
+        """(group id, why) for a new channel of this stream."""
+        if stream["group_id"] in self.by_stream_group:
+            return self.by_stream_group[stream["group_id"]], "where your channels from this stream group are"
+        if country and country in self.by_country:
+            return self.by_country[country], f"where most of your {country} channels are"
+        return stream["group_id"], "the stream's own group"
+
+    def number_in(self, group_id):
+        """The next number after the group's last channel that nobody has, and keep it."""
+        number = float(int(self.highest_in.get(group_id, self.highest)) + 1)
+        while number in self.taken:
+            number += 1
+        self.taken.add(number)
+        if group_id:
+            self.highest_in[group_id] = max(self.highest_in.get(group_id, 0), number)
+        return number
+
+
+def _usual_fallback():
+    """The custom stream most channels end in (a "could not dispatch" screen), or None."""
+    from collections import Counter
+
+    from .models import ChannelStream
+
+    last = {}
+    for channel_id, stream_id, custom in (
+        ChannelStream.objects.order_by("channel_id", "order").values_list("channel_id", "stream_id", "stream__is_custom")
+    ):
+        last[channel_id] = (stream_id, custom)
+    counts = Counter(stream_id for stream_id, custom in last.values() if custom)
+    if not counts:
+        return None
+    stream_id, count = counts.most_common(1)[0]
+    # Only when it really is what channels end in, not one channel's odd stream
+    return stream_id if count * 2 >= len(last) else None
+
+
 def build_plan(settings):
     """
     Every channel as it would come out: what goes into it, and what it would look like.
@@ -669,52 +772,70 @@ def build_plan(settings):
 
     # ── Channels there are not, yet ──
     if settings.get("create_new"):
-        from .models import Channel
-
+        homes = _NewHomes()
         target = settings.get("target_group")
-        target_name = ""
-        if target:
-            target_name = ChannelGroup.objects.filter(id=target).values_list("name", flat=True).first() or ""
         number = settings.get("number_start")
-        if number in (None, ""):
-            highest = Channel.objects.order_by("-channel_number").values_list("channel_number", flat=True).first()
-            number = int(highest or 0) + 1
-        number = float(number)
+        number = float(number) if number not in (None, "") else None
+        # Only streams from the groups in use, unless every group is asked for or groups
+        # were chosen by hand
+        followed = None
+        if settings.get("new_from", "followed") == "followed" and not settings.get("stream_groups"):
+            followed = _followed_groups()
+        # The custom stream your channels end in, so a new one ends in it too
+        fallback_id = _usual_fallback() if settings.get("new_fallback", True) else None
+        fallback = (_attached_rows([fallback_id], settings) or [None])[0] if fallback_id else None
 
         planned = []
         for (country, key), found in homeless.items():
-            if len(found) < int(settings.get("min_streams_new") or 1):
+            if followed is not None:
+                found = [s for s in found if s["group_id"] in followed]
+            if len(found) < int(settings.get("min_streams_new") or 1) or not found:
                 continue
             ordered = _ordered(found, settings)
             if settings.get("drop_sd_when_hd") and any(s["quality_rank"] < 3 for s in ordered):
                 ordered = [s for s in ordered if s["quality"] != "SD"]
             best = min(ordered, key=lambda s: (s["priority"], s["quality_rank"]))
             name = best["clean"] if settings.get("keep_country_prefix") else _strip_country_box(best["clean"])
-            planned.append((name, country, key, ordered, best))
+            if target:
+                group_id, why = int(target), "the group chosen in the levers"
+            else:
+                group_id, why = homes.group_for(best, country)
+            planned.append((name, country, key, ordered, group_id, why))
 
-        for name, country, key, ordered, best in sorted(planned, key=lambda p: p[0].lower()):
+        # By group, then name, so numbers follow on within each group
+        for name, country, key, ordered, group_id, why in sorted(
+            planned, key=lambda p: (homes.names.get(p[4], "").lower(), p[0].lower())
+        ):
             epg = guides.find(ordered, _strip_country_box(name), settings.get("epg"))
             logo = _logo_for(name, ordered, settings.get("logo"), index)
+            if number is not None:
+                channel_number = number
+                number += 1
+            else:
+                channel_number = homes.number_in(group_id)
+            streams_after = [_stream_summary(s, added=True) for s in ordered]
+            if fallback:
+                streams_after.append(_stream_summary(fallback, added=True))
             rows.append({
                 "key": f"new:{country}:{key}",
                 "status": "new",
                 "channel": {
                     "id": None,
                     "name": name,
-                    "number": number,
-                    "group": target_name or best["group"],
-                    "group_id": target or best["group_id"],
+                    "number": channel_number,
+                    "group": homes.names.get(group_id, ""),
+                    "group_id": group_id,
+                    "group_why": why,
                     "logo_url": logo,
                     "epg": epg,
                 },
                 "before": {"channel": None, "streams": [_stream_summary(s) for s in ordered]},
-                "streams": [_stream_summary(s, added=True) for s in ordered],
+                "streams": streams_after,
                 "adds": len(ordered),
                 "removes": 0,
                 "changes": [],
                 "country": country,
             })
-            number += 1
 
     order = {"new": 0, "merge": 1, "conflict": 2, "unchanged": 3}
     rows.sort(key=lambda r: (order[r["status"]], (r["channel"] or {}).get("number") or 0))
@@ -752,14 +873,16 @@ def _in_the_order_given(final_ids, given, custom_ids):
     return [i for i in given if i not in custom_ids] + [i for i in given if i in custom_ids]
 
 
-def apply_plan(settings, keys, orders=None):
+def apply_plan(settings, keys, orders=None, groups=None):
     """
     Carry out the chosen rows of the plan, worked out again now rather than trusted from the
     page: if the streams have changed since it was looked at, what is applied is what is
     true now, not what was true then. Conflicts are never applied.
 
     orders is {row key: [stream ids]} for rows whose streams were put in another order on
-    the page; a channel with nothing else to change is applied for its order alone.
+    the page; a channel with nothing else to change is applied for its order alone. groups
+    is {row key: channel group id} for new channels put in another group than suggested,
+    which are then numbered in that group.
     """
     from django.db import transaction
 
@@ -767,7 +890,12 @@ def apply_plan(settings, keys, orders=None):
 
     wanted = set(keys or ())
     orders = orders if isinstance(orders, dict) else {}
+    groups = groups if isinstance(groups, dict) else {}
     plan = build_plan(settings)
+    homes = _NewHomes() if groups else None
+    if homes:
+        # The numbers the plan gave its new channels are spoken for, whichever get made
+        homes.taken.update(float(r["channel"]["number"]) for r in plan["rows"] if r["status"] == "new")
     rows = [
         r for r in plan["rows"]
         if r["key"] in wanted
@@ -786,6 +914,9 @@ def apply_plan(settings, keys, orders=None):
                 continue
             info = row["channel"]
             if row["status"] == "new":
+                chosen_group = groups.get(row["key"])
+                if chosen_group and int(chosen_group) != info.get("group_id"):
+                    info = {**info, "group_id": int(chosen_group), "number": homes.number_in(int(chosen_group))}
                 channel = Channel.objects.create(
                     name=info["name"][:255],
                     channel_number=info["number"],

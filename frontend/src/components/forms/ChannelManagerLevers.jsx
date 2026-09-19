@@ -30,7 +30,10 @@ const Section = ({ title, children }) => (
 const toOptions = (items, withCount) =>
   (items || []).map((item) => ({
     value: String(item.id),
-    label: withCount && item.count != null ? `${item.name} (${item.count})` : item.name,
+    label:
+      withCount && item.count != null
+        ? `${item.name} (${item.count})`
+        : item.name,
   }));
 
 const ids = (values) => (values || []).map((value) => Number(value));
@@ -39,7 +42,9 @@ const asStrings = (values) => (values || []).map((value) => String(value));
 // Rules and aliases are edited as text, one per line, and kept as the structures the
 // server wants. What cannot be read is reported rather than silently dropped.
 const rulesToText = (rules) =>
-  (rules || []).map(([find, replace]) => `${find} => ${replace ?? ''}`).join('\n');
+  (rules || [])
+    .map(([find, replace]) => `${find} => ${replace ?? ''}`)
+    .join('\n');
 
 const textToRules = (text) =>
   text
@@ -82,10 +87,18 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
   const [aliasText, setAliasText] = useState(aliasesToText(value.aliases));
 
   const profileValue =
-    value.profiles === 'all' ? 'all' : value.profiles === 'none' ? 'none' : 'some';
+    value.profiles === 'all'
+      ? 'all'
+      : value.profiles === 'none'
+        ? 'none'
+        : 'some';
 
   return (
-    <SimpleGrid cols={{ base: 1, md: 2, lg: 3 }} spacing="lg" verticalSpacing="lg">
+    <SimpleGrid
+      cols={{ base: 1, md: 2, lg: 3 }}
+      spacing="lg"
+      verticalSpacing="lg"
+    >
       <Section title="What to look at">
         <MultiSelect
           size="xs"
@@ -130,11 +143,13 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           data={[
             {
               value: 'exact',
-              label: 'Exactly, apart from a quality at the end and case (as DispatcharrUtils)',
+              label:
+                'Exactly, apart from a quality at the end and case (as DispatcharrUtils)',
             },
             {
               value: 'loose',
-              label: 'Loosely: letters and digits only, accents folded, quality anywhere',
+              label:
+                'Loosely: letters and digits only, accents folded, quality anywhere',
             },
           ]}
         />
@@ -146,7 +161,10 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           value={value.several_matches || 'all'}
           onChange={(mode) => mode && set({ several_matches: mode })}
           data={[
-            { value: 'all', label: 'Give it to each of them (as DispatcharrUtils)' },
+            {
+              value: 'all',
+              label: 'Give it to each of them (as DispatcharrUtils)',
+            },
             { value: 'conflict', label: 'Show a conflict and leave it alone' },
           ]}
         />
@@ -208,8 +226,15 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           value={value.order}
           onChange={(order) => order && set({ order })}
           data={[
-            { value: 'quality', label: 'The best picture, then the preferred provider' },
-            { value: 'provider', label: 'The preferred provider, then the best picture (as DispatcharrUtils)' },
+            {
+              value: 'quality',
+              label: 'The best picture, then the preferred provider',
+            },
+            {
+              value: 'provider',
+              label:
+                'The preferred provider, then the best picture (as DispatcharrUtils)',
+            },
           ]}
         />
         <Switch
@@ -240,8 +265,8 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
       <Section title="What may change">
         <Switch
           size="xs"
-          label="Make new channels"
-          description="For streams no channel has. Off, only channels you have are given streams."
+          label="Suggest new channels"
+          description="For streams no channel has. Only suggested: nothing is made unless its row is ticked and applied."
           checked={!!value.create_new}
           onChange={(e) => set({ create_new: e.currentTarget.checked })}
         />
@@ -250,19 +275,45 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
             <Stack gap={8}>
               <Select
                 size="xs"
+                label="From which streams"
+                allowDeselect={false}
+                value={value.new_from || 'followed'}
+                onChange={(from) => from && set({ new_from: from })}
+                data={[
+                  {
+                    value: 'followed',
+                    label: 'The stream groups your channels come from',
+                  },
+                  {
+                    value: 'all',
+                    label: 'Every stream (can be tens of thousands)',
+                  },
+                ]}
+              />
+              <Switch
+                size="xs"
+                label="End each in your fallback stream"
+                description="The custom stream most of your channels end in, such as Could Not Dispatch."
+                checked={value.new_fallback !== false}
+                onChange={(e) => set({ new_fallback: e.currentTarget.checked })}
+              />
+              <Select
+                size="xs"
                 label="Into group"
-                description="Empty puts each in the group its streams came from."
+                description="Empty suggests one per channel: where your channels from the same stream group are. It can be changed on each row."
                 clearable
                 searchable
                 value={value.target_group ? String(value.target_group) : null}
-                onChange={(group) => set({ target_group: group ? Number(group) : null })}
+                onChange={(group) =>
+                  set({ target_group: group ? Number(group) : null })
+                }
                 data={toOptions(options.all_groups)}
               />
               <Group grow gap="xs">
                 <NumberInput
                   size="xs"
                   label="Numbers from"
-                  description="Empty is after the highest."
+                  description="Empty is after the last channel of its group."
                   min={1}
                   value={value.number_start ?? ''}
                   onChange={(number) =>
@@ -275,7 +326,9 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
                   description="Streams needed to make one."
                   min={1}
                   value={value.min_streams_new ?? 1}
-                  onChange={(number) => set({ min_streams_new: Number(number) || 1 })}
+                  onChange={(number) =>
+                    set({ min_streams_new: Number(number) || 1 })
+                  }
                 />
               </Group>
               <Select
@@ -285,10 +338,7 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
                 value={profileValue}
                 onChange={(choice) =>
                   set({
-                    profiles:
-                      choice === 'some'
-                        ? []
-                        : choice,
+                    profiles: choice === 'some' ? [] : choice,
                   })
                 }
                 data={[
@@ -310,7 +360,9 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
                 size="xs"
                 label="Keep the country in the name"
                 checked={!!value.keep_country_prefix}
-                onChange={(e) => set({ keep_country_prefix: e.currentTarget.checked })}
+                onChange={(e) =>
+                  set({ keep_country_prefix: e.currentTarget.checked })
+                }
               />
             </Stack>
           </Box>
@@ -355,7 +407,10 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           value={value.logo}
           onChange={(logo) => logo && set({ logo })}
           data={[
-            { value: 'collections', label: 'From the logo collections, then the stream' },
+            {
+              value: 'collections',
+              label: 'From the logo collections, then the stream',
+            },
             { value: 'stream', label: "The stream's own" },
             { value: 'keep', label: 'Leave it' },
           ]}

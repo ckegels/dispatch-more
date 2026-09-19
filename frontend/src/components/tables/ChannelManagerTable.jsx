@@ -1,8 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Play,
   RotateCcw,
   SlidersHorizontal,
@@ -47,7 +55,13 @@ const STATUS = {
 };
 
 // What is being looked at, which going back to the defaults leaves as it is
-const SCOPE_LEVERS = ['accounts', 'stream_groups', 'channel_groups', 'target_group', 'profiles'];
+const SCOPE_LEVERS = [
+  'accounts',
+  'stream_groups',
+  'channel_groups',
+  'target_group',
+  'profiles',
+];
 
 const QUALITY_COLOR = { '4K': 'grape', FHD: 'teal', HD: 'blue', SD: 'gray' };
 
@@ -57,7 +71,11 @@ const Quality = ({ stream }) =>
       fallback
     </Badge>
   ) : (
-    <Badge size="xs" variant="light" color={QUALITY_COLOR[stream.quality] || 'dark'}>
+    <Badge
+      size="xs"
+      variant="light"
+      color={QUALITY_COLOR[stream.quality] || 'dark'}
+    >
       {stream.quality || '?'}
       {stream.probed ? ' ✓' : ''}
     </Badge>
@@ -90,11 +108,15 @@ const Move = ({ stream, onMove, first, last }) => (
 );
 
 // One stream, with everything worth knowing about it on one line
+// The name first; what it is and where it is from underneath, on as many lines as it takes,
+// so a long one grows the row downwards rather than running off to the right
 const StreamLine = ({ stream, move }) => (
   <Group
     gap={6}
     wrap="nowrap"
+    align="flex-start"
     style={{
+      minWidth: 0,
       opacity: stream.in_scope === false && !stream.custom ? 0.6 : 1,
       textDecoration: stream.removed ? 'line-through' : 'none',
     }}
@@ -102,104 +124,136 @@ const StreamLine = ({ stream, move }) => (
     {move}
     <Watch stream={stream} />
     <Quality stream={stream} />
-    <Text
-      size="xs"
-      c={stream.removed ? 'red' : stream.added ? 'green' : undefined}
-      style={{ minWidth: 0, flex: 1, wordBreak: 'break-word' }}
-    >
-      {stream.added ? '+ ' : stream.removed ? '− ' : ''}
-      {stream.name}
-    </Text>
-    <Badge size="xs" variant="outline" color="gray" style={{ flexShrink: 0 }}>
-      {stream.account}
-    </Badge>
-    {stream.group && (
-      <Text size="xs" c="dimmed" style={{ maxWidth: 180, wordBreak: 'break-word' }}>
-        {stream.group}
+    <Box style={{ minWidth: 0, flex: 1 }}>
+      <Text
+        size="xs"
+        c={stream.removed ? 'red' : stream.added ? 'green' : undefined}
+        style={{ wordBreak: 'break-word' }}
+      >
+        {stream.added ? '+ ' : stream.removed ? '− ' : ''}
+        {stream.name}
       </Text>
-    )}
-    {stream.tvg_id && (
-      <Text size="xs" c="dimmed" ff="monospace" style={{ maxWidth: 160, wordBreak: 'break-all' }}>
-        {stream.tvg_id}
-      </Text>
-    )}
+      <Group gap={6} wrap="wrap">
+        <Badge size="xs" variant="outline" color="gray">
+          {stream.account}
+        </Badge>
+        {stream.group && (
+          <Text size="xs" c="dimmed" style={{ wordBreak: 'break-word' }}>
+            {stream.group}
+          </Text>
+        )}
+        {stream.tvg_id && (
+          <Text
+            size="xs"
+            c="dimmed"
+            ff="monospace"
+            style={{ wordBreak: 'break-all' }}
+          >
+            {stream.tvg_id}
+          </Text>
+        )}
+      </Group>
+    </Box>
   </Group>
 );
 
 // The streams that can be moved: not one taken off, and not the fallback, which stays last
 const movable = (stream) => !stream.removed && !stream.custom;
 
-const Expanded = ({ row, onMove }) => {
+const Expanded = ({ row, onMove, groups, chosenGroup, onGroup }) => {
   const moving = row.streams.filter(movable);
   return (
-  <Box p="sm" style={{ background: 'rgba(0,0,0,0.18)' }}>
-    {row.status === 'conflict' ? (
-      <Stack gap={6}>
-        <Text size="xs" c="orange">
-          These streams could belong to any of these channels, so nothing is done
-          with them. Rename one of the channels, or give one a tvg-id or an alias,
-          to settle which.
-        </Text>
-        {(row.candidates || []).map((candidate) => (
-          <Group key={candidate.id} gap="xs">
-            <Logo url={candidate.logo_url} name={candidate.name} />
-            <Text size="sm">{candidate.name}</Text>
-            <Text size="xs" c="dimmed">
-              {candidate.number} · {candidate.group}
-            </Text>
-          </Group>
-        ))}
-        {row.before.streams.map((stream) => (
-          <StreamLine key={stream.id} stream={stream} />
-        ))}
-      </Stack>
-    ) : (
-      <SimpleGrid cols={2} spacing="lg">
-        <Stack gap={4}>
-          <Text size="xs" fw={700} c="dimmed" tt="uppercase">
-            Before · {row.before.streams.length} stream
-            {row.before.streams.length === 1 ? '' : 's'}
+    <Box
+      p="sm"
+      style={{ background: 'rgba(0,0,0,0.18)', minWidth: 0, maxWidth: '100%' }}
+    >
+      {row.status === 'new' && (
+        <Group gap="xs" mb="sm" align="flex-end" wrap="wrap">
+          <Select
+            size="xs"
+            label="Channel group"
+            aria-label={`Channel group for ${row.channel.name}`}
+            searchable
+            allowDeselect={false}
+            data={groups}
+            value={String(chosenGroup ?? row.channel.group_id ?? '')}
+            onChange={(group) => group && onGroup(row.key, Number(group))}
+            style={{ width: 260 }}
+          />
+          <Text size="xs" c="dimmed" pb={6}>
+            {chosenGroup && chosenGroup !== row.channel.group_id
+              ? 'Chosen by you; numbered after the last channel of that group when applied.'
+              : `Suggested: ${row.channel.group_why || 'its streams’ group'}. Number ${row.channel.number}.`}
           </Text>
-          {row.before.streams.length === 0 ? (
-            <Text size="xs" c="dimmed">
-              {row.status === 'new' ? 'No channel yet' : 'No streams'}
-            </Text>
-          ) : (
-            row.before.streams.map((stream) => (
-              <StreamLine key={stream.id} stream={stream} />
-            ))
-          )}
-        </Stack>
-        <Stack gap={4}>
-          <Text size="xs" fw={700} c="dimmed" tt="uppercase">
-            After · in the order they are tried
+        </Group>
+      )}
+      {row.status === 'conflict' ? (
+        <Stack gap={6}>
+          <Text size="xs" c="orange">
+            These streams could belong to any of these channels, so nothing is
+            done with them. Rename one of the channels, or give one a tvg-id or
+            an alias, to settle which.
           </Text>
-          {row.streams.map((stream) => {
-            const at = moving.indexOf(stream);
-            return (
-              <StreamLine
-                key={`${stream.id}-${stream.removed}`}
-                stream={stream}
-                move={
-                  at === -1 ? (
-                    // Keeps the names lined up with the ones that can move
-                    <Box w={44} style={{ flexShrink: 0 }} />
-                  ) : (
-                    <Move
-                      stream={stream}
-                      first={at === 0}
-                      last={at === moving.length - 1}
-                      onMove={(id, by) => onMove(row.key, id, by)}
-                    />
-                  )
-                }
-              />
-            );
-          })}
+          {(row.candidates || []).map((candidate) => (
+            <Group key={candidate.id} gap="xs">
+              <Logo url={candidate.logo_url} name={candidate.name} />
+              <Text size="sm">{candidate.name}</Text>
+              <Text size="xs" c="dimmed">
+                {candidate.number} · {candidate.group}
+              </Text>
+            </Group>
+          ))}
+          {row.before.streams.map((stream) => (
+            <StreamLine key={stream.id} stream={stream} />
+          ))}
         </Stack>
-      </SimpleGrid>
-    )}
-  </Box>
+      ) : (
+        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+          <Stack gap={4} style={{ minWidth: 0 }}>
+            <Text size="xs" fw={700} c="dimmed" tt="uppercase">
+              Before · {row.before.streams.length} stream
+              {row.before.streams.length === 1 ? '' : 's'}
+            </Text>
+            {row.before.streams.length === 0 ? (
+              <Text size="xs" c="dimmed">
+                {row.status === 'new' ? 'No channel yet' : 'No streams'}
+              </Text>
+            ) : (
+              row.before.streams.map((stream) => (
+                <StreamLine key={stream.id} stream={stream} />
+              ))
+            )}
+          </Stack>
+          <Stack gap={4} style={{ minWidth: 0 }}>
+            <Text size="xs" fw={700} c="dimmed" tt="uppercase">
+              After · in the order they are tried
+            </Text>
+            {row.streams.map((stream) => {
+              const at = moving.indexOf(stream);
+              return (
+                <StreamLine
+                  key={`${stream.id}-${stream.removed}`}
+                  stream={stream}
+                  move={
+                    at === -1 ? (
+                      // Keeps the names lined up with the ones that can move
+                      <Box w={44} style={{ flexShrink: 0 }} />
+                    ) : (
+                      <Move
+                        stream={stream}
+                        first={at === 0}
+                        last={at === moving.length - 1}
+                        onMove={(id, by) => onMove(row.key, id, by)}
+                      />
+                    )
+                  }
+                />
+              );
+            })}
+          </Stack>
+        </SimpleGrid>
+      )}
+    </Box>
   );
 };
 
@@ -222,6 +276,9 @@ const ChannelManagerTable = () => {
   const [ticked, setTicked] = useState(new Set());
   // Streams put in another order by hand, by row: {key: [stream ids]}
   const [orders, setOrders] = useState({});
+  // New channels put in another group than suggested, by row: {key: group id}
+  const [groupChoice, setGroupChoice] = useState({});
+  const [expandAll, setExpandAll] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const tableRef = useRef(null);
@@ -237,6 +294,7 @@ const ChannelManagerTable = () => {
       setPreviewed(JSON.stringify(withLevers));
       setTicked(new Set());
       setOrders({});
+      setGroupChoice({});
       tableRef.current?.setSelectedTableIds?.([]);
       // Kept, so the page opens the way it was left
       API.saveChannelManagerSettings(withLevers).catch(() => {});
@@ -260,10 +318,32 @@ const ChannelManagerTable = () => {
     })();
   }, [preview]);
 
-  const leversChanged = levers && previewed && JSON.stringify(levers) !== previewed;
+  const leversChanged =
+    levers && previewed && JSON.stringify(levers) !== previewed;
+
+  const groupOptions = useMemo(
+    () =>
+      (options?.all_groups || []).map((g) => ({
+        value: String(g.id),
+        label: g.name,
+      })),
+    [options]
+  );
+  const groupNames = useMemo(
+    () =>
+      Object.fromEntries(
+        (options?.all_groups || []).map((g) => [g.id, g.name])
+      ),
+    [options]
+  );
 
   const rows = useMemo(() => {
-    const all = (plan?.rows || []).map((row) => {
+    const all = (plan?.rows || []).map((raw) => {
+      const chosen = groupChoice[raw.key];
+      const row =
+        chosen && chosen !== raw.channel?.group_id
+          ? { ...raw, chosenGroup: groupNames[chosen] || String(chosen) }
+          : raw;
       const order = orders[row.key];
       if (!order) return { ...row, id: row.key };
       // The streams as they were put by hand; the fallback and anything taken off stay
@@ -271,7 +351,12 @@ const ChannelManagerTable = () => {
       const byId = Object.fromEntries(row.streams.map((s) => [s.id, s]));
       const moved = order.map((id) => byId[id]).filter(Boolean);
       const rest = row.streams.filter((s) => !movable(s));
-      return { ...row, id: row.key, streams: [...moved, ...rest], reordered: true };
+      return {
+        ...row,
+        id: row.key,
+        streams: [...moved, ...rest],
+        reordered: true,
+      };
     });
     const byStatus = all.filter((row) =>
       show === 'all'
@@ -286,11 +371,15 @@ const ChannelManagerTable = () => {
     const wanted = search.trim().toLowerCase();
     if (!wanted) return byStatus;
     return byStatus.filter((row) =>
-      [row.channel?.name, row.before?.channel?.name, ...row.before.streams.map((s) => s.name)]
+      [
+        row.channel?.name,
+        row.before?.channel?.name,
+        ...row.before.streams.map((s) => s.name),
+      ]
         .filter(Boolean)
         .some((name) => name.toLowerCase().includes(wanted))
     );
-  }, [plan, show, search, orders]);
+  }, [plan, show, search, orders, groupChoice, groupNames]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const paginatedRows = useMemo(
@@ -319,7 +408,12 @@ const ChannelManagerTable = () => {
       const given = Object.fromEntries(
         tickedKeys.filter((key) => orders[key]).map((key) => [key, orders[key]])
       );
-      await API.applyChannelManager(levers, tickedKeys, given);
+      const groups = Object.fromEntries(
+        tickedKeys
+          .filter((key) => groupChoice[key])
+          .map((key) => [key, groupChoice[key]])
+      );
+      await API.applyChannelManager(levers, tickedKeys, given, groups);
       await preview(levers);
     } catch (e) {
       setError(e?.body?.error || 'Could not apply those channels.');
@@ -334,7 +428,8 @@ const ChannelManagerTable = () => {
     (key, id, by) => {
       const row = (plan?.rows || []).find((r) => r.key === key);
       if (!row) return;
-      const current = orders[key] || row.streams.filter(movable).map((s) => s.id);
+      const current =
+        orders[key] || row.streams.filter(movable).map((s) => s.id);
       const from = current.indexOf(id);
       const to = from + by;
       if (from === -1 || to < 0 || to >= current.length) return;
@@ -349,6 +444,15 @@ const ChannelManagerTable = () => {
     },
     [plan, orders]
   );
+
+  const chooseGroup = useCallback((key, group) => {
+    setGroupChoice((all) => ({ ...all, [key]: group }));
+    setTicked((all) => {
+      const now = new Set(all).add(key);
+      tableRef.current?.setSelectedTableIds?.([...now]);
+      return now;
+    });
+  }, []);
 
   const columns = useMemo(
     () => [
@@ -392,17 +496,24 @@ const ChannelManagerTable = () => {
         cell: ({ row }) => {
           const r = row.original;
           const channel = r.before.channel;
-          const providers = new Set(r.before.streams.map((s) => s.account)).size;
+          const providers = new Set(r.before.streams.map((s) => s.account))
+            .size;
           return (
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Logo url={channel?.logo_url} name={channel?.name} />
               <Box style={{ minWidth: 0 }}>
                 <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
-                  {channel ? channel.name : r.status === 'conflict' ? 'Could be several' : 'No channel yet'}
+                  {channel
+                    ? channel.name
+                    : r.status === 'conflict'
+                      ? 'Could be several'
+                      : 'No channel yet'}
                 </Text>
                 <Text size="xs" c="dimmed" lineClamp={1}>
-                  {r.before.streams.length} stream{r.before.streams.length === 1 ? '' : 's'}
-                  {providers > 0 && ` · ${providers} provider${providers === 1 ? '' : 's'}`}
+                  {r.before.streams.length} stream
+                  {r.before.streams.length === 1 ? '' : 's'}
+                  {providers > 0 &&
+                    ` · ${providers} provider${providers === 1 ? '' : 's'}`}
                 </Text>
               </Box>
             </Group>
@@ -433,11 +544,16 @@ const ChannelManagerTable = () => {
                     {channel.name}
                   </Text>
                   <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
-                    {channel.number}
-                    {channel.group ? ` · ${channel.group}` : ''}
+                    {row.original.chosenGroup
+                      ? `new number · ${row.original.chosenGroup}`
+                      : `${channel.number}${channel.group ? ` · ${channel.group}` : ''}`}
                   </Text>
                 </Group>
-                <Text size="xs" c={epg ? 'dimmed' : 'orange'} style={{ wordBreak: 'break-word' }}>
+                <Text
+                  size="xs"
+                  c={epg ? 'dimmed' : 'orange'}
+                  style={{ wordBreak: 'break-word' }}
+                >
                   {epg
                     ? `Guide: ${epg.name}${epg.how && epg.how !== 'kept' ? ` (by ${epg.how})` : ''}`
                     : 'No guide'}
@@ -464,7 +580,11 @@ const ChannelManagerTable = () => {
                   <Badge
                     size="xs"
                     variant={stream.added ? 'filled' : 'light'}
-                    color={stream.custom ? 'yellow' : QUALITY_COLOR[stream.quality] || 'dark'}
+                    color={
+                      stream.custom
+                        ? 'yellow'
+                        : QUALITY_COLOR[stream.quality] || 'dark'
+                    }
                   >
                     {stream.custom ? 'fb' : stream.quality || '?'}
                   </Badge>
@@ -501,7 +621,16 @@ const ChannelManagerTable = () => {
     manualFiltering: false,
     manualPagination: true,
     onRowSelectionChange: (selected) => setTicked(new Set(selected)),
-    expandedRowRenderer: ({ row }) => <Expanded row={row.original} onMove={moveStream} />,
+    expandAll,
+    expandedRowRenderer: ({ row }) => (
+      <Expanded
+        row={row.original}
+        onMove={moveStream}
+        groups={groupOptions}
+        chosenGroup={groupChoice[row.original.key]}
+        onGroup={chooseGroup}
+      />
+    ),
     headerCellRenderFns: {
       status: renderHeaderCell,
       before: renderHeaderCell,
@@ -570,7 +699,7 @@ const ChannelManagerTable = () => {
                   allowDeselect={false}
                   data={[
                     { value: 'changes', label: 'What would change' },
-                    { value: 'new', label: 'New' },
+                    { value: 'new', label: 'New channels' },
                     { value: 'merge', label: 'Merge' },
                     { value: 'conflict', label: 'Conflicts' },
                     { value: 'unchanged', label: 'Unchanged' },
@@ -582,6 +711,20 @@ const ChannelManagerTable = () => {
               </Group>
 
               <Group gap="sm">
+                <Button
+                  variant="default"
+                  size="xs"
+                  leftSection={
+                    expandAll ? (
+                      <ChevronsDownUp size={16} />
+                    ) : (
+                      <ChevronsUpDown size={16} />
+                    )
+                  }
+                  onClick={() => setExpandAll(!expandAll)}
+                >
+                  {expandAll ? 'Collapse all' : 'Expand all'}
+                </Button>
                 <Button
                   leftSection={<SlidersHorizontal size={16} />}
                   variant="default"
@@ -621,7 +764,9 @@ const ChannelManagerTable = () => {
             </Box>
 
             {/* What the plan comes to */}
-            <Box style={{ padding: '8px 16px', borderBottom: '1px solid #3f3f46' }}>
+            <Box
+              style={{ padding: '8px 16px', borderBottom: '1px solid #3f3f46' }}
+            >
               <Text size="xs" c="dimmed">
                 {plan
                   ? `${(summary.streams || 0).toLocaleString()} streams looked at · ${
@@ -637,7 +782,11 @@ const ChannelManagerTable = () => {
             </Box>
 
             {(error || leversChanged) && (
-              <Stack gap="xs" p="md" style={{ borderBottom: '1px solid #3f3f46' }}>
+              <Stack
+                gap="xs"
+                p="md"
+                style={{ borderBottom: '1px solid #3f3f46' }}
+              >
                 {error && <Alert color="red">{error}</Alert>}
                 {leversChanged && (
                   <Alert color="blue">
@@ -680,7 +829,8 @@ const ChannelManagerTable = () => {
             <Box
               style={{
                 position: 'relative',
-                borderRadius: '0 0 var(--mantine-radius-md) var(--mantine-radius-md)',
+                borderRadius:
+                  '0 0 var(--mantine-radius-md) var(--mantine-radius-md)',
               }}
             >
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
@@ -729,7 +879,9 @@ const ChannelManagerTable = () => {
                     style={{ paddingRight: 20 }}
                   />
                   <Text size="xs">
-                    {rows.length ? `${first} to ${last} of ${rows.length}` : '0 channels'}
+                    {rows.length
+                      ? `${first} to ${last} of ${rows.length}`
+                      : '0 channels'}
                   </Text>
                 </Group>
               </Box>
@@ -743,7 +895,7 @@ const ChannelManagerTable = () => {
         onClose={() => setConfirming(false)}
         onConfirm={apply}
         title={`Apply ${tickedKeys.length} channel${tickedKeys.length === 1 ? '' : 's'}?`}
-        message="Each ticked channel becomes what its row shows: new channels are made, and channels you have gain the streams marked +. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
+        message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
         confirmLabel="Apply"
       />
     </>

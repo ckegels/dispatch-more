@@ -15,7 +15,8 @@ import ChannelManagerTable from '../components/tables/ChannelManagerTable';
 import StreamCheckTable from '../components/tables/StreamCheckTable';
 
 const BLURB = {
-  merge: 'the same channel, from every provider and in every quality, as one',
+  merge:
+    'your channels as they could be: new ones for new streams, and every copy of a channel merged into one',
   check: 'the streams on your channels that no longer play',
 };
 
@@ -54,7 +55,7 @@ const ChannelManagerPage = () => {
           </Flex>
           <Tabs value={activeTab} onChange={setActiveTab} variant="pills">
             <TabsList>
-              <TabsTab value="merge">Merge</TabsTab>
+              <TabsTab value="merge">Lineup</TabsTab>
               <TabsTab value="check">Stream Check</TabsTab>
             </TabsList>
           </Tabs>

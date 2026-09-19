@@ -346,10 +346,45 @@ class NewChannelTests(_Setup):
         self.profile = ChannelProfile.objects.create(name="Everything")
         EPGData.objects.create(tvg_id="PULS4.at", name="PULS 4")
 
-    def test_new_channels_are_only_made_when_asked(self):
+    def test_new_channels_are_suggested_unless_turned_off(self):
         self._stream("┃AT┃ PULS 4 HD", self.a)
-        plan = channel_manager.build_plan(settings())
+        self.assertTrue(any(r["status"] == "new" for r in channel_manager.build_plan(settings())["rows"]))
+        plan = channel_manager.build_plan(settings(create_new=False))
         self.assertFalse(any(r["status"] == "new" for r in plan["rows"]))
+
+    def test_only_streams_from_groups_in_use_are_suggested(self):
+        """Not every provider stream there is: those from the groups your channels come from."""
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        self._stream("┃DE┃ PRO 7 HD", self.a, group=self.germany)
+        names = [r["channel"]["name"] for r in channel_manager.build_plan(settings())["rows"] if r["status"] == "new"]
+        self.assertEqual(names, ["┃AT┃ PULS 4"])
+        names = [
+            r["channel"]["name"] for r in channel_manager.build_plan(settings(new_from="all"))["rows"]
+            if r["status"] == "new"
+        ]
+        self.assertEqual(sorted(names), ["┃AT┃ PULS 4", "┃DE┃ PRO 7"])
+
+    def test_suggested_group_and_number_follow_your_channels(self):
+        """Streams of a provider group go where your channels from it are, numbered after them."""
+        provider_group = ChannelGroup.objects.create(name="AT | AUSTRIA (provider)")
+        ChannelStream.objects.filter(channel=self.orf1).delete()
+        self._attach(self.orf1, [self.existing, self._stream("┃AT┃ ORF 1 HD", self.b, group=provider_group), self.fallback])
+        self._channel("┃DE┃ ARD", 2, self.germany)
+        self._channel("┃AT┃ SERVUS", 3, self.austria)
+        self._stream("┃AT┃ PULS 4 HD", self.b, group=provider_group)
+        (row,) = [r for r in channel_manager.build_plan(settings())["rows"] if r["status"] == "new"]
+        self.assertEqual(row["channel"]["group"], "┃AT┃ AUSTRIA")
+        self.assertIn("stream group", row["channel"]["group_why"])
+        # After the last Austrian channel, 3, on a number nobody has
+        self.assertEqual(row["channel"]["number"], 4)
+
+    def test_a_group_chosen_on_the_page_is_used_and_numbered_there(self):
+        self._channel("┃DE┃ ARD", 50, self.germany)
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        (row,) = [r for r in channel_manager.build_plan(settings())["rows"] if r["status"] == "new"]
+        channel_manager.apply_plan(settings(), [row["key"]], groups={row["key"]: self.germany.id})
+        made = Channel.objects.get(name="┃AT┃ PULS 4")
+        self.assertEqual((made.channel_group_id, made.channel_number), (self.germany.id, 51))
 
     def test_a_channel_no_channel_has_is_made_with_every_copy(self):
         self._stream("┃AT┃ PULS 4 HD", self.a, tvg_id="PULS4.at")
@@ -362,13 +397,14 @@ class NewChannelTests(_Setup):
         self.assertEqual(row["adds"], 2)
         self.assertEqual(row["streams"][0]["quality"], "FHD")
         self.assertEqual(row["channel"]["epg"]["how"], "tvg-id")
-        # Numbered after the highest there is
+        # Numbered after the last channel of its group
         self.assertEqual(row["channel"]["number"], 2)
 
         channel_manager.apply_plan(levers, [row["key"]])
         made = Channel.objects.get(name="┃AT┃ PULS 4")
         self.assertEqual(made.epg_data.tvg_id, "PULS4.at")
-        self.assertEqual(self._order(made), ["┃AT┃ PULS 4 FHD", "┃AT┃ PULS 4 HD"])
+        # Ending in the fallback the other channels end in
+        self.assertEqual(self._order(made), ["┃AT┃ PULS 4 FHD", "┃AT┃ PULS 4 HD", "could not dispatch"])
         # Into every profile, as Dispatcharr does unless told otherwise
         self.assertTrue(ChannelProfileMembership.objects.filter(channel=made, channel_profile=self.profile).exists())
 
@@ -411,7 +447,7 @@ class ViewTests(_Setup):
         data = self.client_api.get("/api/channels/channel-manager/").json()
         self.assertTrue({"Provider A", "Provider B"} <= {a["name"] for a in data["accounts"]})
         self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
-        self.assertEqual(data["defaults"]["create_new"], False)
+        self.assertEqual(data["defaults"]["create_new"], True)
 
     def test_preview_and_apply(self):
         self._stream("┃AT┃ ORF 1 FHD", self.b)

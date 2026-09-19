@@ -78,7 +78,9 @@ def channel_manager_apply(request):
     if not isinstance(keys, list) or not keys:
         return JsonResponse({"error": "Choose at least one channel to apply"}, status=400)
     settings = channel_manager.settings_from(request.data.get("settings"))
-    return JsonResponse(channel_manager.apply_plan(settings, keys, request.data.get("orders")))
+    return JsonResponse(channel_manager.apply_plan(
+        settings, keys, request.data.get("orders"), request.data.get("groups"),
+    ))
 
 
 @api_view(["PUT"])

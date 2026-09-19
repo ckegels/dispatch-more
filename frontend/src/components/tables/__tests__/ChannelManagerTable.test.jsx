@@ -117,7 +117,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
 
     await waitFor(() =>
-      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {})
+      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {}, {})
     );
   });
 
@@ -137,9 +137,12 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
-      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {
-        'ch:1': [2, 1],
-      })
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' },
+        ['ch:1'],
+        { 'ch:1': [2, 1] },
+        {}
+      )
     );
   });
 
@@ -158,12 +161,61 @@ describe('ChannelManagerTable', () => {
     expect(screen.getByText(/nothing is done with them/)).toBeInTheDocument();
   });
 
+  it('opens every row at once, and closes them again', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(screen.queryByText(/nothing is done with them/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    // The merge and the conflict are both open
+    expect(await screen.findByText(/nothing is done with them/)).toBeInTheDocument();
+    expect(screen.getAllByText(/After · in the order they are tried/).length).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    await waitFor(() => expect(screen.queryByText(/nothing is done with them/)).toBeNull());
+  });
+
+  it('suggests a group for a new channel, which can be changed before applying', async () => {
+    const newRow = {
+      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      channel: {
+        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
+        group_why: 'where your channels from this stream group are', logo_url: '', epg: null,
+      },
+      before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
+      streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
+    };
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      channel_groups: [], profiles: [],
+      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 2, name: '┃DE┃ GERMANY' }],
+    });
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ PULS 4');
+    expect(screen.getByText('12 · ┃AT┃ AUSTRIA')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(await screen.findByText(/Suggested: where your channels from this stream group are/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' }));
+    fireEvent.click(await screen.findByText('┃DE┃ GERMANY'));
+    expect(await screen.findByText('new number · ┃DE┃ GERMANY')).toBeInTheDocument();
+
+    // Choosing a group ticks the row, as moving a stream does
+    fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }
+      )
+    );
+  });
+
   it('asks for a fresh preview before applying after the levers move', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('input[type=checkbox]'));
     fireEvent.click(screen.getByRole('button', { name: 'Levers' }));
-    fireEvent.click(screen.getByRole('switch', { name: /Make new channels/ }));
+    fireEvent.click(screen.getByRole('switch', { name: /Suggest new channels/ }));
 
     expect(await screen.findByText(/The levers have changed/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Apply/ })).toBeDisabled();
