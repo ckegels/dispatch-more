@@ -1002,6 +1002,30 @@ def _watch_longer(session, url, playlist, headers, seconds, should_stop):
     return bytes(gathered)
 
 
+def _why_no_connection(error):
+    """
+    Which of the ways a connection fails this was, in words. Never the error's own text: it
+    carries the stream's address, and for Xtream Codes the address carries the login.
+    """
+    text = repr(error)
+    for needles, words in (
+        (("Name or service not known", "Temporary failure in name resolution", "nodename nor servname",
+          "getaddrinfo failed", "NameResolutionError"), "its address could not be looked up"),
+        (("Connection refused", "ECONNREFUSED", "Errno 111"), "its server refused the connection"),
+        (("RemoteDisconnected", "Connection aborted", "without response"),
+         "its server took the connection and closed it without answering"),
+        (("Connection reset", "ECONNRESET", "Errno 104"), "its server cut the connection off"),
+        (("Network is unreachable", "No route to host", "Errno 101", "Errno 113"),
+         "no network route to its server"),
+        (("timed out", "Timeout"), "its server did not answer in time"),
+        (("SSLError", "CERTIFICATE", "SSL"), "a secure connection could not be made"),
+        (("TooManyRedirects", "Exceeded"), "it sent the request round in circles"),
+    ):
+        if any(needle in text for needle in needles):
+            return words
+    return type(error).__name__
+
+
 def _looks_like_ts(data):
     """MPEG-TS: a sync byte every 188 bytes, three in a row somewhere near the start."""
     for start in range(min(188, len(data))):
@@ -1145,11 +1169,11 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
         result["refused"] = e.status in REFUSED_STATUS
         result["transient"] = e.status in TRANSIENT_STATUS
     except requests.exceptions.ConnectTimeout:
-        result.update(reason="The provider did not answer", kind=UNREACHABLE)
+        result.update(reason="The provider did not answer (no connection within the time)", kind=UNREACHABLE)
     except requests.exceptions.ReadTimeout:
         result.update(reason="The provider answered, then sent nothing", transient=True)
-    except requests.exceptions.ConnectionError:
-        result.update(reason="Could not connect to the provider", kind=UNREACHABLE)
+    except requests.exceptions.ConnectionError as e:
+        result.update(reason=f"Could not connect to the provider ({_why_no_connection(e)})", kind=UNREACHABLE)
     except requests.exceptions.RequestException as e:
         result["reason"] = f"Could not be opened: {type(e).__name__}"
     finally:

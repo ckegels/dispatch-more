@@ -243,6 +243,21 @@ class ProbeTests(TestCase):
     def test_without_the_picture_check_a_still_picture_plays(self):
         self.assertTrue(stream_check.probe(f"{self.base}/still.ts", timeout=12)["ok"])
 
+    def test_a_connection_error_is_told_in_words_without_the_login_in_it(self):
+        import requests
+
+        cases = {
+            "Temporary failure in name resolution": "could not be looked up",
+            "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))":
+                "closed it without answering",
+            "Connection reset by peer": "cut the connection off",
+        }
+        for text, words in cases.items():
+            error = requests.exceptions.ConnectionError(f"HTTPConnectionPool: /live/user/secret/1.ts ({text})")
+            said = stream_check._why_no_connection(error)
+            self.assertIn(words, said)
+            self.assertNotIn("secret", said)
+
     def test_no_connection_is_unreachable_not_dead(self):
         import socket
 
@@ -253,6 +268,9 @@ class ProbeTests(TestCase):
         found = stream_check.probe(f"http://127.0.0.1:{port}/live.ts", timeout=5)
         self.assertFalse(found["ok"])
         self.assertEqual(found["kind"], stream_check.UNREACHABLE)
+        # Which way it failed, in words, and never the address
+        self.assertIn("refused the connection", found["reason"])
+        self.assertNotIn("127.0.0.1", found["reason"])
 
     def test_a_stream_the_provider_no_longer_has(self):
         found = stream_check.probe(f"{self.base}/gone.ts", timeout=5)
