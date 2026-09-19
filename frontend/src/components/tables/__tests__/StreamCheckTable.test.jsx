@@ -302,6 +302,17 @@ describe('StreamCheckTable', () => {
     expect(await screen.findByText(/Parked by autopark/)).toHaveTextContent(/3 checks in a row/);
   });
 
+  it('lists the channels hidden because every stream of theirs is parked', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({ hidden_channels: [{ id: 1, name: '┃AT┃ EURONEWS', number: 6435, hidden_at: '2026-09-19T10:00:00+00:00' }] })
+    );
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which channels' }));
+    fireEvent.click(await screen.findByText('Parked (1)'));
+    expect(await screen.findByText(/Hidden from TVs and media servers/)).toHaveTextContent('6435 ┃AT┃ EURONEWS');
+  });
+
   it('shows what each provider allows, and lets it be set by hand', async () => {
     API.setStreamCheckLimit.mockResolvedValue({});
     draw();

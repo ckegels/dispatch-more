@@ -74,6 +74,9 @@ SETTINGS_KEY = "stream-check"
 RESULTS_KEY = "stream-check-results"
 # Failing streams whose provider's playlist was refreshed since, to be looked at again
 RECHECK_KEY = "stream-check-recheck"
+# The channels Stream Check hid because every real stream of theirs was parked, and only
+# those: a channel hidden by a person is never shown again by Stream Check
+HIDDEN_KEY = "stream-check-hidden"
 PARKED_KEY = "stream-check-parked"
 
 DEFAULTS = {
@@ -108,6 +111,10 @@ DEFAULTS = {
     "picture_seconds": 6,
     # A picture that looks frozen is watched this much longer before it is called so
     "frozen_confirm_seconds": 25,
+    # A channel whose every real stream is parked is hidden from what TVs and media servers
+    # get -- the playlist, the guide, the HDHomeRun lineup, Xtream Codes -- rather than shown
+    # with nothing but its fallback to play; shown again when a stream of it is put back
+    "hide_emptied_channels": True,
     # Park a stream by itself once it has failed this many checks in a row -- only a stream
     # that does not play at all; one refused, black, frozen or showing the provider's card is
     # left for a person. Off unless turned on. After a refresh, three checks means at least
@@ -2027,6 +2034,7 @@ def park(stream_id, reason="", auto=False):
             ChannelStream.objects.filter(stream_id=stream_id).delete()
             for link in links:
                 _close_up(link["channel_id"])
+            _hide_emptied([link["channel_id"] for link in links])
             parked[str(stream_id)] = {
                 "channels": [{"channel": c, "order": o} for c, o in sorted(places.items())],
                 "parked_at": (parked.get(str(stream_id)) or {}).get("parked_at") or _now(),
@@ -2078,9 +2086,85 @@ def restore(stream_id):
                 for order, sid in enumerate(ordered):
                     ChannelStream.objects.filter(channel_id=place["channel"], stream_id=sid).update(order=order)
                 put += 1
+            _show_again([place["channel"] for place in entry.get("channels") or []])
         return put
 
     return _update_parked(change)
+
+
+def hidden_channels():
+    """{channel id: {"name", "hidden_at"}}: the channels Stream Check hid, and only those."""
+    return dict(_load(HIDDEN_KEY, {}))
+
+
+def _hide_emptied(channel_ids):
+    """
+    Hide the channels a park left without a real stream -- a custom fallback does not count:
+    it plays a "could not play" screen, not the channel. Stock Dispatcharr's own switch for it
+    (hidden_from_output), which every output honours. Set with an update rather than a save,
+    so it passes by what a save sets off: in a group numbered compactly, stock gives a hidden
+    channel's number away, and it would come back elsewhere.
+    """
+    from .models import Channel, ChannelStream
+
+    if not load_settings().get("hide_emptied_channels", True) or not channel_ids:
+        return
+    real_left = set(
+        ChannelStream.objects.filter(channel_id__in=channel_ids, stream__is_custom=False)
+        .values_list("channel_id", flat=True)
+    )
+    emptied = [
+        channel for channel in Channel.objects.filter(id__in=set(channel_ids) - real_left)
+        # One a person hid already is theirs: not recorded, so never shown again by this
+        if not channel.hidden_from_output
+    ]
+    if not emptied:
+        return
+    Channel.objects.filter(id__in=[c.id for c in emptied]).update(hidden_from_output=True)
+
+    def change(hidden):
+        for channel in emptied:
+            hidden[str(channel.id)] = {"name": channel.name, "number": channel.channel_number, "hidden_at": _now()}
+
+    _change_key(HIDDEN_KEY, "Stream Check hidden channels", change)
+    logger.info(f"Stream Check: hid {len(emptied)} channel(s) with nothing but parked streams: "
+                + ", ".join(c.name for c in emptied))
+
+
+def _show_again(channel_ids):
+    """Show again the channels Stream Check hid, now that a stream of theirs is back."""
+    from .models import Channel, ChannelStream
+
+    ours = hidden_channels()
+    back = [
+        channel_id for channel_id in set(channel_ids)
+        if str(channel_id) in ours
+        and ChannelStream.objects.filter(channel_id=channel_id, stream__is_custom=False).exists()
+    ]
+    if not back:
+        return
+    Channel.objects.filter(id__in=back).update(hidden_from_output=False)
+
+    def change(hidden):
+        for channel_id in back:
+            hidden.pop(str(channel_id), None)
+
+    _change_key(HIDDEN_KEY, "Stream Check hidden channels", change)
+    logger.info(f"Stream Check: showed {len(back)} channel(s) again, a stream of theirs being back")
+
+
+def _change_key(key, name, change):
+    """Read, change and write one CoreSettings row in one go."""
+    from django.db import transaction
+
+    from core.models import CoreSettings
+
+    with transaction.atomic():
+        row, _ = CoreSettings.objects.select_for_update().get_or_create(key=key, defaults={"name": name, "value": {}})
+        value = dict(row.value or {})
+        change(value)
+        row.value = value
+        row.save(update_fields=["value"])
 
 
 def clear_results():
@@ -2203,7 +2287,17 @@ def issues(redis_client, show="problems"):
         ]
         parked_rows.append(row)
     parked_rows.sort(key=lambda r: r["name"].lower())
-    return {"rows": rows, "parked": parked_rows}
+    # The channels hidden because nothing of theirs is left but parked streams; one a person
+    # has shown again since is no longer listed
+    hidden = hidden_channels()
+    still_hidden = set(
+        Channel.objects.filter(id__in=[int(i) for i in hidden], hidden_from_output=True).values_list("id", flat=True)
+    )
+    hidden_rows = sorted(
+        ({"id": int(i), **entry} for i, entry in hidden.items() if int(i) in still_hidden),
+        key=lambda row: (row.get("number") or 0),
+    )
+    return {"rows": rows, "parked": parked_rows, "hidden_channels": hidden_rows}
 
 
 def _stream_row(stream, results, state):

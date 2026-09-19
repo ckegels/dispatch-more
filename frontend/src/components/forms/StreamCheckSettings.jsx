@@ -199,6 +199,15 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           )}
           <Switch
             size="xs"
+            label="Hide a channel when all its streams are parked"
+            description="A channel left with nothing but its fallback (like Could Not Dispatch) disappears from TVs and media servers -- the playlist, the guide, the tuner -- until a stream of it is put back. A channel you hid yourself is never shown again by this."
+            checked={draft.hide_emptied_channels !== false}
+            onChange={(e) =>
+              set({ hide_emptied_channels: e.currentTarget.checked })
+            }
+          />
+          <Switch
+            size="xs"
             label="Also put streams I parked back when they work again"
             description="Off, a parked stream that works again waits for you to put it back."
             checked={!!draft.restore_recovered}

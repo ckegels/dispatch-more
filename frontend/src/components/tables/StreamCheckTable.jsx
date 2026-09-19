@@ -783,6 +783,21 @@ const StreamCheckTable = () => {
               )}
             </Box>
 
+            {show === 'parked' && (data?.hidden_channels || []).length > 0 && (
+              <Box px="md" pt="sm">
+                <Alert color="gray" variant="light" p="xs">
+                  <Text size="xs">
+                    Hidden from TVs and media servers, every real stream of
+                    theirs being parked:{' '}
+                    {data.hidden_channels
+                      .map((c) => `${c.number ?? ''} ${c.name}`.trim())
+                      .join(', ')}
+                    . Each is shown again when one of its streams is put back.
+                  </Text>
+                </Alert>
+              </Box>
+            )}
+
             {(error ||
               notice ||
               skipped.length > 0 ||

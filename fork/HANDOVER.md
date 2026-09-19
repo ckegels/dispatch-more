@@ -307,7 +307,10 @@ no longer play. Summary of how it works now:
   `stream-check-recheck`). **Autopark** (off): `dead` `autopark_after` (3) checks in a row →
   parked; autoparked streams go back by themselves when they play.
 - **Park** = off every channel, remembered with position, still checked, put back before the
-  fallback. The Merge leaves parked streams out. Remove = off the channel only (the stream is
+  fallback. A channel left with no real stream (only its fallback) is **hidden** from outputs
+  (`hidden_from_output`, set by queryset update so stock's compact numbering keeps its number)
+  and shown again when a stream is put back — only channels Stream Check hid itself
+  (`stream-check-hidden`); on by default (`hide_emptied_channels`). The Merge leaves parked streams out. Remove = off the channel only (the stream is
   the provider's). The fallback is never checked, parked or removed.
 - **Stored:** CoreSettings `stream-check` (settings, `SETTINGS_VERSION`), `stream-check-results`,
   `stream-check-parked`, `stream-check-providers` (limits), `stream-check-recheck`; Redis

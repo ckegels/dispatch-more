@@ -409,6 +409,57 @@ class ParkTests(_Setup):
             stream_check.remove(self.fallback.id)
         self.assertIn("could not dispatch", self._order(self.orf1))
 
+    def _hidden(self, channel):
+        channel.refresh_from_db()
+        return channel.hidden_from_output
+
+    def test_a_channel_with_every_real_stream_parked_is_hidden_the_fallback_not_counting(self):
+        for stream in (self.first, self.second):
+            stream_check.park(stream.id)
+        self.assertFalse(self._hidden(self.orf1))
+        stream_check.park(self.third.id)
+        self.assertTrue(self._hidden(self.orf1))
+        self.assertEqual(self._order(self.orf1), ["could not dispatch"])
+        self.assertIn(str(self.orf1.id), stream_check.hidden_channels())
+
+    def test_shown_again_when_a_stream_of_it_is_put_back(self):
+        for stream in (self.first, self.second, self.third):
+            stream_check.park(stream.id)
+        stream_check.restore(self.second.id)
+        self.assertFalse(self._hidden(self.orf1))
+        self.assertEqual(stream_check.hidden_channels(), {})
+
+    def test_hiding_keeps_the_channel_number(self):
+        """A save would set off stock's compact numbering, which gives a hidden channel's number away."""
+        for stream in (self.first, self.second, self.third):
+            stream_check.park(stream.id)
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.channel_number, 1)
+
+    def test_a_channel_a_person_hid_is_never_shown_again_by_this(self):
+        Channel.objects.filter(id=self.orf1.id).update(hidden_from_output=True)
+        for stream in (self.first, self.second, self.third):
+            stream_check.park(stream.id)
+        self.assertEqual(stream_check.hidden_channels(), {})
+        stream_check.restore(self.first.id)
+        self.assertTrue(self._hidden(self.orf1))
+
+    def test_with_hiding_off_the_channel_stays(self):
+        stream_check.save_settings({"hide_emptied_channels": False})
+        for stream in (self.first, self.second, self.third):
+            stream_check.park(stream.id)
+        self.assertFalse(self._hidden(self.orf1))
+
+    def test_the_page_lists_the_channels_hidden_this_way(self):
+        from unittest import mock as _mock
+
+        for stream in (self.first, self.second, self.third):
+            stream_check.park(stream.id)
+        redis = _mock.MagicMock()
+        redis.hgetall.return_value = {}
+        found = stream_check.issues(redis)
+        self.assertEqual([c["name"] for c in found["hidden_channels"]], ["┃AT┃ ORF 1"])
+
     def test_the_merge_leaves_parked_streams_alone(self):
         """It would otherwise put them straight back on the channel they came off."""
         orf = self._stream("┃AT┃ ORF 1 HD", self.b)

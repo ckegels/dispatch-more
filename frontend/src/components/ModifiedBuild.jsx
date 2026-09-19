@@ -121,7 +121,7 @@ const ModifiedBuild = () => {
         onClose={() => setAsking(false)}
         onConfirm={uninstall}
         title="Go back to stock Dispatcharr?"
-        message="Every file the modified build changed is put back as it was, and Dispatcharr restarts. Your channels, streams and settings stay: stock Dispatcharr simply ignores the settings only this build uses, and they are there again if it is installed again."
+        message="Every file the modified build changed is put back as it was, and Dispatcharr restarts. Your channels, streams and settings stay: stock Dispatcharr simply ignores the settings only this build uses, and they are there again if it is installed again. Streams parked by Stream Check stay off their channels, and channels it hid stay hidden: stock cannot put them back by itself, so put back what you want first, or show those channels again under Channels."
         confirmLabel="Uninstall"
       />
     </Stack>
