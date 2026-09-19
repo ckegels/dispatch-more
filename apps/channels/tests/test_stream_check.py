@@ -243,6 +243,17 @@ class ProbeTests(TestCase):
     def test_without_the_picture_check_a_still_picture_plays(self):
         self.assertTrue(stream_check.probe(f"{self.base}/still.ts", timeout=12)["ok"])
 
+    def test_no_connection_is_unreachable_not_dead(self):
+        import socket
+
+        closed = socket.socket()
+        closed.bind(("127.0.0.1", 0))
+        port = closed.getsockname()[1]
+        closed.close()
+        found = stream_check.probe(f"http://127.0.0.1:{port}/live.ts", timeout=5)
+        self.assertFalse(found["ok"])
+        self.assertEqual(found["kind"], stream_check.UNREACHABLE)
+
     def test_a_stream_the_provider_no_longer_has(self):
         found = stream_check.probe(f"{self.base}/gone.ts", timeout=5)
         self.assertFalse(found["ok"])
@@ -1188,6 +1199,52 @@ class RecheckTests(_Setup):
             self.assertEqual(stream_check.run(self.redis), "waiting")
         probe.assert_not_called()
         self.assertGreaterEqual(stream_check.progress(self.redis)["resume_in"], stream_check.RETRY_WAITING)
+
+    def _unreachable(self, should_stop=None):
+        return {"ok": False, "kind": stream_check.UNREACHABLE, "reason": "Could not connect to the provider",
+                "resolution": "", "codec": "", "bytes": 0, "seconds": 0.1}
+
+    def test_no_connection_is_never_counted_and_is_tried_again(self):
+        """What made a working SBS 6 4K broken: two moments the provider could not be reached."""
+        stream_check.save_settings({"account_failures": 99, "autopark": True, "autopark_after": 1})
+        self._round({"ORF1B": self._unreachable})
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "suspect")
+        self.assertEqual(record.get("failures", 0), 0)
+        self._later()
+        self.assertEqual(self._round({}), "done")
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertTrue(record["ok"])
+        self.assertEqual(stream_check.load_parked(), {})
+
+    def test_a_timeout_or_server_error_counts_only_when_it_happens_again(self):
+        stream_check.save_settings({"account_failures": 99})
+
+        def server_error(should_stop=None):
+            return {"ok": False, "kind": "dead", "transient": True, "reason": "The provider answered HTTP 502",
+                    "resolution": "", "codec": "", "bytes": 0, "seconds": 0.1}
+
+        self._round({"ORF1B": server_error})
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "suspect")
+        self._later()
+        self._round({"ORF1B": server_error})
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual((record["kind"], record["failures"]), ("dead", 1))
+        self.assertIn("again when looked at later", record["reason"])
+
+    def test_never_reached_in_a_whole_run_is_not_checked_rather_than_dead(self):
+        stream_check.save_settings({"account_failures": 99, "autopark": True, "autopark_after": 1})
+        self._round({"ORF1B": self._unreachable})
+        for _ in range(stream_check.RELOOKS):
+            self._later()
+            ended = self._round({"ORF1B": self._unreachable})
+        self.assertEqual(ended, "done")
+        record = stream_check.load_results()["streams"][str(self.second.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
+        self.assertIn("not counted", record["refused"])
+        self.assertEqual(record.get("failures", 0), 0)
+        self.assertEqual(stream_check.load_parked(), {})
 
     def test_an_ignored_stream_is_off_the_list_and_not_checked(self):
         stream_check.save_settings({"account_failures": 99})

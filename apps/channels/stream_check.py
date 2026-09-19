@@ -156,6 +156,9 @@ LIVE_RESULTS_KEY = "stream-check:live-results"
 # What a provider answers when it will not give another connection -- too many open on the
 # login, or the login blocked for a moment -- rather than when a stream is gone. Not the
 # stream's fault, and not counted against it.
+# A server in trouble rather than a stream gone: looked at again later in the run, like a picture
+# fault, and counted only when it happens again
+TRANSIENT_STATUS = {500, 502, 504, 520, 521, 522, 523, 524}
 REFUSED_STATUS = {401, 403, 406, 407, 423, 429, 456, 458, 503, 509, 512, 513, 551, 882, 884}
 # A refused stream is told apart from a provider at its limit by trying, this long after, a
 # stream of the same provider that just played
@@ -188,7 +191,7 @@ READ_BYTES = 1024 * 1024
 PICTURE_BYTES = 40 * 1024 * 1024
 # A picture black for this long, or not moving for this long, is a failure (of the seconds
 # looked at); a recording shorter than PICTURE_LEAST says nothing either way
-BLACK_SECONDS = 2
+BLACK_SECONDS = 3
 FROZEN_SECONDS = 4
 PICTURE_LEAST = 3
 # The same frozen picture on this many channels of one provider is the provider's own card
@@ -213,6 +216,10 @@ RELOOK_GAP = 90
 # for a person to decide.
 DEAD, REFUSED, BLACK, FROZEN, PLACEHOLDER = "dead", "refused", "black", "frozen", "placeholder"
 PICTURE_KINDS = (BLACK, FROZEN, PLACEHOLDER)
+# No connection to the provider at all: the stream was never reached, so it says nothing about
+# it. Looked at again in the same run like a picture fault, and never counted: after RELOOKS
+# tries it is noted as not checked, and the next run looks again.
+UNREACHABLE = "unreachable"
 KIND_TEXT = {
     DEAD: "does not play",
     REFUSED: "refused by the provider",
@@ -889,7 +896,7 @@ def _picture(data):
         length = (max(times) - min(times)) if len(times) > 1 else 0.0
         detect = subprocess.run(
             ["ffmpeg", "-hide_banner", "-nostats", "-i", "pipe:0", "-an",
-             "-vf", f"blackdetect=d={BLACK_SECONDS}:pix_th=0.10,freezedetect=n=0.003:d={FROZEN_SECONDS}",
+             "-vf", f"blackdetect=d={BLACK_SECONDS}:pix_th=0.10,freezedetect=n=0.001:d={FROZEN_SECONDS}",
              "-f", "null", "-"],
             input=data, capture_output=True, timeout=60,
         )
@@ -1073,6 +1080,7 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
             said = _said(data)
             result["reason"] = f"The provider answered HTTP {response.status_code}" + (f": {said}" if said else "")
             result["refused"] = response.status_code in REFUSED_STATUS
+            result["transient"] = response.status_code in TRANSIENT_STATUS
             return result
         kind = (response.headers.get("Content-Type") or "").lower()
         if data[:7] == b"#EXTM3U" or "mpegurl" in kind:
@@ -1135,12 +1143,13 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
     except _Answered as e:
         result["reason"] = f"{e.what} answered HTTP {e.status}"
         result["refused"] = e.status in REFUSED_STATUS
+        result["transient"] = e.status in TRANSIENT_STATUS
     except requests.exceptions.ConnectTimeout:
-        result["reason"] = "The provider did not answer"
+        result.update(reason="The provider did not answer", kind=UNREACHABLE)
     except requests.exceptions.ReadTimeout:
-        result["reason"] = "The provider answered, then sent nothing"
+        result.update(reason="The provider answered, then sent nothing", transient=True)
     except requests.exceptions.ConnectionError:
-        result["reason"] = "Could not connect to the provider"
+        result.update(reason="Could not connect to the provider", kind=UNREACHABLE)
     except requests.exceptions.RequestException as e:
         result["reason"] = f"Could not be opened: {type(e).__name__}"
     finally:
@@ -1248,18 +1257,44 @@ def _record(redis_client, results, stream, outcome, settings, round_id=None):
     """
     previous = results.get(str(stream.id)) or {}
     suspect = _relook(previous, round_id)
-    picture_fault = not outcome["ok"] and outcome.get("kind") in PICTURE_KINDS
-    if suspect and outcome["ok"] and int(suspect.get("clean") or 0) + 1 < RELOOKS:
-        record = {**previous, "checked_at": _now(), "suspect": {
-            **suspect, "clean": int(suspect.get("clean") or 0) + 1, "next_at": time.time() + RELOOK_GAP,
-        }}
-        return _keep_record(redis_client, results, stream, record, settings)
-    if picture_fault and not suspect and settings.get("relook_pictures", True):
+    fault = "" if outcome["ok"] else outcome.get("kind") or DEAD
+    picture_fault = fault in PICTURE_KINDS
+    # A timeout or a server error: counted only if it happens again later in the run
+    transient = not outcome["ok"] and bool(outcome.get("transient")) and fault == DEAD
+
+    def keep_suspecting(**changes):
         record = {**previous, "name": stream.name, "checked_at": _now(), "suspect": {
-            "round": round_id, "kind": outcome["kind"], "reason": outcome["reason"],
-            "clean": 0, "next_at": time.time() + RELOOK_GAP,
+            **(suspect or {}), "round": round_id, "next_at": time.time() + RELOOK_GAP, **changes,
         }}
         return _keep_record(redis_client, results, stream, record, settings)
+
+    def not_counted(reason):
+        """Looked at, never reached: noted, counted nowhere, looked at again next run."""
+        record = {k: v for k, v in previous.items() if k != "suspect"}
+        record.update(name=stream.name, checked_at=_now(), skipped=True, refused=reason)
+        return _keep_record(redis_client, results, stream, record, settings)
+
+    if suspect:
+        looks = int(suspect.get("looks") or 0) + 1
+        if fault == UNREACHABLE:
+            # Still no way through: never taken for the stream's fault
+            if looks >= (RELOOKS if suspect.get("kind") == UNREACHABLE else RELOOKS * 2):
+                return not_counted(f"{outcome['reason']}, every time it was tried in this run: not counted")
+            return keep_suspecting(looks=looks)
+        if suspect.get("kind") == UNREACHABLE and picture_fault and settings.get("relook_pictures", True):
+            # Reached at last, and the picture looks wrong: that is a suspicion of its own now
+            return keep_suspecting(kind=fault, reason=outcome["reason"], clean=0, looks=0)
+        if suspect.get("kind") in PICTURE_KINDS and outcome["ok"] and int(suspect.get("clean") or 0) + 1 < RELOOKS:
+            return keep_suspecting(clean=int(suspect.get("clean") or 0) + 1, looks=looks)
+    elif fault == UNREACHABLE:
+        return keep_suspecting(kind=UNREACHABLE, reason=outcome["reason"], clean=0, looks=0)
+    elif picture_fault and settings.get("relook_pictures", True):
+        return keep_suspecting(kind=fault, reason=outcome["reason"], clean=0, looks=0)
+    elif transient:
+        return keep_suspecting(kind="transient", reason=outcome["reason"], clean=0, looks=0)
+    # Unreachable only reaches here with looking again switched off by the run's end: never counted
+    if fault == UNREACHABLE:
+        return not_counted(f"{outcome['reason']}: not counted")
     history = ([1 if outcome["ok"] else 0] + list(previous.get("history") or []))[:HISTORY_KEPT]
     failures = 0 if outcome["ok"] else int(previous.get("failures") or 0) + 1
     kind = "" if outcome["ok"] else outcome.get("kind") or DEAD
@@ -1281,7 +1316,7 @@ def _record(redis_client, results, stream, outcome, settings, round_id=None):
         "history": history,
         "name": stream.name,
     }
-    if suspect and picture_fault:
+    if suspect and not outcome["ok"] and suspect.get("kind") in PICTURE_KINDS + ("transient",):
         record["reason"] = f"{outcome['reason']}, again when looked at later"
     return _keep_record(redis_client, results, stream, record, settings)
 
@@ -1745,7 +1780,7 @@ def run(redis_client, only=None, batch_seconds=None):
                                 count(earlier, found)
                             account_held.clear()
                             count(stream, outcome)
-                        elif account_id in played or outcome.get("kind", DEAD) != DEAD:
+                        elif account_id in played or outcome.get("kind", DEAD) not in (DEAD, UNREACHABLE):
                             # Playing something, or refused while others play: the stream's own
                             # failure. Only streams that do not play at all might be the
                             # provider being down.

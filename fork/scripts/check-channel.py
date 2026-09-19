@@ -98,7 +98,7 @@ for channel in channels:
         kept = results.get(str(stream.id))
         on_record = (
             "never checked" if not kept else
-            f"{stream_check.state_of(kept, settings)} ({kept.get('reason') or kept.get('resolution') or 'plays'}, "
+            f"{stream_check.state_of(kept, settings)} [{kept.get('kind') or 'plays'}] ({kept.get('reason') or kept.get('resolution') or 'plays'}, "
             f"{kept.get('failures', 0)} failure(s), last {kept.get('checked_at', '')[:16]})"
         )
         print(f"  {link.order + 1}. {stream.name}  | {account.name if account else 'custom'}")
@@ -121,9 +121,19 @@ for channel in channels:
         try:
             url = stream_check._url_for(stream, login)
             agent = account.get_user_agent_string() or ""
-            quick = stream_check.probe(url, agent, 12)
-            print(f"     quick check (what Stream Check does): {'plays' if quick['ok'] else 'FAILS'}"
-                  f" {quick.get('reason') or ''} {quick.get('resolution') or ''} {quick.get('codec') or ''}")
+            # Exactly as a run checks: its timeout, and the picture look when that is on
+            started = time.monotonic()
+            quick = stream_check.probe(
+                url, agent, settings["timeout_seconds"],
+                picture_seconds=settings["picture_seconds"] if settings.get("picture_check") else 0,
+            )
+            print(f"     check as a run does it: {'plays' if quick['ok'] else 'FAILS'}"
+                  f" in {time.monotonic() - started:.1f} s | kind {quick.get('kind')} | {quick.get('reason') or ''}"
+                  f" {quick.get('resolution') or ''} {quick.get('codec') or ''} | {quick.get('bytes', 0) // 1024} KB read")
+            bare = stream_check.probe(url, agent, settings["timeout_seconds"])
+            print(f"     check without the picture look: {'plays' if bare['ok'] else 'FAILS'}"
+                  f" | {bare.get('reason') or ''} {bare.get('resolution') or ''} {bare.get('codec') or ''}"
+                  f" | {bare.get('bytes', 0) // 1024} KB read")
             path, how = record(url, agent, SECONDS)
             print(f"     {SECONDS} s recording: {how}")
             if path:
