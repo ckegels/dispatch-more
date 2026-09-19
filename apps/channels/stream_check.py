@@ -146,6 +146,9 @@ OPENS_KEY = "stream-check:opens:{provider}"
 RECOVERY_STEPS = (30, 60, 120, 240, 480, 900, 1800, 3600)
 # What is learned is used with room to spare, for viewers zapping meanwhile
 LIMIT_MARGIN = 0.8
+# Limits learned before a refused channel could be told from a provider at its limit may be
+# nothing but a dead channel: they are not used. Limits set by hand are always kept.
+LIMITS_VERSION = 2
 # A provider can go on counting a connection for a while after it is closed. After a check,
 # a login the provider still counts as in use is waited on this long before it is taken to
 # be someone else's.
@@ -435,7 +438,14 @@ class _ProviderCount:
 
 def load_limits():
     """{provider key: {"name", "limit", "window", "how", ...}}, learned or set by hand."""
-    return dict(_load(LIMITS_KEY, {}))
+    limits = {}
+    for key, state in _load(LIMITS_KEY, {}).items():
+        state = dict(state or {})
+        if state.get("how") != "set by hand" and state.get("v") != LIMITS_VERSION:
+            # Learned (or being learned) the old way: kept only for the stream that played
+            state = {k: v for k, v in state.items() if k in ("name", "good_stream")}
+        limits[key] = state
+    return limits
 
 
 def _change_limits(change):
@@ -540,7 +550,7 @@ class _Budget:
         first = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), since, "+inf", start=0, num=1, withscores=True)
         self.state.update(
             blocked_since=now, count=int(count), span=(now - first[0][1]) if first else 0.0,
-            step=0, next_try=now + RECOVERY_STEPS[0],
+            step=0, next_try=now + RECOVERY_STEPS[0], v=LIMITS_VERSION,
         )
         self._save()
         logger.info(f"Stream Check: {self.name} refused after {count} streams; finding out how long for")
@@ -562,7 +572,10 @@ class _Budget:
             if self.state.get("limit") and count <= int(self.state["limit"]):
                 # Hit even under what was learned: the provider allows less than it seemed
                 learned = max(1, int(int(self.state["limit"]) * LIMIT_MARGIN))
-            self.state.update(limit=learned, window=max(window, int(self.state.get("window") or 0)), how="learned", at=_now())
+            self.state.update(
+                limit=learned, window=max(window, int(self.state.get("window") or 0)), how="learned", at=_now(),
+                v=LIMITS_VERSION,
+            )
             logger.info(f"Stream Check: {self.name} allows about {count} streams; keeping to {learned} every {window // 60} min")
         for field in ("blocked_since", "count", "span", "step", "next_try"):
             self.state.pop(field, None)
@@ -1316,7 +1329,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     with lock:
                         count(good, found)
 
-                for stream in streams:
+                for index, stream in enumerate(streams):
                     account_id = stream.m3u_account_id
                     if account_id in given_up:
                         continue
@@ -1342,28 +1355,46 @@ def run(redis_client, only=None, batch_seconds=None):
                         continue
 
                     if outcome is not None and outcome.get("refused"):
-                        # This stream, or the provider? A stream that just played on it tells.
-                        good = good_streams.get(key)
-                        if good is not None and good.id != stream.id:
+                        # This stream, or the provider? Another of its streams tells: one that
+                        # just played there, or else the next in line. A provider refuses a
+                        # channel it no longer carries the same way it refuses when at its
+                        # limit -- one answered every Euronews HD with HTTP 407 while playing
+                        # everything around it -- and only the other stream tells them apart.
+                        compare = good_streams.get(key)
+                        if compare is None or compare.id == stream.id:
+                            compare = next(
+                                (s for s in streams[index + 1:] if s.m3u_account_id not in given_up),
+                                None,
+                            )
+                        if compare is not None:
                             _pause(REFUSAL_PAUSE, lambda: stop_asked() or someone_watching())
                             if not ready():
                                 return
-                            other = attempt(good)
+                            other = attempt(compare)
                             if other in ("busy", "stopped"):
                                 return
-                            if other is not None and other["ok"]:
-                                # The provider answers; it is this one stream it will not give
+                            if other is not None and other.get("refused"):
+                                # Both refused: the provider will not give any. Its limit.
+                                budget.hit()
+                                rest("resting", f"{budget.describe()} ({outcome['reason']})", budget.resting())
+                                return
+                            if other is not None:
                                 with lock:
-                                    _refused(results, stream, outcome["reason"])
-                                    entry["done"] += 1
-                                    entry["left"] -= 1
-                                    _progress(redis_client, accounts=accounts, done=progress(redis_client).get("done", 0) + 1)
-                                time.sleep(gap)
-                                continue
-                        # The provider will not give any: its limit. Learn it, and rest.
-                        budget.hit()
-                        rest("resting", f"{budget.describe()} ({outcome['reason']})", budget.resting())
-                        return
+                                    count(compare, other)
+                                    if other["ok"]:
+                                        good_streams[key] = compare
+                                        budget.state["good_stream"] = compare.id
+                                        played.add(compare.m3u_account_id)
+                                    if compare in streams[index + 1:]:
+                                        entry["done"] += 1
+                                        entry["left"] -= 1
+                        # The provider gives other streams: this one it does not. A failure of
+                        # the stream, counted like any other, so rechecks and autopark see it.
+                        outcome = {
+                            **outcome, "refused": False,
+                            "reason": f"{outcome['reason']}, while the provider plays its other streams"
+                            if compare is not None and other is not None and other.get("ok") else outcome["reason"],
+                        }
 
                     account_held = held.setdefault(account_id, [])
                     with lock:

@@ -645,7 +645,7 @@ class RunTests(_Setup):
 
     def test_once_it_answers_again_the_limit_is_kept_with_room_to_spare(self):
         state = {"blocked_since": time.time() - 600, "count": 10, "span": 120, "step": 3,
-                 "next_try": time.time() - 1, "good_stream": self.first.id}
+                 "next_try": time.time() - 1, "good_stream": self.first.id, "v": stream_check.LIMITS_VERSION}
         stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
         final, probe = self._run({})
         limit = self._limit()
@@ -656,7 +656,8 @@ class RunTests(_Setup):
 
     def test_a_resting_provider_is_not_asked_anything(self):
         self._as_xc(self.a)
-        state = {"blocked_since": time.time(), "count": 34, "span": 120, "step": 0, "next_try": time.time() + 300}
+        state = {"blocked_since": time.time(), "count": 34, "span": 120, "step": 0, "next_try": time.time() + 300,
+                 "v": stream_check.LIMITS_VERSION}
         stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
         with mock.patch.object(stream_check, "_xc_user_info") as asked:
             final, probe = self._run({})
@@ -669,10 +670,32 @@ class RunTests(_Setup):
         stream_check._change_limits(lambda limits: limits.update({"server:a": {"name": "Provider A", "good_stream": self.first.id}}))
         final, probe = self._run({"ORF1A2": self._refusal})
         record = stream_check.load_results()["streams"][str(self.third.id)]
-        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "unchecked")
-        self.assertIn("407", record["refused"])
+        # A failure of the stream like any other, so rechecks and autopark see it
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "failing")
+        self.assertIn("while the provider plays its other streams", record["reason"])
         self.assertNotIn("blocked_since", self._limit())
         self.assertEqual(final["ended"], "done")
+
+    def test_a_dead_channel_refused_first_is_told_from_a_limit_by_the_next_stream(self):
+        """What hid a dead Euronews: nothing played there yet, and the next stream decides."""
+        final, probe = self._run({"ORF1A": self._refusal})
+        record = stream_check.load_results()["streams"][str(self.first.id)]
+        self.assertEqual(stream_check.state_of(record, stream_check.load_settings()), "failing")
+        self.assertTrue(stream_check.load_results()["streams"][str(self.third.id)]["ok"])
+        self.assertNotIn("limit", self._limit())
+        self.assertEqual(final["ended"], "done")
+        # The next stream was looked at once, not again
+        called = [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list]
+        self.assertEqual(called.count("ORF1A2"), 1)
+
+    def test_a_limit_learned_before_this_is_not_used(self):
+        """It may have been nothing but a dead channel."""
+        stream_check._change_limits(lambda limits: limits.update({"server:a": {
+            "name": "Provider A", "limit": 1, "window": 3600, "how": "learned", "good_stream": self.first.id,
+        }}))
+        self.assertEqual(self._limit(), {"name": "Provider A", "good_stream": self.first.id})
+        final, probe = self._run({})
+        self.assertEqual(probe.call_count, 3)
 
     def test_a_limit_set_by_hand_is_kept_to(self):
         stream_check.set_limit("server:a", "Provider A", limit=1, window_minutes=10)
