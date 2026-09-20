@@ -36,13 +36,13 @@ import {
   NumberInput,
   Paper,
   Select,
-  SimpleGrid,
   Stack,
   Text,
   TextInput,
   Tooltip,
   UnstyledButton,
 } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
 
@@ -54,8 +54,14 @@ import ConfirmationDialog from '../ConfirmationDialog';
 // is one set of rules and not one here and another there.
 
 const Channel = ({ channel, was, renaming, onRenaming, onRename }) => {
-  const { transform, transition, setNodeRef, attributes, listeners, isDragging } =
-    useSortable({ id: channel.id });
+  const {
+    transform,
+    transition,
+    setNodeRef,
+    attributes,
+    listeners,
+    isDragging,
+  } = useSortable({ id: channel.id });
   const moved = was != null && was !== channel.number;
   return (
     <Group
@@ -79,7 +85,12 @@ const Channel = ({ channel, was, renaming, onRenaming, onRename }) => {
       >
         <GripVertical size={14} />
       </Box>
-      <Text size="sm" w={70} style={{ flexShrink: 0 }} c={moved ? 'blue.4' : undefined}>
+      <Text
+        size="sm"
+        w={70}
+        style={{ flexShrink: 0 }}
+        c={moved ? 'blue.4' : undefined}
+      >
         {channel.number ?? '—'}
         {moved && ` → ${was}`}
       </Text>
@@ -98,7 +109,8 @@ const Channel = ({ channel, was, renaming, onRenaming, onRename }) => {
           defaultValue={channel.name}
           onBlur={(event) => onRename(channel.id, event.currentTarget.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter') onRename(channel.id, event.currentTarget.value);
+            if (event.key === 'Enter')
+              onRename(channel.id, event.currentTarget.value);
             if (event.key === 'Escape') onRename(channel.id, null);
           }}
           style={{ flex: 1, minWidth: 0 }}
@@ -115,13 +127,23 @@ const Channel = ({ channel, was, renaming, onRenaming, onRename }) => {
       )}
       {channel.clashes && (
         <Tooltip label="Another channel has this number too. A media server sees one lineup, so it shows only one of them.">
-          <Badge size="xs" color="red" variant="light" style={{ flexShrink: 0 }}>
+          <Badge
+            size="xs"
+            color="red"
+            variant="light"
+            style={{ flexShrink: 0 }}
+          >
             same number
           </Badge>
         </Tooltip>
       )}
       {!channel.epg && (
-        <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
+        <Badge
+          size="xs"
+          color="orange"
+          variant="light"
+          style={{ flexShrink: 0 }}
+        >
           no guide
         </Badge>
       )}
@@ -138,11 +160,35 @@ const GroupBox = ({ id, children }) => {
       ref={setNodeRef}
       p={4}
       withBorder
-      style={isOver ? { outline: '1px solid var(--mantine-color-blue-6)' } : undefined}
+      style={
+        isOver
+          ? { outline: '1px solid var(--mantine-color-blue-6)' }
+          : undefined
+      }
     >
       {children}
     </Paper>
   );
+};
+
+// Two columns, each group going to whichever is shorter at the time, rather than a grid
+// of rows. A grid gives every row the height of its tallest cell, so one group opened put
+// a column of air beside it and pushed everything else below the pair. Filled this way an
+// open group has the closed ones stacked alongside it -- which is how you pick the next
+// one to open -- and once two are open the rest fall in under both of them.
+//
+// With everything closed every group is the same height, so they alternate and the order
+// reads across the page exactly as a grid's did.
+export const intoColumns = (groups, isOpen, howMany = 2) => {
+  const columns = Array.from({ length: howMany }, () => []);
+  const heights = new Array(howMany).fill(0);
+  for (const one of groups) {
+    const at = heights.indexOf(Math.min(...heights));
+    columns[at].push(one);
+    // A shut group is one line; an open one is its channels and the row of boxes over them
+    heights[at] += isOpen(one) ? 4 + (one.channels?.length || 0) : 1;
+  }
+  return columns.filter((column) => column.length);
 };
 
 const GuideLayoutTable = () => {
@@ -163,6 +209,9 @@ const GuideLayoutTable = () => {
   // Groups are shut to begin with. A thousand channels as draggable rows is what made
   // this page crawl, and most of the time one group is the one being worked on.
   const [open, setOpen] = useState(() => new Set());
+  // Two columns only where there is room for two. Narrower than that and the groups go
+  // one under the other in the order they are in, which is what a phone needs.
+  const wide = useMediaQuery('(min-width: 75em)');
   // The channel whose name is being typed, and what to take out of a group's names
   const [renaming, setRenaming] = useState(null);
   const [takeOff, setTakeOff] = useState({});
@@ -205,7 +254,8 @@ const GuideLayoutTable = () => {
   );
   const byId = useMemo(() => {
     const all = {};
-    for (const one of groups) for (const channel of one.channels) all[channel.id] = channel;
+    for (const one of groups)
+      for (const channel of one.channels) all[channel.id] = channel;
     return all;
   }, [groups]);
 
@@ -350,10 +400,19 @@ const GuideLayoutTable = () => {
   return (
     <>
       <Box style={{ display: 'flex', justifyContent: 'center' }}>
-        <Paper style={{ width: '100%', maxWidth: 1200 }} p="sm" mx={{ base: 'xs', md: 0 }}>
+        <Paper
+          style={{ width: '100%', maxWidth: 1200 }}
+          p="sm"
+          mx={{ base: 'xs', md: 0 }}
+        >
           <LoadingOverlay visible={loading} />
           {error && (
-            <Alert color="red" mb="sm" withCloseButton onClose={() => setError(null)}>
+            <Alert
+              color="red"
+              mb="sm"
+              withCloseButton
+              onClose={() => setError(null)}
+            >
               {error}
             </Alert>
           )}
@@ -401,7 +460,10 @@ const GuideLayoutTable = () => {
                 placeholder="Every group"
                 value={group}
                 onChange={(value) => setGroup(value || '')}
-                data={groups.map((g) => ({ value: String(g.id), label: g.name }))}
+                data={groups.map((g) => ({
+                  value: String(g.id),
+                  label: g.name,
+                }))}
                 searchable
                 clearable
                 style={{ width: 240 }}
@@ -409,8 +471,8 @@ const GuideLayoutTable = () => {
               {(data?.clashes || []).length > 0 && (
                 <Text size="xs" c="red.4">
                   {data.clashes.length} number
-                  {data.clashes.length === 1 ? ' is' : 's are'} used by more than one
-                  channel
+                  {data.clashes.length === 1 ? ' is' : 's are'} used by more
+                  than one channel
                 </Text>
               )}
             </Group>
@@ -419,10 +481,16 @@ const GuideLayoutTable = () => {
                 size="xs"
                 variant="default"
                 leftSection={
-                  open.size ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />
+                  open.size ? (
+                    <ChevronsDownUp size={14} />
+                  ) : (
+                    <ChevronsUpDown size={14} />
+                  )
                 }
                 onClick={() =>
-                  setOpen(open.size ? new Set() : new Set(shown.map((one) => one.id)))
+                  setOpen(
+                    open.size ? new Set() : new Set(shown.map((one) => one.id))
+                  )
                 }
               >
                 {open.size ? 'Close them all' : 'Open them all'}
@@ -448,10 +516,10 @@ const GuideLayoutTable = () => {
           </Group>
 
           <Text size="xs" c="dimmed" mb="sm">
-            Drag a channel where it belongs, in its own group or into another one. It
-            takes that place and the others move only as far as they must, so the numbers
-            you have are kept wherever they still work. Nothing is written until you
-            apply.
+            Drag a channel where it belongs, in its own group or into another
+            one. It takes that place and the others move only as far as they
+            must, so the numbers you have are kept wherever they still work.
+            Nothing is written until you apply.
           </Text>
 
           {shown.length === 0 && !loading ? (
@@ -470,141 +538,175 @@ const GuideLayoutTable = () => {
               onDragOver={onDragOver}
               onDragEnd={onDragEnd}
             >
-            <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
-              {shown.map((one) => (
-                <Box key={one.id}>
-                  <Group justify="space-between" mb={4} wrap="wrap" gap="xs">
-                    <Group gap="xs">
-                      <UnstyledButton
-                        onClick={() =>
-                          setOpen((all) => {
-                            const now = new Set(all);
-                            if (now.has(one.id)) now.delete(one.id);
-                            else now.add(one.id);
-                            return now;
-                          })
-                        }
-                        aria-label={`${open.has(one.id) ? 'Close' : 'Open'} ${one.name}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                      >
-                        {open.has(one.id) ? (
-                          <ChevronDown size={14} />
-                        ) : (
-                          <ChevronRight size={14} />
-                        )}
-                        <Text size="sm" fw={600}>
-                          {one.name}
-                        </Text>
-                      </UnstyledButton>
-                      {open.has(one.id) && (
-                        <TextInput
-                          size="xs"
-                          aria-label={`Name for ${one.name}`}
-                          defaultValue={one.name}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter')
-                              renameGroup(one.id, event.currentTarget.value);
-                          }}
-                          placeholder="Rename this group"
-                          style={{ width: 200 }}
-                        />
-                      )}
-                      <Text size="xs" c="dimmed">
-                        {one.channels.length} channel
-                        {one.channels.length === 1 ? '' : 's'}
-                        {one.first != null && ` · ${one.first}–${one.last}`}
-                        {one.room_after != null &&
-                          ` · room for ${one.room_after}`}
-                      </Text>
-                      {one.channels.some((c) => c.clashes) && (
-                        <Badge size="xs" color="red" variant="light">
-                          same numbers
-                        </Badge>
-                      )}
-                    </Group>
-                    <Group gap="xs" align="flex-end" style={{ display: open.has(one.id) ? undefined : 'none' }}>
-                      <NumberInput
-                        size="xs"
-                        label="From"
-                        aria-label={`Renumber ${one.name} from`}
-                        value={from}
-                        onChange={(value) => setFrom(Number(value) || 1)}
-                        style={{ width: 90 }}
-                      />
-                      <NumberInput
-                        size="xs"
-                        label="Step"
-                        aria-label={`Renumber ${one.name} in steps of`}
-                        min={1}
-                        value={step}
-                        onChange={(value) => setStep(Number(value) || 1)}
-                        style={{ width: 80 }}
-                      />
-                      <Button
-                        size="xs"
-                        variant="default"
-                        aria-label={`Renumber every channel of ${one.name}`}
-                        onClick={() => renumber(one.id)}
-                      >
-                        Renumber them all
-                      </Button>
-                      <TextInput
-                        size="xs"
-                        label="Take out of every name"
-                        description="Typed as it is written, not as a pattern"
-                        aria-label={`Take out of every name in ${one.name}`}
-                        value={takeOff[one.id] || ''}
-                        onChange={(event) =>
-                          setTakeOff((all) => ({
-                            ...all,
-                            [one.id]: event.currentTarget.value,
-                          }))
-                        }
-                        placeholder="┃DE┃"
-                        style={{ width: 170 }}
-                      />
-                      <Button
-                        size="xs"
-                        variant="default"
-                        disabled={!(takeOff[one.id] || '').trim()}
-                        aria-label={`See what taking that out of ${one.name} would leave`}
-                        onClick={() => takeOutOf(one.id, false)}
-                      >
-                        Show me
-                      </Button>
-                    </Group>
-                  </Group>
-                  {open.has(one.id) && (
-                  <GroupBox id={one.id}>
-                      <SortableContext
-                        items={order[one.id] || []}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        <Stack gap={0}>
-                          {(order[one.id] || []).map((id) => (
-                            <Channel
-                              key={id}
-                              renaming={renaming === id}
-                              onRenaming={setRenaming}
-                              onRename={renameChannel}
-                              channel={{
-                                ...byId[id],
-                                number: numbers[id] ?? byId[id]?.number,
-                              }}
-                              was={
-                                numbers[id] != null && numbers[id] !== byId[id]?.number
-                                  ? byId[id]?.number
-                                  : null
+              <Box
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 'var(--mantine-spacing-lg)',
+                }}
+              >
+                {intoColumns(
+                  shown,
+                  (one) => open.has(one.id),
+                  wide ? 2 : 1
+                ).map((column, at) => (
+                  <Stack key={at} gap="lg" style={{ flex: 1, minWidth: 0 }}>
+                    {column.map((one) => (
+                      <Box key={one.id}>
+                        <Group
+                          justify="space-between"
+                          mb={4}
+                          wrap="wrap"
+                          gap="xs"
+                        >
+                          <Group gap="xs">
+                            <UnstyledButton
+                              onClick={() =>
+                                setOpen((all) => {
+                                  const now = new Set(all);
+                                  if (now.has(one.id)) now.delete(one.id);
+                                  else now.add(one.id);
+                                  return now;
+                                })
                               }
+                              aria-label={`${open.has(one.id) ? 'Close' : 'Open'} ${one.name}`}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4,
+                              }}
+                            >
+                              {open.has(one.id) ? (
+                                <ChevronDown size={14} />
+                              ) : (
+                                <ChevronRight size={14} />
+                              )}
+                              <Text size="sm" fw={600}>
+                                {one.name}
+                              </Text>
+                            </UnstyledButton>
+                            {open.has(one.id) && (
+                              <TextInput
+                                size="xs"
+                                aria-label={`Name for ${one.name}`}
+                                defaultValue={one.name}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter')
+                                    renameGroup(
+                                      one.id,
+                                      event.currentTarget.value
+                                    );
+                                }}
+                                placeholder="Rename this group"
+                                style={{ width: 200 }}
+                              />
+                            )}
+                            <Text size="xs" c="dimmed">
+                              {one.channels.length} channel
+                              {one.channels.length === 1 ? '' : 's'}
+                              {one.first != null &&
+                                ` · ${one.first}–${one.last}`}
+                              {one.room_after != null &&
+                                ` · room for ${one.room_after}`}
+                            </Text>
+                            {one.channels.some((c) => c.clashes) && (
+                              <Badge size="xs" color="red" variant="light">
+                                same numbers
+                              </Badge>
+                            )}
+                          </Group>
+                          <Group
+                            gap="xs"
+                            align="flex-end"
+                            style={{
+                              display: open.has(one.id) ? undefined : 'none',
+                            }}
+                          >
+                            <NumberInput
+                              size="xs"
+                              label="From"
+                              aria-label={`Renumber ${one.name} from`}
+                              value={from}
+                              onChange={(value) => setFrom(Number(value) || 1)}
+                              style={{ width: 90 }}
                             />
-                          ))}
-                        </Stack>
-                      </SortableContext>
-                  </GroupBox>
-                  )}
-                </Box>
-              ))}
-            </SimpleGrid>
+                            <NumberInput
+                              size="xs"
+                              label="Step"
+                              aria-label={`Renumber ${one.name} in steps of`}
+                              min={1}
+                              value={step}
+                              onChange={(value) => setStep(Number(value) || 1)}
+                              style={{ width: 80 }}
+                            />
+                            <Button
+                              size="xs"
+                              variant="default"
+                              aria-label={`Renumber every channel of ${one.name}`}
+                              onClick={() => renumber(one.id)}
+                            >
+                              Renumber them all
+                            </Button>
+                            <TextInput
+                              size="xs"
+                              label="Take out of every name"
+                              description="Typed as it is written, not as a pattern"
+                              aria-label={`Take out of every name in ${one.name}`}
+                              value={takeOff[one.id] || ''}
+                              onChange={(event) =>
+                                setTakeOff((all) => ({
+                                  ...all,
+                                  [one.id]: event.currentTarget.value,
+                                }))
+                              }
+                              placeholder="┃DE┃"
+                              style={{ width: 170 }}
+                            />
+                            <Button
+                              size="xs"
+                              variant="default"
+                              disabled={!(takeOff[one.id] || '').trim()}
+                              aria-label={`See what taking that out of ${one.name} would leave`}
+                              onClick={() => takeOutOf(one.id, false)}
+                            >
+                              Show me
+                            </Button>
+                          </Group>
+                        </Group>
+                        {open.has(one.id) && (
+                          <GroupBox id={one.id}>
+                            <SortableContext
+                              items={order[one.id] || []}
+                              strategy={verticalListSortingStrategy}
+                            >
+                              <Stack gap={0}>
+                                {(order[one.id] || []).map((id) => (
+                                  <Channel
+                                    key={id}
+                                    renaming={renaming === id}
+                                    onRenaming={setRenaming}
+                                    onRename={renameChannel}
+                                    channel={{
+                                      ...byId[id],
+                                      number: numbers[id] ?? byId[id]?.number,
+                                    }}
+                                    was={
+                                      numbers[id] != null &&
+                                      numbers[id] !== byId[id]?.number
+                                        ? byId[id]?.number
+                                        : null
+                                    }
+                                  />
+                                ))}
+                              </Stack>
+                            </SortableContext>
+                          </GroupBox>
+                        )}
+                      </Box>
+                    ))}
+                  </Stack>
+                ))}
+              </Box>
             </DndContext>
           )}
         </Paper>

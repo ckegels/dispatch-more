@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
-import GuideLayoutTable from '../GuideLayoutTable.jsx';
+import GuideLayoutTable, { intoColumns } from '../GuideLayoutTable.jsx';
 import API from '../../../api';
 
 vi.mock('../../../api', () => ({
@@ -56,6 +56,48 @@ const draw = () =>
       <GuideLayoutTable />
     </MantineProvider>
   );
+
+// Two columns filled by whichever is shorter, rather than a grid of rows: a grid gives
+// every row the height of its tallest cell, so one group opened put a column of air
+// beside it and pushed everything else below the pair.
+describe('intoColumns', () => {
+  const shut = (n) =>
+    Array.from({ length: n }, (_, at) => ({ id: at + 1, channels: [] }));
+
+  it('alternates while everything is shut, so the order reads across the page', () => {
+    const [left, right] = intoColumns(shut(6), () => false);
+    expect(left.map((one) => one.id)).toEqual([1, 3, 5]);
+    expect(right.map((one) => one.id)).toEqual([2, 4, 6]);
+  });
+
+  it('stacks the shut ones beside an open one, to pick the next from', () => {
+    const groups = [
+      { id: 1, channels: Array.from({ length: 20 }, (_, at) => ({ id: at })) },
+      ...shut(5).map((one) => ({ ...one, id: one.id + 1 })),
+    ];
+    const [left, right] = intoColumns(groups, (one) => one.id === 1);
+    expect(left.map((one) => one.id)).toEqual([1]);
+    expect(right.map((one) => one.id)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it('and once two are open the rest fall in under both', () => {
+    const tall = (id) => ({
+      id,
+      channels: Array.from({ length: 20 }, (_, at) => ({ id: at })),
+    });
+    const groups = [tall(1), tall(2), ...shut(4).map((o) => ({ ...o, id: o.id + 2 }))];
+    const [left, right] = intoColumns(groups, (one) => one.id <= 2);
+    expect(left[0].id).toBe(1);
+    expect(right[0].id).toBe(2);
+    // the shut ones are spread under the two, not all piled on one side
+    expect(left.length).toBe(3);
+    expect(right.length).toBe(3);
+  });
+
+  it('is one column where there is no room for two', () => {
+    expect(intoColumns(shut(4), () => false, 1)).toHaveLength(1);
+  });
+});
 
 describe('GuideLayoutTable', () => {
   beforeEach(() => {

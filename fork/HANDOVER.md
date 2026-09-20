@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v148** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v149** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -769,6 +769,14 @@ and there is no undo. What is taken out is **plain text, not a pattern**: somebo
 "┃DE┃" means those characters, and a name full of box-drawing is exactly what turns into a
 pattern nobody meant. A name that would be left empty is not changed.
 
+**Two columns filled by whichever is shorter** (v149, `intoColumns`), not a grid of rows. A
+grid gives every row the height of its tallest cell, so opening one group put a column of
+air beside it and pushed every other group below the pair -- with nothing to choose the
+next one from. Filled this way an open group has the shut ones stacked alongside it, and
+once two are open the rest fall in under both. With everything shut every group is one
+line, so they alternate and read across the page exactly as the grid did. One column below
+`75em`, where there is no room for two.
+
 The page also says what nothing else does: **two channels on one number**. `channel_number`
 is a float and its uniqueness is only checked within a group, by `clean()`, which `save()`
 does not call -- so clashes across groups are easy to make and a media server, seeing one
@@ -998,6 +1006,15 @@ no longer play. Summary of how it works now:
   `.de` read as different countries and quietly cost thirty points, which nobody saw for as
   long as the country only decided the tier. → `ALSO_CALLED`; and a rule that is only ever
   read through one narrow door hides its own bugs.
+- **A row that redrew once and then stopped** (to v149, the Logos tab): choosing one of the
+  other suggested logos worked the first time and did nothing every time after. The shared
+  table wraps each row in `React.memo` and redraws it only when `row.original` is a
+  different object, when it is expanded, or when it is **ticked** -- and choosing a logo
+  also ticks the row, so the first choice slipped through on the tick and every later one
+  changed state the table was not watching. → what has been chosen belongs **on the row**,
+  not in state beside it. The page's own tests could never have caught this: they stand in
+  for the table and for Mantine both, so `LogoLibraryTable.redraw.test.jsx` draws the real
+  ones.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).
