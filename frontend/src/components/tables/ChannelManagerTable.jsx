@@ -38,7 +38,6 @@ import {
   Text,
   TextInput,
   Tooltip,
-  UnstyledButton,
   useMantineTheme,
 } from '@mantine/core';
 import API from '../../api';
@@ -192,12 +191,76 @@ const movable = (stream) => !stream.removed && !stream.custom;
 // how alike the names are, how many programmes it holds, and what is on it at this
 // moment. An entry showing Zeit im Bild is the Austrian ORF 1; one holding no programmes
 // at all is a name and nothing else, which no list of names can tell you.
-const GuideCard = ({ guide, picked, onPick }) => (
-  <UnstyledButton
+// What a guide holds, said without guessing. Holding nothing means two different things:
+// Dispatcharr reads a guide's programmes only once something uses it, so an entry no
+// channel uses and that holds nothing has almost certainly never been read. Saying "no
+// programmes" there would be telling someone a good guide is empty, so it offers to read
+// it instead.
+const WhatItHolds = ({ guide, onLoad, loading }) => {
+  if (guide.programmes) {
+    return (
+      <>
+        <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+          {guide.tvg_id || 'no tvg-id'} · {guide.programmes} programme
+          {guide.programmes === 1 ? '' : 's'}
+        </Text>
+        <Text size="xs" c={guide.now ? undefined : 'dimmed'}>
+          {guide.now ? `Now: ${guide.now}` : 'Nothing on it now'}
+        </Text>
+      </>
+    );
+  }
+  return (
+    <>
+      <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+        {guide.tvg_id || 'no tvg-id'} ·{' '}
+        {guide.in_use ? 'no programmes' : 'programmes not read yet'}
+      </Text>
+      {guide.in_use ? (
+        <Text size="xs" c="dimmed">
+          Nothing on it now
+        </Text>
+      ) : loading ? (
+        <Group gap={6}>
+          <Loader size={10} />
+          <Text size="xs" c="dimmed">
+            Reading them, this can take a moment...
+          </Text>
+        </Group>
+      ) : (
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          aria-label={`Read the programmes of ${guide.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onLoad(guide);
+          }}
+        >
+          Read them, to see
+        </Button>
+      )}
+    </>
+  );
+};
+
+// The whole card chooses the guide, but it carries a button of its own for reading the
+// programmes, and a button inside a button is not a thing a browser will render. So the
+// card says what it is rather than being a <button>.
+const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
+  <Box
+    role="button"
+    tabIndex={0}
     onClick={() => onPick(guide)}
+    onKeyDown={(event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onPick(guide);
+      }
+    }}
     aria-label={`Guide ${guide ? guide.name : 'none'}`}
     style={{
-      display: 'block',
+      cursor: 'pointer',
       width: '100%',
       padding: '8px 10px',
       borderRadius: 6,
@@ -226,21 +289,12 @@ const GuideCard = ({ guide, picked, onPick }) => (
             </Text>
           </Group>
         </Group>
-        <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
-          {guide.tvg_id || 'no tvg-id'}
-          {' · '}
-          {guide.programmes
-            ? `${guide.programmes} programme${guide.programmes === 1 ? '' : 's'}`
-            : 'no programmes'}
-        </Text>
-        <Text size="xs" c={guide.now ? undefined : 'dimmed'}>
-          {guide.now ? `Now: ${guide.now}` : 'Nothing on it now'}
-        </Text>
+        <WhatItHolds guide={guide} onLoad={onLoad} loading={loading} />
       </Stack>
     ) : (
       <Text size="sm">No guide</Text>
     )}
-  </UnstyledButton>
+  </Box>
 );
 
 const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
@@ -249,6 +303,8 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   const [guides, setGuides] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // Guides whose programmes were asked for and have not arrived yet: {id: true}
+  const [reading, setReading] = useState({});
 
   // The typed search is the only thing that drives the question. It is deliberately not
   // touched by choosing one: the first try let a choice write itself into the search box,
@@ -280,6 +336,37 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       clearTimeout(timer);
     };
   }, [search, channel?.name, channel?.epg?.tvg_id, held?.id]);
+
+  // Reading a guide's programmes is a task on the server, so the answer is not the point
+  // it comes back at: the list is asked again until they show up, and given up on after a
+  // while rather than left turning for ever. What is still empty then is empty.
+  const readThem = useCallback(async (guide) => {
+    setReading((all) => ({ ...all, [guide.id]: true }));
+    try {
+      await API.loadChannelManagerGuide(guide.id);
+    } catch {
+      setReading((all) => ({ ...all, [guide.id]: false }));
+      return;
+    }
+    for (let tries = 0; tries < 15; tries += 1) {
+      await new Promise((done) => setTimeout(done, 2000));
+      let found = null;
+      try {
+        const result = await API.getChannelManagerGuides({
+          name: channel?.name || '',
+          tvg_id: channel?.epg?.tvg_id || '',
+          q: search.trim(),
+          current: held?.id ?? '',
+        });
+        setGuides(result?.guides || []);
+        found = (result?.guides || []).find((one) => one.id === guide.id);
+      } catch {
+        // The next try asks again
+      }
+      if (found?.programmes) break;
+    }
+    setReading((all) => ({ ...all, [guide.id]: false }));
+  }, [channel?.name, channel?.epg?.tvg_id, search, held?.id]);
 
   // The server puts what the channel has at the top of every answer, said the same way
   // as the rest; only a choice it has not been asked about yet is added here
@@ -321,6 +408,8 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
               guide={guide}
               picked={guide.id === pickedId}
               onPick={onChoose}
+              onLoad={readThem}
+              loading={!!reading[guide.id]}
             />
           ))}
           <GuideCard guide={null} picked={pickedId == null} onPick={onChoose} />

@@ -571,18 +571,28 @@ def _guide_entry(epg_id, tvg_id, name, source, how, score=None):
 
 def _what_they_carry(entries):
     """
-    What each guide on the list actually holds: the programme on it at this moment, and
-    how many it has altogether.
+    What each guide on the list actually holds: the programme on it at this moment, how
+    many it has altogether, and whether any channel is using it.
 
     This is what settles the choice. Two entries called "ORF 1" from two sources look the
-    same in any list of names; the one showing Zeit im Bild is the Austrian one, and an
-    entry with no programmes at all is a name and nothing else, which no name can tell you.
-    Two queries for the whole list, both on the index ProgramData already has.
+    same in any list of names; the one showing Zeit im Bild is the Austrian one.
+
+    Holding nothing means two different things, and saying the wrong one is worse than
+    saying nothing. Dispatcharr only reads a guide's programmes once something is using
+    it -- a refresh takes every source's channel list, but the programmes only for the
+    entries assigned to a channel (`apps/channels/signals.py`, on assignment). So an entry
+    no channel uses and that holds nothing has almost certainly never been read, not been
+    read and found empty. `in_use` is what tells them apart, and load_programmes is how
+    one is read without having to assign it first.
+
+    Three queries for the whole list, all on indexes that are already there.
     """
     from django.db.models import Count
     from django.utils import timezone
 
     from apps.epg.models import ProgramData
+
+    from .models import Channel
 
     ids = [entry["id"] for entry in entries]
     if not ids:
@@ -598,10 +608,48 @@ def _what_they_carry(entries):
         ProgramData.objects.filter(epg_id__in=ids, start_time__lte=moment, end_time__gt=moment)
         .values_list("epg_id", "title")
     )
+    used = set(
+        Channel.objects.filter(epg_data_id__in=ids).values_list("epg_data_id", flat=True)
+    )
     for entry in entries:
         entry["programmes"] = counts.get(entry["id"], 0)
         entry["now"] = playing.get(entry["id"], "")
+        entry["in_use"] = entry["id"] in used
     return entries
+
+
+def load_programmes(epg_id):
+    """
+    Read one guide's programmes now, without having to put it on a channel first.
+
+    Dispatcharr reads them when a guide is assigned; before that there is nothing to look
+    at, which is exactly when someone is trying to decide. This asks for that one entry --
+    Dispatcharr's own task, the one the assignment would have set off.
+
+    One at a time and only when asked. The task reads the source's file looking for that
+    entry, and this install has a single Celery worker: setting a dozen of them off at
+    once because a window was opened would hold up the M3U and EPG refreshes behind them.
+    """
+    from apps.epg.models import EPGData
+
+    entry = (
+        EPGData.objects.filter(id=epg_id)
+        .select_related("epg_source")
+        .values("id", "epg_source__source_type")
+        .first()
+    )
+    if not entry:
+        return {"error": "That guide is gone"}
+    if entry["epg_source__source_type"] == "dummy":
+        # A dummy source makes its programmes up as they are asked for; there is
+        # nothing to read
+        return {"queued": False, "why": "A dummy guide has nothing to read"}
+
+    from apps.epg.tasks import parse_programs_for_tvg_id
+
+    parse_programs_for_tvg_id.delay(epg_id)
+    logger.info(f"Channel Manager: asked for guide {epg_id}'s programmes, to choose by")
+    return {"queued": True}
 
 
 def guide_candidates(name, tvg_id="", search="", limit=12, current=None):

@@ -2920,6 +2920,15 @@ export default class API {
     );
   }
 
+  // Read one guide's programmes now, so it can be looked at before it is chosen:
+  // Dispatcharr only reads them once a guide is on a channel
+  static async loadChannelManagerGuide(id) {
+    return await request(`${host}/api/channels/channel-manager/guides/load/`, {
+      method: 'POST',
+      body: { id },
+    });
+  }
+
   // Stop suggesting a Lineup row ("ignore"), suggest it again ("unignore"), or all ("clear")
   static async ignoreChannelManager(action, row = {}) {
     return await request(`${host}/api/channels/channel-manager/ignore/`, {

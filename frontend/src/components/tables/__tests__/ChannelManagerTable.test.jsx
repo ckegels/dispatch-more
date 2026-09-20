@@ -24,6 +24,7 @@ vi.mock('../../../api', () => ({
     ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
     getChannelManagerGuides: vi.fn(),
+    loadChannelManagerGuide: vi.fn(),
   },
 }));
 
@@ -34,11 +35,11 @@ const stream = (id, name, extra = {}) => ({
 const fallback = stream(9, 'could not dispatch', { custom: true, account: 'custom' });
 const held = {
   id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept',
-  programmes: 40, now: 'Bundesland heute',
+  programmes: 40, now: 'Bundesland heute', in_use: true,
 };
 const guide = {
   id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96,
-  programmes: 312, now: 'Zeit im Bild',
+  programmes: 312, now: 'Zeit im Bild', in_use: true,
 };
 
 const mergeRow = {
@@ -85,6 +86,7 @@ describe('ChannelManagerTable', () => {
     API.saveChannelManagerSettings.mockResolvedValue({});
     API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
+    API.loadChannelManagerGuide.mockResolvedValue({ queued: true });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -344,9 +346,12 @@ describe('ChannelManagerTable', () => {
     expect(screen.getByText('Now: Zeit im Bild')).toBeInTheDocument();
   });
 
-  it('says when a guide holds nothing, which no name can tell you', async () => {
+  it('says when a guide a channel uses really holds nothing', async () => {
     API.getChannelManagerGuides.mockResolvedValue({
-      guides: [held, { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '' }],
+      guides: [
+        held,
+        { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: true },
+      ],
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
@@ -427,5 +432,36 @@ describe('ChannelManagerTable', () => {
         { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': null }
       )
     );
+  });
+
+  it('reads a guide\'s programmes on request, rather than calling it empty', async () => {
+    const unread = { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: false };
+    API.getChannelManagerGuides.mockResolvedValue({ guides: [held, unread] });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+
+    // Nothing uses it and it holds nothing, so it has never been read -- not empty
+    await screen.findByLabelText('Guide ORF 1 elsewhere');
+    expect(screen.getByText('ORF1.at · programmes not read yet')).toBeInTheDocument();
+
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [held, { ...unread, programmes: 120, now: 'Bundesliga' }],
+    });
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Read the programmes of ORF 1 elsewhere',
+      })
+    );
+    await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalledWith(8));
+
+    // They arrive as a task, so the list is asked again until they show up
+    expect(
+      await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 5000 })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Now: Bundesliga')).toBeInTheDocument();
   });
 });

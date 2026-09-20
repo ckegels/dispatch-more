@@ -104,6 +104,20 @@ def channel_manager_guides(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdmin])
+def channel_manager_load_guide(request):
+    """
+    Read one guide's programmes now, so it can be looked at before it is chosen.
+    Dispatcharr only reads them once a guide is on a channel; this asks for the one.
+    """
+    try:
+        epg_id = int(request.data.get("id"))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Which guide?"}, status=400)
+    return JsonResponse(channel_manager.load_programmes(epg_id))
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
 def channel_manager_ignore(request):
     """
     Stop suggesting a row ("ignore"), suggest one again ("unignore"), or everything ignored

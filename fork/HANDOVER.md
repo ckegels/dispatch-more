@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v118** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v119** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -320,6 +320,22 @@ is a name and nothing else, which no list of names can tell you. The guide the c
 passed as `current` and comes back first on every answer, whatever the search found, so what it
 is now is always there to go back to -- and so it says what it holds like every other entry,
 which the plan's own summary does not know.
+
+**Holding nothing means two things, and the card must not guess** (v119). Dispatcharr reads a
+guide's programmes only once something uses it: a source refresh takes every source's channel
+list (`parse_channels_only`), but the programmes only for entries assigned to a channel
+(`apps/channels/signals.py` `_queue_epg_program_refresh`, on assignment). So most entries on the
+window held nothing and the card said "no programmes", which for a perfectly good guide is a
+lie -- and it is the entries nobody has chosen yet that someone is trying to decide between.
+`in_use` (does any channel use it) tells the two apart: used and empty is **"no programmes"**,
+unused and empty is **"programmes not read yet"** with a button that reads them
+(`load_programmes` → `POST channel-manager/guides/load/` → Dispatcharr's own
+`parse_programs_for_tvg_id`, the task the assignment would have set off). It is a task, so the
+page asks the list again every 2 s for 30 s and gives up rather than turning for ever. **One at
+a time and only when asked**: the task reads the source's file for that one entry, and this
+install has a single Celery worker -- a dozen of them set off because a window was opened would
+hold up the M3U and EPG refreshes behind them. A dummy source is refused outright: it makes its
+programmes up as they are asked for, so there is nothing to read.
 
 **New channels are suggested** (`create_new`, on; only suggested — nothing is made until a row
 is ticked and applied). From the stream groups your channels already come from (`new_from`

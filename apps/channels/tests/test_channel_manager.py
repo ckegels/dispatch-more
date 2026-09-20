@@ -7,6 +7,7 @@ channels in a country group, each with a custom fallback stream on the end that 
 """
 
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -562,6 +563,36 @@ class GuideChoiceTests(_Setup):
         self.assertEqual(other["now"], "")
         self.assertEqual(other["programmes"], 0)
 
+    def test_holding_nothing_and_never_having_been_read_are_not_the_same(self):
+        # Dispatcharr reads a guide's programmes only once a channel uses it, so an entry
+        # nothing uses and that holds nothing has almost certainly never been read
+        never_read = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        really_empty = EPGData.objects.create(tvg_id="orf1.b", name="ORF 1", epg_source=self.big)
+        self.orf1.epg_data = really_empty
+        self.orf1.save(update_fields=["epg_data"])
+        found = {entry["id"]: entry for entry in channel_manager.guide_candidates("┃AT┃ ORF 1")}
+        self.assertFalse(found[never_read.id]["in_use"])
+        self.assertTrue(found[really_empty.id]["in_use"])
+
+    def test_one_guide_s_programmes_can_be_read_without_choosing_it_first(self):
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
+            self.assertEqual(channel_manager.load_programmes(guide.id), {"queued": True})
+        asked.assert_called_once_with(guide.id)
+
+    def test_a_dummy_guide_has_nothing_to_read(self):
+        dummy = EPGSource.objects.create(name="Made up", source_type="dummy")
+        guide = EPGData.objects.create(tvg_id="d.1", name="Dummy", epg_source=dummy)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
+            answer = channel_manager.load_programmes(guide.id)
+        self.assertFalse(answer["queued"])
+        asked.assert_not_called()
+
+    def test_reading_a_guide_that_is_gone_says_so_rather_than_failing(self):
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
+            self.assertIn("error", channel_manager.load_programmes(9999))
+        asked.assert_not_called()
+
     def test_the_guide_a_channel_has_is_always_on_the_list(self):
         held = EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
         EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
@@ -717,6 +748,17 @@ class ViewTests(_Setup):
             ).status_code,
             200,
         )
+
+    def test_reading_one_guide_s_programmes_through_the_page(self):
+        source = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=source)
+        url = "/api/channels/channel-manager/guides/load/"
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
+            response = self.client_api.post(url, {"id": guide.id}, format="json")
+        self.assertEqual(response.json(), {"queued": True})
+        asked.assert_called_once_with(guide.id)
+        # Nothing to read is a refusal, not a 500
+        self.assertEqual(self.client_api.post(url, {"id": "x"}, format="json").status_code, 400)
 
     def test_a_name_and_a_guide_set_on_a_row_are_applied_through_the_page(self):
         source = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
