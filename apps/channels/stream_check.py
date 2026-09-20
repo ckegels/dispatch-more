@@ -1347,6 +1347,50 @@ def _targets(settings, only=None, due_before=None, skip_accounts=(), waiting_too
     return by_account
 
 
+def _pick_next(left, urgent):
+    """
+    The next stream this provider looks at: one whose channel has just failed somewhere
+    else if there is one, otherwise the next in order.
+
+    Taken out of the loop so it can be tried on its own: which stream goes next is decided
+    across threads, and ordering between threads is not a thing a test can pin down.
+    Chosen one is no longer urgent -- it is being done.
+    """
+    if not left:
+        return None
+    wanted = next((s for s in left if s.id in urgent), None)
+    if wanted is None:
+        return left[0]
+    urgent.discard(wanted.id)
+    return wanted
+
+
+def _siblings_of(by_provider):
+    """
+    For each stream being looked at, the other streams on the same channels.
+
+    A channel carries the same programme from several providers, and when one copy fails
+    the useful next question is whether the others do too. Read in one query, before the
+    per-provider threads start: they never touch the database.
+    """
+    from .models import ChannelStream
+
+    wanted = {stream.id for streams in by_provider.values() for stream in streams}
+    if not wanted:
+        return {}
+    by_channel = {}
+    for channel_id, stream_id in ChannelStream.objects.filter(
+        channel__streams__id__in=wanted
+    ).values_list("channel_id", "stream_id").distinct():
+        by_channel.setdefault(channel_id, set()).add(stream_id)
+    siblings = {}
+    for together in by_channel.values():
+        for stream_id in together:
+            if stream_id in wanted:
+                siblings.setdefault(stream_id, set()).update(together - {stream_id})
+    return siblings
+
+
 def _profiles_of(account):
     """The account's profiles a viewer could be given, the default first."""
     # With its account and server group, which taking a connection reads
@@ -1739,9 +1783,24 @@ def run(redis_client, only=None, batch_seconds=None):
                 entry.update(status=status, reason=reason, now="")
                 _progress(redis_client, accounts=accounts)
 
+        # Every stream that shares a channel with each stream, read once here: a thread
+        # never touches the database (§3 of the handover), so this is worked out before
+        # any of them starts.
+        siblings = _siblings_of(by_provider)
+        # Streams to look at next, whichever provider they belong to. Written under the
+        # lock like everything else shared.
+        urgent = set()
+
         def count(stream, outcome):
             """What was found kept, under the lock."""
             record = _record(redis_client, results, stream, outcome, settings, round_id)
+            if record["state"] in ("failing", "broken"):
+                # The same channel from its other providers goes to the front of their
+                # queues. A channel with one copy broken is either a channel that is gone
+                # everywhere or one provider being bad, and which of those it is decides
+                # what you do about it -- so it is worth knowing now rather than whenever
+                # the other provider's turn happens to come round.
+                urgent.update(siblings.get(stream.id, ()))
             if record["state"] == "broken":
                 _progress(redis_client, broken=progress(redis_client).get("broken", 0) + 1)
             if record["state"] == "ok" and str(stream.id) in was_parked:
@@ -1891,7 +1950,23 @@ def run(redis_client, only=None, batch_seconds=None):
                     with lock:
                         count(good, found)
 
-                for index, stream in enumerate(streams):
+                # Taken in order, except that a stream whose channel has just failed
+                # somewhere else is taken first. Hence a list to choose from rather than
+                # a loop over one: see _siblings_of.
+                taken = set()
+
+                def still_to_do():
+                    return [s for s in streams if s.id not in taken]
+
+                def next_stream():
+                    with lock:
+                        return _pick_next(still_to_do(), urgent)
+
+                while True:
+                    stream = next_stream()
+                    if stream is None:
+                        break
+                    taken.add(stream.id)
                     account_id = stream.m3u_account_id
                     if account_id in given_up:
                         continue
@@ -1930,7 +2005,7 @@ def run(redis_client, only=None, batch_seconds=None):
                         compare = good_streams.get(key)
                         if compare is None or compare.id == stream.id:
                             compare = next(
-                                (s for s in streams[index + 1:] if s.m3u_account_id not in given_up),
+                                (s for s in still_to_do() if s.m3u_account_id not in given_up),
                                 None,
                             )
                         if compare is not None:
@@ -1952,7 +2027,10 @@ def run(redis_client, only=None, batch_seconds=None):
                                         good_streams[key] = compare
                                         budget.state["good_stream"] = compare.id
                                         played.add(compare.m3u_account_id)
-                                    if compare in streams[index + 1:]:
+                                    if compare.id not in taken:
+                                        # One of this provider's own, brought forward:
+                                        # it counts as done and is not looked at again
+                                        taken.add(compare.id)
                                         entry["done"] += 1
                                         entry["left"] -= 1
                         # The provider gives other streams: this one it does not. A failure of

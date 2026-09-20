@@ -591,6 +591,42 @@ class RunTests(_Setup):
                     break
         return {"ended": ended, **stream_check.progress(self.redis)}, probe
 
+    def test_the_same_channel_from_another_provider_goes_next(self):
+        """
+        A channel with one copy broken is either a channel that is gone everywhere or one
+        provider being bad, and which of those it is decides what you do about it. So the
+        other copies jump the queue rather than waiting for their provider's turn to come
+        round -- which is what left one stream saying broken and its sibling untested.
+        """
+        left = [self.first, self.second, self.third]
+        urgent = set()
+        # Nothing urgent: in the order they came
+        self.assertIs(stream_check._pick_next(left, urgent), self.first)
+        # The third is a copy of a channel that has just failed elsewhere
+        urgent.add(self.third.id)
+        self.assertIs(stream_check._pick_next(left, urgent), self.third)
+        # ...and once taken it is not urgent any more, so the order goes back to normal
+        self.assertEqual(urgent, set())
+        self.assertIs(stream_check._pick_next(left, urgent), self.first)
+        self.assertIsNone(stream_check._pick_next([], urgent))
+
+    def test_which_streams_are_a_channels_other_copies(self):
+        by_provider = {"a": [self.first, self.third], "b": [self.second]}
+        siblings = stream_check._siblings_of(by_provider)
+        # The fallback is on the channel too, and is nobody's copy of anything, but it is
+        # not being looked at so it is not in the map to begin with
+        self.assertEqual(siblings[self.first.id], {self.second.id, self.third.id, self.fallback.id})
+        self.assertEqual(siblings[self.second.id], {self.first.id, self.third.id, self.fallback.id})
+
+    def test_a_failure_puts_the_other_copies_at_the_front(self):
+        # Through a whole run: the copy that failed and its siblings all end up checked
+        final, probe = self._run({"ORF1A": False})
+        self.assertEqual(final["done"], 3)
+        results = stream_check.load_results()["streams"]
+        self.assertEqual(results[str(self.first.id)]["state"], "failing")
+        self.assertTrue(results[str(self.second.id)]["ok"])
+        self.assertTrue(results[str(self.third.id)]["ok"])
+
     def test_every_stream_on_a_channel_is_looked_at_but_not_the_fallback(self):
         final, probe = self._run({"ORF1B": False})
         self.assertEqual(final["done"], 3)

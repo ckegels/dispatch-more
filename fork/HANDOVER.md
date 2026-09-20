@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v134** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v135** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -683,6 +683,15 @@ no longer play. Summary of how it works now:
   the provider was in use the whole time, or at its learned limit, or the account was left for
   the round -- is recorded `skipped` with the reason, counted nowhere, and looked at again next
   run. The reason is on the row when it is opened.
+- **The same channel from another provider goes next** (v135). A channel with one copy
+  broken is either a channel that is gone everywhere or one provider being bad, and which of
+  those decides what you do about it -- so when a check counts a failure, that channel's other
+  copies jump to the front of their own providers' queues (`_siblings_of`, read in one query
+  before the threads start, since a thread never touches the database; a shared `urgent` set
+  written under the same lock as everything else; `_pick_next` chooses). Before it, one stream
+  said broken while its sibling waited for its provider's turn, which came whenever it came.
+  `_pick_next` is a function of its own so it can be tested: which stream goes next is decided
+  across threads, and ordering between threads is not something a test can pin down.
 - **Rechecks:** failing streams again every `recheck_hours` (3) or after each successful
   playlist refresh of their provider (hook in `apps/m3u/tasks.py`, recorded in
   `stream-check-recheck`). **Autopark** (off): `dead` `autopark_after` (3) checks in a row →
