@@ -311,6 +311,25 @@ describe('GuideManagerTable', () => {
     ).toBeInTheDocument();
   });
 
+  // Laid out the way the Lineup and Stream Check are: a panel with a toolbar, a band
+  // under it saying how the run went, and the table below. The band is always there, so
+  // the page says where it stands before anything has been run.
+  it('says how the last run went even when nothing is running', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    expect(screen.getByText(/Not run yet/)).toBeInTheDocument();
+    expect(screen.getByText(/2 on show/)).toBeInTheDocument();
+
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      run: { state: 'done', running: false, total: 1360, done: 1360, found: 12 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Look for guides/ }));
+    expect(
+      await screen.findByText(/Last run: 1360 channels looked at/)
+    ).toBeInTheDocument();
+  });
+
   // A channel whose guide has been decided is not asked about again. Not the same as
   // waving a suggestion away, which says that one guide is wrong.
   it('keeps the channels chosen already on a view of their own', async () => {

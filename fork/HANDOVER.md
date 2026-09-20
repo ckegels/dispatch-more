@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v147** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v148** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -683,6 +683,15 @@ means what was decided is no longer what is there, and the channel is looked at 
 A settled channel still gets a row and is still scored, so "Every channel" shows what would
 have been suggested; what is not done is suggesting it. The padlock on a row settles the guide
 a channel is already on, for the ones chosen somewhere else, and the arrow unsettles it.
+
+**Laid out the way the other tabs are** (v148). It was a plain `Paper` with the toolbar,
+the bars and the table stacked inside it, which next to the Lineup and Stream Check read as
+a different program: those are a `#27272A` panel with a `#3f3f46` border, a toolbar band
+with a rule under it, a band saying how the run went, then the table in its own scrolling
+box. Guides is that now, nothing else changed. The run band is always there and says "Not
+run yet" before anything has been -- the page's own state, where before there was nothing
+at all until a run started. The reading bar had been drawn twice, once inside the toolbar,
+which is what a stacked layout hides.
 
 **It says where it has got to** (v126). Reading the guide catalogue is most of a batch on a
 setup with a lot of EPG and happens before a single channel is looked at, so the run writes a

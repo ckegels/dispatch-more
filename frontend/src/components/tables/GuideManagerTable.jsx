@@ -1,5 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CirclePlay, EyeOff, Lock, Play, RotateCcw, Square } from 'lucide-react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
+  BookOpen,
+  Check,
+  CirclePlay,
+  EyeOff,
+  Lock,
+  Play,
+  RotateCcw,
+  SlidersHorizontal,
+  Square,
+} from 'lucide-react';
 import {
   ActionIcon,
   Alert,
@@ -77,7 +93,10 @@ const WatchChannel = ({ channel }) => {
           if (envMode === 'dev') {
             url = `${window.location.protocol}//${window.location.hostname}:5656${path}`;
           }
-          showVideo(url, 'live', { name: channel.channel_name, channelId: channel.channel });
+          showVideo(url, 'live', {
+            name: channel.channel_name,
+            channelId: channel.channel,
+          });
         }}
       >
         <CirclePlay size={16} />
@@ -183,7 +202,8 @@ const GuideManagerTable = () => {
         id: String(one.channel),
       };
     });
-    if (group) found = found.filter((one) => String(one.group_id ?? '') === group);
+    if (group)
+      found = found.filter((one) => String(one.group_id ?? '') === group);
     // Nothing chosen means the suggestions; "all" is every channel that was looked at,
     // including the ones no guide fits, which are the ones you go looking for
     if (why === 'all') {
@@ -235,7 +255,9 @@ const GuideManagerTable = () => {
     setError(null);
     try {
       const choices = Object.fromEntries(
-        rows.filter((one) => ticked.has(one.id)).map((one) => [one.channel, one.epg])
+        rows
+          .filter((one) => ticked.has(one.id))
+          .map((one) => [one.channel, one.epg])
       );
       await API.applyGuideManager(choices);
       setTicked(new Set());
@@ -252,7 +274,13 @@ const GuideManagerTable = () => {
   // The guides suggested that nobody has read. Reading one costs a pass of its source's
   // file either way, so they go together -- the same reader the Lineup's guide window uses.
   const unread = useMemo(
-    () => [...new Set(rows.filter((one) => !one.programmes && !one.in_use).map((one) => one.epg))],
+    () => [
+      ...new Set(
+        rows
+          .filter((one) => !one.programmes && !one.in_use)
+          .map((one) => one.epg)
+      ),
+    ],
     [rows]
   );
 
@@ -319,7 +347,9 @@ const GuideManagerTable = () => {
         });
         await look(true, true);
       } catch {
-        setError(settled ? 'Could not keep that one.' : 'Could not unkeep that one.');
+        setError(
+          settled ? 'Could not keep that one.' : 'Could not unkeep that one.'
+        );
       }
     },
     [look]
@@ -385,10 +415,13 @@ const GuideManagerTable = () => {
                   >
                     {one.instead_of_source ? `${one.instead_of_source} · ` : ''}
                     {holds(one.instead_of_holds, true)}
-                    {one.instead_of_score != null && ` · ${one.instead_of_score}%`}
+                    {one.instead_of_score != null &&
+                      ` · ${one.instead_of_score}%`}
                   </Text>
                   <Text size="xs" c="dimmed" lineClamp={1}>
-                    {one.instead_of_now ? `Now: ${one.instead_of_now}` : 'Nothing on it now'}
+                    {one.instead_of_now
+                      ? `Now: ${one.instead_of_now}`
+                      : 'Nothing on it now'}
                   </Text>
                 </>
               )}
@@ -421,7 +454,11 @@ const GuideManagerTable = () => {
                   <Badge
                     size="xs"
                     variant="light"
-                    color={one.by_hand ? 'grape' : (TIER[one.tier] || TIER.guess).color}
+                    color={
+                      one.by_hand
+                        ? 'grape'
+                        : (TIER[one.tier] || TIER.guess).color
+                    }
                   >
                     {one.by_hand
                       ? 'chosen'
@@ -448,7 +485,8 @@ const GuideManagerTable = () => {
                   c={!one.programmes && one.in_use ? 'orange' : 'dimmed'}
                   lineClamp={1}
                 >
-                  {one.tvg_id || 'no tvg-id'} · {holds(one.programmes, one.in_use)}
+                  {one.tvg_id || 'no tvg-id'} ·{' '}
+                  {holds(one.programmes, one.in_use)}
                   {one.now ? ` · Now: ${one.now}` : ''}
                 </Text>
               ) : (
@@ -554,325 +592,387 @@ const GuideManagerTable = () => {
   // How long it has been going, so a slow run reads as slow rather than as stuck
   const elapsed = useMemo(() => {
     if (!run.since) return '';
-    const seconds = Math.max(0, Math.round((now - new Date(run.since).getTime()) / 1000));
+    const seconds = Math.max(
+      0,
+      Math.round((now - new Date(run.since).getTime()) / 1000)
+    );
     if (seconds < 60) return `${seconds}s`;
     return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
   }, [run.since, now]);
 
   return (
     <>
-      <Box style={{ display: 'flex', justifyContent: 'center' }}>
-        <Paper
-          style={{ width: '100%', maxWidth: 1200 }}
-          p="sm"
-          mx={{ base: 'xs', md: 0 }}
-        >
-          <LoadingOverlay visible={loading} />
-          {error && (
-            <Alert color="red" mb="sm" onClose={() => setError(null)} withCloseButton>
-              {error}
-            </Alert>
-          )}
-
-          <Group justify="space-between" mb="sm" wrap="wrap" gap="sm">
-            <Group gap="sm" wrap="wrap">
-              <TextInput
-                size="xs"
-                placeholder="Filter by name..."
-                aria-label="Search suggestions"
-                value={search}
-                onChange={(event) => setSearch(event.currentTarget.value)}
-                style={{ width: 190 }}
-              />
-              <Select
-                size="xs"
-                aria-label="Which group"
-                placeholder="Every group"
-                value={group}
-                onChange={(value) => setGroup(value || '')}
-                data={groups}
-                searchable
-                clearable
-                style={{ width: 190 }}
-              />
-              <Select
-                size="xs"
-                aria-label="Why"
-                placeholder="What to change"
-                value={why}
-                onChange={(value) => setWhy(value || '')}
-                data={[
-                  { value: 'all', label: 'Every channel' },
-                  { value: 'chosen', label: 'Chosen already' },
-                  { value: 'none', label: 'On no guide' },
-                  { value: 'empty', label: 'Guide holds nothing' },
-                  { value: 'better', label: 'A better match' },
-                ]}
-                clearable
-                style={{ width: 190 }}
-              />
-            </Group>
-            <Group gap="sm" wrap="wrap">
-              <Button
-                size="xs"
-                variant="default"
-                onClick={() => setShowSettings(!showSettings)}
-              >
-                Settings
-              </Button>
-              {run.running ? (
-                <Button
+      <Box
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          padding: '0px',
+          minHeight: 'calc(100vh - 200px)',
+        }}
+      >
+        <Stack gap="md" style={{ maxWidth: '1200px', width: '100%' }}>
+          <Paper
+            style={{
+              backgroundColor: '#27272A',
+              border: '1px solid #3f3f46',
+              borderRadius: 'var(--mantine-radius-md)',
+            }}
+          >
+            {/* Top toolbar */}
+            <Box
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
+                padding: '16px',
+                borderBottom: '1px solid #3f3f46',
+              }}
+            >
+              <Group gap="sm">
+                <TextInput
                   size="xs"
-                  color="red"
-                  variant="light"
-                  leftSection={<Square size={14} />}
-                  onClick={halt}
-                >
-                  Stop
-                </Button>
-              ) : (
+                  placeholder="Filter by name..."
+                  aria-label="Search suggestions"
+                  value={search}
+                  onChange={(event) => setSearch(event.currentTarget.value)}
+                  style={{ width: 200 }}
+                />
+                <Select
+                  size="xs"
+                  aria-label="Which group"
+                  placeholder="Every group"
+                  value={group}
+                  onChange={(value) => setGroup(value || '')}
+                  data={groups}
+                  searchable
+                  clearable
+                  style={{ width: 200 }}
+                />
+                <Select
+                  size="xs"
+                  aria-label="Why"
+                  placeholder="What to change"
+                  value={why}
+                  onChange={(value) => setWhy(value || '')}
+                  data={[
+                    { value: 'all', label: 'Every channel' },
+                    { value: 'chosen', label: 'Chosen already' },
+                    { value: 'none', label: 'On no guide' },
+                    { value: 'empty', label: 'Guide holds nothing' },
+                    { value: 'better', label: 'A better match' },
+                  ]}
+                  clearable
+                  style={{ width: 190 }}
+                />
+              </Group>
+
+              <Group gap="sm">
                 <Button
                   size="xs"
                   variant="default"
-                  leftSection={<Play size={14} />}
-                  onClick={start}
-                  disabled={busy}
+                  leftSection={<SlidersHorizontal size={16} />}
+                  onClick={() => setShowSettings(!showSettings)}
                 >
-                  Look for guides
+                  Settings
                 </Button>
+                {unread.length > 0 && !reading && (
+                  <Button
+                    size="xs"
+                    variant="default"
+                    leftSection={<BookOpen size={16} />}
+                    onClick={readThem}
+                    loading={reading}
+                    aria-label="Read the programmes of every suggested guide not read yet"
+                  >
+                    Read {unread.length} guide{unread.length === 1 ? '' : 's'}
+                  </Button>
+                )}
+                {run.running ? (
+                  <Button
+                    size="xs"
+                    color="red"
+                    variant="light"
+                    leftSection={<Square size={16} />}
+                    onClick={halt}
+                  >
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    size="xs"
+                    variant="default"
+                    leftSection={<Play size={16} />}
+                    onClick={start}
+                    disabled={busy}
+                  >
+                    Look for guides
+                  </Button>
+                )}
+                <Button
+                  size="xs"
+                  variant={ticked.size ? 'filled' : 'light'}
+                  leftSection={<Check size={16} />}
+                  disabled={!ticked.size || busy}
+                  onClick={() => setConfirming(true)}
+                >
+                  Apply ({ticked.size})
+                </Button>
+              </Group>
+            </Box>
+
+            {/* How a run is going, or how the last one went */}
+            <Box
+              style={{ padding: '8px 16px', borderBottom: '1px solid #3f3f46' }}
+            >
+              <Group justify="space-between" gap="xs" wrap="wrap">
+                <Text size="xs" c="dimmed">
+                  {run.running
+                    ? `${run.stage || 'looking at your channels'}${run.at ? ` · ${run.at}` : ''}`
+                    : reading
+                      ? `Reading guides · ${readState.stage || 'asking for them'}${
+                          readState.at ? ` · ${readState.at}` : ''
+                        }`
+                      : run.state === 'done'
+                        ? `Last run: ${run.total || 0} channel${run.total === 1 ? '' : 's'} looked at.`
+                        : 'Not run yet.'}
+                  {' — '}
+                  {rows.length} on show
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {run.running
+                    ? `${run.done || 0} of ${run.total || 0} · ${run.found || 0} worth changing${
+                        elapsed ? ` · ${elapsed}` : ''
+                      }`
+                    : reading
+                      ? `${readState.done || 0} of ${readState.total || unread.length}`
+                      : ''}
+                </Text>
+              </Group>
+              {run.running && (
+                <>
+                  {/* Striped while the guides are being read, since nothing can move yet */}
+                  <Progress
+                    mt={6}
+                    value={
+                      run.stage && run.stage.startsWith('reading') ? 100 : done
+                    }
+                    animated={!!(run.stage && !run.stage.startsWith('looking'))}
+                    striped={!!(run.stage && !run.stage.startsWith('looking'))}
+                    size="sm"
+                  />
+                  <Text size="xs" c="dimmed" mt={4}>
+                    Every channel is scored against every guide there is, so
+                    this takes a while with a lot of EPG. It runs a batch at a
+                    time, so playlist and guide refreshes are not held up behind
+                    it, and it can be stopped.
+                  </Text>
+                </>
               )}
               {reading && (
-            <Box mb="sm">
-              <Group justify="space-between" gap="xs" mb={4} wrap="wrap">
-                <Text size="xs" c="dimmed">
-                  Reading guides · {readState.stage || 'asking for them'}
-                  {readState.at ? ` · ${readState.at}` : ''}
-                </Text>
-                <Text size="xs" c="dimmed">
-                  {readState.done || 0} of {readState.total || unread.length}
-                </Text>
-              </Group>
-              <Progress
-                value={
-                  readState.total
-                    ? Math.round((readState.done / readState.total) * 100)
-                    : 0
-                }
-                animated
-                striped
-                size="sm"
-              />
-            </Box>
-          )}
-          {unread.length > 0 && !reading && (
-                <Button
-                  size="xs"
-                  variant="default"
-                  onClick={readThem}
-                  loading={reading}
-                  aria-label="Read the programmes of every suggested guide not read yet"
-                >
-                  Read {unread.length} guide{unread.length === 1 ? '' : 's'}
-                </Button>
+                <Progress
+                  mt={6}
+                  value={
+                    readState.total
+                      ? Math.round((readState.done / readState.total) * 100)
+                      : 0
+                  }
+                  animated
+                  striped
+                  size="sm"
+                />
               )}
-              <Button
-                size="xs"
-                disabled={!ticked.size || busy}
-                onClick={() => setConfirming(true)}
+            </Box>
+
+            {(error || (unread.length > 0 && !reading)) && (
+              <Stack
+                gap="xs"
+                p="md"
+                style={{ borderBottom: '1px solid #3f3f46' }}
               >
-                Apply ({ticked.size})
-              </Button>
-            </Group>
-          </Group>
-
-          {run.running && (
-            <Box mb="sm">
-              <Group justify="space-between" gap="xs" mb={4} wrap="wrap">
-                <Text size="xs" c="dimmed">
-                  {run.stage || 'looking at your channels'}
-                  {run.at ? ` · ${run.at}` : ''}
-                </Text>
-                <Text size="xs" c="dimmed">
-                  {run.done || 0} of {run.total || 0} · {run.found || 0} worth changing
-                  {elapsed ? ` · ${elapsed}` : ''}
-                </Text>
-              </Group>
-              {/* Striped while the guides are being read, since nothing can move yet */}
-              <Progress
-                value={run.stage && run.stage.startsWith('reading') ? 100 : done}
-                animated={!!(run.stage && !run.stage.startsWith('looking'))}
-                striped={!!(run.stage && !run.stage.startsWith('looking'))}
-                size="sm"
-              />
-              <Text size="xs" c="dimmed" mt={4}>
-                Every channel is scored against every guide there is, so this takes a
-                while with a lot of EPG. It runs a batch at a time, so playlist and guide
-                refreshes are not held up behind it, and it can be stopped.
-              </Text>
-            </Box>
-          )}
-          {reading && (
-            <Box mb="sm">
-              <Group justify="space-between" gap="xs" mb={4} wrap="wrap">
-                <Text size="xs" c="dimmed">
-                  Reading guides · {readState.stage || 'asking for them'}
-                  {readState.at ? ` · ${readState.at}` : ''}
-                </Text>
-                <Text size="xs" c="dimmed">
-                  {readState.done || 0} of {readState.total || unread.length}
-                </Text>
-              </Group>
-              <Progress
-                value={
-                  readState.total
-                    ? Math.round((readState.done / readState.total) * 100)
-                    : 0
-                }
-                animated
-                striped
-                size="sm"
-              />
-            </Box>
-          )}
-          {unread.length > 0 && !reading && (
-            <Text size="xs" c="dimmed" mb="sm">
-              {unread.length} suggested guide{unread.length === 1 ? '' : 's'} say
-              &quot;not read yet&quot;: Dispatcharr reads a guide&apos;s programmes when it
-              goes on a channel, so one nothing uses holds nothing whatever it is really
-              like. Reading one costs a pass of its whole guide file, so reading them
-              together costs no more than reading one.
-            </Text>
-          )}
-          {!run.running && run.state === 'done' && (
-            <Text size="xs" c="dimmed" mb="sm">
-              Looked at {run.total || 0} channel{run.total === 1 ? '' : 's'}.
-            </Text>
-          )}
-
-          {showSettings && levers && (
-            <Paper p="sm" mb="sm" withBorder>
-              <Stack gap="sm">
-                <Group gap="lg" wrap="wrap">
-                  <Switch
-                    size="xs"
-                    label="Channels on no guide"
-                    checked={!!levers.suggest_none}
-                    onChange={(event) =>
-                      saveLevers({ ...levers, suggest_none: event.currentTarget.checked })
-                    }
-                  />
-                  <Switch
-                    size="xs"
-                    label="Guides that hold nothing"
-                    checked={!!levers.suggest_empty}
-                    onChange={(event) =>
-                      saveLevers({ ...levers, suggest_empty: event.currentTarget.checked })
-                    }
-                  />
-                  <Switch
-                    size="xs"
-                    label="A better match than the one it is on"
-                    checked={!!levers.suggest_better}
-                    onChange={(event) =>
-                      saveLevers({ ...levers, suggest_better: event.currentTarget.checked })
-                    }
-                  />
-                </Group>
-                <Group gap="lg" wrap="wrap" align="flex-end">
-                  <NumberInput
-                    size="xs"
-                    label="Good enough to suggest"
-                    description="Out of a hundred"
-                    min={0}
-                    max={100}
-                    value={levers.min_score}
-                    onChange={(value) => saveLevers({ ...levers, min_score: value })}
-                    style={{ width: 170 }}
-                  />
-                  <NumberInput
-                    size="xs"
-                    label="Better by at least"
-                    description="Before a guide that works is replaced"
-                    min={1}
-                    max={100}
-                    value={levers.better_by}
-                    onChange={(value) => saveLevers({ ...levers, better_by: value })}
-                    style={{ width: 210 }}
-                  />
-                  <Select
-                    size="xs"
-                    label="Only these groups"
-                    placeholder="Every channel"
-                    data={(page?.channel_groups || []).map((one) => ({
-                      value: String(one.id),
-                      label: `${one.name} (${one.count})`,
-                    }))}
-                    value={String(levers.channel_groups?.[0] ?? '')}
-                    onChange={(value) =>
-                      saveLevers({ ...levers, channel_groups: value ? [Number(value)] : [] })
-                    }
-                    searchable
-                    clearable
-                    style={{ width: 240 }}
-                  />
-                </Group>
-                {(page?.chosen || []).length > 0 && (
-                  <Group gap="sm">
-                    <Text size="xs" c="dimmed">
-                      {page.chosen.length} channel
-                      {page.chosen.length === 1 ? ' is' : 's are'} chosen already, and
-                      nothing is suggested for {page.chosen.length === 1 ? 'it' : 'them'}.
-                    </Text>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      leftSection={<RotateCcw size={12} />}
-                      onClick={async () => {
-                        await API.chooseGuideManager('clear');
-                        look(true, why === 'all' || why === 'chosen');
-                      }}
-                    >
-                      Suggest for them again
-                    </Button>
-                  </Group>
+                {error && (
+                  <Alert
+                    color="red"
+                    onClose={() => setError(null)}
+                    withCloseButton
+                    p="xs"
+                  >
+                    {error}
+                  </Alert>
                 )}
-                {(page?.ignored || []).length > 0 && (
-                  <Group gap="sm">
-                    <Text size="xs" c="dimmed">
-                      {page.ignored.length} suggestion
-                      {page.ignored.length === 1 ? '' : 's'} waved away.
+                {unread.length > 0 && !reading && (
+                  <Alert color="gray" variant="light" p="xs">
+                    <Text size="xs">
+                      {unread.length} suggested guide
+                      {unread.length === 1 ? '' : 's'} say &quot;not read
+                      yet&quot;: Dispatcharr reads a guide&apos;s programmes
+                      when it goes on a channel, so one nothing uses holds
+                      nothing whatever it is really like. Reading one costs a
+                      pass of its whole guide file, so reading them together
+                      costs no more than reading one.
                     </Text>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      leftSection={<RotateCcw size={12} />}
-                      onClick={async () => {
-                        await API.ignoreGuideManager('clear');
-                        look(true);
-                      }}
-                    >
-                      Suggest them again
-                    </Button>
-                  </Group>
+                  </Alert>
                 )}
               </Stack>
-            </Paper>
-          )}
+            )}
 
-          {rows.length === 0 && !loading ? (
-            <Center p="xl">
-              <Text size="sm" c="dimmed" ta="center">
-                {why === 'chosen'
-                  ? 'Nothing is chosen yet. Putting a guide on a channel from here chooses it, and nothing is suggested for it afterwards; the padlock on a row chooses the guide it is already on.'
-                  : page?.suggestions?.length
-                  ? 'Nothing matches what is being looked at.'
-                  : 'Nothing to change. Press "Look for guides" to go through every channel: the ones on no guide, the ones whose guide holds no programmes, and the ones something matches better.'}
-              </Text>
-            </Center>
-          ) : (
-            <CustomTable table={table} />
-          )}
-        </Paper>
+            {showSettings && levers && (
+              <Box p="md" style={{ borderBottom: '1px solid #3f3f46' }}>
+                <Stack gap="sm">
+                  <Group gap="lg" wrap="wrap">
+                    <Switch
+                      size="xs"
+                      label="Channels on no guide"
+                      checked={!!levers.suggest_none}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          suggest_none: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Switch
+                      size="xs"
+                      label="Guides that hold nothing"
+                      checked={!!levers.suggest_empty}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          suggest_empty: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Switch
+                      size="xs"
+                      label="A better match than the one it is on"
+                      checked={!!levers.suggest_better}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          suggest_better: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                  </Group>
+                  <Group gap="lg" wrap="wrap" align="flex-end">
+                    <NumberInput
+                      size="xs"
+                      label="Good enough to suggest"
+                      description="Out of a hundred"
+                      min={0}
+                      max={100}
+                      value={levers.min_score}
+                      onChange={(value) =>
+                        saveLevers({ ...levers, min_score: value })
+                      }
+                      style={{ width: 170 }}
+                    />
+                    <NumberInput
+                      size="xs"
+                      label="Better by at least"
+                      description="Before a guide that works is replaced"
+                      min={1}
+                      max={100}
+                      value={levers.better_by}
+                      onChange={(value) =>
+                        saveLevers({ ...levers, better_by: value })
+                      }
+                      style={{ width: 210 }}
+                    />
+                    <Select
+                      size="xs"
+                      label="Only these groups"
+                      placeholder="Every channel"
+                      data={(page?.channel_groups || []).map((one) => ({
+                        value: String(one.id),
+                        label: `${one.name} (${one.count})`,
+                      }))}
+                      value={String(levers.channel_groups?.[0] ?? '')}
+                      onChange={(value) =>
+                        saveLevers({
+                          ...levers,
+                          channel_groups: value ? [Number(value)] : [],
+                        })
+                      }
+                      searchable
+                      clearable
+                      style={{ width: 240 }}
+                    />
+                  </Group>
+                  {(page?.chosen || []).length > 0 && (
+                    <Group gap="sm">
+                      <Text size="xs" c="dimmed">
+                        {page.chosen.length} channel
+                        {page.chosen.length === 1 ? ' is' : 's are'} chosen
+                        already, and nothing is suggested for{' '}
+                        {page.chosen.length === 1 ? 'it' : 'them'}.
+                      </Text>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        leftSection={<RotateCcw size={12} />}
+                        onClick={async () => {
+                          await API.chooseGuideManager('clear');
+                          look(true, why === 'all' || why === 'chosen');
+                        }}
+                      >
+                        Suggest for them again
+                      </Button>
+                    </Group>
+                  )}
+                  {(page?.ignored || []).length > 0 && (
+                    <Group gap="sm">
+                      <Text size="xs" c="dimmed">
+                        {page.ignored.length} suggestion
+                        {page.ignored.length === 1 ? '' : 's'} waved away.
+                      </Text>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        leftSection={<RotateCcw size={12} />}
+                        onClick={async () => {
+                          await API.ignoreGuideManager('clear');
+                          look(true);
+                        }}
+                      >
+                        Suggest them again
+                      </Button>
+                    </Group>
+                  )}
+                </Stack>
+              </Box>
+            )}
+
+            {/* Table container */}
+            <Box
+              style={{
+                position: 'relative',
+                borderRadius:
+                  '0 0 var(--mantine-radius-md) var(--mantine-radius-md)',
+              }}
+            >
+              <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
+                <div style={{ minWidth: 760 }}>
+                  <LoadingOverlay visible={loading} />
+                  {rows.length === 0 && !loading ? (
+                    <Center p="xl">
+                      <Text size="sm" c="dimmed" ta="center" maw={620}>
+                        {why === 'chosen'
+                          ? 'Nothing is chosen yet. Putting a guide on a channel from here chooses it, and nothing is suggested for it afterwards; the padlock on a row chooses the guide it is already on.'
+                          : page?.suggestions?.length
+                            ? 'Nothing matches what is being looked at.'
+                            : 'Nothing to change. Press "Look for guides" to go through every channel: the ones on no guide, the ones whose guide holds no programmes, and the ones something matches better.'}
+                      </Text>
+                    </Center>
+                  ) : (
+                    <CustomTable table={table} />
+                  )}
+                </div>
+              </Box>
+            </Box>
+          </Paper>
+        </Stack>
       </Box>
 
       {choosing && (
