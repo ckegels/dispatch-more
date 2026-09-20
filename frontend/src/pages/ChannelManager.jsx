@@ -13,6 +13,7 @@ import {
 import { DatabaseBackup } from 'lucide-react';
 import ChannelManagerTable from '../components/tables/ChannelManagerTable';
 import GuideManagerTable from '../components/tables/GuideManagerTable';
+import LogoLibraryTable from '../components/tables/LogoLibraryTable';
 import StreamCheckTable from '../components/tables/StreamCheckTable';
 
 const BLURB = {
@@ -21,6 +22,7 @@ const BLURB = {
   check: 'the streams on your channels that no longer play',
   guides:
     'the channels whose programme guide is missing, empty, or not the best one there is',
+  logos: 'the logo each channel has, next to the ones the collections would give it',
 };
 
 // Headed the way the Logo Manager is, tabs and all, so the two read as parts of one set of
@@ -61,6 +63,7 @@ const ChannelManagerPage = () => {
               <TabsTab value="merge">Lineup</TabsTab>
               <TabsTab value="check">Stream Check</TabsTab>
               <TabsTab value="guides">Guides</TabsTab>
+              <TabsTab value="logos">Logos</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -89,6 +92,7 @@ const ChannelManagerPage = () => {
       {activeTab === 'merge' && <ChannelManagerTable />}
       {activeTab === 'check' && <StreamCheckTable />}
       {activeTab === 'guides' && <GuideManagerTable />}
+      {activeTab === 'logos' && <LogoLibraryTable />}
     </Box>
   );
 };

@@ -4,7 +4,6 @@ import useLogosStore from '../store/logos';
 import useVODLogosStore from '../store/vodLogos';
 import LogosTable from '../components/tables/LogosTable';
 import VODLogosTable from '../components/tables/VODLogosTable';
-import LogoLibraryTable from '../components/tables/LogoLibraryTable';
 import { showNotification } from '../utils/notificationUtils.js';
 
 const LogosPage = () => {
@@ -60,19 +59,15 @@ const LogosPage = () => {
             >
               Logos
             </Text>
-            {/* Find Logos is about channels, not a count of logos kept */}
-            {activeTab !== 'library' && (
-              <Text size="sm" c="dimmed">
-                ({logoCount} {logoCount !== 1 ? 'logos' : 'logo'})
-              </Text>
-            )}
+            <Text size="sm" c="dimmed">
+              ({logoCount} {logoCount !== 1 ? 'logos' : 'logo'})
+            </Text>
           </Flex>
 
           <Tabs value={activeTab} onChange={setActiveTab} variant="pills">
             <TabsList>
               <TabsTab value="channel">Channel Logos</TabsTab>
               <TabsTab value="vod">VOD Logos</TabsTab>
-              <TabsTab value="library">Find Logos</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -81,7 +76,6 @@ const LogosPage = () => {
       {/* Content based on active tab */}
       {activeTab === 'channel' && <LogosTable />}
       {activeTab === 'vod' && <VODLogosTable />}
-      {activeTab === 'library' && <LogoLibraryTable />}
     </Box>
   );
 };

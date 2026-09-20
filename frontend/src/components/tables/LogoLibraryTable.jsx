@@ -315,7 +315,14 @@ const LogoLibraryTable = () => {
               {/* The others, small, to be chosen instead. They take what room is left and
                   go on to the next line, rather than running under the search button */}
               {!custom[original.channel_id] && original.suggestions.length > 1 && (
-                <Group gap={4} wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
+                <Group
+                  gap={6}
+                  wrap="wrap"
+                  // A row of the table has padding to its sides and none above or below,
+                  // so once these wrap onto a second line they sit against the lines of
+                  // the rows either side, squeezed with nothing to separate them
+                  style={{ flex: 1, minWidth: 0, rowGap: 8, paddingTop: 6, paddingBottom: 6 }}
+                >
                   {original.suggestions.map((suggestion, index) => (
                     <Box
                       key={suggestion.url}

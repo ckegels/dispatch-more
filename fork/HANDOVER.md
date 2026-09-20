@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v137** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v138** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -315,9 +315,10 @@ Celery) and text, keeps a traceback with the ERROR line that reported it, follow
 downloads the whole log or a diagnostics bundle (every log of 24 h + version). The web app's
 user needs the `systemd-journal` group; the patcher's installer adds it and uninstall removes it.
 
-### 5.5 Find Logos — `apps/channels/logo_library.py`, `logo_library_views.py`, `LogoLibraryTable.jsx`
+### 5.5 Logos — `apps/channels/logo_library.py`, `logo_library_views.py`, `LogoLibraryTable.jsx`
 
-A tab of the Logo Manager: each channel's logo next to suggestions from public collections
+A tab of the **Channel Manager** since v138 (it was "Find Logos" on the Logos page; a change to
+a channel belongs with the other ways of changing channels): each channel's logo next to suggestions from public collections
 (tv-logo/tv-logos, iptv-org), the user's own added collections, their playlists' and every
 guide's icons — collections first, guides last. Search every logo by hand, use a link or a
 file. Matching uses `match_key` (accents folded, "+"/"&" as words, box removed).
