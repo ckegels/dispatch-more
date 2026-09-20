@@ -741,6 +741,58 @@ def _what_they_carry(entries):
     return entries
 
 
+# How the reading of guides says where it has got to. Reading is a pass of each source's
+# whole file, which on a big guide is minutes, and a button that only spins is
+# indistinguishable from one that has jammed.
+READING_KEY = "guide-read:run"
+READING_KEPT_SECONDS = 6 * 3600
+
+
+def reading_state(redis_client=None):
+    """How the reading of guides is going, for whichever page asked for it."""
+    if redis_client is None:
+        redis_client = _reading_redis()
+    if not redis_client:
+        return {}
+    raw = redis_client.hgetall(READING_KEY) or {}
+    state = {}
+    for key, value in raw.items():
+        key = key.decode() if isinstance(key, bytes) else key
+        value = value.decode() if isinstance(value, bytes) else value
+        state[key] = value
+    for number in ("done", "total"):
+        if number in state:
+            try:
+                state[number] = int(state[number])
+            except (TypeError, ValueError):
+                state[number] = 0
+    state["reading"] = state.get("state") == "reading"
+    return state
+
+
+def _reading_redis():
+    from core.utils import RedisClient
+
+    try:
+        return RedisClient.get_client()
+    except Exception as e:
+        logger.warning(f"Guides: no Redis to say how the reading is going ({e})")
+        return None
+
+
+def say_reading(mapping, redis_client=None):
+    """Put down where the reading has got to; quietly does nothing without Redis."""
+    if redis_client is None:
+        redis_client = _reading_redis()
+    if not redis_client:
+        return
+    try:
+        redis_client.hset(READING_KEY, mapping={k: str(v) for k, v in mapping.items()})
+        redis_client.expire(READING_KEY, READING_KEPT_SECONDS)
+    except Exception as e:
+        logger.debug(f"Guides: could not say how the reading is going ({e})")
+
+
 def load_programmes(epg_ids):
     """
     Read these guides' programmes now, without having to put them on a channel first.
@@ -796,6 +848,17 @@ def load_programmes(epg_ids):
             parse_programs_for_tvg_id.delay(entry["id"], force=True)
         reading += 1
 
+    if reading:
+        from django.utils import timezone
+
+        say_reading({
+            "state": "reading",
+            "stage": "asking for them",
+            "at": "",
+            "done": 0,
+            "total": reading,
+            "since": timezone.now().isoformat(timespec="seconds"),
+        })
     if by_source:
         from .tasks import read_guide_programmes
 

@@ -773,6 +773,19 @@ class GuideChoiceTests(_Setup):
             self.assertEqual(channel_manager.load_programmes([guide.id])["reading"], 1)
         asked.assert_called_once_with(guide.id, force=True)
 
+    def test_the_reading_says_where_it_has_got_to(self):
+        from apps.channels.tests.test_guide_manager import FakeRedis
+
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        fake = FakeRedis()
+        with patch("apps.channels.channel_manager._reading_redis", return_value=fake):
+            with patch("apps.channels.tasks.read_guide_programmes.delay"):
+                channel_manager.load_programmes([guide.id])
+            state = channel_manager.reading_state()
+        self.assertTrue(state["reading"])
+        self.assertEqual(state["total"], 1)
+        self.assertEqual(state["done"], 0)
+
     def test_a_dummy_guide_has_nothing_to_read(self):
         dummy = EPGSource.objects.create(name="Made up", source_type="dummy")
         guide = EPGData.objects.create(tvg_id="d.1", name="Dummy", epg_source=dummy)

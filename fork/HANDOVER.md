@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v126** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v127** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -313,6 +313,12 @@ whole-word guard for tags: that guard only means anything at an edge that is a l
 digit, and asking for a word boundary around `⏺ʳᵉᶜ` missed it the moment a provider wrote it up
 against the name ("NPO 1⏺ʳᵉᶜ"). A bare word like RAW is still only taken whole.
 
+**The group picker offers only groups you have channels in** (v127), from `channel_groups`
+rather than `all_groups`: every group there is ran to hundreds on this setup, most of them a
+provider's own names that no channel is in, and finding your own among them was the hard part.
+The last entry of the list makes a new group (`API.addChannelGroup`) and chooses it for that
+row, because that is where you look when none of them is the one you want.
+
 **The group is on the Before side too** (v125): you cannot judge "one channel in one group"
 without seeing which groups they are in now.
 
@@ -394,6 +400,15 @@ a time and only when asked**: the task reads the source's file for that one entr
 install has a single Celery worker -- a dozen of them set off because a window was opened would
 hold up the M3U and EPG refreshes behind them. A dummy source is refused outright: it makes its
 programmes up as they are asked for, so there is nothing to read.
+
+**The reading says where it has got to** (v127). A pass of a big guide file is minutes, and a
+spinner that says nothing is indistinguishable from one that has jammed.
+`read_guide_programmes` writes a `guide-read:run` hash in Redis (`channel_manager.say_reading`
+/ `reading_state`, `GET channel-manager/guides/reading/`): which source it is going through,
+how many programmes of it have gone by (every 20 000), which guide it has just kept, and how
+many of the wanted guides are done. Both places that read guides follow it -- the Lineup's
+window and the Guides tab -- and they wait for as long as the task says it is still reading
+rather than giving up after a fixed number of tries.
 
 **Reading one guide costs the whole file** (v120, and the button did nothing before it).
 `parse_programs_for_tvg_id` streams the source's XMLTV from beginning to end and keeps the

@@ -52,6 +52,9 @@ import { Logo, Watch } from './StreamParts';
 
 const PAGE_SIZES = ['25', '50', '100', '250'];
 
+// The last entry of a group picker: not a group, a way to make one
+const NEW_GROUP = '__new__';
+
 const STATUS = {
   new: { label: 'New', color: 'green' },
   merge: { label: 'Merge', color: 'blue' },
@@ -344,6 +347,7 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   const [search, setSearch] = useState('');
   // Guides whose programmes were asked for and have not arrived yet: {id: true}
   const [reading, setReading] = useState({});
+  const [readState, setReadState] = useState({});
 
   // The typed search is the only thing that drives the question. It is deliberately not
   // touched by choosing one: the first try let a choice write itself into the search box,
@@ -390,10 +394,18 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
         setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, false])) }));
         return;
       }
-      // Reading is a task, and a pass of a big guide file is not quick, so the list is
-      // asked again for a few minutes and then given up on rather than turning for ever
-      for (let tries = 0; tries < 60; tries += 1) {
+      // Reading is a pass of each source's whole file, which on a big guide is minutes.
+      // So it is followed by what the task says it is doing rather than a fixed number
+      // of tries, and says so: a spinner that says nothing looks like one that has hung.
+      for (let tries = 0; tries < 400; tries += 1) {
         await new Promise((done) => setTimeout(done, 3000));
+        let state = {};
+        try {
+          state = (await API.getChannelManagerReading())?.reading || {};
+          setReadState(state);
+        } catch {
+          // The next try asks again
+        }
         let back = null;
         try {
           const result = await API.getChannelManagerGuides({
@@ -410,8 +422,10 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
         if (back && ids.every((id) => (back.find((one) => one.id === id) || {}).programmes)) {
           break;
         }
+        if (!state.reading && tries > 2) break;
       }
       setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, false])) }));
+      setReadState({});
     },
     [channel?.name, channel?.epg?.tvg_id, search, held?.id]
   );
@@ -472,6 +486,13 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
           programmes when it goes on a channel. Reading one means going through the whole
           guide file, so reading them all together costs no more than reading one.
         </Text>
+        {readState.reading && (
+          <Text size="xs" c="dimmed">
+            Reading guides · {readState.stage || 'asking for them'}
+            {readState.at ? ` · ${readState.at}` : ''} ·{' '}
+            {readState.done || 0} of {readState.total || 0}
+          </Text>
+        )}
         <Stack gap={6} style={{ maxHeight: '50vh', overflowY: 'auto' }}>
           {shown.length === 0 && !loading && (
             <Text size="xs" c="dimmed">
@@ -539,6 +560,7 @@ const Expanded = ({
   groups,
   chosenGroup,
   onGroup,
+  onMakeGroup,
   onDrop,
   chosenName,
   onName,
@@ -546,6 +568,11 @@ const Expanded = ({
   onGuide,
 }) => {
   const moving = row.streams.filter(movable);
+  // Making a group from the row, rather than leaving the page to go and make one
+  const [naming, setNaming] = useState(false);
+  const [newGroup, setNewGroup] = useState('');
+  const [making, setMaking] = useState(false);
+  const [groupError, setGroupError] = useState(null);
   return (
     <Box
       p="sm"
@@ -560,10 +587,50 @@ const Expanded = ({
             searchable
             allowDeselect={false}
             data={groups}
-            value={String(chosenGroup ?? row.channel.group_id ?? '')}
-            onChange={(group) => group && onGroup(row.key, Number(group))}
+            value={naming ? NEW_GROUP : String(chosenGroup ?? row.channel.group_id ?? '')}
+            onChange={(group) => {
+              if (!group) return;
+              if (group === NEW_GROUP) return setNaming(true);
+              setNaming(false);
+              onGroup(row.key, Number(group));
+            }}
             style={{ width: 260 }}
           />
+          {naming && (
+            <Group gap="xs" align="flex-end">
+              <TextInput
+                size="xs"
+                label="Its name"
+                aria-label="Name for the new group"
+                value={newGroup}
+                onChange={(event) => setNewGroup(event.currentTarget.value)}
+                error={groupError}
+                style={{ width: 220 }}
+              />
+              <Button
+                size="xs"
+                variant="default"
+                disabled={!newGroup.trim() || making}
+                loading={making}
+                onClick={async () => {
+                  setMaking(true);
+                  setGroupError(null);
+                  try {
+                    const made = await onMakeGroup(newGroup.trim());
+                    onGroup(row.key, Number(made.id));
+                    setNaming(false);
+                    setNewGroup('');
+                  } catch (e) {
+                    setGroupError(e?.body?.error || 'That group could not be made.');
+                  } finally {
+                    setMaking(false);
+                  }
+                }}
+              >
+                Make it
+              </Button>
+            </Group>
+          )}
           <Text size="xs" c="dimmed" pb={6}>
             {row.status === 'combine'
               ? chosenGroup && chosenGroup !== row.channel.group_id
@@ -749,13 +816,22 @@ const ChannelManagerTable = () => {
   const leversChanged =
     levers && previewed && JSON.stringify(levers) !== previewed;
 
+  // Groups made on the page, which are not in what the server sent with it
+  const [madeGroups, setMadeGroups] = useState([]);
+
+  // Only the groups you actually have channels in. Every group there is ran to hundreds
+  // on this setup, most of them a provider's own names that no channel of yours is in,
+  // and finding your own group among them was the hard part. Making a new one is the
+  // last entry rather than a button of its own, since that is where you look when none
+  // of them is the one you want.
   const groupOptions = useMemo(
-    () =>
-      (options?.all_groups || []).map((g) => ({
-        value: String(g.id),
-        label: g.name,
-      })),
-    [options]
+    () => [
+      ...[...(options?.channel_groups || []), ...madeGroups]
+        .map((g) => ({ value: String(g.id), label: g.name }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+      { value: NEW_GROUP, label: '+ A new group…' },
+    ],
+    [options, madeGroups]
   );
   // Only the groups the plan actually has something in, named for the page. A new
   // channel counts under the group it would go into.
@@ -780,10 +856,18 @@ const ChannelManagerTable = () => {
   const groupNames = useMemo(
     () =>
       Object.fromEntries(
-        (options?.all_groups || []).map((g) => [g.id, g.name])
+        [...(options?.all_groups || []), ...madeGroups].map((g) => [g.id, g.name])
       ),
-    [options]
+    [options, madeGroups]
   );
+
+  // A group made from a row: kept so every row can choose it, and chosen for that row
+  const makeGroup = useCallback(async (name) => {
+    const made = await API.addChannelGroup({ name });
+    if (!made?.id) throw new Error('No group came back');
+    setMadeGroups((all) => [...all, { id: made.id, name: made.name || name }]);
+    return made;
+  }, []);
 
   const rows = useMemo(() => {
     const all = (plan?.rows || []).map((given) => {
@@ -1271,6 +1355,7 @@ const ChannelManagerTable = () => {
         groups={groupOptions}
         chosenGroup={groupChoice[row.original.key]}
         onGroup={chooseGroup}
+        onMakeGroup={makeGroup}
         onDrop={dropStream}
         chosenName={nameChoice[row.original.key]}
         onName={chooseName}

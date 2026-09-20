@@ -23,6 +23,8 @@ vi.mock('../../../api', () => ({
     applyChannelManager: vi.fn(),
     ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
+    getChannelManagerReading: vi.fn(),
+    addChannelGroup: vi.fn(),
     getChannelManagerGuides: vi.fn(),
     loadChannelManagerGuide: vi.fn(),
   },
@@ -95,6 +97,7 @@ describe('ChannelManagerTable', () => {
     API.saveChannelManagerSettings.mockResolvedValue({});
     API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
+    API.getChannelManagerReading.mockResolvedValue({ reading: {} });
     API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
   });
 
@@ -214,7 +217,11 @@ describe('ChannelManagerTable', () => {
     };
     API.getChannelManagerOptions.mockResolvedValue({
       settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
-      channel_groups: [], profiles: [],
+      profiles: [],
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20 },
+        { id: 2, name: '┃DE┃ GERMANY', count: 9 },
+      ],
       all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 2, name: '┃DE┃ GERMANY' }],
     });
     API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
@@ -616,7 +623,11 @@ describe('ChannelManagerTable', () => {
     };
     API.getChannelManagerOptions.mockResolvedValue({
       settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
-      channel_groups: [], profiles: [],
+      profiles: [],
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20 },
+        { id: 3, name: '┃AT┃ NEWS', count: 4 },
+      ],
       all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 3, name: '┃AT┃ NEWS' }],
     });
     API.previewChannelManager.mockResolvedValue({ ...plan, rows: [combineRow] });
@@ -637,5 +648,80 @@ describe('ChannelManagerTable', () => {
         { order: 'quality' }, ['combine:at:orf1'], {}, { 'combine:at:orf1': 3 }, {}, {}, {}
       )
     );
+  });
+
+  it('offers only the groups you have channels in, and a way to make one', async () => {
+    const newRow = {
+      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      channel: {
+        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
+        group_why: 'where your channels are', logo_url: '', epg: null,
+      },
+      before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
+      streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
+    };
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      profiles: [],
+      // Every group there is runs to hundreds, most of them a provider's own names
+      channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA', count: 20 }],
+      all_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA' },
+        { id: 99, name: 'A provider group no channel of yours is in' },
+      ],
+    });
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
+    API.addChannelGroup.mockResolvedValue({ id: 7, name: '┃AT┃ KIDS' });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ PULS 4');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+
+    fireEvent.click(
+      await screen.findByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' })
+    );
+    expect((await screen.findAllByText('┃AT┃ AUSTRIA')).length).toBeGreaterThan(0);
+    expect(
+      screen.queryByText('A provider group no channel of yours is in')
+    ).toBeNull();
+
+    // The last entry makes one, rather than leaving the page to go and make it
+    fireEvent.click(screen.getByText('+ A new group…'));
+    fireEvent.change(await screen.findByLabelText('Name for the new group'), {
+      target: { value: '┃AT┃ KIDS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Make it' }));
+
+    await waitFor(() =>
+      expect(API.addChannelGroup).toHaveBeenCalledWith({ name: '┃AT┃ KIDS' })
+    );
+    expect(await screen.findByText('new number · ┃AT┃ KIDS')).toBeInTheDocument();
+  });
+
+  it('says what the reading of guides is doing, rather than only spinning', async () => {
+    const unread = {
+      id: 8, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96,
+      programmes: 0, now: '', in_use: false,
+    };
+    API.getChannelManagerGuides.mockResolvedValue({ guides: [held, unread] });
+    API.getChannelManagerReading.mockResolvedValue({
+      reading: {
+        reading: true, state: 'reading', stage: 'going through xmltv.at',
+        at: 'ORF 1', done: 1, total: 4,
+      },
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Read the programmes of ORF 1' })
+    );
+
+    expect(
+      await screen.findByText(/going through xmltv.at/, undefined, { timeout: 6000 })
+    ).toBeInTheDocument();
   });
 });

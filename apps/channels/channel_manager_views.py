@@ -119,6 +119,13 @@ def channel_manager_load_guide(request):
     return JsonResponse(answer, status=400 if answer.get("error") else 200)
 
 
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def channel_manager_reading(request):
+    """How the reading of guides is going, for whichever page asked for it."""
+    return JsonResponse({"reading": channel_manager.reading_state()})
+
+
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def channel_manager_ignore(request):

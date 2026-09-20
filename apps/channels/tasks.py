@@ -4605,7 +4605,10 @@ def read_guide_programmes(by_source):
     from apps.epg.utils import extract_season_episode_from_description
     from core.utils import is_task_lock_held
 
+    from apps.channels import channel_manager
+
     read = 0
+    wanted_in_all = sum(len(ids) for ids in (by_source or {}).values())
     title_max_length = ProgramData._meta.get_field("title").max_length
     for source_id, epg_ids in (by_source or {}).items():
         try:
@@ -4619,6 +4622,10 @@ def read_guide_programmes(by_source):
         source = EPGSource.objects.filter(id=source_id).first()
         if not source:
             continue
+        channel_manager.say_reading({
+            "stage": f"going through {source.name}", "at": "", "done": read,
+            "total": wanted_in_all,
+        })
         path = source.extracted_file_path or source.file_path or source.get_cache_file()
         if not path or not os.path.exists(path):
             logger.info(f"Guide programmes: no file for source {source.name}, nothing to read")
@@ -4632,12 +4639,21 @@ def read_guide_programmes(by_source):
             continue
 
         found = {epg.id: [] for entries in wanted.values() for epg in entries}
+        # Said as the file goes by, because one pass of a big guide is minutes and a
+        # button that only spins is indistinguishable from one that has jammed
+        seen = 0
         handle = None
         try:
             handle = _open_xmltv_file(path)
             for _, elem in etree.iterparse(
                 handle, events=("end",), tag="programme", remove_blank_text=True, recover=True
             ):
+                seen += 1
+                if seen % 20000 == 0:
+                    channel_manager.say_reading({
+                        "stage": f"{seen:,} programmes into {source.name}".replace(",", " "),
+                        "done": read, "total": wanted_in_all,
+                    })
                 for epg in wanted.get(elem.get("channel"), ()):
                     try:
                         title = description = sub_title = None
@@ -4689,7 +4705,14 @@ def read_guide_programmes(by_source):
                     if made:
                         ProgramData.objects.bulk_create(made, batch_size=1000)
                 read += 1
+                channel_manager.say_reading({
+                    "stage": f"keeping what {source.name} had", "at": epg.name or epg.tvg_id,
+                    "done": read, "total": wanted_in_all,
+                })
                 logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
+    channel_manager.say_reading({
+        "state": "done", "stage": "", "at": "", "done": read, "total": wanted_in_all,
+    })
     return f"Read {read} guide(s)"
 
 

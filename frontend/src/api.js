@@ -2930,6 +2930,13 @@ export default class API {
     });
   }
 
+  // How the reading of guides is going: a pass of a whole guide file is minutes
+  static async getChannelManagerReading() {
+    return await request(
+      `${host}/api/channels/channel-manager/guides/reading/`
+    );
+  }
+
   // Stop suggesting a Lineup row ("ignore"), suggest it again ("unignore"), or all ("clear")
   static async ignoreChannelManager(action, row = {}) {
     return await request(`${host}/api/channels/channel-manager/ignore/`, {

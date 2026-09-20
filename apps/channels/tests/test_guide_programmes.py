@@ -83,6 +83,22 @@ class ReadGuideProgrammesTests(TestCase):
         self._read(nothing)
         self.assertEqual(ProgramData.objects.filter(epg=nothing).count(), 0)
 
+    def test_it_says_where_it_has_got_to_as_it_reads(self):
+        from unittest.mock import patch
+
+        from apps.channels import channel_manager
+        from apps.channels.tests.test_guide_manager import FakeRedis
+
+        fake = FakeRedis()
+        with patch("apps.channels.channel_manager._reading_redis", return_value=fake):
+            self._read(self.one, self.two)
+            state = channel_manager.reading_state()
+        # A pass of a big guide file is minutes, and a spinner that says nothing looks
+        # exactly like one that has jammed
+        self.assertEqual(state["state"], "done")
+        self.assertEqual(state["done"], 2)
+        self.assertEqual(state["total"], 2)
+
     def test_a_missing_file_is_logged_and_left_rather_than_throwing(self):
         os.remove(self.path)
         self.assertEqual(self._read(self.one), "Read 0 guide(s)")

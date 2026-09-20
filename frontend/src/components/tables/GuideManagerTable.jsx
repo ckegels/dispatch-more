@@ -85,6 +85,7 @@ const GuideManagerTable = () => {
   const [ticked, setTicked] = useState(new Set());
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
+  const [readState, setReadState] = useState({});
   const [now, setNow] = useState(() => Date.now());
   const [confirming, setConfirming] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -203,20 +204,31 @@ const GuideManagerTable = () => {
     setError(null);
     try {
       await API.loadChannelManagerGuide(unread);
-      // They arrive as a task, so the page keeps asking until they turn up
-      for (let tries = 0; tries < 60; tries += 1) {
+      // Reading is a pass of each source's whole file, which on a big guide is minutes.
+      // So it is followed by what the task says it is doing rather than given a number
+      // of tries: as long as it is still reading, the page waits.
+      for (let tries = 0; tries < 400; tries += 1) {
         await new Promise((done) => setTimeout(done, 3000));
+        let state = {};
+        try {
+          state = (await API.getChannelManagerReading())?.reading || {};
+          setReadState(state);
+        } catch {
+          // The next try asks again
+        }
         const data = await API.getGuideManager();
         setPage(data);
         const still = (data.suggestions || []).filter(
           (one) => unread.includes(one.epg) && !one.programmes && !one.in_use
         );
         if (!still.length) break;
+        if (!state.reading && tries > 2) break;
       }
     } catch (e) {
       setError(e?.body?.error || 'Could not read those guides.');
     } finally {
       setReading(false);
+      setReadState({});
     }
   };
 
@@ -477,7 +489,30 @@ const GuideManagerTable = () => {
                   Look for guides
                 </Button>
               )}
-              {unread.length > 0 && (
+              {reading && (
+            <Box mb="sm">
+              <Group justify="space-between" gap="xs" mb={4} wrap="wrap">
+                <Text size="xs" c="dimmed">
+                  Reading guides · {readState.stage || 'asking for them'}
+                  {readState.at ? ` · ${readState.at}` : ''}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {readState.done || 0} of {readState.total || unread.length}
+                </Text>
+              </Group>
+              <Progress
+                value={
+                  readState.total
+                    ? Math.round((readState.done / readState.total) * 100)
+                    : 0
+                }
+                animated
+                striped
+                size="sm"
+              />
+            </Box>
+          )}
+          {unread.length > 0 && !reading && (
                 <Button
                   size="xs"
                   variant="default"
@@ -524,7 +559,30 @@ const GuideManagerTable = () => {
               </Text>
             </Box>
           )}
-          {unread.length > 0 && (
+          {reading && (
+            <Box mb="sm">
+              <Group justify="space-between" gap="xs" mb={4} wrap="wrap">
+                <Text size="xs" c="dimmed">
+                  Reading guides · {readState.stage || 'asking for them'}
+                  {readState.at ? ` · ${readState.at}` : ''}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {readState.done || 0} of {readState.total || unread.length}
+                </Text>
+              </Group>
+              <Progress
+                value={
+                  readState.total
+                    ? Math.round((readState.done / readState.total) * 100)
+                    : 0
+                }
+                animated
+                striped
+                size="sm"
+              />
+            </Box>
+          )}
+          {unread.length > 0 && !reading && (
             <Text size="xs" c="dimmed" mb="sm">
               {unread.length} suggested guide{unread.length === 1 ? '' : 's'} say
               &quot;not read yet&quot;: Dispatcharr reads a guide&apos;s programmes when it
