@@ -24,6 +24,8 @@ vi.mock('../../../api', () => ({
     ignoreGuideManager: vi.fn(),
     saveGuideManagerSettings: vi.fn(),
     loadChannelManagerGuide: vi.fn(),
+    getChannelManagerGuides: vi.fn(),
+    getChannelManagerReading: vi.fn(),
   },
 }));
 
@@ -70,6 +72,8 @@ describe('GuideManagerTable', () => {
     API.ignoreGuideManager.mockResolvedValue({});
     API.saveGuideManagerSettings.mockResolvedValue({});
     API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
+    API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
+    API.getChannelManagerReading.mockResolvedValue({ reading: {} });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -214,5 +218,42 @@ describe('GuideManagerTable', () => {
     draw();
     expect(await screen.findByText(/reading the guides there are/)).toBeInTheDocument();
     expect(screen.getByText(/0 of 1360/)).toBeInTheDocument();
+  });
+
+  it('changes a suggestion by hand, with the window the Lineup uses', async () => {
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [
+        {
+          id: 21, name: 'ORF 1 Austria', tvg_id: 'ORF1b.at', source: 'xmltv.at',
+          how: 'name', score: 88, programmes: 90, now: 'Wetter', in_use: true,
+        },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' }));
+
+    // The same window: search, cards, what each one holds and what is on it
+    expect(await screen.findByLabelText('Search every guide')).toBeInTheDocument();
+    fireEvent.click(await screen.findByLabelText('Guide ORF 1 Austria'));
+
+    // The row says it is a choice now, not a suggestion, and is ticked with it
+    expect(await screen.findByText('chosen')).toBeInTheDocument();
+    expect(screen.getByText('ORF1b.at · 90 programmes · Now: Wetter')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(API.applyGuideManager).toHaveBeenCalledWith({ 1: 21 }));
+  });
+
+  it('can choose no guide at all for a channel', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' }));
+    fireEvent.click(await screen.findByLabelText('Guide none'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(API.applyGuideManager).toHaveBeenCalledWith({ 1: null }));
   });
 });

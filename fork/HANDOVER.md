@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v127** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v128** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -370,6 +370,10 @@ that (`epg_data__epg_source` is select_related with it). A card whose `in_use` t
 not said anything about claims nothing either way: the guide a row was matched to is on the
 window's list from the start, but the plan's summary does not know what it holds.
 
+The window lives in `frontend/src/components/tables/GuidePicker.jsx` since v128 and is used
+by both pages: on the Lineup it sets the guide a row would come out with, on the Guides tab it
+changes what a suggestion suggests. The same decision, so the same window.
+
 **Why the guide is a window and not a dropdown** (v118). The first try was a Mantine `Select`
 and it was wrong twice over. It was wired with `searchValue` as the server query, so choosing
 an entry made Mantine write that entry's label into the search box, which asked again for that
@@ -489,6 +493,11 @@ unread one, since it can be judged on the spot. Each row also says **what is on 
 channel is on now** (`instead_of_now`, `instead_of_source`) beside what is on the suggested
 one, and carries the channel's `uuid` for a **watch button** -- a guide can have the right
 name and the channel behind it be something else entirely.
+
+**A suggestion can be disagreed with** (v128): every row has Change, opening the Lineup's own
+guide window, and what is chosen there is what the row applies ("chosen" in place of a score).
+Choosing it ticks the row. "No guide" is a choice of its own and comes back as null, so what
+counts is whether a choice was made for that channel, not whether it has a value.
 
 Applying saves each channel **one at a time with `update_fields`**, because that is what
 Dispatcharr's own signal watches: it drops the guide cache and reads the new guide's

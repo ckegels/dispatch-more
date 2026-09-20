@@ -25,6 +25,7 @@ import useSettingsStore from '../../store/settings';
 import { buildLiveStreamUrl } from '../../utils/components/FloatingVideoUtils.js';
 import ConfirmationDialog from '../ConfirmationDialog';
 import { CustomTable, useTable } from './CustomTable';
+import { GuideWindow } from './GuidePicker';
 
 // The Lineup's third of a set: laid out the same way, a panel with a toolbar over a table.
 // A row here is one channel whose guide is worth changing, next to what it is on now.
@@ -86,6 +87,12 @@ const GuideManagerTable = () => {
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
   const [readState, setReadState] = useState({});
+  // Guides chosen by hand, by channel: {channel id: guide}. The suggestion is a
+  // suggestion, and the whole point of seeing what each one holds is to be able to
+  // disagree with it.
+  const [chosen, setChosen] = useState({});
+  // The row whose guide is being chosen, if any
+  const [choosing, setChoosing] = useState(null);
   const [now, setNow] = useState(() => Date.now());
   const [confirming, setConfirming] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -135,7 +142,29 @@ const GuideManagerTable = () => {
   }, [page]);
 
   const rows = useMemo(() => {
-    let found = (page?.suggestions || []).map((one) => ({ ...one, id: String(one.channel) }));
+    let found = (page?.suggestions || []).map((one) => {
+      // "No guide" is a choice of its own and comes back as null, so what counts is
+      // whether a choice was made for this channel, not whether it has a value
+      const mine = Object.prototype.hasOwnProperty.call(chosen, one.channel)
+        ? chosen[one.channel]
+        : undefined;
+      return {
+        ...one,
+        ...(mine === undefined
+          ? {}
+          : {
+              epg: mine ? mine.id : null,
+              name: mine ? mine.name : 'No guide',
+              tvg_id: mine?.tvg_id || '',
+              source: mine?.source || '',
+              programmes: mine?.programmes || 0,
+              now: mine?.now || '',
+              in_use: mine?.in_use,
+              by_hand: true,
+            }),
+        id: String(one.channel),
+      };
+    });
     if (group) found = found.filter((one) => String(one.group_id ?? '') === group);
     if (why) found = found.filter((one) => one.why === why);
     const wanted = search.trim().toLowerCase();
@@ -147,7 +176,7 @@ const GuideManagerTable = () => {
       );
     }
     return found.sort((a, b) => a.channel_name.localeCompare(b.channel_name));
-  }, [page, group, why, search]);
+  }, [page, group, why, search, chosen]);
 
   const start = async () => {
     setBusy(true);
@@ -182,6 +211,7 @@ const GuideManagerTable = () => {
       );
       await API.applyGuideManager(choices);
       setTicked(new Set());
+      setChosen({});
       tableRef.current?.setSelectedTableIds?.([]);
       await look(true);
     } catch (e) {
@@ -259,6 +289,8 @@ const GuideManagerTable = () => {
 
   const waveAwayRef = useRef(waveAway);
   waveAwayRef.current = waveAway;
+  const chooseRef = useRef(setChoosing);
+  chooseRef.current = setChoosing;
 
   const columns = useMemo(
     () => [
@@ -332,8 +364,21 @@ const GuideManagerTable = () => {
                   {one.source || 'no source'}
                 </Badge>
                 <Text size="xs" c="dimmed">
-                  {one.score}%
+                  {one.by_hand ? 'chosen' : `${one.score}%`}
                 </Text>
+                {/* A suggestion is a suggestion: the same window the Lineup uses, so
+                    another guide can be searched for and looked at before it is taken */}
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  aria-label={`Change the guide for ${one.channel_name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    chooseRef.current(one);
+                  }}
+                >
+                  Change
+                </Button>
               </Group>
               <Text
                 size="xs"
@@ -700,6 +745,34 @@ const GuideManagerTable = () => {
           )}
         </Paper>
       </Box>
+
+      {choosing && (
+        <GuideWindow
+          channel={{
+            name: choosing.channel_name,
+            epg: {
+              id: choosing.epg,
+              name: choosing.name,
+              source: choosing.source,
+              tvg_id: choosing.tvg_id,
+              programmes: choosing.programmes,
+              now: choosing.now,
+              in_use: choosing.in_use,
+            },
+          }}
+          onClose={() => setChoosing(null)}
+          onChoose={(picked) => {
+            setChosen((all) => ({ ...all, [choosing.channel]: picked }));
+            // Choosing one is something to apply, and would otherwise be easy to lose
+            setTicked((all) => {
+              const now = new Set(all).add(String(choosing.channel));
+              tableRef.current?.setSelectedTableIds?.([...now]);
+              return now;
+            });
+            setChoosing(null);
+          }}
+        />
+      )}
 
       <ConfirmationDialog
         opened={confirming}

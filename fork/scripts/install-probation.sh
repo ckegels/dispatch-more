@@ -94,6 +94,7 @@ frontend/src/components/overlap/__tests__/OverlapActivity.test.jsx
 frontend/src/components/Sidebar.jsx
 frontend/src/components/tables/ChannelManagerTable.jsx
 frontend/src/components/tables/GuideManagerTable.jsx
+frontend/src/components/tables/GuidePicker.jsx
 frontend/src/components/tables/__tests__/GuideManagerTable.test.jsx
 frontend/src/components/tables/logoLibraryColors.js
 frontend/src/components/tables/LogoLibraryTable.jsx
