@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v116** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v117** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -288,6 +288,23 @@ Euronews and every CBS station into one), no country guessing, every same-named 
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
 `DEFAULTS_VERSION` resets saved settings when defaults change (`CHANGED_IN` keeps the rest). A
 backup warning with a link to Settings → Backup & Restore sits above both tabs.
+
+**The name and the guide are set by hand on the row** (v117), in the After column: a text box
+for the name -- what a new channel is called, or a rename of a channel you have -- and a picker
+for the guide. Guide matching is in two places on purpose. The plan keeps `_Guides`, a plain
+lookup (exact tvg-id, exact name) because it runs over every channel at once; it now reads the
+sources in priority order and leaves out the ones switched off (an entry with no source at all
+is kept: nobody switched it off). When a row's menu is opened, `guide_candidates` puts that one
+channel through Dispatcharr's own matcher (`apps/channels/epg_matching.stream_fuzzy_epg_scan`,
+fuzzy + `preferred-region`, no ML -- it has to answer while a menu is open), country box taken
+off the name first. Only candidates at or above `MIN_GUIDE_SCORE` (40) are offered: without a
+floor the three least unlike names in the file read as matches. Typing searches every guide by
+name or tvg-id. Nothing is asked until the menu is opened -- with Expand all that would be a
+question per row. Both travel on apply as `names` and `epgs` ({row key: guide id, or null for
+"no guide" -- a choice of its own, and how a wrong match comes off), beside `groups` and
+`drops`, worked out again rather than trusted from the page: a guide deleted since is applied
+to nothing, a name of only spaces is no name. Conflict rows have no channel, so they have
+neither.
 
 **New channels are suggested** (`create_new`, on; only suggested — nothing is made until a row
 is ticked and applied). From the stream groups your channels already come from (`new_from`
