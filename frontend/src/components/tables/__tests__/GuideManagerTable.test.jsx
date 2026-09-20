@@ -34,6 +34,7 @@ const onNothing = {
   group: '┃AT┃ AUSTRIA', group_id: 1,
   epg: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'xmltv.at', score: 96,
   programmes: 312, now: 'Zeit im Bild', in_use: true, why: 'none',
+  tier: 'certain', match_why: 'its name exactly',
   instead_of: '', instead_of_epg: null, instead_of_holds: 0, instead_of_now: '',
 };
 const onEmpty = {
@@ -41,6 +42,7 @@ const onEmpty = {
   group: '┃NL┃ HOLLAND', group_id: 2,
   epg: 9, name: 'DreamWorks', tvg_id: 'dreamworks.nl', source: 'xmltv.nl', score: 98,
   programmes: 140, now: 'Shrek', in_use: true, why: 'empty',
+  tier: 'likely', match_why: 'its name, and the country agrees',
   instead_of: 'DreamWorks', instead_of_epg: 8, instead_of_holds: 0,
   instead_of_now: '', instead_of_source: 'xmltv.uk',
 };
@@ -255,5 +257,42 @@ describe('GuideManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(API.applyGuideManager).toHaveBeenCalledWith({ 1: null }));
+  });
+
+  it('says what kind of match it is, not only how alike the names read', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    // A name that happens to read alike is not the same sort of thing as an id that
+    // agrees, and one number for both is what made a wrong station read as a certainty
+    expect(screen.getByText('Certain · 96%')).toBeInTheDocument();
+    expect(screen.getByText('Likely · 98%')).toBeInTheDocument();
+  });
+
+  it('shows every channel looked at, including the ones nothing fits', async () => {
+    const nothingFits = {
+      channel: 3, channel_name: '┃USA┃ PBS 12', number: 12, uuid: 'uuid-three',
+      group: '┃USA┃ PBS', group_id: 3, why: '',
+      epg: null, name: '', tvg_id: '', source: '', programmes: 0, now: '',
+      instead_of: '', instead_of_epg: null, instead_of_holds: 0, instead_of_now: '',
+    };
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      suggestions: [onNothing, nothingFits],
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    // Not among the suggestions, which is the default view
+    await screen.findByText('┃AT┃ ORF 1');
+    expect(screen.queryByText('┃USA┃ PBS 12')).toBeNull();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText('Every channel'));
+
+    expect(await screen.findByText('┃USA┃ PBS 12')).toBeInTheDocument();
+    expect(screen.getByText('Nothing fits it')).toBeInTheDocument();
+    // and it can still be settled by hand
+    expect(
+      screen.getByRole('button', { name: 'Change the guide for ┃USA┃ PBS 12' })
+    ).toBeInTheDocument();
   });
 });

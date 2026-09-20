@@ -590,6 +590,62 @@ class PageChoiceTests(_Setup):
         self.assertEqual(row["channel"]["logo_url"], "http://logos/puls4.png")
 
 
+class JudgingGuidesTests(TestCase):
+    """
+    How good a match a guide is, and what kind of match it is.
+
+    The comparison used to be on letters alone, over a name that had had the words that
+    tell two channels apart taken out of it first. That made a completely different
+    station read as a certainty, which is the worst thing a page like this can say.
+    """
+
+    def judge(self, name, guide_name, tvg_id="", country="us", mine=""):
+        return channel_manager.judge_guide(
+            name, country, {"name": guide_name, "tvg_id": tvg_id}, mine
+        )
+
+    def test_east_and_west_are_not_the_same_channel(self):
+        # Stock takes "east" and "west" off as extraneous, which leaves both as "pbs"
+        # and matches them at a hundred per cent
+        score, tier, why = self.judge("┃USA┃ PBS EAST", "PBS West", "pbs.west")
+        self.assertEqual(score, 0)
+        self.assertIn("side", why)
+
+    def test_two_numbers_that_differ_are_two_channels(self):
+        self.assertEqual(self.judge("┃USA┃ PBS 12", "PBS 13", "pbs13.us")[0], 0)
+        self.assertEqual(self.judge("┃UK┃ SKY SPORTS 1", "Sky Sports 2")[0], 0)
+
+    def test_but_a_number_written_as_a_word_is_that_number(self):
+        score, tier, _ = self.judge("┃AT┃ ORF 1", "ORF Eins", "orfeins.at", country="at")
+        self.assertEqual(score, 100)
+        self.assertEqual(tier, channel_manager.CERTAIN)
+
+    def test_two_call_signs_are_never_the_same_station(self):
+        score, _, why = self.judge("┃USA┃ PBS WNET", "PBS KQED", "kqed.us")
+        self.assertEqual(score, 0)
+        self.assertIn("call sign", why)
+
+    def test_a_tvg_id_that_agrees_is_not_a_guess(self):
+        score, tier, why = self.judge(
+            "┃USA┃ Anything at all", "Nothing like it", "the.same.id", mine="THE.SAME.ID"
+        )
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+        self.assertEqual(why, "its tvg-id")
+
+    def test_a_name_that_only_reads_alike_is_no_more_than_a_guess(self):
+        score, tier, _ = self.judge("┃NL┃ DREAMWORKS", "DreamWorks", "dreamworks.uk", country="nl")
+        self.assertEqual(tier, channel_manager.GUESS)
+        self.assertLess(score, 80)
+
+    def test_and_the_same_name_in_the_right_country_is_a_certainty(self):
+        score, tier, _ = self.judge("┃NL┃ DREAMWORKS", "DreamWorks", "dreamworks.nl", country="nl")
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+
+    def test_one_saying_a_number_and_the_other_not_is_not_certain(self):
+        _, tier, _ = self.judge("┃USA┃ PBS 12", "PBS", "pbs.us")
+        self.assertEqual(tier, channel_manager.GUESS)
+
+
 class GuideChoiceTests(_Setup):
     """The guide picker on a row: what it offers, and what choosing one does."""
 

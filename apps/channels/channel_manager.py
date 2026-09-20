@@ -627,9 +627,10 @@ class _Guides:
 # How alike a guide's name has to be before it is worth offering at all. The matcher
 # scores everything it sees, so without a floor a channel with no guide is still offered
 # the three least unlike names in the whole file, which reads as if they were matches.
-# "ORF 1" against "ORF Eins" scores 62 and belongs in the list; against "Sender Eins" it
-# scores 25 and does not. Anything under it is what the search is for.
-MIN_GUIDE_SCORE = 40
+# "ORF 1" against "ORF Eins" is the same channel written twice and scores a hundred, a
+# number word being read as its number; against "Sender Eins" it scores forty-six, which
+# is two names that share a word. Anything under it is what the search is for.
+MIN_GUIDE_SCORE = 55
 
 # What a guide's country is worth when the channel says which one it is. The matcher
 # never sees it: normalize_name takes the box off before scoring, so "┃NL┃ DREAMWORKS"
@@ -646,6 +647,68 @@ OTHER_COUNTRY = 30
 COUNTRY_ALSO = {"gb": ("gb", "uk"), "uk": ("gb", "uk")}
 
 
+# A number written as a word, so "ORF Eins" and "ORF 1" are the one channel while
+# "PBS 12" and "PBS 13" are not. English for the guides, then the languages this setup's
+# channels are actually in.
+NUMBER_WORDS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "eins": "1", "zwei": "2", "drei": "3", "vier": "4", "fuenf": "5", "funf": "5",
+    "sechs": "6", "sieben": "7", "acht": "8", "neun": "9", "zehn": "10",
+    "een": "1", "twee": "2", "drie": "3", "vijf": "5", "zes": "6", "zeven": "7",
+    "negen": "9", "tien": "10",
+    "un": "1", "une": "1", "deux": "2", "trois": "3", "quatre": "4", "cinq": "5",
+    "uno": "1", "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5",
+    "i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
+}
+
+# What a name says that makes it one channel rather than its sibling. These are not
+# decoration and must never be dropped before comparing: stock's own normalising takes
+# "east" and "west" off as extraneous, which turns "PBS East" and "PBS West" into the
+# same word and matches them at a hundred per cent.
+SIDE_WORDS = {"east", "west", "eastern", "western", "atlantic", "pacific"}
+
+
+def guide_words(name):
+    """
+    A name as the words that say which channel it is.
+
+    The country box comes off, accents are folded, punctuation becomes space and a number
+    written as a word becomes the number. Nothing else is thrown away -- not "east", not
+    "TV", not "network" -- because what looks like decoration next to one name is the
+    whole difference next to its sibling.
+    """
+    import unicodedata
+
+    text = _strip_country_box(str(name or "")).lower()
+    text = text.replace("&", " and ").replace("+", " plus ")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r"[^0-9a-z]+", " ", text)
+    words = []
+    for word in text.split():
+        words.append(NUMBER_WORDS.get(word, word))
+    return words
+
+
+def _identity_of(words):
+    """
+    What in these words picks one channel out from the others of its name: the number it
+    carries, which side of the country it is for, and its call sign.
+
+    A call sign is the American way of naming a station -- WNET, KQED -- and two of them
+    are never the same station. Only taken as one where it looks like one: four letters
+    beginning with K or W, which is how they are allocated, and not a word.
+    """
+    number = next((w for w in words if w.isdigit()), "")
+    side = next((w for w in words if w in SIDE_WORDS), "")
+    call = next(
+        (w for w in words if len(w) == 4 and w[0] in "kw" and w.isalpha() and w not in ("kids", "west", "kino")),
+        "",
+    )
+    return {"number": number, "side": side, "call": call}
+
+
 def _country_of_guide(entry):
     """
     Which country a guide entry is for, as its two letters, or "".
@@ -657,6 +720,69 @@ def _country_of_guide(entry):
     if found:
         return found[-1].lower()
     return logo_library.country_of(entry.get("name") or "")
+
+
+# What a match is, rather than only how alike two names look. Taken from how the
+# epgmatcharr plugin reports its work: a name that happens to read alike is not the same
+# kind of thing as an id that agrees, and calling both of them "96%" is what made a
+# completely different channel look like a certainty.
+CERTAIN, LIKELY, GUESS = "certain", "likely", "guess"
+# How alike the names have to be before a match is more than a guess, once nothing
+# contradicts and the country agrees
+LIKELY_SCORE = 80
+
+
+def judge_guide(name, country, entry, tvg_id=""):
+    """
+    How good a match this guide is for this channel, and what kind of match it is.
+
+    Returns (score out of a hundred, one of CERTAIN/LIKELY/GUESS, why in a few words).
+
+    Three things decide it, in this order:
+
+    1. **An id that agrees is not a guess.** The channel's own tvg-id matching the guide's
+       is the thing itself, not a resemblance.
+    2. **A contradiction ends it.** If both names carry a number and the numbers differ,
+       they are not the same channel however alike the rest reads -- "PBS 12" and
+       "PBS 13" are two stations, and on the letters alone they score eighty-three. The
+       same for the side of the country ("PBS East"/"PBS West") and for call signs, which
+       are never shared. This is what was wrong: the words that tell two channels apart
+       carry the least weight in a comparison of letters, and one of them was being
+       deleted before the comparison even happened.
+    3. **Otherwise it is how alike the names are**, with the country counting (see
+       _by_country), and it is only better than a guess when the names are close, the
+       country agrees, and nothing at all contradicts.
+    """
+    from rapidfuzz import fuzz
+
+    theirs = f"{entry.get('name') or ''}"
+    mine_words, their_words = guide_words(name), guide_words(theirs)
+    if not mine_words or not their_words:
+        return 0, GUESS, "nothing to compare"
+
+    their_tvg = (entry.get("original_tvg_id") or entry.get("tvg_id") or "").strip().lower()
+    if tvg_id and their_tvg and tvg_id.strip().lower() == their_tvg:
+        return 100, CERTAIN, "its tvg-id"
+
+    mine, theirs_id = _identity_of(mine_words), _identity_of(their_words)
+    for what, said in (("number", "a different number"), ("side", "the other side of the country"),
+                       ("call", "another station's call sign")):
+        if mine[what] and theirs_id[what] and mine[what] != theirs_id[what]:
+            return 0, GUESS, said
+
+    alike = fuzz.ratio(" ".join(mine_words), " ".join(their_words))
+    score = max(0, min(100, int(round(alike + _by_country(country, entry)))))
+
+    agrees = _by_country(country, entry) >= 0
+    # One of them says a number, a side or a call sign and the other says nothing: it may
+    # well be the same channel written shorter, but it is not something to be sure about
+    half_said = any(bool(mine[w]) != bool(theirs_id[w]) for w in ("number", "side", "call"))
+
+    if mine_words == their_words and agrees:
+        return max(score, 100 if not half_said else score), CERTAIN, "its name exactly"
+    if score >= LIKELY_SCORE and agrees and not half_said:
+        return score, LIKELY, "its name, and the country agrees"
+    return score, GUESS, "how the names read"
 
 
 def _by_country(country, entry):
@@ -937,7 +1063,9 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
             .first()
         )
         if exact:
-            found.append(_guide_entry(*exact, "tvg-id", 100))
+            entry = _guide_entry(*exact, "tvg-id", 100)
+            entry["tier"], entry["why"] = CERTAIN, "its tvg-id"
+            found.append(entry)
             seen.add(exact[0])
 
     plain = _strip_country_box(name or "")
@@ -956,15 +1084,17 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
         # The matcher works in source ids; the page shows which source an entry is from
         sources = dict(EPGSource.objects.values_list("id", "name"))
         judged = []
-        for score, row in candidates:
+        for _, row in candidates:
             if row["id"] in seen:
+                continue
+            score, tier, why = judge_guide(name, country, row, tvg_id)
+            if score < MIN_GUIDE_SCORE:
                 continue
             entry = _guide_entry(
                 row["id"], row.get("original_tvg_id") or row.get("tvg_id"), row["name"],
-                sources.get(row["epg_source_id"], ""), "name", score + _by_country(country, row),
+                sources.get(row["epg_source_id"], ""), "name", score,
             )
-            if entry["score"] < MIN_GUIDE_SCORE:
-                continue
+            entry["tier"], entry["why"] = tier, why
             judged.append((entry["score"], row.get("epg_source_priority") or 0, entry))
         judged.sort(key=lambda one: (one[0], one[1]), reverse=True)
         for _, _, entry in judged:

@@ -215,7 +215,7 @@ def guides_in_use(epg_ids):
     )
 
 
-def _score_against(name, catalogue, sources, counts, used, playing, limit=6):
+def _score_against(name, catalogue, sources, counts, used, playing, limit=6, channel_tvg_id=""):
     """
     The guides this channel could be, best first, with the country counting.
 
@@ -234,13 +234,13 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6):
         normalized, catalogue, None, candidate_limit=max(limit * 3, 20)
     )
     judged = []
-    for score, row in candidates:
-        with_country = score + channel_manager._by_country(country, row)
-        judged.append((
-            max(0, min(100, int(round(with_country)))),
-            row.get("epg_source_priority") or 0,
-            row,
-        ))
+    for _, row in candidates:
+        # Judged by what kind of match it is, not only how alike the letters are: see
+        # channel_manager.judge_guide, and why "PBS 12" and "PBS 13" used to score 83
+        score, tier, why = channel_manager.judge_guide(name, country, row, channel_tvg_id)
+        if not score:
+            continue
+        judged.append((score, row.get("epg_source_priority") or 0, tier, why, row))
     judged.sort(key=lambda one: (one[0], one[1]), reverse=True)
     return [
         {
@@ -249,12 +249,16 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6):
             "tvg_id": row.get("original_tvg_id") or row.get("tvg_id") or "",
             "source": sources.get(row["epg_source_id"], ""),
             "score": score,
+            "tier": tier,
+            # Why it is that kind of match. Not "why", which on a row is the reason there
+            # is something to suggest at all -- two different questions, one word.
+            "match_why": why,
             "programmes": counts.get(row["id"], 0),
             "now": playing.get(row["id"], ""),
             # Nobody uses it, so holding nothing says nothing: it has never been read
             "in_use": row["id"] in used,
         }
-        for score, _, row in judged[:limit]
+        for score, _, tier, why, row in judged[:limit]
     ]
 
 
@@ -271,7 +275,14 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     churned for nothing.
     """
     least = int(settings.get("min_score") or 0)
-    worth = [one for one in found if one["score"] >= least]
+    # A guess is never suggested. It is still on the list for the picker, so it can be
+    # looked at and taken by hand, but nothing that rests on how two names happen to read
+    # is put forward as a change to make: that is how a completely different station came
+    # to be offered at ninety-six per cent.
+    worth = [
+        one for one in found
+        if one["score"] >= least and one.get("tier") in (channel_manager.CERTAIN, channel_manager.LIKELY)
+    ]
     if settings.get("only_if_it_holds_something", True):
         # A guide a channel is already on and that holds nothing is empty, and swapping
         # one empty guide for another helps nobody. A guide nobody uses holds nothing
@@ -333,7 +344,10 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         # batches looks like a page that has stopped
         if say and at % 10 == 0:
             say(at, channel.name)
-        candidates = _score_against(channel.name, catalogue, sources, counts, used, playing)
+        candidates = _score_against(
+            channel.name, catalogue, sources, counts, used, playing,
+            channel_tvg_id=channel.tvg_id or "",
+        )
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,
         # so a better source added later is still found
@@ -357,10 +371,14 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
                         + channel_manager._by_country(country, row)
                     ))))
         worth = _worth_suggesting(channel, candidates, settings, counts, mine)
-        if not worth:
-            continue
+        # A row for every channel looked at, whether or not there is anything to suggest.
+        # Nothing to suggest is not nothing to know: a channel no guide fits is exactly
+        # the one somebody wants to find and settle by hand, and it is invisible in a
+        # list that only holds suggestions.
+        best = worth or (candidates[0] if candidates else {})
         found[str(channel.id)] = {
-            **worth,
+            **best,
+            "why": (worth or {}).get("why", ""),
             "channel": channel.id,
             "channel_name": channel.name,
             # So the channel itself can be watched from the page: a guide can look right

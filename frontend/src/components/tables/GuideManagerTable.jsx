@@ -34,6 +34,17 @@ const WHY = {
   none: { label: 'On no guide', color: 'orange' },
   empty: { label: 'Holds nothing', color: 'red' },
   better: { label: 'Better match', color: 'blue' },
+  // A channel with nothing to suggest, which is still worth being able to find
+  '': { label: 'Nothing to suggest', color: 'gray' },
+};
+
+// What kind of match it is, not only how alike two names read. A name that happens to
+// read alike is not the same sort of thing as an id that agrees, and calling both of
+// them "96%" is what made a completely different station look like a certainty.
+const TIER = {
+  certain: { label: 'Certain', color: 'green' },
+  likely: { label: 'Likely', color: 'blue' },
+  guess: { label: 'A guess', color: 'gray' },
 };
 
 // Holding nothing means two things and the difference matters: Dispatcharr reads a guide's
@@ -166,7 +177,15 @@ const GuideManagerTable = () => {
       };
     });
     if (group) found = found.filter((one) => String(one.group_id ?? '') === group);
-    if (why) found = found.filter((one) => one.why === why);
+    // Nothing chosen means the suggestions; "all" is every channel that was looked at,
+    // including the ones no guide fits, which are the ones you go looking for
+    if (why === 'all') {
+      // everything
+    } else if (why) {
+      found = found.filter((one) => one.why === why);
+    } else {
+      found = found.filter((one) => one.why);
+    }
     const wanted = search.trim().toLowerCase();
     if (wanted) {
       found = found.filter((one) =>
@@ -357,15 +376,28 @@ const GuideManagerTable = () => {
           return (
             <Box style={{ minWidth: 0 }}>
               <Group gap={6} wrap="wrap">
-                <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
-                  {one.name}
+                <Text
+                  size="sm"
+                  fw={500}
+                  c={one.name ? undefined : 'dimmed'}
+                  style={{ wordBreak: 'break-word' }}
+                >
+                  {one.name || 'Nothing fits it'}
                 </Text>
                 <Badge size="xs" variant="light" color="gray">
                   {one.source || 'no source'}
                 </Badge>
-                <Text size="xs" c="dimmed">
-                  {one.by_hand ? 'chosen' : `${one.score}%`}
-                </Text>
+                {one.epg && (
+                  <Badge
+                    size="xs"
+                    variant="light"
+                    color={one.by_hand ? 'grape' : (TIER[one.tier] || TIER.guess).color}
+                  >
+                    {one.by_hand
+                      ? 'chosen'
+                      : `${(TIER[one.tier] || TIER.guess).label} · ${one.score}%`}
+                  </Badge>
+                )}
                 {/* A suggestion is a suggestion: the same window the Lineup uses, so
                     another guide can be searched for and looked at before it is taken */}
                 <Button
@@ -380,14 +412,20 @@ const GuideManagerTable = () => {
                   Change
                 </Button>
               </Group>
-              <Text
-                size="xs"
-                c={!one.programmes && one.in_use ? 'orange' : 'dimmed'}
-                lineClamp={1}
-              >
-                {one.tvg_id || 'no tvg-id'} · {holds(one.programmes, one.in_use)}
-                {one.now ? ` · Now: ${one.now}` : ''}
-              </Text>
+              {one.epg ? (
+                <Text
+                  size="xs"
+                  c={!one.programmes && one.in_use ? 'orange' : 'dimmed'}
+                  lineClamp={1}
+                >
+                  {one.tvg_id || 'no tvg-id'} · {holds(one.programmes, one.in_use)}
+                  {one.now ? ` · Now: ${one.now}` : ''}
+                </Text>
+              ) : (
+                <Text size="xs" c="dimmed" lineClamp={1}>
+                  No guide is enough like it · search for one
+                </Text>
+              )}
             </Box>
           );
         },
@@ -493,10 +531,11 @@ const GuideManagerTable = () => {
               <Select
                 size="xs"
                 aria-label="Why"
-                placeholder="Any reason"
+                placeholder="What to change"
                 value={why}
                 onChange={(value) => setWhy(value || '')}
                 data={[
+                  { value: 'all', label: 'Every channel' },
                   { value: 'none', label: 'On no guide' },
                   { value: 'empty', label: 'Guide holds nothing' },
                   { value: 'better', label: 'A better match' },

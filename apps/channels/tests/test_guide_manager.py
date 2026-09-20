@@ -79,6 +79,10 @@ class _Setup(TestCase):
             )
         return guide
 
+    def _suggested(self, levers=None, channels=None):
+        """Only the rows with something to suggest: a run keeps one for every channel."""
+        return {k: v for k, v in self._look(levers, channels).items() if v.get("why")}
+
     def _look(self, levers=None, channels=None):
         catalogue, _ = build_epg_matching_catalog()
         counts = guide_manager.programme_counts([row["id"] for row in catalogue])
@@ -162,17 +166,32 @@ class SuggestionTests(_Setup):
         on_it = self._guide("ORF1.at", "ORF 1", programmes=4)
         self._guide("ORF1b.at", "ORF 1 Austria", programmes=4)
         self._channel("┃AT┃ ORF 1", 1, epg=on_it)
-        self.assertEqual(self._look(), {})
+        self.assertEqual(self._suggested(), {})
 
     def test_nothing_is_suggested_that_is_not_good_enough(self):
         self._guide("x.at", "Something else entirely", programmes=4)
         self._channel("┃AT┃ ORF 1", 1)
-        self.assertEqual(self._look(), {})
+        self.assertEqual(self._suggested(), {})
 
     def test_each_kind_can_be_turned_off_on_its_own(self):
         self._guide("ORF1.at", "ORF 1", programmes=3)
         self._channel("┃AT┃ ORF 1", 1)
-        self.assertEqual(self._look(settings(suggest_none=False)), {})
+        self.assertEqual(self._suggested(settings(suggest_none=False)), {})
+
+    def test_a_guess_is_never_suggested_however_the_letters_read(self):
+        # The station nobody would pick: a different number, which on letters alone
+        # scores in the eighties
+        self._guide("pbs13.us", "PBS 13", programmes=9)
+        self._channel("┃USA┃ PBS 12", 12)
+        self.assertEqual(self._suggested(), {})
+
+    def test_but_the_channel_is_still_on_the_list_to_settle_by_hand(self):
+        # Nothing to suggest is not nothing to know: a channel no guide fits is exactly
+        # the one somebody goes looking for
+        self._guide("pbs13.us", "PBS 13", programmes=9)
+        channel = self._channel("┃USA┃ PBS 12", 12)
+        self.assertIn(str(channel.id), self._look())
+        self.assertEqual(self._look()[str(channel.id)]["why"], "")
 
     def test_only_the_groups_chosen_are_looked_at(self):
         self._guide("ORF1.at", "ORF 1", programmes=3)
@@ -186,7 +205,7 @@ class SuggestionTests(_Setup):
         guide = self._guide("ORF1.at", "ORF 1", programmes=3)
         channel = self._channel("┃AT┃ ORF 1", 1)
         guide_manager.ignore(channel.id, channel.name, guide.id)
-        self.assertEqual(self._look(), {})
+        self.assertEqual(self._suggested(), {})
 
     def test_but_a_different_guide_later_is_offered_all_the_same(self):
         guide = self._guide("ORF1.at", "ORF 1", programmes=3)

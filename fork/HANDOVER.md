@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v128** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v129** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -339,6 +339,33 @@ question per row. Both travel on apply as `names` and `epgs` ({row key: guide id
 to nothing, a name of only spaces is no name. Conflict rows have no channel, so they have
 neither.
 
+**A match is judged, not measured** (v129, `judge_guide`, and the worst bug this matching has
+had). Stock scores on `fuzz.ratio` over `normalize_name`, and `COMMON_EXTRANEOUS_WORDS`
+contains **"east" and "west"**: "PBS East" and "PBS West" both come out as "pbs" and match at
+**100 %**. The word that tells two channels apart was being deleted before the comparison. And
+`fuzz.ratio` is character similarity, so where a broadcaster's name carries most of the letters
+the one token that identifies the station barely counts: "PBS 12"/"PBS 13" scored 83, "Sky
+Sports 1"/"Sky Sports 2" 92. Most PBS stations were being offered at over 90 as each other.
+
+So: `guide_words` is the fork's own normalising, which keeps everything that says which
+channel it is (nothing dropped but the country box, accents and punctuation) and reads a number
+word as its number ("ORF Eins" is "orf 1"). `_identity_of` pulls out what picks one channel
+from its siblings -- a number, a side (`SIDE_WORDS`), an American call sign -- and
+**a contradiction ends it**: both saying a number and saying different ones is not the same
+channel whatever the letters say, score 0. Then a tier rather than one number, taken from how
+the epgmatcharr plugin reports its work: **CERTAIN** (the tvg-id agrees, or the same name with
+the country agreeing), **LIKELY** (>= `LIKELY_SCORE` 80, country agreeing, nothing half-said),
+**GUESS** (everything else). The Guides tab **suggests nothing from a guess** -- a guess is
+still on the picker's list to be taken by hand, which is a different thing from putting it
+forward as a change to make. `MIN_GUIDE_SCORE` went 40 → 55.
+
+**Every channel is on the list** (v129): a run keeps a row for each channel it looked at, with
+`why` empty where there is nothing to suggest, and the tab's "Every channel" view shows them.
+Nothing to suggest is not nothing to know -- a channel no guide fits is exactly the one
+somebody goes looking for, and it was invisible in a list that only held suggestions. (A row's
+`why` is the reason there is something to suggest; a candidate's `match_why` is why it is the
+kind of match it is. Two questions, one word, so they have two names.)
+
 **The country decides between guides of one name** (v122). `normalize_name` takes the country
 box off before scoring, so "┃NL┃ DREAMWORKS" and a British "DreamWorks" are both "dreamworks"
 and score a flat 100 -- the same channel from the wrong country, offered as a certainty. The
@@ -654,6 +681,10 @@ no longer play. Summary of how it works now:
   per-guide task without `force`, and that task returns at once for a guide no channel uses --
   which is every guide the button is for. It logged one INFO line and looked like a slow task.
   → when reusing a stock task, read what it refuses to do before trusting it.
+- **A wrong station offered as a certainty** (to v129): stock's normalising drops "east" and
+  "west" as extraneous, so "PBS East" and "PBS West" were one word and matched at 100 %, and
+  character similarity let "PBS 12" and "PBS 13" reach 83. → never compare on a name with its
+  distinguishing words removed, and let a contradiction end a match outright (§5.6b).
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

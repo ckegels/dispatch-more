@@ -119,16 +119,34 @@ const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
                 {guide.source}
               </Badge>
             )}
-            <Text size="xs" c="dimmed">
-              {guide.how === 'tvg-id'
-                ? 'by tvg-id'
-                : guide.score != null
-                  ? `${guide.score}%`
-                  : ''}
-            </Text>
+            {guide.tier ? (
+              <Badge
+                size="xs"
+                variant="light"
+                color={
+                  { certain: 'green', likely: 'blue' }[guide.tier] || 'gray'
+                }
+              >
+                {{ certain: 'Certain', likely: 'Likely' }[guide.tier] || 'A guess'}
+                {guide.score != null ? ` · ${guide.score}%` : ''}
+              </Badge>
+            ) : (
+              <Text size="xs" c="dimmed">
+                {guide.how === 'tvg-id'
+                  ? 'by tvg-id'
+                  : guide.score != null
+                    ? `${guide.score}%`
+                    : ''}
+              </Text>
+            )}
           </Group>
         </Group>
         <WhatItHolds guide={guide} onLoad={onLoad} loading={loading} />
+        {guide.why && (
+          <Text size="xs" c="dimmed">
+            Matched on {guide.why}
+          </Text>
+        )}
       </Stack>
     ) : (
       <Text size="sm">No guide</Text>
