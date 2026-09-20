@@ -2999,6 +2999,13 @@ export default class API {
     });
   }
 
+  static async chooseGuideManager(action, row = {}) {
+    return await request(`${host}/api/channels/guides/chosen/`, {
+      method: 'POST',
+      body: { action, ...row },
+    });
+  }
+
   static async saveGuideManagerSettings(settings) {
     return await request(`${host}/api/channels/guides/settings/`, {
       method: 'PUT',

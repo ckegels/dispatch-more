@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CirclePlay, EyeOff, Play, RotateCcw, Square } from 'lucide-react';
+import { CirclePlay, EyeOff, Lock, Play, RotateCcw, Square } from 'lucide-react';
 import {
   ActionIcon,
   Alert,
@@ -128,7 +128,9 @@ const GuideManagerTable = () => {
   // for channels nothing was found for, which are not kept with the suggestions.
   const loadedOnce = useRef(false);
   useEffect(() => {
-    look(loadedOnce.current, why === 'all');
+    // "Chosen" needs every channel too: a settled channel has nothing to suggest, so it
+    // is not among what a run wrote down
+    look(loadedOnce.current, why === 'all' || why === 'chosen');
     loadedOnce.current = true;
   }, [look, why]);
 
@@ -186,6 +188,8 @@ const GuideManagerTable = () => {
     // including the ones no guide fits, which are the ones you go looking for
     if (why === 'all') {
       // everything
+    } else if (why === 'chosen') {
+      found = found.filter((one) => one.chosen);
     } else if (why) {
       found = found.filter((one) => one.why === why);
     } else {
@@ -302,6 +306,25 @@ const GuideManagerTable = () => {
     [look]
   );
 
+  // Settled: this channel's guide has been decided, so nothing is put forward for it
+  // again. Not the same as waving a suggestion away, which says that guide is wrong and
+  // leaves the channel open to a better one later.
+  const keep = useCallback(
+    async (row, settled) => {
+      try {
+        await API.chooseGuideManager(settled ? 'choose' : 'unchoose', {
+          channel: row.channel,
+          name: row.instead_of,
+          epg: row.instead_of_epg ?? null,
+        });
+        await look(true, true);
+      } catch {
+        setError(settled ? 'Could not keep that one.' : 'Could not unkeep that one.');
+      }
+    },
+    [look]
+  );
+
   const saveLevers = async (changed) => {
     setLevers(changed);
     try {
@@ -313,6 +336,8 @@ const GuideManagerTable = () => {
 
   const waveAwayRef = useRef(waveAway);
   waveAwayRef.current = waveAway;
+  const keepRef = useRef(keep);
+  keepRef.current = keep;
   const chooseRef = useRef(setChoosing);
   chooseRef.current = setChoosing;
 
@@ -444,23 +469,60 @@ const GuideManagerTable = () => {
           const kind = WHY[one.why] || { label: one.why, color: 'gray' };
           return (
             <Group gap={6} wrap="nowrap">
-              <Badge size="sm" variant="light" color={kind.color}>
-                {kind.label}
+              <Badge
+                size="sm"
+                variant="light"
+                color={one.chosen ? 'teal' : kind.color}
+              >
+                {one.chosen ? 'Chosen' : kind.label}
               </Badge>
-              <Tooltip label="Don't suggest this again">
-                <ActionIcon
-                  size="xs"
-                  variant="subtle"
-                  color="gray"
-                  aria-label={`Ignore ${one.channel_name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    waveAwayRef.current(one);
-                  }}
-                >
-                  <EyeOff size={12} />
-                </ActionIcon>
-              </Tooltip>
+              {one.chosen ? (
+                <Tooltip label="Suggest for this channel again">
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color="gray"
+                    aria-label={`Suggest for ${one.channel_name} again`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      keepRef.current(one, false);
+                    }}
+                  >
+                    <RotateCcw size={12} />
+                  </ActionIcon>
+                </Tooltip>
+              ) : (
+                <>
+                  <Tooltip label="Keep the guide it is on and stop suggesting for it">
+                    <ActionIcon
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      aria-label={`Keep the guide on ${one.channel_name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        keepRef.current(one, true);
+                      }}
+                    >
+                      <Lock size={12} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <Tooltip label="Don't suggest this again">
+                    <ActionIcon
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      aria-label={`Ignore ${one.channel_name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        waveAwayRef.current(one);
+                      }}
+                    >
+                      <EyeOff size={12} />
+                    </ActionIcon>
+                  </Tooltip>
+                </>
+              )}
             </Group>
           );
         },
@@ -541,6 +603,7 @@ const GuideManagerTable = () => {
                 onChange={(value) => setWhy(value || '')}
                 data={[
                   { value: 'all', label: 'Every channel' },
+                  { value: 'chosen', label: 'Chosen already' },
                   { value: 'none', label: 'On no guide' },
                   { value: 'empty', label: 'Guide holds nothing' },
                   { value: 'better', label: 'A better match' },
@@ -753,6 +816,26 @@ const GuideManagerTable = () => {
                     style={{ width: 240 }}
                   />
                 </Group>
+                {(page?.chosen || []).length > 0 && (
+                  <Group gap="sm">
+                    <Text size="xs" c="dimmed">
+                      {page.chosen.length} channel
+                      {page.chosen.length === 1 ? ' is' : 's are'} chosen already, and
+                      nothing is suggested for {page.chosen.length === 1 ? 'it' : 'them'}.
+                    </Text>
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      leftSection={<RotateCcw size={12} />}
+                      onClick={async () => {
+                        await API.chooseGuideManager('clear');
+                        look(true, why === 'all' || why === 'chosen');
+                      }}
+                    >
+                      Suggest for them again
+                    </Button>
+                  </Group>
+                )}
                 {(page?.ignored || []).length > 0 && (
                   <Group gap="sm">
                     <Text size="xs" c="dimmed">
@@ -779,7 +862,9 @@ const GuideManagerTable = () => {
           {rows.length === 0 && !loading ? (
             <Center p="xl">
               <Text size="sm" c="dimmed" ta="center">
-                {page?.suggestions?.length
+                {why === 'chosen'
+                  ? 'Nothing is chosen yet. Putting a guide on a channel from here chooses it, and nothing is suggested for it afterwards; the padlock on a row chooses the guide it is already on.'
+                  : page?.suggestions?.length
                   ? 'Nothing matches what is being looked at.'
                   : 'Nothing to change. Press "Look for guides" to go through every channel: the ones on no guide, the ones whose guide holds no programmes, and the ones something matches better.'}
               </Text>

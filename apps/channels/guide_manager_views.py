@@ -30,6 +30,7 @@ def guide_manager_page(request):
         .order_by("channel_group__name")
     )
     ignored = guide_manager.load_ignored()
+    chosen = guide_manager.load_chosen()
     stored = guide_manager.load_suggestions()
     # "Every channel" means every channel, not every channel the last run reached
     if request.GET.get("all"):
@@ -39,6 +40,9 @@ def guide_manager_page(request):
     # As the guides are now, not as the run left them: reading a guide's programmes
     # afterwards does not go back and change what it wrote down
     guide_manager.freshen(found)
+    # Whether a channel is settled is asked now rather than taken from what a run wrote:
+    # settling one and a run looking at it happen in either order
+    guide_manager.mark_chosen(found, chosen)
     return JsonResponse({
         "settings": guide_manager.load_settings(),
         "defaults": guide_manager.DEFAULTS,
@@ -50,6 +54,7 @@ def guide_manager_page(request):
         ],
         "all_groups": [{"id": g.id, "name": g.name} for g in ChannelGroup.objects.order_by("name")],
         "ignored": [{"channel": k, **v} for k, v in ignored.items()],
+        "chosen": [{"channel": k, **v} for k, v in chosen.items()],
     })
 
 
@@ -99,6 +104,32 @@ def guide_manager_ignore(request):
     kept.pop(str(channel), None)
     guide_manager.save_suggestions(kept)
     return JsonResponse({"ignored": entry})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def guide_manager_chosen(request):
+    """Settle a channel's guide ("choose"), unsettle one ("unchoose"), or all ("clear")."""
+    action = request.data.get("action")
+    if action == "clear":
+        guide_manager.unchoose()
+        return JsonResponse({"chosen": 0})
+    channel = request.data.get("channel")
+    if channel in (None, ""):
+        return JsonResponse({"error": "Which channel?"}, status=400)
+    if action == "unchoose":
+        return JsonResponse({"chosen": guide_manager.unchoose(channel)})
+    if action != "choose":
+        return JsonResponse({"error": f"Unknown action: {action}"}, status=400)
+    entry = guide_manager.choose(
+        channel, str(request.data.get("name") or ""), request.data.get("epg")
+    )
+    # Off the list it is on now as well, so settling one takes it out of what is being
+    # put forward rather than only out of what the next run puts forward
+    kept = guide_manager.load_suggestions()
+    kept.pop(str(channel), None)
+    guide_manager.save_suggestions(kept)
+    return JsonResponse({"chosen": entry})
 
 
 @api_view(["PUT"])

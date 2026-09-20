@@ -218,6 +218,86 @@ class SuggestionTests(_Setup):
         self.assertIn(found[str(channel.id)]["epg"], [better.id])
 
 
+class ChosenTests(_Setup):
+    """A channel whose guide is settled is not asked about again."""
+
+    def test_a_settled_channel_has_nothing_suggested_for_it(self):
+        self._guide("ORF1.at", "ORF 1", programmes=99)
+        # Settled on no guide at all, which is a decision like any other
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        self.assertTrue(self._suggested())
+        guide_manager.choose(channel.id, "", None)
+        self.assertEqual(self._suggested(), {})
+
+    def test_but_it_still_gets_a_row_of_its_own(self):
+        # Settled means nothing is put forward, not that the channel disappears: what
+        # would have been suggested is exactly what somebody wants to look at
+        better = self._guide("ORF1.at", "ORF 1", programmes=99)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.choose(channel.id, "", None)
+        row = self._look()[str(channel.id)]
+        self.assertTrue(row["chosen"])
+        self.assertEqual(row["why"], "")
+        self.assertEqual(row["epg"], better.id)
+
+    def test_a_guide_changed_underneath_unsettles_it(self):
+        # What was settled was that guide. On a different one, the decision is no longer
+        # about what is there, so the channel is looked at like any other.
+        on_it = self._guide("orfeins.old", "ORF Eins", programmes=1)
+        self._guide("ORF1.at", "ORF 1", programmes=99)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=on_it)
+        guide_manager.choose(channel.id, on_it.name, on_it.id)
+        self.assertEqual(self._suggested(), {})
+        channel.epg_data = None
+        channel.save(update_fields=["epg_data"])
+        self.assertTrue(self._suggested())
+
+    def test_applying_a_guide_settles_the_channel(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            guide_manager.apply({channel.id: guide.id})
+        self.assertEqual(guide_manager.load_chosen()[str(channel.id)]["epg"], guide.id)
+        self.assertEqual(self._suggested(), {})
+
+    def test_unsettling_one_asks_about_it_again(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            guide_manager.apply({channel.id: guide.id})
+        guide_manager.unchoose(channel.id)
+        self.assertEqual(guide_manager.load_chosen(), {})
+
+    def test_unsettling_them_all_asks_about_them_all_again(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        one = self._channel("┃AT┃ ORF 1", 1)
+        two = self._channel("┃AT┃ ORF 2", 2)
+        guide_manager.choose(one.id, guide.name, guide.id)
+        guide_manager.choose(two.id, guide.name, guide.id)
+        self.assertEqual(guide_manager.unchoose(), 0)
+        self.assertEqual(guide_manager.load_chosen(), {})
+
+    def test_the_page_says_which_rows_are_settled(self):
+        on_it = self._guide("orfeins.old", "ORF Eins", programmes=1)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=on_it)
+        rows = [{"channel": channel.id, "instead_of_epg": on_it.id, "why": "better"}]
+        guide_manager.choose(channel.id, on_it.name, on_it.id)
+        guide_manager.mark_chosen(rows)
+        self.assertTrue(rows[0]["chosen"])
+        # Settled, so nothing is put forward for it whatever the run wrote down
+        self.assertEqual(rows[0]["why"], "")
+
+    def test_a_row_settled_on_another_guide_is_not_marked(self):
+        on_it = self._guide("orfeins.old", "ORF Eins", programmes=1)
+        other = self._guide("ORF1.at", "ORF 1", programmes=9)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=on_it)
+        guide_manager.choose(channel.id, other.name, other.id)
+        rows = [{"channel": channel.id, "instead_of_epg": on_it.id, "why": "better"}]
+        guide_manager.mark_chosen(rows)
+        self.assertFalse(rows[0]["chosen"])
+        self.assertEqual(rows[0]["why"], "better")
+
+
 class BatchTests(_Setup):
     """The looking runs in batches that queue the next, so one Celery worker is not held."""
 
@@ -464,6 +544,34 @@ class ViewTests(_Setup):
         self.assertEqual(guide_manager.load_suggestions(), {})
         self.client_api.post(url, {"action": "unignore", "channel": channel.id}, format="json")
         self.assertEqual(guide_manager.load_ignored(), {})
+
+    def test_a_channel_can_be_settled_and_unsettled_from_the_page(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=guide)
+        url = "/api/channels/guides/chosen/"
+        answer = self.client_api.post(
+            url, {"action": "choose", "channel": channel.id, "name": guide.name, "epg": guide.id},
+            format="json",
+        )
+        self.assertEqual(answer.status_code, 200)
+        self.assertIn(str(channel.id), guide_manager.load_chosen())
+        data = self.client_api.get("/api/channels/guides/?all=1").json()
+        self.assertTrue(data["suggestions"][0]["chosen"])
+        self.assertEqual([one["channel"] for one in data["chosen"]], [str(channel.id)])
+
+        self.client_api.post(url, {"action": "unchoose", "channel": channel.id}, format="json")
+        self.assertEqual(guide_manager.load_chosen(), {})
+
+    def test_settling_takes_it_off_the_list_being_put_forward(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.save_suggestions(self._look())
+        self.client_api.post(
+            "/api/channels/guides/chosen/",
+            {"action": "choose", "channel": channel.id, "name": "", "epg": None},
+            format="json",
+        )
+        self.assertEqual(guide_manager.load_suggestions(), {})
 
     def test_the_settings_are_kept_and_checked(self):
         self.client_api.put(

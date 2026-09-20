@@ -646,10 +646,28 @@ MIN_GUIDE_SCORE = 55
 # country it says it is not from falls below every candidate that could still be right.
 SAME_COUNTRY = 10
 OTHER_COUNTRY = 30
-# The two letters a guide may be written with for one country. Playlists say "UK" and
-# XMLTV tvg-ids say ".uk", while the country's code is "gb", and without this a British
-# channel is penalised against a British guide.
-COUNTRY_ALSO = {"gb": ("gb", "uk"), "uk": ("gb", "uk")}
+# The other ways one country gets written. A playlist's box says "UK", "USA", "GER";
+# an XMLTV tvg-id says ".uk", ".us", ".de". Without this a British channel is penalised
+# against a British guide and an American one against an American guide -- and since the
+# country now counts against every match and not only against the tier, that penalty is
+# no longer invisible.
+ALSO_CALLED = {
+    "uk": "gb", "eng": "gb", "gbr": "gb",
+    "usa": "us", "can": "ca", "mex": "mx",
+    "ger": "de", "deu": "de", "ned": "nl", "nld": "nl", "hol": "nl",
+    "fra": "fr", "esp": "es", "ita": "it", "por": "pt", "bel": "be",
+    "aut": "at", "sui": "ch", "che": "ch", "swe": "se", "nor": "no",
+    "den": "dk", "dnk": "dk", "fin": "fi", "pol": "pl", "svk": "sk",
+    "cze": "cz", "hun": "hu", "rom": "ro", "rou": "ro", "gre": "gr", "grc": "gr",
+    "tur": "tr", "rus": "ru", "ukr": "ua", "aus": "au", "nzl": "nz",
+    "bra": "br", "arg": "ar", "ire": "ie", "irl": "ie", "ind": "in",
+}
+
+
+def _one_country(code):
+    """One country written one way, so "USA" and "us" are not two places."""
+    code = (code or "").strip().lower()
+    return ALSO_CALLED.get(code, code)
 
 
 # A number written as a word, so "ORF Eins" and "ORF 1" are the one channel while
@@ -775,21 +793,42 @@ def _alike(mine, theirs):
     return round(200 * shared / (len(mine) + len(theirs)))
 
 
-def _identity_of(words):
+# Four letters beginning with K or W that are a word and not a station. A call sign is
+# taken as proof of which station a name is, so anything read as one that is not is a
+# channel matched to somebody else's guide -- "┃BE┃ NGC WILD" was matched at a hundred
+# per cent to a Slovak Nat Geo Wild because both names say "wild".
+NOT_A_CALL_SIGN = {
+    "kids", "kids", "kino", "kult", "kunst", "kanal", "kanaal", "kino",
+    "west", "wild", "wind", "wine", "work", "wall", "west", "welt", "weer", "week",
+    "wonen", "waar", "wire", "wave", "wish", "king", "kick",
+}
+# Where call signs are allocated. They are a North American way of naming a station, so
+# four letters on a Belgian or German channel are four letters and nothing more. Written
+# whichever way the box writes them, since a box saying "USA" is the commonest of all
+# and "us" alone would have left every American channel without its call sign.
+CALL_SIGN_COUNTRIES = {"", "us", "ca", "mx", "pr"}
+
+
+def _identity_of(words, country=""):
     """
     What in these words picks one channel out from the others of its name: the number it
     carries, which side of the country it is for, and its call sign.
 
     A call sign is the American way of naming a station -- WNET, KQED -- and two of them
-    are never the same station. Only taken as one where it looks like one: four letters
-    beginning with K or W, which is how they are allocated, and not a word.
+    are never the same station. Only taken as one where it can be one: in a country that
+    allocates them, four letters beginning with K or W, and not a word.
     """
     number = next((w for w in words if w.isdigit()), "")
     side = next((w for w in words if w in SIDE_WORDS), "")
-    call = next(
-        (w for w in words if len(w) == 4 and w[0] in "kw" and w.isalpha() and w not in ("kids", "west", "kino")),
-        "",
-    )
+    call = ""
+    if _one_country(country) in CALL_SIGN_COUNTRIES:
+        call = next(
+            (
+                w for w in words
+                if len(w) == 4 and w[0] in "kw" and w.isalpha() and w not in NOT_A_CALL_SIGN
+            ),
+            "",
+        )
     return {"number": number, "side": side, "call": call}
 
 
@@ -863,7 +902,11 @@ def judge_guide(name, country, entry, tvg_id=""):
         said = f"{sorted(my_names)[0].upper()} is not {sorted(their_names)[0].upper()}"
         return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
 
-    mine, theirs_id = _identity_of(mine_words), _identity_of(their_words)
+    # Each side's identity read in its own country, since a call sign is only a call
+    # sign where call signs are allocated
+    their_country = _country_of_guide(entry)
+    mine = _identity_of(mine_words, country)
+    theirs_id = _identity_of(their_words, their_country)
     for what, said in (("number", "a different number"), ("side", "the other side of the country"),
                        ("call", "another station's call sign")):
         if mine[what] and theirs_id[what] and mine[what] != theirs_id[what]:
@@ -877,24 +920,42 @@ def judge_guide(name, country, entry, tvg_id=""):
     # "PBS WHYY" and "WHYY-DT" have one word in common out of three. Taken from the EPG
     # Janitor plugin, which anchors a match on the call sign and rejects a disagreement --
     # the rejecting half of that was already here.
+    # What the country says, counted the same way whatever else anchors the match. It
+    # used to be asked only about the tier, so a match anchored on a call sign or a
+    # tvg-id came out at a hundred per cent with the country flatly disagreeing -- which
+    # is how a Belgian channel was offered a Slovak guide as the better of the two.
+    by_country = _by_country(country, entry)
+    elsewhere = by_country < 0
     if mine["call"] and mine["call"] == theirs_id["call"]:
-        agrees_on_country = _by_country(country, entry) >= 0
-        return (
-            max(alike, 90),
-            CERTAIN if agrees_on_country else LIKELY,
-            f"its call sign, {mine['call'].upper()}",
-        )
+        anchored = max(0, min(100, int(round(max(alike, 90) + by_country))))
+        if elsewhere:
+            # Two stations of one call sign in two countries are two stations. Still on
+            # the list to be taken by hand, since a tvg-id's country is the provider's
+            # word and not gospel; never put forward as a change to make.
+            return anchored, GUESS, (
+                f"its call sign, {mine['call'].upper()}, but that guide is "
+                f"{their_country.upper()}'s"
+            )
+        return anchored, CERTAIN, f"its call sign, {mine['call'].upper()}"
     if same_id:
         if alike >= TVG_NEEDS_NAME:
+            if elsewhere:
+                return max(0, min(100, 100 + by_country)), LIKELY, (
+                    f"its tvg-id and its name, though that guide is {their_country.upper()}'s"
+                )
             return 100, CERTAIN, "its tvg-id and its name"
         # The id says yes and the name says nothing of the kind. That is a channel that
         # was renamed as often as it is a provider with the wrong id, and only what is on
         # the guide now tells you which
-        return max(alike, 80), LIKELY, "its tvg-id, though the names do not read alike"
+        return (
+            max(0, min(100, int(round(max(alike, 80) + by_country)))),
+            GUESS if elsewhere else LIKELY,
+            "its tvg-id, though the names do not read alike",
+        )
 
-    score = max(0, min(100, int(round(alike + _by_country(country, entry)))))
+    score = max(0, min(100, int(round(alike + by_country))))
 
-    agrees = _by_country(country, entry) >= 0
+    agrees = not elsewhere
     # One of them says a number, a side or a call sign and the other says nothing: it may
     # well be the same channel written shorter, but it is not something to be sure about
     half_said = any(bool(mine[w]) != bool(theirs_id[w]) for w in ("number", "side", "call"))
@@ -918,8 +979,7 @@ def _by_country(country, entry):
     theirs = _country_of_guide(entry)
     if not theirs:
         return 0
-    ours = COUNTRY_ALSO.get(country, (country,))
-    if theirs in ours or country in COUNTRY_ALSO.get(theirs, (theirs,)):
+    if _one_country(country) == _one_country(theirs):
         return SAME_COUNTRY
     return -OTHER_COUNTRY
 

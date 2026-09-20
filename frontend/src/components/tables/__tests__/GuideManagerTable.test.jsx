@@ -22,6 +22,7 @@ vi.mock('../../../api', () => ({
     runGuideManager: vi.fn(),
     applyGuideManager: vi.fn(),
     ignoreGuideManager: vi.fn(),
+    chooseGuideManager: vi.fn(),
     saveGuideManagerSettings: vi.fn(),
     loadChannelManagerGuide: vi.fn(),
     getChannelManagerGuides: vi.fn(),
@@ -72,6 +73,7 @@ describe('GuideManagerTable', () => {
     API.runGuideManager.mockResolvedValue({ started: true, total: 2 });
     API.applyGuideManager.mockResolvedValue({ changed: 1 });
     API.ignoreGuideManager.mockResolvedValue({});
+    API.chooseGuideManager.mockResolvedValue({});
     API.saveGuideManagerSettings.mockResolvedValue({});
     API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
@@ -307,5 +309,67 @@ describe('GuideManagerTable', () => {
     expect(
       screen.getByRole('button', { name: 'Change the guide for ┃USA┃ PBS 12' })
     ).toBeInTheDocument();
+  });
+
+  // A channel whose guide has been decided is not asked about again. Not the same as
+  // waving a suggestion away, which says that one guide is wrong.
+  it('keeps the channels chosen already on a view of their own', async () => {
+    const settled = {
+      channel: 4, channel_name: '┃AT┃ ORF 2', number: 2, uuid: 'uuid-four',
+      group: '┃AT┃ AUSTRIA', group_id: 1, why: '', chosen: true,
+      epg: 11, name: 'ORF 2', tvg_id: 'ORF2.at', source: 'xmltv.at', score: 91,
+      tier: 'certain', programmes: 40, now: 'Bundesland heute', in_use: true,
+      instead_of: 'ORF 2', instead_of_epg: 11, instead_of_holds: 40,
+      instead_of_now: 'Bundesland heute', instead_of_source: 'xmltv.at',
+    };
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      suggestions: [onNothing, settled],
+      chosen: [{ channel: '4', name: 'ORF 2', epg: 11, at: '2026-09-20T20:00:00' }],
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    // Settled, so it is not among what is being put forward
+    await screen.findByText('┃AT┃ ORF 1');
+    expect(screen.queryByText('┃AT┃ ORF 2')).toBeNull();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText('Chosen already'));
+
+    // ...and a settled channel has nothing to suggest, so the rows come from every channel
+    await waitFor(() => expect(API.getGuideManager).toHaveBeenCalledWith(true));
+    expect(await screen.findByText('┃AT┃ ORF 2')).toBeInTheDocument();
+    expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull();
+    expect(screen.getByText('Chosen')).toBeInTheDocument();
+  });
+
+  it('settles the guide a channel is already on, and unsettles it again', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Keep the guide on ┃NL┃ DREAMWORKS' })
+    );
+    await waitFor(() =>
+      expect(API.chooseGuideManager).toHaveBeenCalledWith('choose', {
+        channel: 2, name: 'DreamWorks', epg: 8,
+      })
+    );
+  });
+
+  it('asks again about a channel settled by mistake', async () => {
+    const settled = { ...onEmpty, why: '', chosen: true };
+    API.getGuideManager.mockResolvedValue({ ...page, suggestions: [settled] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText('Chosen already'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Suggest for ┃NL┃ DREAMWORKS again' })
+    );
+    await waitFor(() =>
+      expect(API.chooseGuideManager).toHaveBeenCalledWith('unchoose', {
+        channel: 2, name: 'DreamWorks', epg: 8,
+      })
+    );
   });
 });

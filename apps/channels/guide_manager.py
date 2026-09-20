@@ -40,6 +40,12 @@ SUGGESTIONS_KEY = "guide-manager-suggestions"
 # suggested is kept, so a different suggestion later is offered again.
 IGNORED_KEY = "guide-manager-ignored"
 
+# Channels whose guide is settled: {channel id: {"name", "epg", "at"}}. Nothing is
+# suggested for them at all while they are still on the guide that was chosen -- not
+# "this guide is wrong", which is what waving one away means, but "I have decided this
+# one, stop asking". Applying a guide from the page is deciding, so it is recorded here.
+CHOSEN_KEY = "guide-manager-chosen"
+
 RUN_KEY = "guide-manager:run"
 STOP_KEY = "guide-manager:stop"
 
@@ -145,6 +151,70 @@ def unignore(channel_id=None):
     ignored.pop(str(channel_id), None)
     _store(IGNORED_KEY, "Guides ignored", ignored)
     return len(ignored)
+
+
+def load_chosen():
+    return dict(_load(CHOSEN_KEY, {}))
+
+
+def choose(channel_id, name="", epg_id=None):
+    """
+    This channel's guide is settled: suggest nothing for it.
+
+    The guide is written down with it, because the decision was about that guide. If the
+    channel later ends up on a different one -- changed in the Lineup, or by Dispatcharr's
+    own matching -- then what was decided is no longer what is there, and the channel is
+    looked at again like any other.
+    """
+    from django.utils import timezone
+
+    chosen = load_chosen()
+    chosen[str(channel_id)] = {
+        "name": name, "epg": epg_id, "at": timezone.now().isoformat(timespec="seconds")
+    }
+    _store(CHOSEN_KEY, "Guides chosen", chosen)
+    return chosen[str(channel_id)]
+
+
+def unchoose(channel_id=None):
+    """Unsettle one channel, or every one of them, so they are suggested for again."""
+    if channel_id is None:
+        _store(CHOSEN_KEY, "Guides chosen", {})
+        return 0
+    chosen = load_chosen()
+    chosen.pop(str(channel_id), None)
+    _store(CHOSEN_KEY, "Guides chosen", chosen)
+    return len(chosen)
+
+
+def settled(channel_id, epg_id, chosen=None):
+    """Whether this channel is settled on the guide it is on now."""
+    entry = (load_chosen() if chosen is None else chosen).get(str(channel_id))
+    if not entry:
+        return False
+    return (entry.get("epg") or None) == (epg_id or None)
+
+
+def mark_chosen(rows, chosen=None):
+    """
+    Say on each row whether that channel is settled, so the page can keep them apart.
+
+    Done over the rows rather than written into them when a run looks, because settling a
+    channel and a run looking at it happen in either order: a channel settled after the
+    last run would otherwise carry a run's word for it and be offered around again.
+    """
+    chosen = load_chosen() if chosen is None else chosen
+    for row in rows:
+        entry = chosen.get(str(row.get("channel")))
+        on_now = row.get("instead_of_epg") or None
+        row["chosen"] = bool(entry) and (entry.get("epg") or None) == on_now
+        row["chosen_at"] = entry.get("at", "") if row["chosen"] else ""
+        # Settled means nothing is put forward for it. The suggestion itself stays on the
+        # row: "every channel" is for looking, and being able to see what would have been
+        # suggested is the point of looking.
+        if row["chosen"]:
+            row["why"] = ""
+    return rows
 
 
 # ── Looking ──────────────────────────────────────────────────────────────────
@@ -337,6 +407,7 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
     if playing is None:
         playing = what_is_on([row["id"] for row in catalogue])
     ignored = load_ignored()
+    chosen = load_chosen()
     found = {}
     for at, channel in enumerate(channels):
         # Said as it goes rather than once the batch is over: a batch is a hundred and
@@ -370,7 +441,14 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
                         epg_matching._compute_fuzzy_score(normalized, row, None)
                         + channel_manager._by_country(country, row)
                     ))))
-        worth = _worth_suggesting(channel, candidates, settings, counts, mine)
+        # A channel whose guide is settled is not asked about again while it is still on
+        # the guide that was settled on. It is still scored and still gets a row, because
+        # "every channel" means every channel -- what is not done is putting something
+        # forward as a change to make.
+        if settled(channel.id, channel.epg_data_id, chosen):
+            worth = None
+        else:
+            worth = _worth_suggesting(channel, candidates, settings, counts, mine)
         # A row for every channel looked at, whether or not there is anything to suggest.
         # Nothing to suggest is not nothing to know: a channel no guide fits is exactly
         # the one somebody wants to find and settle by hand, and it is invisible in a
@@ -397,6 +475,7 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
                 if channel.epg_data_id and channel.epg_data.epg_source_id
                 else ""
             ),
+            "chosen": settled(channel.id, channel.epg_data_id, chosen),
         }
     return found
 
@@ -596,14 +675,24 @@ def apply(choices):
         entry["id"]: entry
         for entry in EPGData.objects.filter(
             id__in=[e for e in wanted.values() if e]
-        ).values("id", "tvg_id")
+        ).values("id", "tvg_id", "name")
     }
+    from django.utils import timezone
+
     changed = 0
     suggestions = load_suggestions()
+    # Putting a guide on a channel from this page is deciding what that channel is on,
+    # whether the guide came from a suggestion or was searched for by hand. So it is
+    # written down as settled, and nothing is put forward for that channel again until
+    # somebody asks for it to be or its guide changes underneath.
+    chosen = load_chosen()
+    settled_now = timezone.now().isoformat(timespec="seconds")
     for channel in Channel.objects.filter(id__in=wanted):
         epg_id = wanted[channel.id]
         if epg_id is not None and epg_id not in guides:
             continue
+        name = (guides.get(epg_id) or {}).get("name") or ""
+        chosen[str(channel.id)] = {"name": name, "epg": epg_id, "at": settled_now}
         if channel.epg_data_id == epg_id:
             suggestions.pop(str(channel.id), None)
             continue
@@ -616,6 +705,7 @@ def apply(choices):
         channel.save(update_fields=fields)
         suggestions.pop(str(channel.id), None)
         changed += 1
+    _store(CHOSEN_KEY, "Guides chosen", chosen)
     save_suggestions(suggestions)
     logger.info(f"Guides: {changed} channel(s) put on another guide")
     return {"changed": changed}

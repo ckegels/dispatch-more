@@ -696,6 +696,46 @@ class JudgingGuidesTests(TestCase):
         self.assertEqual(score, 100)
         self.assertEqual(tier, channel_manager.CERTAIN)
 
+    def test_a_word_is_not_a_call_sign_because_it_starts_with_a_w(self):
+        """
+        "┃BE┃ NGC WILD" was matched at a hundred per cent to a Slovak Nat Geo Wild,
+        because "wild" was read as an American call sign and a call sign is taken as
+        proof of which station a name is.
+        """
+        score, tier, _ = self.judge(
+            "┃BE┃ NGC WILD", "NGC Wild HD", "NGC.Wild.HD.sk", country="be"
+        )
+        self.assertEqual(tier, channel_manager.GUESS)
+        self.assertLess(score, 80)
+
+    def test_and_a_call_sign_is_only_one_where_they_are_allocated(self):
+        # Four letters beginning with W on a German channel are four letters
+        self.assertEqual(
+            channel_manager._identity_of(["wdr", "wett"], "de")["call"], ""
+        )
+        self.assertEqual(
+            channel_manager._identity_of(["wnet"], "us")["call"], "wnet"
+        )
+
+    def test_the_country_counts_even_when_a_call_sign_anchors_the_match(self):
+        """
+        It used to be asked only about the tier, so a match anchored on a call sign came
+        out at a hundred per cent with the country flatly disagreeing.
+        """
+        score, tier, why = self.judge("┃USA┃ PBS WNET", "WNET", "WNET.ca")
+        self.assertEqual(tier, channel_manager.GUESS)
+        self.assertLessEqual(score, 70)
+        self.assertIn("CA", why)
+
+    def test_a_country_written_long_is_the_same_country(self):
+        # A playlist's box says "USA" or "GER" and a tvg-id says ".us" or ".de"
+        for box, tvg in (("usa", "us"), ("ger", "de"), ("uk", "gb"), ("ned", "nl")):
+            self.assertEqual(
+                channel_manager._by_country(box, {"tvg_id": f"channel.{tvg}"}),
+                channel_manager.SAME_COUNTRY,
+                box,
+            )
+
     def test_two_call_signs_are_never_the_same_station(self):
         score, _, why = self.judge("┃USA┃ PBS WNET", "PBS KQED", "kqed.us")
         self.assertEqual(score, 0)

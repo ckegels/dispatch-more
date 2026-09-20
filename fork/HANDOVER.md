@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v145** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v146** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -466,6 +466,29 @@ rejects numbered and time-shifted siblings):
   rejecting half of it was here. "PBS WHYY" against "WHYY-DT" went 60 → 90, and "ABC (WABC)"
   against "WABC" 77 → 90.
 
+**What v146 fixed, from one real row.** A Belgian channel, `┃BE┃ NGC WILD`, already on the
+right Belgian guide, was offered a **Slovak** one -- `NGC.Wild.HD.sk` -- as *Likely, 100 %*.
+Two separate faults, and each on its own was enough:
+
+- **"WILD" was being read as an American call sign.** Four letters beginning with K or W and
+  not on a short list of exceptions was the whole test, and a call sign is taken as *proof* of
+  which station a name is. So a call sign is now only read where call signs are allocated
+  (`CALL_SIGN_COUNTRIES`: North America, or a channel whose country is not said at all), and
+  the list of four-letter words that are not stations (`NOT_A_CALL_SIGN`: wild, kids, west,
+  kino, kult, welt, king…) is longer. A German channel's "WELT" is a word.
+- **The country was asked about the tier and not about the score.** `_by_country` was applied
+  on the name path only; a match anchored on a call sign or on a tvg-id came out at its full
+  score with the country flatly disagreeing, and merely dropped from certain to likely --
+  which is still suggested. The country now counts on **every** path, and where both say a
+  country and they differ the match is a **guess**, which is never put forward as a change.
+  It stays on the picker's list, because a tvg-id's `.sk` is the provider's word and not
+  gospel, and is there to be taken by hand.
+
+Fixing the second one showed a third: `┃USA┃` and `.us`, `┃GER┃` and `.de`, `┃NED┃` and `.nl`
+were being read as *different countries* and quietly penalised thirty points. `ALSO_CALLED`
+now folds the long forms onto the two-letter one. That penalty had been invisible for as long
+as the country only decided the tier.
+
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found
 nothing before, because the guide is called "PBS WHYY Philadelphia".
@@ -628,6 +651,20 @@ plus `channel_manager._by_country`), over a catalogue held in memory rather than
 channel — over a thousand channels that difference is the whole run. **The guide a channel
 is already on is scored by the same measure**, so "better" means better at being this
 channel rather than a high number next to one nobody worked out.
+
+**A channel chosen already is not asked about again** (v146, `CHOSEN_KEY`, the "Chosen
+already" view). Putting a guide on a channel from this page is deciding what that channel is
+on, so it is written down as settled and nothing is put forward for it afterwards -- otherwise
+the next run offers the same channel round again and a decision has to be made twice. Settled
+is not the same as waved away (`IGNORED_KEY`), which says *that guide* is wrong and leaves the
+channel open to a better one later; settled says *this channel* is done.
+
+The guide is written down with the decision, and `settled()` only holds while the channel is
+still on it: a guide changed underneath -- in the Lineup, or by Dispatcharr's own matching --
+means what was decided is no longer what is there, and the channel is looked at like any other.
+A settled channel still gets a row and is still scored, so "Every channel" shows what would
+have been suggested; what is not done is suggesting it. The padlock on a row settles the guide
+a channel is already on, for the ones chosen somewhere else, and the arrow unsettles it.
 
 **It says where it has got to** (v126). Reading the guide catalogue is most of a batch on a
 setup with a lot of EPG and happens before a single channel is looked at, so the run writes a
@@ -923,6 +960,17 @@ no longer play. Summary of how it works now:
   "west" as extraneous, so "PBS East" and "PBS West" were one word and matched at 100 %, and
   character similarity let "PBS 12" and "PBS 13" reach 83. → never compare on a name with its
   distinguishing words removed, and let a contradiction end a match outright (§5.6b).
+- **An ordinary word taken for a call sign** (to v146): "┃BE┃ NGC WILD" was offered a Slovak
+  guide as *Likely, 100 %*, because "WILD" is four letters beginning with W and that was the
+  whole test for an American call sign -- which the matcher treats as proof of which station a
+  name is. Two rules had to fail together: the call sign was wrong, and the country, which said
+  Belgium against Slovakia, was only asked about the tier and never about the score. → a call
+  sign only where call signs are allocated, and evidence against a match counts on every path
+  and not just on the path it was written for (§5.6).
+- **A country penalised against itself** (to v146): `┃USA┃` against `.us` and `┃GER┃` against
+  `.de` read as different countries and quietly cost thirty points, which nobody saw for as
+  long as the country only decided the tier. → `ALSO_CALLED`; and a rule that is only ever
+  read through one narrow door hides its own bugs.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

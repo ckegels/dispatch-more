@@ -93,6 +93,7 @@ urlpatterns = [
     path('guides/run/', guide_manager_views.guide_manager_run, name='guide_manager_run'),
     path('guides/apply/', guide_manager_views.guide_manager_apply, name='guide_manager_apply'),
     path('guides/ignore/', guide_manager_views.guide_manager_ignore, name='guide_manager_ignore'),
+    path('guides/chosen/', guide_manager_views.guide_manager_chosen, name='guide_manager_chosen'),
     path('guides/settings/', guide_manager_views.guide_manager_settings, name='guide_manager_settings'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
