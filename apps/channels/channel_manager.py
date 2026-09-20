@@ -730,6 +730,9 @@ CERTAIN, LIKELY, GUESS = "certain", "likely", "guess"
 # How alike the names have to be before a match is more than a guess, once nothing
 # contradicts and the country agrees
 LIKELY_SCORE = 80
+# How alike the names have to read before a tvg-id that agrees is taken as the thing
+# itself rather than as strong evidence
+TVG_NEEDS_NAME = 55
 
 
 def judge_guide(name, country, entry, tvg_id=""):
@@ -740,15 +743,22 @@ def judge_guide(name, country, entry, tvg_id=""):
 
     Three things decide it, in this order:
 
-    1. **An id that agrees is not a guess.** The channel's own tvg-id matching the guide's
-       is the thing itself, not a resemblance.
-    2. **A contradiction ends it.** If both names carry a number and the numbers differ,
-       they are not the same channel however alike the rest reads -- "PBS 12" and
-       "PBS 13" are two stations, and on the letters alone they score eighty-three. The
-       same for the side of the country ("PBS East"/"PBS West") and for call signs, which
-       are never shared. This is what was wrong: the words that tell two channels apart
-       carry the least weight in a comparison of letters, and one of them was being
-       deleted before the comparison even happened.
+    1. **A contradiction ends it, whatever the ids say.** If both names carry a number and
+       the numbers differ, they are not the same channel however alike the rest reads --
+       "PBS 12" and "PBS 13" are two stations, and on the letters alone they score
+       eighty-three. The same for the side of the country ("PBS East"/"PBS West") and for
+       call signs, which are never shared. This is what was wrong: the words that tell two
+       channels apart carry the least weight in a comparison of letters, and one of them
+       was being deleted before the comparison even happened.
+    2. **A tvg-id that agrees is strong, and it is not proof.** A provider writes it, and
+       providers write it wrongly: they hand one id to channels that are not the same, and
+       they leave it behind when a channel is renamed or sold. This fork has been bitten
+       by that already -- a Krone stream carrying Euronews' id, every CBS station sharing
+       one -- which is why matching on tvg-id is off by default in the Channel Manager.
+       So the id agreeing with a name that reads alike is a certainty; the id agreeing
+       with a name that reads nothing like it is worth offering and saying so, because it
+       is as likely to be a channel that was renamed as a provider that is wrong, and the
+       only thing that settles it is what is on the guide now.
     3. **Otherwise it is how alike the names are**, with the country counting (see
        _by_country), and it is only better than a guess when the names are close, the
        country agrees, and nothing at all contradicts.
@@ -761,16 +771,25 @@ def judge_guide(name, country, entry, tvg_id=""):
         return 0, GUESS, "nothing to compare"
 
     their_tvg = (entry.get("original_tvg_id") or entry.get("tvg_id") or "").strip().lower()
-    if tvg_id and their_tvg and tvg_id.strip().lower() == their_tvg:
-        return 100, CERTAIN, "its tvg-id"
+    same_id = bool(tvg_id and their_tvg and tvg_id.strip().lower() == their_tvg)
 
     mine, theirs_id = _identity_of(mine_words), _identity_of(their_words)
     for what, said in (("number", "a different number"), ("side", "the other side of the country"),
                        ("call", "another station's call sign")):
         if mine[what] and theirs_id[what] and mine[what] != theirs_id[what]:
-            return 0, GUESS, said
+            # Even with the id agreeing: a provider writing one id on two stations is the
+            # commoner mistake by far, and it is the mistake this fork has already made
+            return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
 
     alike = fuzz.ratio(" ".join(mine_words), " ".join(their_words))
+    if same_id:
+        if alike >= TVG_NEEDS_NAME:
+            return 100, CERTAIN, "its tvg-id and its name"
+        # The id says yes and the name says nothing of the kind. That is a channel that
+        # was renamed as often as it is a provider with the wrong id, and only what is on
+        # the guide now tells you which
+        return max(alike, 80), LIKELY, "its tvg-id, though the names do not read alike"
+
     score = max(0, min(100, int(round(alike + _by_country(country, entry)))))
 
     agrees = _by_country(country, entry) >= 0
@@ -1063,10 +1082,17 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
             .first()
         )
         if exact:
-            entry = _guide_entry(*exact, "tvg-id", 100)
-            entry["tier"], entry["why"] = CERTAIN, "its tvg-id"
-            found.append(entry)
-            seen.add(exact[0])
+            # Judged like any other, because an id a provider wrote is evidence and not
+            # proof: it goes first on the list either way, and says what it is worth
+            country = logo_library.country_of(name or "") or ""
+            score, tier, why = judge_guide(
+                name, country, {"name": exact[2], "tvg_id": exact[1]}, tvg_id
+            )
+            if score:
+                entry = _guide_entry(*exact, "tvg-id", score)
+                entry["tier"], entry["why"] = tier, why
+                found.append(entry)
+                seen.add(exact[0])
 
     plain = _strip_country_box(name or "")
     normalized = epg_matching.normalize_name(plain)

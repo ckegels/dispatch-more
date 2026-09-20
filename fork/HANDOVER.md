@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v129** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v130** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -359,6 +359,17 @@ the country agreeing), **LIKELY** (>= `LIKELY_SCORE` 80, country agreeing, nothi
 still on the picker's list to be taken by hand, which is a different thing from putting it
 forward as a change to make. `MIN_GUIDE_SCORE` went 40 → 55.
 
+**A tvg-id is a provider's word, not proof** (v130). v129 returned CERTAIN 100 on a matching
+tvg-id *before* the contradiction checks -- which is the mistake §7 already records, made
+again: providers hand one id to channels that are not the same (a Krone stream carrying
+Euronews', every CBS station) and leave an old id on a channel that was renamed, which is why
+`match_tvg_id` is off by default in the Lineup. So the order is contradiction first (a
+differing number, side or call sign refuses the match **whatever the id says**), then the id:
+with a name that reads alike (>= `TVG_NEEDS_NAME` 55) it is CERTAIN, with a name that reads
+nothing like it it is LIKELY and says so. That last case is a renamed channel as often as it is
+a wrong id, and the two are indistinguishable from ids and names alone -- only what is on the
+guide now separates them, which is why the page shows it.
+
 **Every channel is on the list** (v129): a run keeps a row for each channel it looked at, with
 `why` empty where there is nothing to suggest, and the tab's "Every channel" view shows them.
 Nothing to suggest is not nothing to know -- a channel no guide fits is exactly the one
@@ -681,6 +692,10 @@ no longer play. Summary of how it works now:
   per-guide task without `force`, and that task returns at once for a guide no channel uses --
   which is every guide the button is for. It logged one INFO line and looked like a slow task.
   → when reusing a stock task, read what it refuses to do before trusting it.
+- **Trusting a tvg-id outright** (v129, fixed v130): the guide matching took a matching
+  tvg-id as proof and answered before it had even looked for a contradiction -- the same
+  mistake as the shared-tvg_id merge of §5.6, made again a year later in a new place. → an id
+  a provider wrote is evidence; a name that contradicts it beats it.
 - **A wrong station offered as a certainty** (to v129): stock's normalising drops "east" and
   "west" as extraneous, so "PBS East" and "PBS West" were one word and matched at 100 %, and
   character similarity let "PBS 12" and "PBS 13" reach 83. → never compare on a name with its

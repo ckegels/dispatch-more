@@ -625,12 +625,37 @@ class JudgingGuidesTests(TestCase):
         self.assertEqual(score, 0)
         self.assertIn("call sign", why)
 
-    def test_a_tvg_id_that_agrees_is_not_a_guess(self):
+    def test_a_tvg_id_that_agrees_with_the_name_is_a_certainty(self):
         score, tier, why = self.judge(
-            "┃USA┃ Anything at all", "Nothing like it", "the.same.id", mine="THE.SAME.ID"
+            "┃AT┃ ORF 1", "ORF 1", "orf1.at", country="at", mine="ORF1.at"
         )
         self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
-        self.assertEqual(why, "its tvg-id")
+        self.assertEqual(why, "its tvg-id and its name")
+
+    def test_but_a_tvg_id_is_a_providers_word_and_not_proof(self):
+        """
+        Providers write it wrongly -- one id on channels that are not the same, and an
+        old id left on a channel that was renamed. This fork has been bitten already, by
+        a Krone stream carrying Euronews' id, which is why matching on tvg-id is off by
+        default in the Channel Manager.
+        """
+        score, tier, why = self.judge(
+            "┃AT┃ KRONE TV", "Euronews", "euronews.at", country="at", mine="euronews.at"
+        )
+        self.assertEqual(tier, channel_manager.LIKELY)
+        self.assertIn("do not read alike", why)
+        # Worth offering, because the very same thing happens when a channel is renamed
+        # and keeps its id, and only what is on the guide now tells the two apart
+        self.assertGreaterEqual(score, 80)
+
+    def test_and_never_beats_a_name_that_contradicts_it(self):
+        for name, theirs, said in (
+            ("┃USA┃ PBS 12", "PBS 13", "number"),
+            ("┃USA┃ HBO EAST", "HBO West", "side"),
+        ):
+            score, tier, why = self.judge(name, theirs, "shared.id", mine="shared.id")
+            self.assertEqual(score, 0, name)
+            self.assertIn("whatever its tvg-id says", why)
 
     def test_a_name_that_only_reads_alike_is_no_more_than_a_guess(self):
         score, tier, _ = self.judge("┃NL┃ DREAMWORKS", "DreamWorks", "dreamworks.uk", country="nl")
@@ -671,13 +696,21 @@ class GuideChoiceTests(_Setup):
         found = channel_manager.guide_candidates("┃AT┃ ORF 1")
         self.assertEqual(found, [])
 
-    def test_an_exact_tvg_id_comes_first_however_the_names_read(self):
+    def test_an_exact_tvg_id_comes_first_but_does_not_claim_to_be_certain(self):
+        # A provider wrote that id. It goes to the top of the list, and it says what it
+        # is worth: with a name that reads nothing like it, it is likely and not certain
         EPGData.objects.create(tvg_id="ORF1.at", name="Nothing like it", epg_source=self.local)
         EPGData.objects.create(tvg_id="other", name="ORF 1", epg_source=self.big)
         found = channel_manager.guide_candidates("┃AT┃ ORF 1", tvg_id="ORF1.at")
         self.assertEqual(found[0]["name"], "Nothing like it")
         self.assertEqual(found[0]["how"], "tvg-id")
-        self.assertEqual(found[0]["score"], 100)
+        self.assertEqual(found[0]["tier"], channel_manager.LIKELY)
+        self.assertIn("do not read alike", found[0]["why"])
+
+    def test_and_a_tvg_id_on_a_name_that_contradicts_it_is_not_offered_at_all(self):
+        EPGData.objects.create(tvg_id="pbs.us", name="PBS 13", epg_source=self.local)
+        found = channel_manager.guide_candidates("┃USA┃ PBS 12", tvg_id="pbs.us")
+        self.assertEqual([one["name"] for one in found], [])
 
     def test_the_country_box_does_not_drag_the_match_down(self):
         EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
