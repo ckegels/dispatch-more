@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v130** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v131** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -318,6 +318,15 @@ rather than `all_groups`: every group there is ran to hundreds on this setup, mo
 provider's own names that no channel is in, and finding your own among them was the hard part.
 The last entry of the list makes a new group (`API.addChannelGroup`) and chooses it for that
 row, because that is where you look when none of them is the one you want.
+
+That took two goes (v131). A group made on the page has **no channels in it yet**, so "groups
+you have channels in" hid it the moment it was made -- the offered set is now groups with
+channels **plus groups with neither channels nor streams**, an empty group being one somebody
+made by hand while a provider's carries streams. And `API.addChannelGroup` swallows its error
+and returns nothing at all, so a name already taken came back as "that group could not be
+made"; a name that is already there is now chosen rather than refused, since making one is what
+was asked for and having it is what was meant. (Annotations on ChannelGroup cannot be called
+`channels` or `streams`: those are the relations.)
 
 **The group is on the Before side too** (v125): you cannot judge "one channel in one group"
 without seeing which groups they are in now.

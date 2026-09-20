@@ -3,7 +3,7 @@ the rows picked from it. See channel_manager for how channels are recognised."""
 
 import logging
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 
@@ -28,12 +28,22 @@ def channel_manager_options(request):
         .annotate(streams=Count("id"))
         .order_by("channel_group__name")
     )
-    channel_groups = (
-        Channel.objects.filter(channel_group__isnull=False)
-        .values("channel_group_id", "channel_group__name")
-        .annotate(channels=Count("id"))
-        .order_by("channel_group__name")
-    )
+    # The groups worth offering as a home for a channel: the ones you have channels in,
+    # and the ones that are empty of everything. Every group there is runs to hundreds,
+    # nearly all of them a provider's own names carrying streams and no channel of yours;
+    # a group with neither channels nor streams is one somebody made by hand, very likely
+    # a moment ago on this page, and leaving it out was how a new group disappeared the
+    # instant it was made.
+    channel_groups = [
+        {"channel_group_id": g.id, "channel_group__name": g.name, "channels": g.how_many}
+        # Not "channels"/"streams" as names: they are the relations themselves
+        for g in ChannelGroup.objects.annotate(
+            how_many=Count("channels", distinct=True),
+            their_streams=Count("streams", distinct=True),
+        )
+        .filter(Q(how_many__gt=0) | Q(their_streams=0))
+        .order_by("name")
+    ]
     return JsonResponse({
         "settings": channel_manager.load_settings(),
         "defaults": channel_manager.DEFAULTS,

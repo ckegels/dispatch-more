@@ -1005,6 +1005,26 @@ class ViewTests(_Setup):
         self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
         self.assertEqual(data["defaults"]["create_new"], True)
 
+    def test_the_groups_offered_are_yours_and_the_empty_ones(self):
+        """
+        A group with channels is yours. A group with neither channels nor streams is one
+        somebody made by hand, very likely a moment ago on this page -- leaving those out
+        was how a group disappeared the instant it was made. A group carrying a
+        provider's streams and none of your channels is the provider's, and there are
+        hundreds of them.
+        """
+        from apps.channels.models import ChannelGroup
+
+        made_by_hand = ChannelGroup.objects.create(name="┃AT┃ KIDS")
+        theirs = ChannelGroup.objects.create(name="AT | PROVIDER SPORT")
+        self._stream("AT | SOME SPORT", self.a, group=theirs)
+        offered = {
+            g["name"] for g in self.client_api.get("/api/channels/channel-manager/").json()["channel_groups"]
+        }
+        self.assertIn("┃AT┃ AUSTRIA", offered)
+        self.assertIn("┃AT┃ KIDS", offered)
+        self.assertNotIn("AT | PROVIDER SPORT", offered)
+
     def test_ignoring_through_the_page(self):
         self._stream("┃AT┃ PULS 4 HD", self.a)
         url = "/api/channels/channel-manager/ignore/"

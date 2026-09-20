@@ -698,6 +698,42 @@ describe('ChannelManagerTable', () => {
     expect(await screen.findByText('new number · ┃AT┃ KIDS')).toBeInTheDocument();
   });
 
+  it('chooses a group of that name that is already there, rather than refusing', async () => {
+    const newRow = {
+      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      channel: {
+        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
+        group_why: 'where your channels are', logo_url: '', epg: null,
+      },
+      before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
+      streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
+    };
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      profiles: [],
+      channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA', count: 20 }],
+      // It exists, it simply has no channels in it yet
+      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 5, name: '┃AT┃ KIDS' }],
+    });
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ PULS 4');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    fireEvent.click(
+      await screen.findByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' })
+    );
+    fireEvent.click(screen.getByText('+ A new group…'));
+    fireEvent.change(await screen.findByLabelText('Name for the new group'), {
+      target: { value: '┃AT┃ KIDS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Make it' }));
+
+    // Making one is what was asked for; having that group is what was meant
+    expect(await screen.findByText('new number · ┃AT┃ KIDS')).toBeInTheDocument();
+    expect(API.addChannelGroup).not.toHaveBeenCalled();
+  });
+
   it('says what the reading of guides is doing, rather than only spinning', async () => {
     const unread = {
       id: 8, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96,

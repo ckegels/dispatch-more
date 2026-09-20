@@ -284,7 +284,9 @@ const Expanded = ({
                     setNaming(false);
                     setNewGroup('');
                   } catch (e) {
-                    setGroupError(e?.body?.error || 'That group could not be made.');
+                    setGroupError(
+                      e?.body?.error || e?.message || 'That group could not be made.'
+                    );
                   } finally {
                     setMaking(false);
                   }
@@ -524,13 +526,44 @@ const ChannelManagerTable = () => {
     [options, madeGroups]
   );
 
-  // A group made from a row: kept so every row can choose it, and chosen for that row
-  const makeGroup = useCallback(async (name) => {
-    const made = await API.addChannelGroup({ name });
-    if (!made?.id) throw new Error('No group came back');
-    setMadeGroups((all) => [...all, { id: made.id, name: made.name || name }]);
-    return made;
-  }, []);
+  // A group made from a row: kept so every row can choose it, and chosen for that row.
+  //
+  // A group of that name already there is chosen rather than refused. Making one is what
+  // someone asked for, having that group is what they meant, and Dispatcharr answers a
+  // name it already has with an error that says nothing about which -- it swallows the
+  // reason and returns nothing at all, which read as "that group could not be made".
+  const makeGroup = useCallback(
+    async (name) => {
+      const wanted = name.trim().toLowerCase();
+      const already = [...(options?.all_groups || []), ...madeGroups].find(
+        (g) => (g.name || '').trim().toLowerCase() === wanted
+      );
+      if (already) {
+        setMadeGroups((all) =>
+          all.some((g) => g.id === already.id) ? all : [...all, already]
+        );
+        return already;
+      }
+      const made = await API.addChannelGroup({ name });
+      if (made?.id) {
+        setMadeGroups((all) => [...all, { id: made.id, name: made.name || name }]);
+        return made;
+      }
+      // Nothing came back and no reason with it: ask what groups there are now, in case
+      // it was made after all
+      const now = await API.getChannelManagerOptions();
+      setOptions(now);
+      const found = (now?.all_groups || []).find(
+        (g) => (g.name || '').trim().toLowerCase() === wanted
+      );
+      if (found) {
+        setMadeGroups((all) => [...all, found]);
+        return found;
+      }
+      throw new Error('That group could not be made');
+    },
+    [options, madeGroups]
+  );
 
   const rows = useMemo(() => {
     const all = (plan?.rows || []).map((given) => {
