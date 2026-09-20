@@ -80,7 +80,25 @@ def channel_manager_apply(request):
     settings = channel_manager.settings_from(request.data.get("settings"))
     return JsonResponse(channel_manager.apply_plan(
         settings, keys, request.data.get("orders"), request.data.get("groups"), request.data.get("drops"),
+        request.data.get("names"), request.data.get("epgs"),
     ))
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def channel_manager_guides(request):
+    """
+    The guides one channel could be, for the picker on its row: the best matches for the
+    name given, or -- with `q` -- a plain search through every guide there is. Asked for
+    one row at a time, when it is opened, because matching this well over every channel
+    at once would keep the whole page waiting.
+    """
+    return JsonResponse({"guides": channel_manager.guide_candidates(
+        request.GET.get("name", ""),
+        request.GET.get("tvg_id", ""),
+        request.GET.get("q", ""),
+        request.GET.get("limit", 12),
+    )})
 
 
 @api_view(["POST"])

@@ -23,6 +23,7 @@ vi.mock('../../../api', () => ({
     applyChannelManager: vi.fn(),
     ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
+    getChannelManagerGuides: vi.fn(),
   },
 }));
 
@@ -34,7 +35,7 @@ const fallback = stream(9, 'could not dispatch', { custom: true, account: 'custo
 
 const mergeRow = {
   key: 'ch:1', status: 'merge', adds: 1, removes: 0, changes: [], country: 'at',
-  channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', logo_url: '', epg: { name: 'ORF 1', how: 'kept' } },
+  channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', logo_url: '', epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' } },
   before: { channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, logo_url: '' }, streams: [stream(1, '┃AT┃ ORF 1'), fallback] },
   streams: [
     stream(1, '┃AT┃ ORF 1'),
@@ -75,6 +76,7 @@ describe('ChannelManagerTable', () => {
     API.previewChannelManager.mockResolvedValue(plan);
     API.saveChannelManagerSettings.mockResolvedValue({});
     API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
+    API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -118,7 +120,9 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
 
     await waitFor(() =>
-      expect(API.applyChannelManager).toHaveBeenCalledWith({ order: 'quality' }, ['ch:1'], {}, {}, {})
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}
+      )
     );
   });
 
@@ -142,6 +146,8 @@ describe('ChannelManagerTable', () => {
         { order: 'quality' },
         ['ch:1'],
         { 'ch:1': [2, 1] },
+        {},
+        {},
         {},
         {}
       )
@@ -207,7 +213,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }, {}
+        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }, {}, {}, {}
       )
     );
   });
@@ -224,7 +230,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, { 'ch:1': [2] }
+        { order: 'quality' }, ['ch:1'], {}, {}, { 'ch:1': [2] }, {}, {}
       )
     );
   });
@@ -276,6 +282,93 @@ describe('ChannelManagerTable', () => {
     await waitFor(() =>
       expect(API.previewChannelManager).toHaveBeenLastCalledWith(
         expect.objectContaining({ order: 'provider', match_tvg_id: false, channel_groups: [7] })
+      )
+    );
+  });
+
+  it('renames a channel on its row, and applies the name with it', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+
+    const name = await screen.findByRole('textbox', { name: 'Name for ┃AT┃ ORF 1' });
+    fireEvent.change(name, { target: { value: '┃AT┃ ORF Eins' } });
+    // The row says what it would come out as, and warns that a channel is renamed
+    expect(await screen.findByText(/renamed or re-guided/)).toBeInTheDocument();
+
+    // Typing a name ticks the row, as moving a stream does
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' },
+        ['ch:1'],
+        {},
+        {},
+        {},
+        { 'ch:1': '┃AT┃ ORF Eins' },
+        {}
+      )
+    );
+  });
+
+  it('asks for the guides a channel could be only when the menu is opened', async () => {
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [
+        { id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96 },
+      ],
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+
+    // Opening the row asks nothing: with Expand all that would be a question per row
+    expect(await screen.findByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' })).toBeInTheDocument();
+    expect(API.getChannelManagerGuides).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' }));
+    await waitFor(() => expect(API.getChannelManagerGuides).toHaveBeenCalled());
+    // Which source it is from, and how sure the matcher is
+    expect(await screen.findByText('ORF 1 · Austria · 96%')).toBeInTheDocument();
+  });
+
+  it('chooses a guide by hand and sends it with the row', async () => {
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [
+        { id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96 },
+      ],
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(await screen.findByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' }));
+    fireEvent.click(await screen.findByText('ORF 1 · Austria · 96%'));
+
+    expect(await screen.findByText('Guide: ORF 1 (chosen)')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': 7 }
+      )
+    );
+  });
+
+  it('takes a guide off again by choosing no guide', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(await screen.findByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' }));
+    fireEvent.click(await screen.findByText('No guide'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': null }
       )
     );
   });

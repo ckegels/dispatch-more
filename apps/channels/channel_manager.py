@@ -500,16 +500,31 @@ def _channel_summary(channel):
 
 
 class _Guides:
-    """Guide entries by tvg-id and by name, looked up once for the whole plan."""
+    """
+    Guide entries by tvg-id and by name, looked up once for the whole plan.
+
+    A source switched off is not offered, and the ones with the higher priority are read
+    first, so that when two sources carry the same channel the one you put first wins.
+    Before that it was whichever the database happened to hand over, which is how a big
+    source nobody ranked came to shadow the right entry. An entry belonging to no source
+    at all is still offered: nobody switched it off.
+
+    This stays a plain lookup on purpose: it runs over every channel at once, and on a
+    setup with a thousand channels there is no room here for anything cleverer. The better
+    matching is in guide_candidates, asked for one row at a time when someone opens it.
+    """
 
     def __init__(self):
         from apps.epg.models import EPGData
 
         self.by_tvg_id = {}
         self.by_key = {}
-        for epg_id, tvg_id, name, source in EPGData.objects.values_list(
-            "id", "tvg_id", "name", "epg_source__name"
-        ):
+        entries = (
+            EPGData.objects.exclude(epg_source__is_active=False)
+            .order_by("-epg_source__priority", "id")
+            .values_list("id", "tvg_id", "name", "epg_source__name")
+        )
+        for epg_id, tvg_id, name, source in entries:
             entry = {"id": epg_id, "tvg_id": tvg_id or "", "name": name or "", "source": source or ""}
             if tvg_id:
                 self.by_tvg_id.setdefault(tvg_id.lower(), entry)
@@ -529,6 +544,100 @@ class _Guides:
             if entry:
                 return {**entry, "how": "name"}
         return None
+
+
+# How alike a guide's name has to be before it is worth offering at all. The matcher
+# scores everything it sees, so without a floor a channel with no guide is still offered
+# the three least unlike names in the whole file, which reads as if they were matches.
+# "ORF 1" against "ORF Eins" scores 62 and belongs in the list; against "Sender Eins" it
+# scores 25 and does not. Anything under it is what the search is for.
+MIN_GUIDE_SCORE = 40
+
+
+def _guide_entry(epg_id, tvg_id, name, source, how, score=None):
+    entry = {
+        "id": epg_id,
+        "tvg_id": tvg_id or "",
+        "name": name or "",
+        "source": source or "",
+        "how": how,
+    }
+    if score is not None:
+        # A score is a percentage to read, so it stays between nothing and everything:
+        # the region bonus can push the raw one past a hundred or under zero
+        entry["score"] = max(0, min(100, int(round(score))))
+    return entry
+
+
+def guide_candidates(name, tvg_id="", search="", limit=12):
+    """
+    The guide entries one channel could be, best first, for the picker on its row.
+
+    The plan's own matching (see _Guides) is deliberately plain, because it runs over
+    every channel at once. When someone opens one row and asks, there is time to do
+    better, so this uses Dispatcharr's own matcher: the same fuzzy scoring and country
+    preference its "Match EPG" button uses, which knows that "ORF 1" and "ORF1.at" are
+    the same channel. Not the ML part of it -- that loads a model, and this has to answer
+    while a menu is open.
+
+    The country box in front is taken off first. It is this fork's own way of writing
+    names and means nothing to a guide, and left on it drags every score down.
+
+    With `search`, it is a plain search instead: every guide whose name or tvg-id carries
+    what was typed, so a channel the matcher cannot see is still there to be chosen.
+    """
+    from django.db.models import Q
+
+    from apps.epg.models import EPGData, EPGSource
+
+    from . import epg_matching
+
+    active = EPGData.objects.exclude(epg_source__is_active=False)
+    try:
+        limit = max(1, min(int(limit or 12), 50))
+    except (TypeError, ValueError):
+        limit = 12
+
+    wanted = (search or "").strip()
+    if wanted:
+        rows = (
+            active.filter(Q(name__icontains=wanted) | Q(tvg_id__icontains=wanted))
+            .order_by("-epg_source__priority", "name")
+            .values_list("id", "tvg_id", "name", "epg_source__name")[:limit]
+        )
+        return [_guide_entry(*row, "search") for row in rows]
+
+    found = []
+    seen = set()
+    # An exact tvg-id is not a guess: whatever the names look like, it goes first
+    if (tvg_id or "").strip():
+        exact = (
+            active.filter(tvg_id__iexact=tvg_id.strip())
+            .order_by("-epg_source__priority", "id")
+            .values_list("id", "tvg_id", "name", "epg_source__name")
+            .first()
+        )
+        if exact:
+            found.append(_guide_entry(*exact, "tvg-id", 100))
+            seen.add(exact[0])
+
+    plain = _strip_country_box(name or "")
+    normalized = epg_matching.normalize_name(plain)
+    if normalized:
+        _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
+            normalized, epg_matching.get_preferred_region_code(), candidate_limit=limit + len(found)
+        )
+        # The matcher works in source ids; the page shows which source an entry is from
+        sources = dict(EPGSource.objects.values_list("id", "name"))
+        for score, row in candidates:
+            if row["id"] in seen or score < MIN_GUIDE_SCORE:
+                continue
+            seen.add(row["id"])
+            found.append(_guide_entry(
+                row["id"], row.get("original_tvg_id") or row.get("tvg_id"), row["name"],
+                sources.get(row["epg_source_id"], ""), "name", score,
+            ))
+    return found[:limit]
 
 
 def _logo_for(name, streams, mode, index):
@@ -934,7 +1043,45 @@ def _in_the_order_given(final_ids, given, custom_ids):
     return [i for i in given if i not in custom_ids] + [i for i in given if i in custom_ids]
 
 
-def apply_plan(settings, keys, orders=None, groups=None, drops=None):
+def _names_given(names):
+    """The names typed on the page, by row: emptied or all spaces is no name at all."""
+    out = {}
+    for key, name in (names if isinstance(names, dict) else {}).items():
+        name = str(name or "").strip()[:255]
+        if name:
+            out[key] = name
+    return out
+
+
+def _guides_given(epgs):
+    """
+    The guides chosen on the page, by row: an id to use, or None for "no guide" -- which
+    is a choice of its own, and how a guide matched wrongly is taken off again.
+    """
+    from apps.epg.models import EPGData
+
+    out = {}
+    for key, epg_id in (epgs if isinstance(epgs, dict) else {}).items():
+        if epg_id in (None, "", 0, "0", "none"):
+            out[key] = None
+            continue
+        try:
+            out[key] = int(epg_id)
+        except (TypeError, ValueError):
+            continue
+    wanted = [i for i in out.values() if i is not None]
+    if wanted:
+        # A guide deleted since the page was looked at is not applied to anything
+        known = {
+            entry["id"]: entry
+            for entry in EPGData.objects.filter(id__in=wanted).values("id", "tvg_id")
+        }
+        out = {k: v for k, v in out.items() if v is None or v in known}
+        return out, known
+    return out, {}
+
+
+def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None, epgs=None):
     """
     Carry out the chosen rows of the plan, worked out again now rather than trusted from the
     page: if the streams have changed since it was looked at, what is applied is what is
@@ -946,6 +1093,11 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None):
     which are then numbered in that group. drops is {row key: [stream ids]}: streams taken
     out of a row on the page -- not added, or taken off a channel that has them. A custom
     fallback is never dropped.
+
+    names is {row key: name} and epgs is {row key: guide id, or None for none}: the name
+    and the guide as they were set by hand on the row. They name a channel being made, or
+    rename and re-guide one that is already there -- the only two things this changes about
+    a channel you have beyond its streams, and only ever on a row that was ticked.
     """
     from django.db import transaction
 
@@ -955,6 +1107,8 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None):
     orders = orders if isinstance(orders, dict) else {}
     groups = groups if isinstance(groups, dict) else {}
     drops = {k: {int(i) for i in v} for k, v in (drops if isinstance(drops, dict) else {}).items()}
+    names = _names_given(names)
+    epgs, guides_known = _guides_given(epgs)
     plan = build_plan(settings)
     homes = _NewHomes() if groups else None
     if homes:
@@ -963,7 +1117,10 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None):
     rows = [
         r for r in plan["rows"]
         if r["key"] in wanted
-        and (r["status"] in ("new", "merge") or (r["status"] == "unchanged" and (r["key"] in orders or r["key"] in drops)))
+        and (r["status"] in ("new", "merge") or (
+            r["status"] == "unchanged"
+            and (r["key"] in orders or r["key"] in drops or r["key"] in names or r["key"] in epgs)
+        ))
     ]
     created = updated = streams_added = 0
 
@@ -980,12 +1137,19 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None):
                 # Never leaves a channel with nothing to play
                 continue
             info = row["channel"]
+            chosen_name = names.get(row["key"])
+            if row["key"] in epgs:
+                epg_id = epgs[row["key"]]
+                info = {**info, "epg": {
+                    "id": epg_id,
+                    "tvg_id": (guides_known.get(epg_id) or {}).get("tvg_id") or "",
+                } if epg_id else None}
             if row["status"] == "new":
                 chosen_group = groups.get(row["key"])
                 if chosen_group and int(chosen_group) != info.get("group_id"):
                     info = {**info, "group_id": int(chosen_group), "number": homes.number_in(int(chosen_group))}
                 channel = Channel.objects.create(
-                    name=info["name"][:255],
+                    name=(chosen_name or info["name"])[:255],
                     channel_number=info["number"],
                     channel_group_id=info.get("group_id"),
                     epg_data_id=(info.get("epg") or {}).get("id"),
@@ -1007,7 +1171,18 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None):
             else:
                 channel = Channel.objects.get(id=info["id"])
                 fields = []
-                if "epg" in row["changes"] and info.get("epg"):
+                if chosen_name and chosen_name != channel.name:
+                    channel.name = chosen_name
+                    fields.append("name")
+                if row["key"] in epgs:
+                    # Chosen by hand, which includes choosing no guide at all
+                    epg = info.get("epg")
+                    channel.epg_data_id = epg["id"] if epg else None
+                    fields.append("epg_data")
+                    if epg and epg.get("tvg_id"):
+                        channel.tvg_id = epg["tvg_id"]
+                        fields.append("tvg_id")
+                elif "epg" in row["changes"] and info.get("epg"):
                     channel.epg_data_id = info["epg"]["id"]
                     fields.append("epg_data")
                 if "logo" in row["changes"] and info.get("logo_url"):

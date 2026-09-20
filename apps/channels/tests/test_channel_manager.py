@@ -19,7 +19,7 @@ from apps.channels.models import (
     ChannelStream,
     Stream,
 )
-from apps.epg.models import EPGData
+from apps.epg.models import EPGData, EPGSource
 from apps.m3u.models import M3UAccount
 
 
@@ -480,6 +480,143 @@ class PageChoiceTests(_Setup):
         self.assertEqual(row["channel"]["logo_url"], "http://logos/puls4.png")
 
 
+class GuideChoiceTests(_Setup):
+    """The guide picker on a row: what it offers, and what choosing one does."""
+
+    def setUp(self):
+        super().setUp()
+        self.big = EPGSource.objects.create(name="Everything", source_type="xmltv", priority=1)
+        self.local = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
+        self.off = EPGSource.objects.create(
+            name="Switched off", source_type="xmltv", priority=99, is_active=False
+        )
+
+    def test_the_source_you_put_first_wins_a_name_two_sources_carry(self):
+        EPGData.objects.create(tvg_id="orf1.generic", name="ORF 1", epg_source=self.big)
+        wanted = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        (row,) = [
+            r for r in channel_manager.build_plan(settings(epg="tvg_id_then_name"))["rows"]
+            if r["key"] == f"ch:{self.orf1.id}"
+        ]
+        self.assertEqual(row["channel"]["epg"]["id"], wanted.id)
+
+    def test_a_source_switched_off_is_not_offered(self):
+        EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.off)
+        found = channel_manager.guide_candidates("┃AT┃ ORF 1")
+        self.assertEqual(found, [])
+
+    def test_an_exact_tvg_id_comes_first_however_the_names_read(self):
+        EPGData.objects.create(tvg_id="ORF1.at", name="Nothing like it", epg_source=self.local)
+        EPGData.objects.create(tvg_id="other", name="ORF 1", epg_source=self.big)
+        found = channel_manager.guide_candidates("┃AT┃ ORF 1", tvg_id="ORF1.at")
+        self.assertEqual(found[0]["name"], "Nothing like it")
+        self.assertEqual(found[0]["how"], "tvg-id")
+        self.assertEqual(found[0]["score"], 100)
+
+    def test_the_country_box_does_not_drag_the_match_down(self):
+        EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        (best,) = channel_manager.guide_candidates("┃AT┃ ORF 1")
+        self.assertEqual(best["name"], "ORF 1")
+        self.assertEqual(best["source"], "Austria")
+        self.assertGreaterEqual(best["score"], 90)
+
+    def test_a_name_nothing_like_it_is_not_offered_as_a_match(self):
+        EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
+        # The matcher scores everything it sees; only what is alike enough is offered
+        self.assertEqual(channel_manager.guide_candidates("┃AT┃ ORF 1"), [])
+
+    def test_but_a_name_that_is_the_same_channel_written_differently_is(self):
+        EPGData.objects.create(tvg_id="x.1", name="ORF Eins", epg_source=self.local)
+        (found,) = channel_manager.guide_candidates("┃AT┃ ORF 1")
+        self.assertEqual(found["name"], "ORF Eins")
+
+    def test_a_guide_the_matcher_cannot_see_is_still_there_to_search_for(self):
+        EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
+        (found,) = channel_manager.guide_candidates("┃AT┃ ORF 1", search="Sender")
+        self.assertEqual(found["name"], "Sender Eins")
+        self.assertEqual(found["how"], "search")
+
+    def test_a_guide_chosen_by_hand_is_put_on_the_channel_with_its_tvg_id(self):
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], epgs={key: guide.id})
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.epg_data_id, guide.id)
+        self.assertEqual(self.orf1.tvg_id, "ORF1.at")
+
+    def test_no_guide_is_a_choice_of_its_own(self):
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        self.orf1.epg_data = guide
+        self.orf1.save(update_fields=["epg_data"])
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], epgs={key: None})
+        self.orf1.refresh_from_db()
+        self.assertIsNone(self.orf1.epg_data_id)
+
+    def test_a_guide_gone_since_the_page_was_looked_at_is_not_applied(self):
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], epgs={key: 9999})
+        self.orf1.refresh_from_db()
+        self.assertIsNone(self.orf1.epg_data_id)
+
+    def test_a_guide_chosen_for_a_new_channel_beats_the_one_matched(self):
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        EPGData.objects.create(tvg_id="PULS4.at", name="PULS 4", epg_source=self.local)
+        chosen = EPGData.objects.create(tvg_id="PULS4.de", name="PULS 4 Germany", epg_source=self.big)
+        (row,) = [r for r in channel_manager.build_plan(settings())["rows"] if r["status"] == "new"]
+        channel_manager.apply_plan(
+            settings(epg="tvg_id_then_name"), [row["key"]], epgs={row["key"]: chosen.id}
+        )
+        made = Channel.objects.get(name="┃AT┃ PULS 4")
+        self.assertEqual(made.epg_data_id, chosen.id)
+        self.assertEqual(made.tvg_id, "PULS4.de")
+
+
+class NameChoiceTests(_Setup):
+    """The name typed on a row: what a new channel is called, or a channel renamed."""
+
+    def test_a_new_channel_takes_the_name_typed_for_it(self):
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        (row,) = [r for r in channel_manager.build_plan(settings())["rows"] if r["status"] == "new"]
+        channel_manager.apply_plan(settings(), [row["key"]], names={row["key"]: "┃AT┃ Puls 4"})
+        self.assertTrue(Channel.objects.filter(name="┃AT┃ Puls 4").exists())
+        self.assertFalse(Channel.objects.filter(name="┃AT┃ PULS 4").exists())
+
+    def test_a_channel_you_have_is_renamed(self):
+        self._stream("┃AT┃ ORF 1 FHD", self.b)
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], names={key: "┃AT┃ ORF Eins"})
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ ORF Eins")
+        # and still gains the stream the row was about
+        self.assertIn("┃AT┃ ORF 1 FHD", self._order(self.orf1))
+
+    def test_a_row_with_nothing_else_to_change_is_applied_for_its_name_alone(self):
+        key = f"ch:{self.orf1.id}"
+        row = self._row(channel_manager.build_plan(settings()), key)
+        self.assertEqual(row["status"], "unchanged")
+        channel_manager.apply_plan(settings(), [key], names={key: "┃AT┃ ORF Eins"})
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ ORF Eins")
+
+    def test_a_name_of_nothing_but_spaces_is_no_name_at_all(self):
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], names={key: "   "})
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ ORF 1")
+
+    def test_a_long_name_is_cut_to_what_the_field_holds(self):
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], names={key: "N" * 400})
+        self.orf1.refresh_from_db()
+        self.assertEqual(len(self.orf1.name), 255)
+
+    def test_renaming_leaves_the_fallback_where_it_is(self):
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], names={key: "┃AT┃ ORF Eins"})
+        self.assertEqual(self._order(self.orf1)[-1], "could not dispatch")
+
+
 class ViewTests(_Setup):
     def setUp(self):
         super().setUp()
@@ -519,6 +656,35 @@ class ViewTests(_Setup):
         )
         self.assertEqual(response.json()["updated"], 1)
         self.assertIn("┃AT┃ ORF 1 FHD", self._order(self.orf1))
+
+    def test_the_guides_a_channel_could_be_through_the_page(self):
+        source = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
+        EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=source)
+        found = self.client_api.get(
+            "/api/channels/channel-manager/guides/", {"name": "┃AT┃ ORF 1"}
+        ).json()["guides"]
+        self.assertEqual(found[0]["name"], "ORF 1")
+        # A limit that is not a number is not a 500
+        self.assertEqual(
+            self.client_api.get(
+                "/api/channels/channel-manager/guides/", {"name": "┃AT┃ ORF 1", "limit": "lots"}
+            ).status_code,
+            200,
+        )
+
+    def test_a_name_and_a_guide_set_on_a_row_are_applied_through_the_page(self):
+        source = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=source)
+        key = f"ch:{self.orf1.id}"
+        response = self.client_api.post(
+            "/api/channels/channel-manager/apply/",
+            {"settings": {}, "keys": [key], "names": {key: "┃AT┃ ORF Eins"}, "epgs": {key: guide.id}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ ORF Eins")
+        self.assertEqual(self.orf1.epg_data_id, guide.id)
 
     def test_the_levers_are_kept(self):
         self.client_api.put(

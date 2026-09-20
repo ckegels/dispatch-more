@@ -26,6 +26,7 @@ import {
   Button,
   Center,
   Group,
+  Loader,
   LoadingOverlay,
   NativeSelect,
   Pagination,
@@ -181,7 +182,130 @@ const StreamLine = ({ stream, move, onDrop }) => (
 // The streams that can be moved: not one taken off, and not the fallback, which stays last
 const movable = (stream) => !stream.removed && !stream.custom;
 
-const Expanded = ({ row, onMove, groups, chosenGroup, onGroup, onDrop }) => {
+// The name and the guide of the channel as it would come out, both to be set by hand.
+//
+// The guides are asked for only when the menu is first opened, not when the row is: with
+// Expand all that would be fifty questions at once, and most rows are opened to look at
+// their streams. What comes back is the plan's own guess put in order by Dispatcharr's
+// matcher; typing searches every guide there is, for the ones it cannot see.
+const GuidePicker = ({ row, chosen, onChoose }) => {
+  const channel = row.channel;
+  const [guides, setGuides] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [asked, setAsked] = useState(false);
+
+  useEffect(() => {
+    if (!asked) return;
+    let dropped = false;
+    const wanted = search.trim();
+    const timer = setTimeout(
+      async () => {
+        setLoading(true);
+        try {
+          const result = await API.getChannelManagerGuides({
+            name: channel?.name || '',
+            tvg_id: channel?.epg?.tvg_id || '',
+            q: wanted,
+          });
+          if (!dropped) setGuides(result?.guides || []);
+        } catch {
+          if (!dropped) setGuides([]);
+        } finally {
+          if (!dropped) setLoading(false);
+        }
+      },
+      wanted ? 300 : 0
+    );
+    return () => {
+      dropped = true;
+      clearTimeout(timer);
+    };
+  }, [asked, search, channel?.name, channel?.epg?.tvg_id]);
+
+  // "No guide" is a choice of its own: it is how a guide matched wrongly comes off again
+  const data = useMemo(() => {
+    const options = [{ value: 'none', label: 'No guide' }];
+    const seen = new Set();
+    if (chosen) {
+      seen.add(String(chosen.id));
+      options.push({
+        value: String(chosen.id),
+        label: `${chosen.name}${chosen.source ? ` · ${chosen.source}` : ''}`,
+      });
+    }
+    if (channel?.epg && !seen.has(String(channel.epg.id))) {
+      seen.add(String(channel.epg.id));
+      options.push({
+        value: String(channel.epg.id),
+        label: `${channel.epg.name}${channel.epg.source ? ` · ${channel.epg.source}` : ''}`,
+      });
+    }
+    for (const guide of guides) {
+      if (seen.has(String(guide.id))) continue;
+      seen.add(String(guide.id));
+      options.push({
+        value: String(guide.id),
+        label:
+          `${guide.name}${guide.source ? ` · ${guide.source}` : ''}` +
+          (guide.how === 'tvg-id'
+            ? ' · by tvg-id'
+            : guide.score != null
+              ? ` · ${guide.score}%`
+              : ''),
+      });
+    }
+    return options;
+  }, [guides, channel?.epg, chosen]);
+
+  const value =
+    chosen === undefined
+      ? channel?.epg
+        ? String(channel.epg.id)
+        : 'none'
+      : chosen === null
+        ? 'none'
+        : String(chosen.id);
+
+  return (
+    <Select
+      size="xs"
+      label="Guide"
+      aria-label={`Guide for ${channel?.name || 'this channel'}`}
+      searchable
+      allowDeselect={false}
+      data={data}
+      value={value}
+      searchValue={search}
+      onSearchChange={setSearch}
+      onDropdownOpen={() => setAsked(true)}
+      nothingFoundMessage={loading ? 'Looking...' : 'No guide of that name'}
+      rightSection={loading ? <Loader size={12} /> : undefined}
+      onChange={(id) => {
+        if (!id) return;
+        if (id === 'none') return onChoose(row.key, null);
+        const found =
+          guides.find((guide) => String(guide.id) === id) ||
+          (channel?.epg && String(channel.epg.id) === id ? channel.epg : null);
+        onChoose(row.key, found || { id: Number(id), name: id });
+      }}
+      style={{ width: 300 }}
+    />
+  );
+};
+
+const Expanded = ({
+  row,
+  onMove,
+  groups,
+  chosenGroup,
+  onGroup,
+  onDrop,
+  chosenName,
+  onName,
+  chosenGuide,
+  onGuide,
+}) => {
   const moving = row.streams.filter(movable);
   return (
     <Box
@@ -249,6 +373,28 @@ const Expanded = ({ row, onMove, groups, chosenGroup, onGroup, onDrop }) => {
             <Text size="xs" fw={700} c="dimmed" tt="uppercase">
               After · in the order they are tried
             </Text>
+            <Stack gap={6} mb={4}>
+              <TextInput
+                size="xs"
+                label="Name"
+                aria-label={`Name for ${row.channel?.name || 'this channel'}`}
+                value={chosenName ?? row.channel?.name ?? ''}
+                onChange={(event) => onName(row.key, event.currentTarget.value)}
+                style={{ maxWidth: 300 }}
+              />
+              <GuidePicker
+                row={row}
+                chosen={chosenGuide}
+                onChoose={onGuide}
+              />
+              {row.status !== 'new' &&
+                (chosenName !== undefined || chosenGuide !== undefined) && (
+                  <Text size="xs" c="orange">
+                    The channel you have is renamed or re-guided when this row is
+                    applied.
+                  </Text>
+                )}
+            </Stack>
             {row.streams.map((stream) => {
               const at = moving.indexOf(stream);
               return (
@@ -303,6 +449,10 @@ const ChannelManagerTable = () => {
   const [expandAll, setExpandAll] = useState(false);
   // Streams taken out of a row on the page: {key: [stream ids]}
   const [drops, setDrops] = useState({});
+  // Names typed on a row: {key: name}. A guide chosen on a row: {key: guide id, or null
+  // for no guide} -- null is a choice, so what was chosen is "the key is there", not its value
+  const [nameChoice, setNameChoice] = useState({});
+  const [guideChoice, setGuideChoice] = useState({});
   const [clearing, setClearing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -321,6 +471,8 @@ const ChannelManagerTable = () => {
       setOrders({});
       setGroupChoice({});
       setDrops({});
+      setNameChoice({});
+      setGuideChoice({});
       tableRef.current?.setSelectedTableIds?.([]);
       // Kept, so the page opens the way it was left
       API.saveChannelManagerSettings(withLevers).catch(() => {});
@@ -376,10 +528,26 @@ const ChannelManagerTable = () => {
           }
         : given;
       const chosen = groupChoice[raw.key];
-      const row =
+      let row =
         chosen && chosen !== raw.channel?.group_id
           ? { ...raw, chosenGroup: groupNames[chosen] || String(chosen) }
           : raw;
+      // What was set by hand is what the row says it would come out as
+      const name = nameChoice[row.key];
+      const guide = guideChoice[row.key];
+      if (row.channel && (name !== undefined || guide !== undefined)) {
+        row = {
+          ...row,
+          byHand: true,
+          channel: {
+            ...row.channel,
+            ...(name === undefined ? {} : { name }),
+            ...(guide === undefined
+              ? {}
+              : { epg: guide && { ...guide, how: 'chosen' } }),
+          },
+        };
+      }
       const order = orders[row.key];
       if (!order) return { ...row, id: row.key };
       // The streams as they were put by hand; the fallback and anything taken off stay
@@ -401,7 +569,8 @@ const ChannelManagerTable = () => {
           ? row.status === 'new' ||
             row.status === 'merge' ||
             row.status === 'conflict' ||
-            row.reordered
+            row.reordered ||
+            row.byHand
           : row.status === show
     );
     const wanted = search.trim().toLowerCase();
@@ -415,7 +584,17 @@ const ChannelManagerTable = () => {
         .filter(Boolean)
         .some((name) => name.toLowerCase().includes(wanted))
     );
-  }, [plan, show, search, orders, groupChoice, groupNames, drops]);
+  }, [
+    plan,
+    show,
+    search,
+    orders,
+    groupChoice,
+    groupNames,
+    drops,
+    nameChoice,
+    guideChoice,
+  ]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const paginatedRows = useMemo(
@@ -433,7 +612,8 @@ const ChannelManagerTable = () => {
             (row.status === 'new' ||
               row.status === 'merge' ||
               row.reordered ||
-              row.dropped)
+              row.dropped ||
+              row.byHand)
         )
         .map((row) => row.key),
     [rows, ticked]
@@ -457,7 +637,25 @@ const ChannelManagerTable = () => {
           .filter((key) => drops[key]?.length)
           .map((key) => [key, drops[key]])
       );
-      await API.applyChannelManager(levers, tickedKeys, given, groups, dropped);
+      const named = Object.fromEntries(
+        tickedKeys
+          .filter((key) => nameChoice[key] !== undefined)
+          .map((key) => [key, nameChoice[key]])
+      );
+      const guided = Object.fromEntries(
+        tickedKeys
+          .filter((key) => guideChoice[key] !== undefined)
+          .map((key) => [key, guideChoice[key]?.id ?? null])
+      );
+      await API.applyChannelManager(
+        levers,
+        tickedKeys,
+        given,
+        groups,
+        dropped,
+        named,
+        guided
+      );
       await preview(levers);
     } catch (e) {
       setError(e?.body?.error || 'Could not apply those channels.');
@@ -506,6 +704,25 @@ const ChannelManagerTable = () => {
         else now.add(id);
         return { ...all, [key]: [...now] };
       });
+      tick(key);
+    },
+    [tick]
+  );
+
+  // A name typed, or a guide chosen, on a row; the row is ticked, as a change to apply.
+  // Both are kept even when they are what the plan already said, so that setting a name
+  // back to what it was does not silently stop being a choice.
+  const chooseName = useCallback(
+    (key, name) => {
+      setNameChoice((all) => ({ ...all, [key]: name }));
+      tick(key);
+    },
+    [tick]
+  );
+
+  const chooseGuide = useCallback(
+    (key, guide) => {
+      setGuideChoice((all) => ({ ...all, [key]: guide }));
       tick(key);
     },
     [tick]
@@ -686,7 +903,13 @@ const ChannelManagerTable = () => {
                   style={{ wordBreak: 'break-word' }}
                 >
                   {epg
-                    ? `Guide: ${epg.name}${epg.how && epg.how !== 'kept' ? ` (by ${epg.how})` : ''}`
+                    ? `Guide: ${epg.name}${
+                        epg.how === 'chosen'
+                          ? ' (chosen)'
+                          : epg.how && epg.how !== 'kept'
+                            ? ` (by ${epg.how})`
+                            : ''
+                      }`
                     : 'No guide'}
                 </Text>
               </Box>
@@ -761,6 +984,10 @@ const ChannelManagerTable = () => {
         chosenGroup={groupChoice[row.original.key]}
         onGroup={chooseGroup}
         onDrop={dropStream}
+        chosenName={nameChoice[row.original.key]}
+        onName={chooseName}
+        chosenGuide={guideChoice[row.original.key]}
+        onGuide={chooseGuide}
       />
     ),
     headerCellRenderFns: {

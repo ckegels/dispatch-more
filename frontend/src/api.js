@@ -2885,13 +2885,32 @@ export default class API {
     });
   }
 
-  static async applyChannelManager(settings, keys, orders = {}, groups = {}, drops = {}) {
+  static async applyChannelManager(
+    settings,
+    keys,
+    orders = {},
+    groups = {},
+    drops = {},
+    names = {},
+    epgs = {}
+  ) {
     // groups: {row key: channel group id} for new channels put in another group;
-    // drops: {row key: [stream ids]} taken out of a row on the page
+    // drops: {row key: [stream ids]} taken out of a row on the page;
+    // names and epgs: {row key: name} and {row key: guide id, or null for no guide},
+    // set by hand on the row
     return await request(`${host}/api/channels/channel-manager/apply/`, {
       method: 'POST',
-      body: { settings, keys, orders, groups, drops },
+      body: { settings, keys, orders, groups, drops, names, epgs },
     });
+  }
+
+  // The guides one channel could be: the best matches for its name, or with `q` a plain
+  // search through every guide. Asked for one row at a time, as it is opened.
+  static async getChannelManagerGuides({ name = '', tvg_id = '', q = '' } = {}) {
+    const query = new URLSearchParams({ name, tvg_id, q });
+    return await request(
+      `${host}/api/channels/channel-manager/guides/?${query}`
+    );
   }
 
   // Stop suggesting a Lineup row ("ignore"), suggest it again ("unignore"), or all ("clear")
