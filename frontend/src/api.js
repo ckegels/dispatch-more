@@ -2906,8 +2906,15 @@ export default class API {
 
   // The guides one channel could be: the best matches for its name, or with `q` a plain
   // search through every guide. Asked for one row at a time, as it is opened.
-  static async getChannelManagerGuides({ name = '', tvg_id = '', q = '' } = {}) {
-    const query = new URLSearchParams({ name, tvg_id, q });
+  static async getChannelManagerGuides({
+    name = '',
+    tvg_id = '',
+    q = '',
+    current = '',
+  } = {}) {
+    // current: the guide the channel has, which comes back on the list whatever the
+    // search finds, so what it is now is always there to go back to
+    const query = new URLSearchParams({ name, tvg_id, q, current });
     return await request(
       `${host}/api/channels/channel-manager/guides/?${query}`
     );

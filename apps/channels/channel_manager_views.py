@@ -98,6 +98,7 @@ def channel_manager_guides(request):
         request.GET.get("tvg_id", ""),
         request.GET.get("q", ""),
         request.GET.get("limit", 12),
+        request.GET.get("current", ""),
     )})
 
 

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v117** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v118** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -290,8 +290,8 @@ the stream. Loose matching etc. are levers. Streams can be reordered on the page
 backup warning with a link to Settings → Backup & Restore sits above both tabs.
 
 **The name and the guide are set by hand on the row** (v117), in the After column: a text box
-for the name -- what a new channel is called, or a rename of a channel you have -- and a picker
-for the guide. Guide matching is in two places on purpose. The plan keeps `_Guides`, a plain
+for the name -- what a new channel is called, or a rename of a channel you have -- and a window
+of its own for the guide (v118; a dropdown was tried first and was the wrong shape, see below). Guide matching is in two places on purpose. The plan keeps `_Guides`, a plain
 lookup (exact tvg-id, exact name) because it runs over every channel at once; it now reads the
 sources in priority order and leaves out the ones switched off (an entry with no source at all
 is kept: nobody switched it off). When a row's menu is opened, `guide_candidates` puts that one
@@ -305,6 +305,21 @@ question per row. Both travel on apply as `names` and `epgs` ({row key: guide id
 `drops`, worked out again rather than trusted from the page: a guide deleted since is applied
 to nothing, a name of only spaces is no name. Conflict rows have no channel, so they have
 neither.
+
+**Why the guide is a window and not a dropdown** (v118). The first try was a Mantine `Select`
+and it was wrong twice over. It was wired with `searchValue` as the server query, so choosing
+an entry made Mantine write that entry's label into the search box, which asked again for that
+one name and emptied the list of everything else -- and Mantine filtered the list client-side
+by the same value. Keep the typed search separate from the selection. Worse, a menu is the
+wrong shape for the decision: two entries called "ORF 1" from two sources read the same on one
+line. So each candidate is now a card in a modal, with the source, the tvg-id, the match, **how
+many programmes it holds and what is on it at this moment** (`_what_they_carry`, two queries on
+the index `ProgramData` already has for `epg + start_time + end_time`). That is what actually
+settles it: the entry showing Zeit im Bild is the Austrian ORF 1, and one holding no programmes
+is a name and nothing else, which no list of names can tell you. The guide the channel has is
+passed as `current` and comes back first on every answer, whatever the search found, so what it
+is now is always there to go back to -- and so it says what it holds like every other entry,
+which the plan's own summary does not know.
 
 **New channels are suggested** (`create_new`, on; only suggested — nothing is made until a row
 is ticked and applied). From the stream groups your channels already come from (`new_from`
@@ -462,6 +477,9 @@ no longer play. Summary of how it works now:
   bursts. → keep what came, wait up to ten seconds, and never call that "could not connect".
 - **Black/frozen measured as seconds anywhere** (to v115): "Black picture (3 of 29 s)" on a
   fade. → most of what was seen.
+- **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
+  search box that asked the server, so every other candidate vanished. Never let a widget's
+  search value double as the query. → a window with a card per candidate (§5.6).
 - **The settings store dropped the build field** (to v102), so nothing on the page ever said it
   was a modified build, while every component test passed. → test through the store, not past it.
 - **The install script kept a backup per install** in `/root`; ~100 of them helped fill a 20 GB

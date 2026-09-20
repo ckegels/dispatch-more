@@ -28,6 +28,7 @@ import {
   Group,
   Loader,
   LoadingOverlay,
+  Modal,
   NativeSelect,
   Pagination,
   Paper,
@@ -37,6 +38,7 @@ import {
   Text,
   TextInput,
   Tooltip,
+  UnstyledButton,
   useMantineTheme,
 } from '@mantine/core';
 import API from '../../api';
@@ -182,21 +184,76 @@ const StreamLine = ({ stream, move, onDrop }) => (
 // The streams that can be moved: not one taken off, and not the fallback, which stays last
 const movable = (stream) => !stream.removed && !stream.custom;
 
-// The name and the guide of the channel as it would come out, both to be set by hand.
+// Which guide a channel gets, chosen in a window of its own rather than a menu.
 //
-// The guides are asked for only when the menu is first opened, not when the row is: with
-// Expand all that would be fifty questions at once, and most rows are opened to look at
-// their streams. What comes back is the plan's own guess put in order by Dispatcharr's
-// matcher; typing searches every guide there is, for the ones it cannot see.
-const GuidePicker = ({ row, chosen, onChoose }) => {
-  const channel = row.channel;
-  const [guides, setGuides] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
-  const [asked, setAsked] = useState(false);
+// A menu was tried first and was the wrong shape for the decision. Two entries called
+// "ORF 1" from two sources read the same on one line, and there was nowhere to say what
+// tells them apart. So each candidate is a card here: where it comes from, its tvg-id,
+// how alike the names are, how many programmes it holds, and what is on it at this
+// moment. An entry showing Zeit im Bild is the Austrian ORF 1; one holding no programmes
+// at all is a name and nothing else, which no list of names can tell you.
+const GuideCard = ({ guide, picked, onPick }) => (
+  <UnstyledButton
+    onClick={() => onPick(guide)}
+    aria-label={`Guide ${guide ? guide.name : 'none'}`}
+    style={{
+      display: 'block',
+      width: '100%',
+      padding: '8px 10px',
+      borderRadius: 6,
+      border: `1px solid ${picked ? 'var(--mantine-color-blue-6)' : 'transparent'}`,
+      background: picked ? 'rgba(34,139,230,0.12)' : 'rgba(0,0,0,0.18)',
+    }}
+  >
+    {guide ? (
+      <Stack gap={2}>
+        <Group gap="xs" wrap="nowrap" justify="space-between">
+          <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
+            {guide.name}
+          </Text>
+          <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+            {guide.source && (
+              <Badge size="xs" variant="light" color="gray">
+                {guide.source}
+              </Badge>
+            )}
+            <Text size="xs" c="dimmed">
+              {guide.how === 'tvg-id'
+                ? 'by tvg-id'
+                : guide.score != null
+                  ? `${guide.score}%`
+                  : ''}
+            </Text>
+          </Group>
+        </Group>
+        <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+          {guide.tvg_id || 'no tvg-id'}
+          {' · '}
+          {guide.programmes
+            ? `${guide.programmes} programme${guide.programmes === 1 ? '' : 's'}`
+            : 'no programmes'}
+        </Text>
+        <Text size="xs" c={guide.now ? undefined : 'dimmed'}>
+          {guide.now ? `Now: ${guide.now}` : 'Nothing on it now'}
+        </Text>
+      </Stack>
+    ) : (
+      <Text size="sm">No guide</Text>
+    )}
+  </UnstyledButton>
+);
 
+const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
+  // The guide the row would come out with: the one chosen by hand, or the plan's
+  const held = chosen === undefined ? channel?.epg : chosen;
+  const [guides, setGuides] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+
+  // The typed search is the only thing that drives the question. It is deliberately not
+  // touched by choosing one: the first try let a choice write itself into the search box,
+  // which asked again for that one name and emptied the list of everything else.
   useEffect(() => {
-    if (!asked) return;
     let dropped = false;
     const wanted = search.trim();
     const timer = setTimeout(
@@ -207,6 +264,7 @@ const GuidePicker = ({ row, chosen, onChoose }) => {
             name: channel?.name || '',
             tvg_id: channel?.epg?.tvg_id || '',
             q: wanted,
+            current: held?.id ?? '',
           });
           if (!dropped) setGuides(result?.guides || []);
         } catch {
@@ -221,76 +279,90 @@ const GuidePicker = ({ row, chosen, onChoose }) => {
       dropped = true;
       clearTimeout(timer);
     };
-  }, [asked, search, channel?.name, channel?.epg?.tvg_id]);
+  }, [search, channel?.name, channel?.epg?.tvg_id, held?.id]);
 
-  // "No guide" is a choice of its own: it is how a guide matched wrongly comes off again
-  const data = useMemo(() => {
-    const options = [{ value: 'none', label: 'No guide' }];
-    const seen = new Set();
-    if (chosen) {
-      seen.add(String(chosen.id));
-      options.push({
-        value: String(chosen.id),
-        label: `${chosen.name}${chosen.source ? ` · ${chosen.source}` : ''}`,
-      });
-    }
-    if (channel?.epg && !seen.has(String(channel.epg.id))) {
-      seen.add(String(channel.epg.id));
-      options.push({
-        value: String(channel.epg.id),
-        label: `${channel.epg.name}${channel.epg.source ? ` · ${channel.epg.source}` : ''}`,
-      });
-    }
-    for (const guide of guides) {
-      if (seen.has(String(guide.id))) continue;
-      seen.add(String(guide.id));
-      options.push({
-        value: String(guide.id),
-        label:
-          `${guide.name}${guide.source ? ` · ${guide.source}` : ''}` +
-          (guide.how === 'tvg-id'
-            ? ' · by tvg-id'
-            : guide.score != null
-              ? ` · ${guide.score}%`
-              : ''),
-      });
-    }
-    return options;
-  }, [guides, channel?.epg, chosen]);
+  // The server puts what the channel has at the top of every answer, said the same way
+  // as the rest; only a choice it has not been asked about yet is added here
+  const shown = useMemo(() => {
+    if (!held || guides.some((guide) => guide.id === held.id)) return guides;
+    return [held, ...guides];
+  }, [guides, held]);
 
-  const value =
-    chosen === undefined
-      ? channel?.epg
-        ? String(channel.epg.id)
-        : 'none'
-      : chosen === null
-        ? 'none'
-        : String(chosen.id);
+  const pickedId = held?.id ?? null;
 
   return (
-    <Select
-      size="xs"
-      label="Guide"
-      aria-label={`Guide for ${channel?.name || 'this channel'}`}
-      searchable
-      allowDeselect={false}
-      data={data}
-      value={value}
-      searchValue={search}
-      onSearchChange={setSearch}
-      onDropdownOpen={() => setAsked(true)}
-      nothingFoundMessage={loading ? 'Looking...' : 'No guide of that name'}
-      rightSection={loading ? <Loader size={12} /> : undefined}
-      onChange={(id) => {
-        if (!id) return;
-        if (id === 'none') return onChoose(row.key, null);
-        const found =
-          guides.find((guide) => String(guide.id) === id) ||
-          (channel?.epg && String(channel.epg.id) === id ? channel.epg : null);
-        onChoose(row.key, found || { id: Number(id), name: id });
-      }}
-      style={{ width: 300 }}
-    />
+    <Modal
+      opened
+      onClose={onClose}
+      title={`Guide for ${channel?.name || 'this channel'}`}
+      size="lg"
+    >
+      <Stack gap="sm">
+        <TextInput
+          size="xs"
+          label="Search every guide"
+          placeholder="A name or a tvg-id"
+          aria-label="Search every guide"
+          value={search}
+          onChange={(event) => setSearch(event.currentTarget.value)}
+          rightSection={loading ? <Loader size={12} /> : undefined}
+        />
+        <Stack gap={6} style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+          {shown.length === 0 && !loading && (
+            <Text size="xs" c="dimmed">
+              {search.trim()
+                ? 'No guide of that name.'
+                : 'No guide is enough like this channel. Search for one by name.'}
+            </Text>
+          )}
+          {shown.map((guide) => (
+            <GuideCard
+              key={guide.id}
+              guide={guide}
+              picked={guide.id === pickedId}
+              onPick={onChoose}
+            />
+          ))}
+          <GuideCard guide={null} picked={pickedId == null} onPick={onChoose} />
+        </Stack>
+      </Stack>
+    </Modal>
+  );
+};
+
+// The guide as the row would come out, and the way to change it. Nothing is asked of the
+// server until the window is opened: with Expand all that would be a question per row.
+const GuidePicker = ({ row, chosen, onChoose }) => {
+  const channel = row.channel;
+  const [open, setOpen] = useState(false);
+  const guide = chosen === undefined ? channel?.epg : chosen;
+
+  return (
+    <Group gap="xs" wrap="nowrap" align="center">
+      <Text size="xs" c={guide ? undefined : 'orange'} style={{ minWidth: 0 }}>
+        Guide: {guide ? guide.name : 'none'}
+        {guide?.source ? ` · ${guide.source}` : ''}
+      </Text>
+      <Button
+        size="compact-xs"
+        variant="default"
+        aria-label={`Change the guide for ${channel?.name || 'this channel'}`}
+        onClick={() => setOpen(true)}
+      >
+        Change
+      </Button>
+      {open && (
+        <GuideWindow
+          channel={channel}
+          chosen={chosen}
+          onClose={() => setOpen(false)}
+          onChoose={(picked) => {
+            onChoose(row.key, picked || null);
+            setOpen(false);
+          }}
+        />
+      )}
+    </Group>
   );
 };
 

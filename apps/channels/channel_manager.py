@@ -569,9 +569,49 @@ def _guide_entry(epg_id, tvg_id, name, source, how, score=None):
     return entry
 
 
-def guide_candidates(name, tvg_id="", search="", limit=12):
+def _what_they_carry(entries):
+    """
+    What each guide on the list actually holds: the programme on it at this moment, and
+    how many it has altogether.
+
+    This is what settles the choice. Two entries called "ORF 1" from two sources look the
+    same in any list of names; the one showing Zeit im Bild is the Austrian one, and an
+    entry with no programmes at all is a name and nothing else, which no name can tell you.
+    Two queries for the whole list, both on the index ProgramData already has.
+    """
+    from django.db.models import Count
+    from django.utils import timezone
+
+    from apps.epg.models import ProgramData
+
+    ids = [entry["id"] for entry in entries]
+    if not ids:
+        return entries
+    counts = dict(
+        ProgramData.objects.filter(epg_id__in=ids)
+        .values_list("epg_id")
+        .annotate(held=Count("id"))
+        .values_list("epg_id", "held")
+    )
+    moment = timezone.now()
+    playing = dict(
+        ProgramData.objects.filter(epg_id__in=ids, start_time__lte=moment, end_time__gt=moment)
+        .values_list("epg_id", "title")
+    )
+    for entry in entries:
+        entry["programmes"] = counts.get(entry["id"], 0)
+        entry["now"] = playing.get(entry["id"], "")
+    return entries
+
+
+def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
     """
     The guide entries one channel could be, best first, for the picker on its row.
+
+    `current` is the guide it has or was matched to. It is always on the list, first and
+    however the search went, so what the channel is now is always there to go back to --
+    and so that it says what it holds like every other entry, which the plan's own summary
+    does not know.
 
     The plan's own matching (see _Guides) is deliberately plain, because it runs over
     every channel at once. When someone opens one row and asks, there is time to do
@@ -598,17 +638,31 @@ def guide_candidates(name, tvg_id="", search="", limit=12):
     except (TypeError, ValueError):
         limit = 12
 
+    found = []
+    seen = set()
+    if current not in (None, "", 0, "0"):
+        try:
+            held = (
+                active.filter(id=int(current))
+                .values_list("id", "tvg_id", "name", "epg_source__name")
+                .first()
+            )
+        except (TypeError, ValueError):
+            held = None
+        if held:
+            found.append(_guide_entry(*held, "kept"))
+            seen.add(held[0])
+
     wanted = (search or "").strip()
     if wanted:
         rows = (
             active.filter(Q(name__icontains=wanted) | Q(tvg_id__icontains=wanted))
+            .exclude(id__in=seen)
             .order_by("-epg_source__priority", "name")
             .values_list("id", "tvg_id", "name", "epg_source__name")[:limit]
         )
-        return [_guide_entry(*row, "search") for row in rows]
+        return _what_they_carry(found + [_guide_entry(*row, "search") for row in rows])
 
-    found = []
-    seen = set()
     # An exact tvg-id is not a guess: whatever the names look like, it goes first
     if (tvg_id or "").strip():
         exact = (
@@ -637,7 +691,7 @@ def guide_candidates(name, tvg_id="", search="", limit=12):
                 row["id"], row.get("original_tvg_id") or row.get("tvg_id"), row["name"],
                 sources.get(row["epg_source_id"], ""), "name", score,
             ))
-    return found[:limit]
+    return _what_they_carry(found[:limit])
 
 
 def _logo_for(name, streams, mode, index):

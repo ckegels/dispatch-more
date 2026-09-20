@@ -6,6 +6,8 @@ channels in a country group, each with a custom fallback stream on the end that 
 "could not play this" screen, which is the thing most easily broken by getting this wrong.
 """
 
+from datetime import timedelta
+
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -535,6 +537,50 @@ class GuideChoiceTests(_Setup):
         (found,) = channel_manager.guide_candidates("┃AT┃ ORF 1", search="Sender")
         self.assertEqual(found["name"], "Sender Eins")
         self.assertEqual(found["how"], "search")
+
+    def test_what_a_guide_holds_is_what_tells_two_of_one_name_apart(self):
+        from django.utils import timezone
+
+        from apps.epg.models import ProgramData
+
+        right = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        EPGData.objects.create(tvg_id="orf1.generic", name="ORF 1", epg_source=self.big)
+        moment = timezone.now()
+        ProgramData.objects.create(
+            epg=right, title="Zeit im Bild",
+            start_time=moment - timedelta(minutes=10), end_time=moment + timedelta(minutes=20),
+        )
+        ProgramData.objects.create(
+            epg=right, title="Later",
+            start_time=moment + timedelta(minutes=20), end_time=moment + timedelta(minutes=50),
+        )
+        found = {entry["id"]: entry for entry in channel_manager.guide_candidates("┃AT┃ ORF 1")}
+        self.assertEqual(found[right.id]["now"], "Zeit im Bild")
+        self.assertEqual(found[right.id]["programmes"], 2)
+        # The one that is a name and nothing else says so
+        other = next(entry for key, entry in found.items() if key != right.id)
+        self.assertEqual(other["now"], "")
+        self.assertEqual(other["programmes"], 0)
+
+    def test_the_guide_a_channel_has_is_always_on_the_list(self):
+        held = EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
+        EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        # Nothing like the name, so the matcher would never offer it
+        (first, *rest) = channel_manager.guide_candidates("┃AT┃ ORF 1", current=held.id)
+        self.assertEqual(first["id"], held.id)
+        self.assertEqual(first["how"], "kept")
+        self.assertEqual([entry["name"] for entry in rest], ["ORF 1"])
+
+    def test_and_stays_on_the_list_while_searching_for_another(self):
+        held = EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
+        EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        found = channel_manager.guide_candidates("┃AT┃ ORF 1", search="ORF", current=held.id)
+        self.assertEqual([entry["name"] for entry in found], ["Sender Eins", "ORF 1"])
+
+    def test_a_guide_that_is_gone_is_simply_not_on_it(self):
+        found = channel_manager.guide_candidates("┃AT┃ ORF 1", current=9999)
+        self.assertEqual(found, [])
+        self.assertEqual(channel_manager.guide_candidates("┃AT┃ ORF 1", current="rubbish"), [])
 
     def test_a_guide_chosen_by_hand_is_put_on_the_channel_with_its_tvg_id(self):
         guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)

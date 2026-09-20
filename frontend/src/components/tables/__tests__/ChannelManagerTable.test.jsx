@@ -32,6 +32,14 @@ const stream = (id, name, extra = {}) => ({
   tvg_id: '', logo_url: '', added: false, removed: false, custom: false, in_scope: true, ...extra,
 });
 const fallback = stream(9, 'could not dispatch', { custom: true, account: 'custom' });
+const held = {
+  id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept',
+  programmes: 40, now: 'Bundesland heute',
+};
+const guide = {
+  id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96,
+  programmes: 312, now: 'Zeit im Bild',
+};
 
 const mergeRow = {
   key: 'ch:1', status: 'merge', adds: 1, removes: 0, changes: [], country: 'at',
@@ -312,41 +320,88 @@ describe('ChannelManagerTable', () => {
     );
   });
 
-  it('asks for the guides a channel could be only when the menu is opened', async () => {
+  it('asks for the guides a channel could be only when the window is opened', async () => {
     API.getChannelManagerGuides.mockResolvedValue({
-      guides: [
-        { id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96 },
-      ],
+      guides: [held, { ...guide, name: 'ORF 1 Austria' }],
     });
-    Element.prototype.scrollIntoView = vi.fn();
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
 
     // Opening the row asks nothing: with Expand all that would be a question per row
-    expect(await screen.findByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' })).toBeInTheDocument();
+    const change = await screen.findByRole('button', {
+      name: 'Change the guide for ┃AT┃ ORF 1',
+    });
     expect(API.getChannelManagerGuides).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' }));
+    fireEvent.click(change);
     await waitFor(() => expect(API.getChannelManagerGuides).toHaveBeenCalled());
-    // Which source it is from, and how sure the matcher is
-    expect(await screen.findByText('ORF 1 · Austria · 96%')).toBeInTheDocument();
+    // What tells two entries of one name apart: where it is from, what it holds,
+    // and what is on it now
+    expect(await screen.findByText('ORF 1 Austria')).toBeInTheDocument();
+    expect(screen.getAllByText('Austria').length).toBeGreaterThan(0);
+    expect(screen.getByText('ORF1.at · 312 programmes')).toBeInTheDocument();
+    expect(screen.getByText('Now: Zeit im Bild')).toBeInTheDocument();
+  });
+
+  it('says when a guide holds nothing, which no name can tell you', async () => {
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [held, { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '' }],
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+
+    expect(await screen.findByText('ORF1.at · no programmes')).toBeInTheDocument();
+    expect(screen.getByText('Nothing on it now')).toBeInTheDocument();
+    // and the one it has says what it holds, next to it
+    expect(screen.getByText('ORF1.at · 40 programmes')).toBeInTheDocument();
+    expect(screen.getByText('Now: Bundesland heute')).toBeInTheDocument();
+  });
+
+  it('keeps every candidate on the list, and what the channel has, while searching', async () => {
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [held, guide, { ...guide, id: 8, name: 'ORF Eins', score: 62 }],
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+    expect(await screen.findByLabelText('Guide ORF Eins')).toBeInTheDocument();
+
+    // A search that finds only one still leaves the guide the channel has to go back to
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [held, { ...guide, id: 8, name: 'ORF Eins' }],
+    });
+    fireEvent.change(screen.getByLabelText('Search every guide'), {
+      target: { value: 'Eins' },
+    });
+    await waitFor(() =>
+      expect(API.getChannelManagerGuides).toHaveBeenLastCalledWith(
+        expect.objectContaining({ q: 'Eins' })
+      )
+    );
+    expect(await screen.findByLabelText('Guide ORF 1')).toBeInTheDocument();
   });
 
   it('chooses a guide by hand and sends it with the row', async () => {
     API.getChannelManagerGuides.mockResolvedValue({
-      guides: [
-        { id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96 },
-      ],
+      guides: [held, { ...guide, id: 7, name: 'ORF 1 Austria' }],
     });
-    Element.prototype.scrollIntoView = vi.fn();
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
-    fireEvent.click(await screen.findByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' }));
-    fireEvent.click(await screen.findByText('ORF 1 · Austria · 96%'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+    fireEvent.click(await screen.findByLabelText('Guide ORF 1 Austria'));
 
-    expect(await screen.findByText('Guide: ORF 1 (chosen)')).toBeInTheDocument();
+    expect(await screen.findByText('Guide: ORF 1 Austria (chosen)')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
@@ -357,12 +412,13 @@ describe('ChannelManagerTable', () => {
   });
 
   it('takes a guide off again by choosing no guide', async () => {
-    Element.prototype.scrollIntoView = vi.fn();
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
-    fireEvent.click(await screen.findByRole('textbox', { name: 'Guide for ┃AT┃ ORF 1' }));
-    fireEvent.click(await screen.findByText('No guide'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+    fireEvent.click(await screen.findByLabelText('Guide none'));
 
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
