@@ -691,6 +691,18 @@ NUMBER_WORDS = {
 # same word and matches them at a hundred per cent.
 SIDE_WORDS = {"east", "west", "eastern", "western", "atlantic", "pacific"}
 
+# The word that makes a channel one of a network's family rather than the network itself.
+# Nat Geo Wild is not National Geographic, Nick Jr is not Nickelodeon, Discovery Science
+# is not Discovery -- and once a short form is written out in full (ALSO_WRITTEN) the two
+# are alike enough to be offered for each other, since all that parts them is this one
+# word. So one name carrying one and the other carrying none is treated like a number one
+# of them says and the other does not: still on the list, never put forward.
+FAMILY_WORDS = {
+    "wild", "junior", "jr", "kids", "baby", "science", "people", "turbo", "crime",
+    "investigation", "life", "gold", "classic", "extra", "xtra", "movies", "music",
+    "comedy", "family", "action", "drama", "nature", "history",
+}
+
 
 # How a stream is sent, and the mark an American station's name ends in. A guide has one
 # entry for a channel however it is sent, so "CNN" and "CNN HD" are the same channel and
@@ -702,15 +714,88 @@ NOT_THE_CHANNEL = {
 }
 
 
+# The same channel written short in one place and long in the other. A playlist says
+# "NGC WILD" and a guide says "Nat Geo Wild": word for word those share one word of
+# three, which is not enough for either to be offered for the other, and no amount of
+# comparing letters will ever join them -- "ngc" and "nat geo" have nothing in common to
+# compare. So the short form is written out, on both sides, before anything is compared.
+#
+# Deliberately short and deliberately dull. Every entry here is a claim that two names
+# are one channel, which is exactly the claim this fork has got wrong before, so the only
+# ones in it are abbreviations of a network's own name that a guide writes out in full.
+# Nothing is guessed from initials alone: "CN" is Cartoon Network in one playlist and
+# China in the next, "AP" is Animal Planet or Associated Press, and neither is here.
+#
+# Read longest first, so "nat geo wild" is not turned into "national geographic wild"
+# twice over.
+ALSO_WRITTEN = {
+    ("nat", "geo"): ("national", "geographic"),
+    ("natgeo",): ("national", "geographic"),
+    ("ngc",): ("national", "geographic"),
+    ("ngw",): ("national", "geographic", "wild"),
+    ("cartoon", "netw"): ("cartoon", "network"),
+    ("ctn",): ("cartoon", "network"),
+    ("comedy", "cent"): ("comedy", "central"),
+    ("comedy", "ctrl"): ("comedy", "central"),
+    ("disc",): ("discovery",),
+    ("discovery", "ch"): ("discovery",),
+    ("anim", "planet"): ("animal", "planet"),
+    ("animal", "pl"): ("animal", "planet"),
+    ("hist",): ("history",),
+    ("sci", "fi"): ("syfy",),
+    ("scifi",): ("syfy",),
+    ("nick", "jr"): ("nickelodeon", "junior"),
+    ("nickjr",): ("nickelodeon", "junior"),
+    ("nick",): ("nickelodeon",),
+    ("dw",): ("deutsche", "welle"),
+    ("fs", "1"): ("fox", "sports", "1"),
+    ("fs", "2"): ("fox", "sports", "2"),
+    ("fox", "spt"): ("fox", "sports"),
+    ("sky", "spt"): ("sky", "sports"),
+    ("sky", "sp"): ("sky", "sports"),
+    ("cbssn",): ("cbs", "sports", "network"),
+    ("nbcsn",): ("nbc", "sports", "network"),
+    ("ch",): ("channel",),
+    ("chan",): ("channel",),
+}
+# How many words the longest key is, so the window knows where to start
+_MOST_WRITTEN = max(len(k) for k in ALSO_WRITTEN)
+
+
+def _written_out(words):
+    """The same words with any short form written out in full, longest form first."""
+    if not any(w in _STARTS_ONE for w in words):
+        return words
+    out, at = [], 0
+    while at < len(words):
+        for span in range(min(_MOST_WRITTEN, len(words) - at), 0, -1):
+            longer = ALSO_WRITTEN.get(tuple(words[at:at + span]))
+            if longer:
+                out.extend(longer)
+                at += span
+                break
+        else:
+            out.append(words[at])
+            at += 1
+    return out
+
+
+# The first word of every short form, so a name with none of them is left alone without
+# walking the table: this runs for every channel against every guide in the catalogue.
+_STARTS_ONE = {key[0] for key in ALSO_WRITTEN}
+
+
 def guide_words(name):
     """
     A name as the words that say which channel it is.
 
     The country box comes off, words stuck together in camel case come apart
     ("FoxSports1" is "Fox Sports 1"), accents are folded, punctuation becomes space, how
-    the stream is sent is dropped (NOT_THE_CHANNEL) and a number written as a word becomes
-    the number. Nothing else is thrown away -- not "east", not "network" -- because what
-    looks like decoration next to one name is the whole difference next to its sibling.
+    the stream is sent is dropped (NOT_THE_CHANNEL), a number written as a word becomes
+    the number and a network's name written short is written out (ALSO_WRITTEN: "NGC" is
+    "national geographic"). Nothing is thrown away -- not "east", not "network" -- because
+    what looks like decoration next to one name is the whole difference next to its
+    sibling.
     """
     import unicodedata
 
@@ -731,7 +816,9 @@ def guide_words(name):
         if word in NOT_THE_CHANNEL:
             continue
         words.append(NUMBER_WORDS.get(word, word))
-    return words
+    # Last, so a short form is looked for in words that have already been split apart and
+    # had their numbers settled: "NatGeo" is "nat geo" by now, and "FS1" is "fs 1"
+    return _written_out(words)
 
 
 # A short word carrying few vowels is a name rather than a word: PBS, CBS, ABC, NBC, ORF,
@@ -959,6 +1046,10 @@ def judge_guide(name, country, entry, tvg_id=""):
     # One of them says a number, a side or a call sign and the other says nothing: it may
     # well be the same channel written shorter, but it is not something to be sure about
     half_said = any(bool(mine[w]) != bool(theirs_id[w]) for w in ("number", "side", "call"))
+    # ...and the same where one says which of the family it is and the other does not
+    my_family = {w for w in mine_words if w in FAMILY_WORDS}
+    their_family = {w for w in their_words if w in FAMILY_WORDS}
+    half_said = half_said or my_family != their_family
 
     if "".join(mine_words) == "".join(their_words) and agrees:
         return max(score, 100 if not half_said else score), CERTAIN, "its name exactly"

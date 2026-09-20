@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v146** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v147** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -488,6 +488,24 @@ Fixing the second one showed a third: `┃USA┃` and `.us`, `┃GER┃` and `.d
 were being read as *different countries* and quietly penalised thirty points. `ALSO_CALLED`
 now folds the long forms onto the two-letter one. That penalty had been invisible for as long
 as the country only decided the tier.
+
+**A network written short is written out** (v147, `ALSO_WRITTEN`). "NGC WILD" and "Nat Geo
+Wild" share one word of three, and no amount of comparing letters will ever join "ngc" to
+"nat geo" -- there is nothing there to compare. So the short form is written out on both
+sides before anything else happens, last in `guide_words`, after the camel case has come
+apart and the digits have been parted ("FS1" is "fs 1" by then, "NatGeo" is "nat geo").
+The table is deliberately short and dull: every entry is a claim that two names are one
+channel, which is the claim this fork has got wrong before, so it holds only abbreviations
+of a network's own name that guides write out in full. Nothing is guessed from initials
+alone -- "CN" is Cartoon Network in one playlist and China in the next, "AP" is Animal
+Planet or Associated Press, and neither is in it.
+
+Writing names out made two names alike that were not: once "NGC WILD" is "national
+geographic wild", the only thing parting it from plain National Geographic is one word, and
+it scored ninety. So `FAMILY_WORDS` -- wild, junior, kids, science, people, crime, gold… --
+joins the number, the side and the call sign in `half_said`: one name saying which of the
+family it is and the other saying none is never a certainty and never likely, only a guess.
+Nick Jr is not Nickelodeon and Discovery Science is not Discovery.
 
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found

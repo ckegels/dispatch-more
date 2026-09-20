@@ -736,6 +736,50 @@ class JudgingGuidesTests(TestCase):
                 box,
             )
 
+    def test_a_network_written_short_is_written_out(self):
+        """
+        "NGC WILD" and "Nat Geo Wild" share one word of three, and no amount of comparing
+        letters will ever join "ngc" to "nat geo". So the short form is written out on
+        both sides before anything is compared.
+        """
+        self.assertEqual(
+            channel_manager.guide_words("┃BE┃ NGC WILD"),
+            ["national", "geographic", "wild"],
+        )
+        score, tier, _ = self.judge(
+            "┃BE┃ NGC WILD", "Nat Geo Wild", "NatGeoWild.be", country="be"
+        )
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+
+    def test_and_written_out_after_the_letters_and_digits_are_parted(self):
+        # "FS1" is "fs 1" by the time the table sees it, and "NatGeo" is "nat geo"
+        self.assertEqual(channel_manager.guide_words("FS1"), ["fox", "sports", "1"])
+        self.assertEqual(
+            channel_manager.guide_words("NatGeo"), ["national", "geographic"]
+        )
+
+    def test_but_one_of_a_family_is_not_the_network_itself(self):
+        """
+        Writing a short form out makes two names alike that were not: once "NGC WILD" is
+        "national geographic wild", all that parts it from plain National Geographic is
+        one word, and it scored ninety.
+        """
+        score, tier, _ = self.judge(
+            "┃BE┃ NGC WILD", "National Geographic", "NatGeo.be", country="be"
+        )
+        self.assertEqual(tier, channel_manager.GUESS)
+        # ...while the one that says the same family is the certainty
+        self.assertEqual(
+            self.judge(
+                "┃USA┃ DISCOVERY SCIENCE", "Discovery Science", "discsci.us"
+            )[1],
+            channel_manager.CERTAIN,
+        )
+        self.assertEqual(
+            self.judge("┃USA┃ DISCOVERY SCIENCE", "Discovery", "disc.us")[1],
+            channel_manager.GUESS,
+        )
+
     def test_two_call_signs_are_never_the_same_station(self):
         score, _, why = self.judge("┃USA┃ PBS WNET", "PBS KQED", "kqed.us")
         self.assertEqual(score, 0)
