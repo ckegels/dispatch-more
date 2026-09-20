@@ -193,6 +193,17 @@ const StreamLine = ({ stream, channel, onAct }) => (
         <History history={stream.result?.history} />
       </Group>
       <Finding result={stream.result} />
+      {stream.confidence > 0 && (
+        <Tooltip
+          multiline
+          w={320}
+          label={`How sure Stream Check is that this is broken, and why: ${stream.confidence_why.join('; ')}.`}
+        >
+          <Text size="xs" c="dimmed" style={{ cursor: 'help' }}>
+            {stream.confidence}% sure it is broken
+          </Text>
+        </Tooltip>
+      )}
     </Box>
     {!stream.custom && (
       <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>

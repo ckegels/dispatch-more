@@ -591,6 +591,44 @@ class RunTests(_Setup):
                     break
         return {"ended": ended, **stream_check.progress(self.redis)}, probe
 
+    def test_how_sure_it_is_and_why(self):
+        """
+        A number that can be read back as the sentences it was made of. Nothing short of
+        failing run after run gets near a hundred: the one thing this must never do is
+        call a working channel broken.
+        """
+        one_look = {"ok": False, "kind": "black", "failures": 1, "history": [0], "last_ok": "y"}
+        sure, why = stream_check.confidence_of(one_look)
+        self.assertLess(sure, 20)
+        self.assertTrue(any("fade" in one for one in why))
+
+        # ...the same fault, seen again later in the run and again the next run
+        twice = {**one_look, "failures": 2, "confirmed": True, "history": [0, 0]}
+        surer, why = stream_check.confidence_of(twice)
+        self.assertGreater(surer, sure + 30)
+        self.assertTrue(any("looked at again" in one for one in why))
+
+        # ...and the same channel playing from somewhere else says it is this stream
+        with_sibling, why = stream_check.confidence_of(twice, [{"ok": True}])
+        self.assertGreater(with_sibling, surer)
+        self.assertTrue(any("another provider" in one for one in why))
+
+    def test_nothing_that_is_still_being_judged_has_a_confidence(self):
+        for record in (
+            {"ok": True, "failures": 0},
+            {"ok": False, "skipped": True},
+            {"ok": False, "suspect": {"kind": "black"}},
+            {},
+        ):
+            self.assertEqual(stream_check.confidence_of(record), (0, []))
+
+    def test_a_stream_never_seen_working_is_less_sure_not_more(self):
+        # It may never have been right, which is not the same as having stopped working
+        failing = {"ok": False, "kind": "dead", "failures": 3, "history": [0, 0, 0]}
+        seen_working, _ = stream_check.confidence_of({**failing, "last_ok": "yesterday"})
+        never, _ = stream_check.confidence_of(failing)
+        self.assertLess(never, seen_working)
+
     def test_the_same_channel_from_another_provider_goes_next(self):
         """
         A channel with one copy broken is either a channel that is gone everywhere or one
@@ -617,6 +655,41 @@ class RunTests(_Setup):
         # not being looked at so it is not in the map to begin with
         self.assertEqual(siblings[self.first.id], {self.second.id, self.third.id, self.fallback.id})
         self.assertEqual(siblings[self.second.id], {self.first.id, self.third.id, self.fallback.id})
+
+    def test_nothing_is_parked_or_removed_until_you_say_how_sure_is_sure_enough(self):
+        self.assertEqual(stream_check.DEFAULTS["park_above"], 0)
+        self.assertEqual(stream_check.DEFAULTS["remove_above"], 0)
+        for _ in range(4):
+            self._run({"ORF1B": False})
+        self.assertEqual(stream_check.load_parked(), {})
+        self.assertIn("ORF 1 B", self._order(self.orf1))
+
+    def test_a_stream_it_is_sure_enough_about_is_parked(self):
+        stream_check.save_settings({"park_above": 40})
+        for _ in range(3):
+            self._run({"ORF1B": False})
+        parked = stream_check.load_parked()
+        self.assertIn(str(self.second.id), parked)
+        self.assertIn("% sure", parked[str(self.second.id)]["reason"])
+        self.assertNotIn("ORF 1 B", self._order(self.orf1))
+
+    def test_and_removed_only_above_a_bar_of_its_own(self):
+        # Parking is the kind one and comes back by itself; removing does not, so it is
+        # asked for separately and wants a higher bar
+        stream_check.save_settings({"remove_above": 40, "park_above": 90})
+        for _ in range(3):
+            self._run({"ORF1B": False})
+        self.assertEqual(stream_check.load_parked(), {})
+        self.assertNotIn("ORF 1 B", self._order(self.orf1))
+
+    def test_a_stream_that_plays_is_never_acted_on_however_low_the_bar(self):
+        stream_check.save_settings({"remove_above": 1, "park_above": 1})
+        for _ in range(3):
+            self._run({})
+        self.assertEqual(stream_check.load_parked(), {})
+        self.assertEqual(
+            self._order(self.orf1), ["ORF 1 A", "ORF 1 B", "ORF 1 A2", "could not dispatch"]
+        )
 
     def test_a_failure_puts_the_other_copies_at_the_front(self):
         # Through a whole run: the copy that failed and its siblings all end up checked

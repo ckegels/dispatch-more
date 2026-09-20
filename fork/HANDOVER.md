@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v135** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v136** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -692,6 +692,20 @@ no longer play. Summary of how it works now:
   said broken while its sibling waited for its provider's turn, which came whenever it came.
   `_pick_next` is a function of its own so it can be tested: which stream goes next is decided
   across threads, and ordering between threads is not something a test can pin down.
+- **How sure it is, and why** (v136, `confidence_of` / `EVIDENCE`). A number out of a hundred
+  on every failing stream, built only from what the checking already found: failing again on
+  another run (25 / +15 / +10), the fault still there when it was looked at again
+  (`confirmed`, +20), the provider's own card (+15), refused while its other streams played
+  (+15), nothing at all (+10), every kept look failed (+10), the same channel playing from
+  another provider (+10) -- against a picture fault seen only once (-15) and never having been
+  seen working (-10, it may never have been right, which is not the same as having stopped).
+  Every number reads back as the sentences it was made of, on the stream's line: a number
+  nobody can argue with is no use for deciding whether to throw a stream away. Nothing short
+  of failing run after run gets near a hundred, on purpose (§7).
+  **`park_above` and `remove_above`** act on it, both **0 (off)**. Parking is the kind one --
+  off its channels, still checked, back by itself if it ever plays. Removing is not watched
+  for at all, so it is asked for separately and the page warns under about 60. The older
+  `autopark` (a `dead_streak` of N) is untouched and still there.
 - **Rechecks:** failing streams again every `recheck_hours` (3) or after each successful
   playlist refresh of their provider (hook in `apps/m3u/tasks.py`, recorded in
   `stream-check-recheck`). **Autopark** (off): `dead` `autopark_after` (3) checks in a row →

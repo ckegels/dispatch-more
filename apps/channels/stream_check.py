@@ -128,6 +128,15 @@ DEFAULTS = {
     # two refreshes went by.
     "autopark": False,
     "autopark_after": 3,
+    # Sure enough to act on by itself, out of a hundred (see confidence_of and EVIDENCE).
+    # Both off: nothing is parked or removed for you until you say how sure is sure enough.
+    #
+    # Parking is the kind one: the stream comes off its channels, is still checked, and
+    # goes back by itself if it ever plays again. Removing is not -- it comes off and is
+    # not watched for -- so it wants a higher bar, and 100 is the only number that cannot
+    # be reached by anything short of a stream failing run after run.
+    "park_above": 0,
+    "remove_above": 0,
     # Only while nothing at all is playing through Dispatcharr. On: nothing is checked
     # while anyone watches anything. A check never uses a provider somebody is watching
     # through (see _Providers) and lets go of a connection a viewer needs (make_way), and
@@ -296,6 +305,8 @@ def save_settings(given):
         values["account_failures"] = max(2, int(values["account_failures"]))
         values["recheck_hours"] = min(168, max(0.5, float(values["recheck_hours"])))
         values["autopark_after"] = max(2, int(values["autopark_after"]))
+        values["park_above"] = min(100, max(0, int(values["park_above"])))
+        values["remove_above"] = min(100, max(0, int(values["remove_above"])))
         values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
         values["picture_every_days"] = min(60, max(0, float(values["picture_every_days"])))
     except (TypeError, ValueError):
@@ -1522,6 +1533,9 @@ def _record(redis_client, results, stream, outcome, settings, round_id=None):
     }
     if suspect and not outcome["ok"] and suspect.get("kind") in PICTURE_KINDS + ("transient",):
         record["reason"] = f"{outcome['reason']}, again when looked at later"
+        # Said outright rather than left in the wording: it is the strongest single piece
+        # of evidence there is that a fault is real, and confidence_of has to read it
+        record["confirmed"] = True
     return _keep_record(redis_client, results, stream, record, settings)
 
 
@@ -1530,6 +1544,72 @@ def _keep_record(redis_client, results, stream, record, settings):
     results[str(stream.id)] = record
     redis_client.hset(LIVE_RESULTS_KEY, str(stream.id), json.dumps(record))
     return record
+
+
+# How sure Stream Check is that a stream is genuinely broken, out of a hundred, built only
+# from what the checking already found. Each piece of evidence says what it is worth, so a
+# number can always be read back as the sentences it was made of -- a number nobody can
+# argue with is no use for deciding whether to throw a stream away.
+#
+# The weights are deliberately shy of certainty on any single piece. Nothing but failing
+# again, run after run, gets near a hundred, because the one thing this fork must never do
+# is call a working channel broken (§7 of the handover, more than once).
+EVIDENCE = {
+    "failed_twice": (25, "it failed on two runs in a row"),
+    "failed_three": (15, "and on a third"),
+    "failed_five": (10, "and has gone on failing"),
+    "confirmed": (20, "the fault was still there when it was looked at again"),
+    "nothing_at_all": (10, "nothing came through at all"),
+    "providers_card": (15, "it is the provider's own \"no stream\" picture"),
+    "refused_alone": (15, "the provider refused it while playing its other streams"),
+    "all_history": (10, "every look kept of it has failed"),
+    "sibling_plays": (10, "the same channel plays from another provider"),
+    "picture_once": (-15, "a picture fault seen once can be a fade or a moment's trouble"),
+    "never_worked": (-10, "it has never been seen working, so it may never have been right"),
+}
+
+
+def confidence_of(record, others=()):
+    """
+    How sure we are that this stream is broken: (0-100, [why, ...]).
+
+    `others` are the records of the same channel's other streams, which say whether the
+    channel itself is gone or this one copy of it is.
+    """
+    if not record or record.get("ok") or record.get("skipped") or record.get("suspect"):
+        return 0, []
+
+    picked = []
+    failures = int(record.get("failures") or 0)
+    if failures >= 2:
+        picked.append("failed_twice")
+    if failures >= 3:
+        picked.append("failed_three")
+    if failures >= 5:
+        picked.append("failed_five")
+    if record.get("confirmed"):
+        picked.append("confirmed")
+
+    kind = record.get("kind")
+    if kind == PLACEHOLDER:
+        picked.append("providers_card")
+    elif kind == DEAD:
+        picked.append("nothing_at_all")
+    elif kind == REFUSED and "while the provider plays its other streams" in (record.get("reason") or ""):
+        picked.append("refused_alone")
+    elif kind in PICTURE_KINDS and failures < 2 and not record.get("confirmed"):
+        picked.append("picture_once")
+
+    history = list(record.get("history") or [])
+    if len(history) >= 3 and not any(history):
+        picked.append("all_history")
+    if not record.get("last_ok"):
+        picked.append("never_worked")
+    if any(one.get("ok") for one in others):
+        picked.append("sibling_plays")
+
+    score = sum(EVIDENCE[name][0] for name in picked)
+    return max(0, min(100, score)), [EVIDENCE[name][1] for name in picked]
 
 
 def state_of(record, settings):
@@ -1732,6 +1812,7 @@ def run(redis_client, only=None, batch_seconds=None):
         parked_now = load_parked()
         was_parked = set(parked_now)
         to_park = []
+        to_remove = []
         own_connection = connections["default"]
         give_up_after = int(settings.get("account_failures") or 5)
         recovered = []
@@ -1813,6 +1894,19 @@ def run(redis_client, only=None, batch_seconds=None):
                 and str(stream.id) not in was_parked
             ):
                 to_park.append((stream.id, record["reason"], record["failures"]))
+            elif not outcome["ok"] and str(stream.id) not in was_parked:
+                # Sure enough to act on by itself. The others of this channel are what say
+                # whether the channel is gone or this one copy of it is, and they are here
+                # already: the siblings were read before the threads started.
+                others = [results.get(str(i)) or {} for i in siblings.get(stream.id, ())]
+                sure, why = confidence_of(record, others)
+                record["confidence"] = sure
+                remove_above = int(settings.get("remove_above") or 0)
+                park_above = int(settings.get("park_above") or 0)
+                if remove_above and sure >= remove_above:
+                    to_remove.append((stream.id, f"{sure}% sure: {why[0] if why else record['reason']}"))
+                elif park_above and sure >= park_above:
+                    to_park.append((stream.id, f"{sure}% sure: {why[0] if why else record['reason']}", record["failures"]))
 
         def one_provider(key, streams):
             entry = accounts[_key_text(key)]
@@ -2127,6 +2221,12 @@ def run(redis_client, only=None, batch_seconds=None):
                     logger.info(f"Stream Check: autopark parked stream {stream_id} after {failures} failed checks")
                 except ValueError as e:
                     logger.info(f"Stream Check: autopark could not park stream {stream_id}: {e}")
+            for stream_id, reason in to_remove:
+                try:
+                    remove(stream_id)
+                    logger.info(f"Stream Check: removed stream {stream_id} from its channels -- {reason}")
+                except ValueError as e:
+                    logger.info(f"Stream Check: could not remove stream {stream_id}: {e}")
             _placeholders(results, providers.provider_of)
             _keep_results(results)
             if only is None:
@@ -2681,6 +2781,12 @@ def issues(redis_client, show="problems", keep=()):
         channel = found["channel"]
         streams = [_stream_row(link.stream, results, state(link.stream_id)) for link in found["links"]]
         real = [s for s in streams if not s["custom"]]
+        # How sure we are about each, which needs the others of the same channel: they say
+        # whether the channel is gone or this one copy of it is
+        for row in real:
+            others = [one["result"] or {} for one in real if one is not row]
+            sure, why = confidence_of(row["result"], others)
+            row["confidence"], row["confidence_why"] = sure, why
         bad = [s for s in real if s["state"] in ("failing", "broken")]
         # Picture faults being looked at again: shown, not yet counted
         suspects = [s for s in real if s["state"] == "suspect"]

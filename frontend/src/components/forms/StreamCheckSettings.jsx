@@ -208,6 +208,30 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
               onChange={number('autopark_after')}
             />
           )}
+          <NumberInput
+            size="xs"
+            label="Park by itself when this sure (out of 100)"
+            description="0 is off. How sure Stream Check is that a stream is broken, built from what it found: failing again on another run, the fault still being there when it was looked at again, the same channel playing from another provider. Every stream says what its number is made of. Parking is the kind one — the stream comes off its channels, is still checked, and goes back by itself if it ever plays again."
+            min={0}
+            max={100}
+            value={draft.park_above ?? 0}
+            onChange={number('park_above')}
+          />
+          <NumberInput
+            size="xs"
+            label="Remove by itself when this sure (out of 100)"
+            description="0 is off, and off is the sensible place to leave it. A removed stream comes off its channels and is not watched for any more, so nothing brings it back if the provider fixes it — park does that, this does not. Nothing short of a stream failing run after run gets near 100."
+            min={0}
+            max={100}
+            value={draft.remove_above ?? 0}
+            onChange={number('remove_above')}
+          />
+          {(draft.remove_above ?? 0) > 0 && (draft.remove_above ?? 0) < 60 && (
+            <Alert color="orange" variant="light">
+              Below about 60, a single bad run can be enough. A stream removed by
+              mistake is not watched for again — park is the one that undoes itself.
+            </Alert>
+          )}
           <Switch
             size="xs"
             label="Hide a channel when all its streams are parked"

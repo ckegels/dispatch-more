@@ -42,7 +42,15 @@ const channelRow = {
   channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', logo_url: '' },
   streams: [
     { id: 11, name: 'ORF 1 A', account: 'Provider A', custom: false, hash: 'h11', state: 'ok', result: result(true) },
-    { id: 12, name: 'ORF 1 B', account: 'Provider B', custom: false, hash: 'h12', state: 'broken', result: result(false) },
+    {
+      id: 12, name: 'ORF 1 B', account: 'Provider B', custom: false, hash: 'h12',
+      state: 'broken', result: result(false),
+      confidence: 70,
+      confidence_why: [
+        'it failed on two runs in a row',
+        'the same channel plays from another provider',
+      ],
+    },
     { id: 9, name: 'could not dispatch', account: 'custom', custom: true, hash: 'h9', state: 'fallback', result: null },
   ],
   broken: 1,
@@ -392,5 +400,20 @@ describe('StreamCheckTable', () => {
     API.getStreamCheck.mockResolvedValue(overview({ ffprobe: false }));
     draw();
     expect(await screen.findByText(/ffprobe is not installed/)).toBeInTheDocument();
+  });
+
+  it('says how sure it is that a stream is broken, and what that is made of', async () => {
+    draw();
+    await open();
+    // A number nobody can argue with is no use for deciding whether to throw a stream
+    // away, so it reads back as the evidence it was built from
+    expect(screen.getByText('70% sure it is broken')).toBeInTheDocument();
+  });
+
+  it('says nothing about how sure it is when it is not sure at all', async () => {
+    draw();
+    await open();
+    // The stream that plays has no number on it at all
+    expect(screen.getAllByText(/sure it is broken/)).toHaveLength(1);
   });
 });
