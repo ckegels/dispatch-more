@@ -2970,9 +2970,12 @@ export default class API {
     });
   }
 
-  static async getStreamCheck(show = 'problems') {
-    // The channels with a stream that does not play, the parked streams, and how a run is going
-    return await request(`${host}/api/channels/stream-check/?${new URLSearchParams({ show })}`);
+  static async getStreamCheck(show = 'problems', keep = []) {
+    // The channels with a stream that does not play, the parked streams, and how a run is
+    // going. keep: channels to list whatever the view says, being ones just acted on.
+    const query = new URLSearchParams({ show });
+    if (keep.length) query.set('keep', keep.join(','));
+    return await request(`${host}/api/channels/stream-check/?${query}`);
   }
 
   static async runStreamCheck(only = null) {
@@ -3007,10 +3010,16 @@ export default class API {
   }
 
   static async streamCheckAction(action, streamId, channelId = null) {
-    // remove, park, restore or forget
+    // remove, park, restore or forget. streamId may be one id or several: a channel whose
+    // streams are all broken is parked a channel at a time, not a stream at a time.
+    const many = Array.isArray(streamId);
     return await request(`${host}/api/channels/stream-check/action/`, {
       method: 'POST',
-      body: { action, stream_id: streamId, channel_id: channelId },
+      body: {
+        action,
+        ...(many ? { stream_ids: streamId } : { stream_id: streamId }),
+        channel_id: channelId,
+      },
     });
   }
 

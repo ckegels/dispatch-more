@@ -26,7 +26,11 @@ def stream_check_overview(request):
 
     redis_client = RedisClient.get_client()
     show = request.GET.get("show", "problems")
-    found = stream_check.issues(redis_client, show if show in SHOWS else "problems")
+    try:
+        keep = {int(one) for one in (request.GET.get("keep") or "").split(",") if one.strip()}
+    except (TypeError, ValueError):
+        keep = set()
+    found = stream_check.issues(redis_client, show if show in SHOWS else "problems", keep)
     return JsonResponse({
         **found,
         "settings": stream_check.load_settings(),
@@ -134,17 +138,33 @@ def stream_check_action(request):
     action = request.data.get("action")
     if action not in ACTIONS:
         return JsonResponse({"error": f"Unknown action: {action}"}, status=400)
+    # One stream, or every stream of a channel at once. Both kinds come through here
+    # because a channel whose streams are all broken is parked a channel at a time, not a
+    # stream at a time -- and doing it one at a time took the row out from under you.
+    given = request.data.get("stream_ids")
+    if given is None:
+        given = [request.data.get("stream_id")]
     try:
-        data = {
-            "stream_id": int(request.data["stream_id"]),
-            "channel_id": int(request.data["channel_id"]) if request.data.get("channel_id") else None,
-            "reason": str(request.data.get("reason") or ""),
-        }
+        stream_ids = [int(one) for one in given]
+        channel_id = int(request.data["channel_id"]) if request.data.get("channel_id") else None
+        reason = str(request.data.get("reason") or "")
     except (KeyError, TypeError, ValueError):
         return JsonResponse({"error": "A stream is given by id"}, status=400)
-    try:
-        changed = ACTIONS[action](data)
-    except ValueError as e:
-        return JsonResponse({"error": str(e)}, status=400)
-    logger.info(f"Stream Check: {action} stream {data['stream_id']} ({changed} channels)")
-    return JsonResponse({"done": action, "channels": changed})
+    if not stream_ids:
+        return JsonResponse({"error": "No streams were given"}, status=400)
+
+    changed = 0
+    done = []
+    for stream_id in stream_ids:
+        data = {"stream_id": stream_id, "channel_id": channel_id, "reason": reason}
+        try:
+            changed += ACTIONS[action](data) or 0
+            done.append(stream_id)
+        except ValueError as e:
+            # One stream that cannot be done does not stop the rest: with every stream of
+            # a channel going at once, stopping half way is the worst of both
+            logger.warning(f"Stream Check: could not {action} stream {stream_id}: {e}")
+    if not done:
+        return JsonResponse({"error": f"Could not {action} those streams"}, status=400)
+    logger.info(f"Stream Check: {action} {len(done)} stream(s) ({changed} channels)")
+    return JsonResponse({"done": action, "channels": changed, "streams": done})

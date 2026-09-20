@@ -359,23 +359,43 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
 
                         # On first failure, check if the error is retryable
                         if attempt == 1:
-                            if error_reason and "maximum connection limits" not in error_reason:
+                            # Stream Check: a check may be holding the connection this
+                            # viewer needs. It lets go within a second, inside the wait
+                            # below. Costs one lookup when no check is running.
+                            #
+                            # Asked before the test underneath, and its answer overrides
+                            # it. That test only lets a retry happen when the provider
+                            # said "maximum connection limits" in those words, and a
+                            # provider whose only slot is held by a check refuses however
+                            # it likes -- 403, 407, its own wording. A viewer would then
+                            # be told no, with no retry and no signal to let go, while
+                            # the connection it needed was about to be free. Never take a
+                            # viewer's channel: if a run is going, it is worth the wait.
+                            from apps.channels.stream_check import make_way
+
+                            a_check_was_holding_it = make_way(proxy_server.redis_client)
+
+                            if (
+                                error_reason
+                                and "maximum connection limits" not in error_reason
+                                and not a_check_was_holding_it
+                            ):
                                 logger.warning(
                                     f"[{client_id}] Can't retry - error not related to connection limits: {error_reason}"
                                 )
                                 should_retry = False
                                 break
+                            if a_check_was_holding_it:
+                                logger.info(
+                                    f"[{client_id}] A stream check was holding a connection on this "
+                                    f"provider; waiting for it to let go rather than giving up "
+                                    f"({error_reason})"
+                                )
                             # Channel Switch Overlap: not even the overlap slot is free, so
                             # release the channels this viewer surfed past and try again.
                             probation.stop_skipped_channels(
                                 proxy_server.redis_client, viewer, channel_id, hold_slots=True
                             )
-                            # Stream Check: a check may be holding the connection this
-                            # viewer needs. It lets go within a second, inside the wait
-                            # below. Costs one lookup when no check is running.
-                            from apps.channels.stream_check import make_way
-
-                            make_way(proxy_server.redis_client)
 
                         # Check if we have time remaining for another sleep cycle
                         elapsed_time = time.time() - wait_start_time

@@ -236,25 +236,103 @@ const StreamLine = ({ stream, channel, onAct }) => (
   </Group>
 );
 
-const Expanded = ({ row, onAct }) => (
-  <Box p="sm" style={{ background: 'rgba(0,0,0,0.18)' }}>
-    <Stack gap={8}>
-      {row.dead && (
-        <Text size="xs" c="red.4">
-          Nothing on this channel plays: a viewer gets the fallback, or nothing.
-        </Text>
-      )}
-      {row.streams.map((stream) => (
-        <StreamLine
-          key={stream.id}
-          stream={stream}
-          channel={row.channel}
-          onAct={onAct}
-        />
-      ))}
-    </Stack>
-  </Box>
-);
+const Expanded = ({ row, onAct }) => {
+  // The fallback is never parked or removed: it is what the channel falls back to
+  const real = row.streams.filter((stream) => !stream.custom);
+  return (
+    <Box p="sm" style={{ background: 'rgba(0,0,0,0.18)' }}>
+      <Stack gap={8}>
+        {row.dead && (
+          <Text size="xs" c="red.4">
+            {deadText(row)}: a viewer gets the fallback, or nothing.
+          </Text>
+        )}
+        {real.length > 1 && (
+          // When every stream of a channel is broken the channel is dealt with, not the
+          // streams one at a time -- which is also how the row came out from under you
+          <Group gap={4} wrap="wrap">
+            <Text size="xs" c="dimmed">
+              All {real.length} streams at once:
+            </Text>
+            <Button
+              size="compact-xs"
+              variant="light"
+              color="yellow"
+              onClick={() => onAct('park', real, row.channel)}
+            >
+              Park all
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="light"
+              color="red"
+              onClick={() => onAct('remove', real, row.channel)}
+            >
+              Remove all
+            </Button>
+          </Group>
+        )}
+        {row.streams.map((stream) => (
+          <StreamLine
+            key={stream.id}
+            stream={stream}
+            channel={row.channel}
+            onAct={onAct}
+          />
+        ))}
+      </Stack>
+    </Box>
+  );
+};
+
+// What a channel with nothing playing actually has wrong with it. "Nothing plays" is true
+// of a channel whose streams are all a black screen, and says the least useful thing about
+// it: black on every stream is a different problem from a channel nobody serves, and it is
+// usually the same problem on all of them.
+const KIND_WORDS = {
+  black: ['a black screen', 'black screens'],
+  frozen: ['a picture that does not move', 'pictures that do not move'],
+  placeholder: ["the provider's \"no stream\" card", "the provider's \"no stream\" cards"],
+  refused: ['refused by its provider', 'refused by their providers'],
+  dead: ['nothing at all', 'nothing at all'],
+};
+
+// The same in two or three words, for the badge on the row
+const DEAD_BADGE = {
+  black: 'All black',
+  frozen: 'All frozen',
+  placeholder: 'All "no stream"',
+  refused: 'All refused',
+};
+
+const deadBadge = (row) => {
+  const kinds = new Set(
+    row.streams
+      .filter((s) => !s.custom && ['failing', 'broken'].includes(s.state))
+      .map((s) => s.result?.kind)
+      .filter(Boolean)
+  );
+  return (kinds.size === 1 && DEAD_BADGE[[...kinds][0]]) || 'Nothing plays';
+};
+
+const deadText = (row) => {
+  const kinds = new Set(
+    row.streams
+      .filter((s) => !s.custom && ['failing', 'broken'].includes(s.state))
+      .map((s) => s.result?.kind)
+      .filter(Boolean)
+  );
+  const many = row.streams.filter((s) => !s.custom).length > 1;
+  if (kinds.size === 1) {
+    const words = KIND_WORDS[[...kinds][0]];
+    if (words) {
+      return many
+        ? `Every stream on this channel shows ${words[1]}`
+        : `This channel shows ${words[0]}`;
+    }
+  }
+  return 'Nothing on this channel plays';
+};
 
 const ACT_TEXT = {
   remove: (stream, channel) => ({
@@ -287,6 +365,8 @@ const StreamCheckTable = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [saving, setSaving] = useState(false);
   const [asking, setAsking] = useState(null);
+  // Channels acted on, listed whatever the view says until the view is changed
+  const [keepShowing, setKeepShowing] = useState(() => new Set());
 
   const load = useCallback(
     async (quiet = false) => {
@@ -297,7 +377,8 @@ const StreamCheckTable = () => {
           await API.getStreamCheck(
             ['parked', 'needs_you', 'ignored'].includes(show)
               ? 'problems'
-              : show
+              : show,
+            [...keepShowing]
           )
         );
         setError(null);
@@ -307,7 +388,7 @@ const StreamCheckTable = () => {
         if (!quiet) setLoading(false);
       }
     },
-    [show]
+    [show, keepShowing]
   );
 
   useEffect(() => {
@@ -328,6 +409,10 @@ const StreamCheckTable = () => {
   const act = async (action, stream, channel = null) => {
     setError(null);
     setNotice(null);
+    // Parking the broken stream of a channel left it with nothing broken, so the row
+    // dropped out of this view -- taking with it the stream you had not got to yet. A
+    // channel acted on stays until the view is changed.
+    if (channel?.id) setKeepShowing((all) => new Set(all).add(channel.id));
     try {
       if (action === 'clear') {
         await API.clearStreamCheck();
@@ -337,6 +422,19 @@ const StreamCheckTable = () => {
         setWatchUntil(Date.now() + 5 * 60 * 1000);
         setNotice(
           `Checking "${stream.name}" now, once a login of its provider is free. Its result shows here when it is in.`
+        );
+      } else if (Array.isArray(stream)) {
+        // Every stream of a channel at once
+        await API.streamCheckAction(
+          action,
+          stream.map((one) => one.id),
+          channel?.id ?? null
+        );
+        setNotice(
+          {
+            park: `${stream.length} stream${stream.length === 1 ? '' : 's'} of "${channel?.name}" parked: off the channel, and checked again on every run.`,
+            remove: `${stream.length} stream${stream.length === 1 ? '' : 's'} removed from "${channel?.name}".`,
+          }[action] || 'Done.'
         );
       } else {
         await API.streamCheckAction(action, stream.id, channel?.id ?? null);
@@ -443,9 +541,11 @@ const StreamCheckTable = () => {
           return (
             <Group gap={4} wrap="wrap">
               {r.dead && (
-                <Badge size="xs" color="red">
-                  Nothing plays
-                </Badge>
+                <Tooltip label={deadText(r)}>
+                  <Badge size="xs" color="red">
+                    {deadBadge(r)}
+                  </Badge>
+                </Tooltip>
               )}
               {!r.dead && r.broken > 0 && (
                 <Badge size="xs" variant="light" color="red">
@@ -721,7 +821,11 @@ const StreamCheckTable = () => {
                   aria-label="Which channels"
                   value={show}
                   onChange={(value) => {
-                    if (value) setShow(value);
+                    if (value) {
+                      setShow(value);
+                      // A view chosen afresh shows what that view means, and nothing kept
+                      setKeepShowing(new Set());
+                    }
                     setPageIndex(0);
                   }}
                   allowDeselect={false}

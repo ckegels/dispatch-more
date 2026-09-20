@@ -809,15 +809,20 @@ class RunTests(_Setup):
         self.assertIn("/live/user/pass/1234.ts", url)
         self.assertNotIn("olduser", url)
 
-    def test_the_saved_on_from_before_goes_back_to_off(self):
-        """Checking beside viewers is the default now; a setting saved before it is not kept."""
-        stream_check._store(stream_check.SETTINGS_KEY, "Stream Check", {"only_when_idle": True, "every_hours": 12, "gap_seconds": 1})
+    def test_the_saved_off_from_before_goes_back_to_on(self):
+        """
+        Checking only while nothing plays is the default again (version 4), after a viewer
+        changing channel onto a provider a check was using lost their channel. A setting
+        saved before that takes the new default; what else was saved is kept.
+        """
+        stream_check._store(stream_check.SETTINGS_KEY, "Stream Check", {"only_when_idle": False, "every_hours": 12, "gap_seconds": 1})
         loaded = stream_check.load_settings()
-        self.assertFalse(loaded["only_when_idle"])
+        self.assertTrue(loaded["only_when_idle"])
         self.assertEqual(loaded["gap_seconds"], 3)
         self.assertEqual(loaded["every_hours"], 12)
-        stream_check.save_settings({"only_when_idle": True})
-        self.assertTrue(stream_check.load_settings()["only_when_idle"])
+        # ...and choosing it for yourself is kept
+        stream_check.save_settings({"only_when_idle": False})
+        self.assertFalse(stream_check.load_settings()["only_when_idle"])
 
     def _limit(self):
         return stream_check.load_limits().get("server:a", {})
@@ -1057,9 +1062,34 @@ class ChainTests(_Setup):
         self.addCleanup(patcher.stop)
         stream_check.save_settings({"gap_seconds": 0})
 
+    def test_make_way_says_whether_a_run_was_going(self):
+        """
+        The viewer's path needs the answer, not just the signal. A provider whose only
+        connection a check is holding refuses however it likes -- and the stock test that
+        decides whether to wait only recognises one wording, so without this a viewer was
+        told no, with no retry, while the connection it needed was about to be free.
+        """
+        self.assertFalse(stream_check.make_way(self.redis))
+        self.redis.set(stream_check.RUN_KEY, "1")
+        self.assertTrue(stream_check.make_way(self.redis))
+        self.assertTrue(self.redis.exists(stream_check.YIELD_KEY))
+
+    def test_a_round_waits_for_everything_to_stop_by_default(self):
+        from apps.channels.tasks import run_stream_check
+
+        stream_check.start_round(self.redis, force=True)
+        self.redis.set("live:channel:abc:metadata", "1")
+        with mock.patch.object(run_stream_check, "apply_async"), \
+                mock.patch.object(stream_check, "probe") as probe:
+            self.assertEqual(run_stream_check(), "waiting")
+        probe.assert_not_called()
+        self.assertIn("nothing is playing", stream_check.progress(self.redis)["message"])
+
     def test_a_waiting_round_is_tried_again_in_a_minute_once(self):
         from apps.channels.tasks import run_stream_check, stream_check_tick
 
+        # With checks allowed beside viewers, the wait is per provider instead
+        stream_check.save_settings({"only_when_idle": False})
         stream_check.start_round(self.redis, force=True)
         self.redis.set("live:channel:abc:metadata", "1")
         self.redis.set("stream_profile:1", self.a.profiles.get().id)
@@ -1409,6 +1439,47 @@ class ViewTests(_Setup):
         self.assertEqual(parked[0]["from"][0]["name"], "┃AT┃ ORF 1")
         self.api.post("/api/channels/stream-check/action/", {"action": "restore", "stream_id": self.second.id}, format="json")
         self.assertIn("ORF 1 B", self._order(self.orf1))
+
+    def test_every_stream_of_a_channel_can_be_parked_at_once(self):
+        """
+        A channel whose streams are all broken is dealt with a channel at a time. Doing it
+        a stream at a time took the row out from under you: park the broken one and the
+        channel had nothing broken left, so it left the list with the stream you had not
+        got to yet still on it.
+        """
+        response = self.api.post(
+            "/api/channels/stream-check/action/",
+            {"action": "park", "stream_ids": [self.first.id, self.second.id, self.third.id]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            sorted(response.json()["streams"]),
+            sorted([self.first.id, self.second.id, self.third.id]),
+        )
+        parked = self.api.get("/api/channels/stream-check/").json()["parked"]
+        self.assertEqual(len(parked), 3)
+        # ...and the fallback is still the only thing left on the channel
+        self.assertEqual(self._order(self.orf1), ["could not dispatch"])
+
+    def test_one_stream_that_cannot_be_done_does_not_stop_the_others(self):
+        # Stopping half way through a channel is the worst of both
+        response = self.api.post(
+            "/api/channels/stream-check/action/",
+            {"action": "park", "stream_ids": [self.fallback.id, self.second.id]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["streams"], [self.second.id])
+
+    def test_a_channel_just_acted_on_stays_on_the_list(self):
+        # Whatever the view would otherwise do with it, now that it has nothing broken
+        data = self.api.get(
+            f"/api/channels/stream-check/?show=broken&keep={self.orf1.id}"
+        ).json()
+        self.assertEqual([r["channel"]["id"] for r in data["rows"]], [self.orf1.id])
+        # ...and without being asked for, it is not there
+        self.assertEqual(self.api.get("/api/channels/stream-check/?show=broken").json()["rows"], [])
 
     def test_the_fallback_cannot_be_removed_from_here(self):
         response = self.api.post("/api/channels/stream-check/action/", {"action": "remove", "stream_id": self.fallback.id}, format="json")

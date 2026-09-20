@@ -128,10 +128,14 @@ DEFAULTS = {
     # two refreshes went by.
     "autopark": False,
     "autopark_after": 3,
-    # Only while nothing at all is playing through Dispatcharr. Off by default: checks go
-    # on while people watch, but never on a provider any of them is using (see
-    # _Providers). On, nothing is checked while anyone watches anything.
-    "only_when_idle": False,
+    # Only while nothing at all is playing through Dispatcharr. On: nothing is checked
+    # while anyone watches anything. A check never uses a provider somebody is watching
+    # through (see _Providers) and lets go of a connection a viewer needs (make_way), and
+    # even so a viewer changing channel onto a provider a check was on has gone wrong
+    # once -- and once is enough, because it costs somebody their television. Runs take
+    # longer on a setup where something is nearly always playing; that is the trade, and
+    # it is made this way round on purpose.
+    "only_when_idle": True,
     # A provider whose first streams in a run all fail is down, not its streams: after this
     # many in a row it is left for the rest of the run, and those failures do not count
     "account_failures": 5,
@@ -264,10 +268,12 @@ def _store(key, name, value):
 
 
 # Saved settings from before a default changed keep everything but what changed. Version 2:
-# only_when_idle went from on to off, once providers in use could be told apart. Version 3:
+# only_when_idle went from on to off, once providers in use could be told apart; back
+# on in version 4, after a viewer changing channel onto a provider a check was using
+# lost their channel altogether. Version 3:
 # gap_seconds went from 1 to 3.
-SETTINGS_VERSION = 3
-CHANGED_IN = {2: ("only_when_idle",), 3: ("gap_seconds",)}
+SETTINGS_VERSION = 4
+CHANGED_IN = {2: ("only_when_idle",), 3: ("gap_seconds",), 4: ("only_when_idle",)}
 
 
 def load_settings():
@@ -810,13 +816,20 @@ def make_way(redis_client):
     """
     A viewer found a provider full: if a check could be holding the connection, have it
     let go. Called from the viewer's path, so it costs one lookup when no run is going.
+
+    Answers whether a run was going, and so whether letting go is even possible. The
+    viewer's path needs to know: a provider refusing while a check holds its connection
+    is worth waiting a moment and asking again for, and a provider refusing for any other
+    reason is not.
     """
     try:
         if redis_client and redis_client.exists(RUN_KEY):
             redis_client.set(YIELD_KEY, "1", ex=YIELD_SECONDS)
             logger.info("Stream Check: a viewer needs a connection, checks are making way")
+            return True
     except Exception as e:
         logger.debug(f"Stream Check could not be asked to make way: {e}")
+    return False
 
 
 def in_window(settings, now=None):
@@ -2559,7 +2572,7 @@ def _close_up(channel_id):
 # ── What the page shows ──────────────────────────────────────────────────────
 
 
-def issues(redis_client, show="problems"):
+def issues(redis_client, show="problems", keep=()):
     """
     The channels with a stream that does not play, each with all its streams as last
     found, and the parked streams. show: "problems" (failing or broken), "broken", or
@@ -2597,11 +2610,15 @@ def issues(redis_client, show="problems"):
         needs_you = [s for s in bad if (s.get("result") or {}).get("kind") not in ("", None, DEAD)]
         broken = [s for s in real if s["state"] == "broken"]
         working = [s for s in real if s["state"] == "ok"]
-        if show == "broken" and not broken:
+        # A channel just acted on stays on the list whatever the view says. Parking the
+        # broken stream of a channel leaves it with nothing broken, and the row used to
+        # drop out then and there -- taking with it the stream nobody had got to yet.
+        kept = channel_id in keep
+        if show == "broken" and not broken and not kept:
             continue
-        if show == "problems" and not bad and not suspects:
+        if show == "problems" and not bad and not suspects and not kept:
             continue
-        if show == "all" and all(s["state"] == "unchecked" for s in real):
+        if show == "all" and all(s["state"] == "unchecked" for s in real) and not kept:
             continue
         rows.append({
             "key": f"ch:{channel_id}",

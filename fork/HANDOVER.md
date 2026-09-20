@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v132** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v133** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -651,6 +651,31 @@ no longer play. Summary of how it works now:
   count/span recorded, provider left completely alone, retried after 30 s…60 min until it
   plays, then limit = 80 % of the count per (span + block). Shown/editable/forgettable in
   settings; limits set by hand kept; `LIMITS_VERSION` drops old learned ones.
+- **A viewer is never left with a dead channel** (v133, and it happened once). `make_way`
+  answers whether a run was going, and `live_proxy/views.py` asks it **before** stock's test
+  of the refusal's wording and lets that answer override it. Stock only retries when the
+  provider said "maximum connection limits" in those words; a provider whose only connection
+  a check is holding refuses however it likes (403, 407, its own phrasing), so the viewer was
+  told no, with no retry and no signal to let go, while the connection it needed was seconds
+  from being free. With a run going, the wait now always happens.
+- **`only_when_idle` is on by default** (v133, `SETTINGS_VERSION` 4, on → off in v2 and back
+  again here). A check never uses a provider somebody is watching through and lets go when a
+  viewer needs it, and even so a viewer changing channel onto a provider a check was on lost
+  their channel. Once is enough. Runs take longer on a setup that is rarely idle; that is the
+  trade, made this way round on purpose.
+- **A channel is dealt with a channel at a time:** Park all / Remove all on the row, and the
+  action endpoint takes `stream_ids` as well as `stream_id` (one stream that cannot be done
+  does not stop the rest). Doing it a stream at a time took the row out from under you --
+  parking the broken stream left the channel with nothing broken, so it left the view with
+  the stream nobody had got to yet still on it. A channel just acted on is now listed whatever
+  the view says (`keep=` on the overview, cleared when the view is changed).
+- **"Nothing plays" says what is actually wrong** when every stream failed the same way: all
+  black, all frozen, all the provider's card, all refused. A channel whose streams are all a
+  black screen is a different problem from one nobody serves.
+- **"Not checked" after a finished run is not a bug.** A stream the run could never reach --
+  the provider was in use the whole time, or at its learned limit, or the account was left for
+  the round -- is recorded `skipped` with the reason, counted nowhere, and looked at again next
+  run. The reason is on the row when it is opened.
 - **Rechecks:** failing streams again every `recheck_hours` (3) or after each successful
   playlist refresh of their provider (hook in `apps/m3u/tasks.py`, recorded in
   `stream-check-recheck`). **Autopark** (off): `dead` `autopark_after` (3) checks in a row →
