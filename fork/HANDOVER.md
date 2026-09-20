@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v141** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v142** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -660,6 +660,14 @@ The numbers are worked out **on the server** and the page asks after each drag
 another in JavaScript. Nothing is written until Apply, which sends only what would actually
 change; `apply` saves each channel with `update_fields` (a number or a group changing is
 something else in Dispatcharr watches for) and leaves alone a channel gone since.
+
+**A channel can be dragged into another group** (v142), changing its group and its place in
+one go: one `DndContext` around every group rather than one each, a `GroupBox` droppable so an
+empty group can receive, `onDragOver` moving it across as the cursor goes so what is under the
+cursor is what would happen, and `moves` ({channel: group}) sent with the numbers on apply.
+`numbers_for` works the group's first number out **without** the channel being moved -- one
+coming from another group brings its old number with it, and a channel numbered 5 dropped at
+the top of a group starting at 100 must take 100, not 5.
 
 The page also says what nothing else does: **two channels on one number**. `channel_number`
 is a float and its uniqueness is only checked within a group, by `clean()`, which `save()`

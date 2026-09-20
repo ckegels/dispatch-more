@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  closestCenter,
+  closestCorners,
   DndContext,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
+  useDroppable,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -98,6 +99,22 @@ const Channel = ({ channel, was }) => {
   );
 };
 
+// A group takes a drop as a whole as well as between its channels, so a channel can be
+// moved into one that is empty
+const GroupBox = ({ id, children }) => {
+  const { setNodeRef, isOver } = useDroppable({ id: `group-${id}` });
+  return (
+    <Paper
+      ref={setNodeRef}
+      p={4}
+      withBorder
+      style={isOver ? { outline: '1px solid var(--mantine-color-blue-6)' } : undefined}
+    >
+      {children}
+    </Paper>
+  );
+};
+
 const GuideLayoutTable = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -111,6 +128,8 @@ const GuideLayoutTable = () => {
   const [confirming, setConfirming] = useState(false);
   const [from, setFrom] = useState(1);
   const [step, setStep] = useState(1);
+  // Channels dragged into another group: {channel id: group id}
+  const [moves, setMoves] = useState({});
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
@@ -129,6 +148,7 @@ const GuideLayoutTable = () => {
         )
       );
       setNumbers({});
+      setMoves({});
       setError(null);
     } catch (e) {
       setError(e?.body?.error || 'Could not load the lineup.');
@@ -163,13 +183,51 @@ const GuideLayoutTable = () => {
     }
   }, []);
 
-  const onDragEnd = (groupId) => (event) => {
+  // Which group a thing being dragged over belongs to: a channel's group, or the group
+  // itself when the drop is on its empty space
+  const groupOf = useCallback(
+    (id) => {
+      const text = String(id);
+      if (text.startsWith('group-')) return Number(text.slice(6));
+      const found = Object.entries(order).find(([, ids]) => ids.includes(id));
+      return found ? Number(found[0]) : null;
+    },
+    [order]
+  );
+
+  // Dragged over another group: it goes there and then, so what is under the cursor is
+  // what would happen. Where it lands within the group is settled on the drop.
+  const onDragOver = (event) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const ids = order[groupId] || [];
-    const moved = arrayMove(ids, ids.indexOf(active.id), ids.indexOf(over.id));
-    setOrder((all) => ({ ...all, [groupId]: moved }));
-    arrange({ order: moved, moved: active.id });
+    if (!over) return;
+    const from = groupOf(active.id);
+    const to = groupOf(over.id);
+    if (from == null || to == null || from === to) return;
+    setOrder((all) => {
+      const leaving = (all[from] || []).filter((id) => id !== active.id);
+      const joining = [...(all[to] || [])];
+      const at = joining.indexOf(over.id);
+      joining.splice(at === -1 ? joining.length : at, 0, active.id);
+      return { ...all, [from]: leaving, [to]: joining };
+    });
+  };
+
+  const onDragEnd = (event) => {
+    const { active, over } = event;
+    if (!over) return;
+    const to = groupOf(over.id);
+    if (to == null) return;
+    const ids = order[to] || [];
+    const at = ids.indexOf(active.id);
+    const onto = ids.indexOf(over.id);
+    const arranged =
+      at === -1 || onto === -1 || at === onto ? ids : arrayMove(ids, at, onto);
+    setOrder((all) => ({ ...all, [to]: arranged }));
+    // A channel that has left its group is on the move as well as being renumbered
+    if (byId[active.id] && byId[active.id].group_id !== to) {
+      setMoves((all) => ({ ...all, [active.id]: to }));
+    }
+    arrange({ order: arranged, moved: active.id });
   };
 
   const renumber = (groupId) => {
@@ -184,12 +242,17 @@ const GuideLayoutTable = () => {
       ),
     [numbers, byId]
   );
+  // A channel can move group without its number changing, and that is a change too
+  const changingCount = useMemo(
+    () => new Set([...changing.map(([id]) => id), ...Object.keys(moves)]).size,
+    [changing, moves]
+  );
 
   const apply = async () => {
     setConfirming(false);
     setBusy(true);
     try {
-      await API.applyGuideLayout(Object.fromEntries(changing));
+      await API.applyGuideLayout(Object.fromEntries(changing), moves);
       await load();
     } catch (e) {
       setError(e?.body?.error || 'Could not apply that.');
@@ -231,7 +294,7 @@ const GuideLayoutTable = () => {
               )}
             </Group>
             <Group gap="sm" wrap="wrap">
-              {changing.length > 0 && (
+              {changingCount > 0 && (
                 <Button
                   size="xs"
                   variant="subtle"
@@ -243,18 +306,19 @@ const GuideLayoutTable = () => {
               )}
               <Button
                 size="xs"
-                disabled={!changing.length || busy}
+                disabled={!changingCount || busy}
                 onClick={() => setConfirming(true)}
               >
-                Apply ({changing.length})
+                Apply ({changingCount})
               </Button>
             </Group>
           </Group>
 
           <Text size="xs" c="dimmed" mb="sm">
-            Drag a channel where it belongs. It takes that place and the others move only
-            as far as they must, so the numbers you have are kept wherever they still
-            work. Nothing is written until you apply.
+            Drag a channel where it belongs, in its own group or into another one. It
+            takes that place and the others move only as far as they must, so the numbers
+            you have are kept wherever they still work. Nothing is written until you
+            apply.
           </Text>
 
           {shown.length === 0 && !loading ? (
@@ -264,6 +328,15 @@ const GuideLayoutTable = () => {
               </Text>
             </Center>
           ) : (
+            // One context around every group, so a channel can be dragged out of its own
+            // into another rather than only up and down within it
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCorners}
+              modifiers={[restrictToVerticalAxis]}
+              onDragOver={onDragOver}
+              onDragEnd={onDragEnd}
+            >
             <Stack gap="lg">
               {shown.map((one) => (
                 <Box key={one.id}>
@@ -301,19 +374,14 @@ const GuideLayoutTable = () => {
                       <Button
                         size="xs"
                         variant="default"
+                        aria-label={`Renumber every channel of ${one.name}`}
                         onClick={() => renumber(one.id)}
                       >
                         Renumber them all
                       </Button>
                     </Group>
                   </Group>
-                  <Paper p={4} withBorder>
-                    <DndContext
-                      sensors={sensors}
-                      collisionDetection={closestCenter}
-                      modifiers={[restrictToVerticalAxis]}
-                      onDragEnd={onDragEnd(one.id)}
-                    >
+                  <GroupBox id={one.id}>
                       <SortableContext
                         items={order[one.id] || []}
                         strategy={verticalListSortingStrategy}
@@ -335,11 +403,11 @@ const GuideLayoutTable = () => {
                           ))}
                         </Stack>
                       </SortableContext>
-                    </DndContext>
-                  </Paper>
+                  </GroupBox>
                 </Box>
               ))}
             </Stack>
+            </DndContext>
           )}
         </Paper>
       </Box>
@@ -348,7 +416,7 @@ const GuideLayoutTable = () => {
         opened={confirming}
         onClose={() => setConfirming(false)}
         onConfirm={apply}
-        title={`Renumber ${changing.length} channel${changing.length === 1 ? '' : 's'}?`}
+        title={`Renumber ${changingCount} channel${changingCount === 1 ? '' : 's'}?`}
         message="Every channel shown with a new number gets it. Your media servers read the numbers, so their own lineups change with it. Nothing else about the channels is touched."
         confirmLabel="Apply"
         actionKey="apply-guide-layout"

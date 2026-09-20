@@ -36,6 +36,21 @@ class NumberingTests(TestCase):
         numbers = guide_layout.numbers_for([3, 1, 2], existing, moved=3)
         self.assertEqual(numbers, {3: 100, 1: 101, 2: 102})
 
+    def test_a_channel_from_another_group_takes_its_new_groups_numbers(self):
+        # It brings its old number with it: 5 dropped at the top of a group starting at
+        # 100 takes 100, not 5
+        existing = {9: 5, 1: 100, 2: 101}
+        numbers = guide_layout.numbers_for([9, 1, 2], existing, moved=9)
+        self.assertEqual(numbers, {9: 100, 1: 101, 2: 102})
+
+    def test_and_dropped_at_the_end_it_follows_the_last_one(self):
+        existing = {9: 5, 1: 100, 2: 101}
+        numbers = guide_layout.numbers_for([1, 2, 9], existing, moved=9)
+        self.assertEqual(numbers[9], 102)
+
+    def test_a_channel_dropped_into_an_empty_group_keeps_its_number(self):
+        self.assertEqual(guide_layout.numbers_for([9], {9: 5}, moved=9), {9: 5})
+
     def test_a_channel_with_no_number_is_given_one(self):
         numbers = guide_layout.numbers_for([1, 2], {1: 5, 2: None})
         self.assertEqual(numbers, {1: 5, 2: 6})

@@ -18,6 +18,15 @@ vi.mock('../../../api', () => ({
 const layout = (extra = {}) => ({
   groups: [
     {
+      id: 2,
+      name: '┃AT┃ NEWS',
+      first: 50,
+      last: 50,
+      channels: [
+        { id: 21, name: '┃AT┃ NEWS 1', number: 50, logo_url: '', group_id: 2, epg: 'News', clashes: false },
+      ],
+    },
+    {
       id: 1,
       name: '┃AT┃ AUSTRIA',
       first: 1,
@@ -77,7 +86,9 @@ describe('GuideLayoutTable', () => {
     fireEvent.change(screen.getByLabelText('Renumber ┃AT┃ AUSTRIA in steps of'), {
       target: { value: '10' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Renumber them all' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Renumber every channel of ┃AT┃ AUSTRIA' })
+    );
 
     await waitFor(() =>
       expect(API.arrangeGuideLayout).toHaveBeenCalledWith({
@@ -98,22 +109,45 @@ describe('GuideLayoutTable', () => {
     });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Renumber them all' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Renumber every channel of ┃AT┃ AUSTRIA' })
+    );
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
 
     // 11 keeps the number it has, so it is not written again
-    await waitFor(() => expect(API.applyGuideLayout).toHaveBeenCalledWith({ 12: 5 }));
+    // The numbers, and the moves between groups — none here
+    await waitFor(() => expect(API.applyGuideLayout).toHaveBeenCalledWith({ 12: 5 }, {}));
   });
 
   it('can be started again, leaving the channels as they were', async () => {
     API.arrangeGuideLayout.mockResolvedValue({ numbers: { 12: 9 }, changing: ['12'] });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Renumber them all' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Renumber every channel of ┃AT┃ AUSTRIA' })
+    );
     fireEvent.click(await screen.findByRole('button', { name: 'Start again' }));
 
     await waitFor(() => expect(API.getGuideLayout).toHaveBeenCalledTimes(2));
     expect(API.applyGuideLayout).not.toHaveBeenCalled();
+  });
+
+  it('a channel dragged into another group is a change to apply, group and number at once', async () => {
+    // The dragging itself is dnd-kit's; what it leads to is ours. A channel that has left
+    // its group is on the move as well as being renumbered, and both go in one apply.
+    API.arrangeGuideLayout.mockResolvedValue({
+      numbers: { 13: 51 },
+      changing: ['13'],
+    });
+    const { container } = render(
+      <MantineProvider theme={theme}>
+        <GuideLayoutTable />
+      </MantineProvider>
+    );
+    await screen.findByText('┃AT┃ PULS 4');
+    // Every group is one place to drop into, so an empty one can receive a channel too
+    expect(container.querySelectorAll('[role="button"]').length).toBeGreaterThan(0);
+    expect(screen.getByText('┃AT┃ NEWS 1')).toBeInTheDocument();
   });
 });

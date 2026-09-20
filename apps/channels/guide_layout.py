@@ -32,7 +32,14 @@ def numbers_for(order, existing, moved=None):
     dropped in rather than keeping its own -- everything else keeps what it has unless the
     order would be wrong, and then it moves by as little as possible.
     """
-    base = min((n for n in existing.values() if n is not None), default=1)
+    # What the first number of this group is, worked out without the channel being moved:
+    # one coming from another group brings its old number with it, and a channel numbered
+    # 5 dropped at the top of a group that starts at 100 must take 100, not 5.
+    base = min(
+        (n for one, n in existing.items() if n is not None and one != moved), default=None
+    )
+    if base is None:
+        base = existing.get(moved) or 1
     numbers = {}
     last = None
     for channel_id in order:
