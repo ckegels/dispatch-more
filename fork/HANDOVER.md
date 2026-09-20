@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v142** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v143** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -375,10 +375,16 @@ row, because that is where you look when none of them is the one you want.
 
 Which groups, exactly, is a lever since v134 (`group_choices`). The page is told what kind
 each group is rather than handed a list somebody else chose: **with_channels** (you have
-channels in it), **empty** (nothing in it at all, so somebody made it by hand), **active_m3u**
-and **inactive_m3u** (a provider's group, carrying streams of an account switched on or off).
-The first two are the default; a provider's hundreds are there to be asked for. A group made
-on the page is always offered, whatever the lever says.
+channels in it), **active_m3u** / **inactive_m3u** (a provider's group, of an account switched
+on or off), **empty** (nothing in it and no provider's name on it, so somebody made it by
+hand). The first and last are the default; a provider's hundreds are there to be asked for. A
+group made on the page is always offered, whatever the lever says.
+
+**What says a group is a provider's is the M3U account linked to it** (`ChannelGroupM3UAccount`),
+not whether it has streams in it now -- v142 counted streams, and a provider lists hundreds of
+groups while carrying streams in a handful at any moment, so all the rest came out "empty" and
+every one of them was offered. That is the whole thing the lever exists to keep out of the way,
+and it was letting them all through.
 
 That took two goes (v131). A group made on the page has **no channels in it yet**, so "groups
 you have channels in" hid it the moment it was made -- the offered set is now groups with

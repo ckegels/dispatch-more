@@ -34,18 +34,24 @@ def channel_manager_options(request):
     # those you want to see is not something to decide for somebody.
     #
     #   with_channels  you have channels in it
-    #   empty          nothing in it at all, so somebody made it by hand -- very likely a
-    #                  moment ago on this page
-    #   active_m3u     a provider's group, carrying streams of an account switched on
+    #   active_m3u     a provider's group, of an account switched on
     #   inactive_m3u   the same, of an account switched off
+    #   empty          nothing in it and no provider's name on it, so somebody made it by
+    #                  hand -- very likely a moment ago on this page
+    #
+    # What says a group is a provider's is that an M3U account is **linked to it**, not
+    # that it has streams in it now. A provider lists hundreds of groups and carries
+    # streams in a handful of them at any moment, so counting streams called the rest
+    # "empty" and offered every one of them -- which is the whole thing this was meant to
+    # keep out of the way.
     #
     # Not "channels"/"streams" as annotation names: they are the relations themselves.
     def kind_of(group):
         if group.how_many:
             return "with_channels"
-        if not group.their_streams:
-            return "empty"
-        return "active_m3u" if group.live_streams else "inactive_m3u"
+        if group.accounts or group.their_streams:
+            return "active_m3u" if (group.live_accounts or group.live_streams) else "inactive_m3u"
+        return "empty"
 
     channel_groups = [
         {
@@ -60,6 +66,12 @@ def channel_manager_options(request):
             their_streams=Count("streams", distinct=True),
             live_streams=Count(
                 "streams", filter=Q(streams__m3u_account__is_active=True), distinct=True
+            ),
+            accounts=Count("m3u_accounts", distinct=True),
+            live_accounts=Count(
+                "m3u_accounts",
+                filter=Q(m3u_accounts__m3u_account__is_active=True),
+                distinct=True,
             ),
         ).order_by("name")
     ]

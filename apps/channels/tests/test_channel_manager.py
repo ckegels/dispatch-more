@@ -1071,6 +1071,8 @@ class ViewTests(_Setup):
         """
         from apps.channels.models import ChannelGroup
 
+        from apps.channels.models import ChannelGroupM3UAccount
+
         ChannelGroup.objects.create(name="┃AT┃ KIDS")
         theirs = ChannelGroup.objects.create(name="AT | PROVIDER SPORT")
         self._stream("AT | SOME SPORT", self.a, group=theirs)
@@ -1078,6 +1080,15 @@ class ViewTests(_Setup):
         self.b.is_active = False
         self.b.save(update_fields=["is_active"])
         self._stream("AT | SOMETHING OLD", self.b, group=switched_off)
+
+        # A provider lists hundreds of groups and has streams in a handful of them at any
+        # moment. The empty ones are still the provider's, and what says so is that the
+        # account is linked to them -- counting streams called them all "empty" and
+        # offered every one.
+        empty_of_theirs = ChannelGroup.objects.create(name="AF | AFRICA")
+        ChannelGroupM3UAccount.objects.create(channel_group=empty_of_theirs, m3u_account=self.a)
+        empty_of_an_old_one = ChannelGroup.objects.create(name="AF | OLD AFRICA")
+        ChannelGroupM3UAccount.objects.create(channel_group=empty_of_an_old_one, m3u_account=self.b)
 
         kinds = {
             g["name"]: g["kind"]
@@ -1087,6 +1098,16 @@ class ViewTests(_Setup):
         self.assertEqual(kinds["┃AT┃ KIDS"], "empty")
         self.assertEqual(kinds["AT | PROVIDER SPORT"], "active_m3u")
         self.assertEqual(kinds["AT | OLD PROVIDER"], "inactive_m3u")
+        self.assertEqual(kinds["AF | AFRICA"], "active_m3u")
+        self.assertEqual(kinds["AF | OLD AFRICA"], "inactive_m3u")
+
+    def test_a_group_with_nothing_in_it_and_no_provider_on_it_is_yours(self):
+        ChannelGroup.objects.create(name="┃AT┃ KIDS")
+        kinds = {
+            g["name"]: g["kind"]
+            for g in self.client_api.get("/api/channels/channel-manager/").json()["channel_groups"]
+        }
+        self.assertEqual(kinds["┃AT┃ KIDS"], "empty")
 
     def test_by_default_only_your_own_groups_are_asked_for(self):
         self.assertEqual(
