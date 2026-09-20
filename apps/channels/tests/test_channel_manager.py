@@ -574,6 +574,25 @@ class GuideChoiceTests(_Setup):
         self.assertFalse(found[never_read.id]["in_use"])
         self.assertTrue(found[really_empty.id]["in_use"])
 
+    def test_the_guide_a_channel_is_on_is_shown_with_its_source_before_and_after(self):
+        # So the two can be read against each other: two entries of one name are told
+        # apart by where they come from
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        self.orf1.epg_data = guide
+        self.orf1.save(update_fields=["epg_data"])
+        self._stream("┃AT┃ ORF 1 FHD", self.b)
+        row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
+        self.assertEqual(row["before"]["channel"]["epg"]["name"], "ORF 1")
+        self.assertEqual(row["before"]["channel"]["epg"]["source"], "Austria")
+        self.assertEqual(row["channel"]["epg"]["source"], "Austria")
+
+    def test_a_guide_belonging_to_no_source_says_so_rather_than_failing(self):
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1")
+        self.orf1.epg_data = guide
+        self.orf1.save(update_fields=["epg_data"])
+        row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
+        self.assertEqual(row["before"]["channel"]["epg"]["source"], "")
+
     def test_guides_are_read_in_one_pass_of_each_source_s_file(self):
         # Reading one costs a pass of the whole file, so a window's worth goes in one
         a = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)

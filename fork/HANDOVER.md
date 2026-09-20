@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v120** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v121** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -305,6 +305,13 @@ question per row. Both travel on apply as `names` and `epgs` ({row key: guide id
 `drops`, worked out again rather than trusted from the page: a guide deleted since is applied
 to nothing, a name of only spaces is no name. Conflict rows have no channel, so they have
 neither.
+
+**The guide is shown on both sides** (v121): the Before column says which guide the channel is
+on now, with its source, and the After column says the one it would come out with, in the same
+words -- so the two lines read against each other. `_channel_summary` carries the source for
+that (`epg_data__epg_source` is select_related with it). A card whose `in_use` the server has
+not said anything about claims nothing either way: the guide a row was matched to is on the
+window's list from the start, but the plan's summary does not know what it holds.
 
 **Why the guide is a window and not a dropdown** (v118). The first try was a Mantine `Select`
 and it was wrong twice over. It was wired with `searchValue` as the server query, so choosing

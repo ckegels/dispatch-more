@@ -45,7 +45,13 @@ const guide = {
 const mergeRow = {
   key: 'ch:1', status: 'merge', adds: 1, removes: 0, changes: [], country: 'at',
   channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', logo_url: '', epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' } },
-  before: { channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, logo_url: '' }, streams: [stream(1, '┃AT┃ ORF 1'), fallback] },
+  before: {
+    channel: {
+      id: 1, name: '┃AT┃ ORF 1', number: 1, logo_url: '',
+      epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' },
+    },
+    streams: [stream(1, '┃AT┃ ORF 1'), fallback],
+  },
   streams: [
     stream(1, '┃AT┃ ORF 1'),
     stream(2, '┃AT┃ ORF 1 FHD', { added: true, quality: 'FHD', account: 'Provider B' }),
@@ -94,7 +100,9 @@ describe('ChannelManagerTable', () => {
   it('shows each channel as it is and as it would be, and what it comes to', async () => {
     draw();
     expect((await screen.findAllByText('┃AT┃ ORF 1')).length).toBeGreaterThan(0);
-    expect(screen.getByText('Guide: ORF 1')).toBeInTheDocument();
+    // The guide it is on now and the one it would come out with, said the same way on
+    // both sides so they can be read against each other
+    expect(screen.getAllByText('Guide: ORF 1 · Austria')).toHaveLength(2);
     expect(screen.getByText(/1 channels gain 1 streams/)).toBeInTheDocument();
     expect(screen.getByText(/1 conflicts/)).toBeInTheDocument();
   });
@@ -406,7 +414,9 @@ describe('ChannelManagerTable', () => {
     );
     fireEvent.click(await screen.findByLabelText('Guide ORF 1 Austria'));
 
-    expect(await screen.findByText('Guide: ORF 1 Austria (chosen)')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Guide: ORF 1 Austria · Austria (chosen)')
+    ).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
@@ -477,7 +487,8 @@ describe('ChannelManagerTable', () => {
     );
 
     // The one the channel has is read already, so it is not among them
-    const all = await screen.findByRole('button', {
+    await screen.findByLabelText('Guide ORF Eins');
+    const all = screen.getByRole('button', {
       name: 'Read the programmes of every guide shown',
     });
     expect(all).toHaveTextContent('Read all 2');
@@ -497,5 +508,21 @@ describe('ChannelManagerTable', () => {
       await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 6000 })
     ).toBeInTheDocument();
     expect(screen.getByText('ORF1.at · 90 programmes')).toBeInTheDocument();
+  });
+
+  it('says on the left when a channel is on no guide yet', async () => {
+    API.previewChannelManager.mockResolvedValue({
+      ...plan,
+      rows: [
+        {
+          ...mergeRow,
+          before: { ...mergeRow.before, channel: { ...mergeRow.before.channel, epg: null } },
+        },
+      ],
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(screen.getByText('No guide')).toBeInTheDocument();
+    expect(screen.getByText('Guide: ORF 1 · Austria')).toBeInTheDocument();
   });
 });

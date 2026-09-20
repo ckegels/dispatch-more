@@ -210,6 +210,16 @@ const WhatItHolds = ({ guide, onLoad, loading }) => {
       </>
     );
   }
+  // Until the server has said, nothing is claimed either way: the guide a row was
+  // matched to is on the list from the start, but the plan's summary does not know what
+  // it holds, and saying "not read yet" about it would be a guess
+  if (guide.in_use === undefined) {
+    return (
+      <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+        {guide.tvg_id || 'no tvg-id'}
+      </Text>
+    );
+  }
   return (
     <>
       <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
@@ -247,6 +257,20 @@ const WhatItHolds = ({ guide, onLoad, loading }) => {
 // The whole card chooses the guide, but it carries a button of its own for reading the
 // programmes, and a button inside a button is not a thing a browser will render. So the
 // card says what it is rather than being a <button>.
+// Which guide a channel is on, said the same way before and after so the two lines can
+// be read against each other
+const GuideLine = ({ guide, how }) => (
+  <Text
+    size="xs"
+    c={guide ? 'dimmed' : 'orange'}
+    style={{ wordBreak: 'break-word' }}
+  >
+    {guide
+      ? `Guide: ${guide.name}${guide.source ? ` · ${guide.source}` : ''}${how || ''}`
+      : 'No guide'}
+  </Text>
+);
+
 const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
   <Box
     role="button"
@@ -391,7 +415,10 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   // The ones on the list nobody has read: reading them together costs one pass of the
   // file, the same as reading any one of them on its own
   const unread = useMemo(
-    () => shown.filter((guide) => !guide.programmes && !guide.in_use && !reading[guide.id]),
+    () =>
+      shown.filter(
+        (guide) => !guide.programmes && guide.in_use === false && !reading[guide.id]
+      ),
     [shown, reading]
   );
 
@@ -556,6 +583,9 @@ const Expanded = ({
               Before · {row.before.streams.length} stream
               {row.before.streams.length === 1 ? '' : 's'}
             </Text>
+            {row.before.channel && (
+              <GuideLine guide={row.before.channel.epg} />
+            )}
             {row.before.streams.length === 0 ? (
               <Text size="xs" c="dimmed">
                 {row.status === 'new' ? 'No channel yet' : 'No streams'}
@@ -1060,6 +1090,7 @@ const ChannelManagerTable = () => {
                   {providers > 0 &&
                     ` · ${providers} provider${providers === 1 ? '' : 's'}`}
                 </Text>
+                {channel && <GuideLine guide={channel.epg} />}
               </Box>
             </Group>
           );
@@ -1094,21 +1125,16 @@ const ChannelManagerTable = () => {
                       : `${channel.number}${channel.group ? ` · ${channel.group}` : ''}`}
                   </Text>
                 </Group>
-                <Text
-                  size="xs"
-                  c={epg ? 'dimmed' : 'orange'}
-                  style={{ wordBreak: 'break-word' }}
-                >
-                  {epg
-                    ? `Guide: ${epg.name}${
-                        epg.how === 'chosen'
-                          ? ' (chosen)'
-                          : epg.how && epg.how !== 'kept'
-                            ? ` (by ${epg.how})`
-                            : ''
-                      }`
-                    : 'No guide'}
-                </Text>
+                <GuideLine
+                  guide={epg}
+                  how={
+                    epg?.how === 'chosen'
+                      ? ' (chosen)'
+                      : epg?.how && epg.how !== 'kept'
+                        ? ` (by ${epg.how})`
+                        : ''
+                  }
+                />
               </Box>
             </Group>
           );

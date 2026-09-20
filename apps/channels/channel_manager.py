@@ -410,7 +410,9 @@ def _existing_channels(settings, aliases):
     """The channels streams may be added to, with what they have now."""
     from .models import Channel, ChannelStream
 
-    channels = Channel.objects.select_related("channel_group", "logo", "epg_data")
+    channels = Channel.objects.select_related(
+        "channel_group", "logo", "epg_data", "epg_data__epg_source"
+    )
     groups = [int(g) for g in settings.get("channel_groups") or ()]
     if groups:
         channels = channels.filter(channel_group_id__in=groups)
@@ -495,7 +497,16 @@ def _channel_summary(channel):
         "number": channel.channel_number,
         "group": channel.channel_group.name if channel.channel_group_id else "",
         "logo_url": channel.logo.url if channel.logo_id else "",
-        "epg": {"id": epg.id, "name": epg.name, "tvg_id": epg.tvg_id, "how": "kept"} if epg else None,
+        # The source is part of it: the page shows the guide a channel has beside the one
+        # it would come out with, and two entries of one name are told apart by where
+        # they come from
+        "epg": {
+            "id": epg.id,
+            "name": epg.name,
+            "tvg_id": epg.tvg_id,
+            "source": epg.epg_source.name if epg.epg_source_id else "",
+            "how": "kept",
+        } if epg else None,
     }
 
 
