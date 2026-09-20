@@ -30,10 +30,16 @@ def guide_manager_page(request):
         .order_by("channel_group__name")
     )
     ignored = guide_manager.load_ignored()
+    stored = guide_manager.load_suggestions()
+    # "Every channel" means every channel, not every channel the last run reached
+    if request.GET.get("all"):
+        found = guide_manager.every_channel(guide_manager.load_settings(), stored)
+    else:
+        found = list(stored.values())
     return JsonResponse({
         "settings": guide_manager.load_settings(),
         "defaults": guide_manager.DEFAULTS,
-        "suggestions": list(guide_manager.load_suggestions().values()),
+        "suggestions": found,
         "run": guide_manager.run_state(guide_manager.redis()),
         "channel_groups": [
             {"id": g["channel_group_id"], "name": g["channel_group__name"], "count": g["channels"]}

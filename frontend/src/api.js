@@ -2960,8 +2960,11 @@ export default class API {
 
   // ── Guides: which guide each channel should be on (see guide_manager) ──
 
-  static async getGuideManager() {
-    return await request(`${host}/api/channels/guides/`);
+  // everyChannel: a row for every channel in scope, not only the ones a run reached
+  static async getGuideManager(everyChannel = false) {
+    return await request(
+      `${host}/api/channels/guides/${everyChannel ? '?all=1' : ''}`
+    );
   }
 
   static async runGuideManager(action, settings) {

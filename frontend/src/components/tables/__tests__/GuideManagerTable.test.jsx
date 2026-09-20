@@ -268,6 +268,19 @@ describe('GuideManagerTable', () => {
     expect(screen.getByText('Likely · 98%')).toBeInTheDocument();
   });
 
+  it('loads on its own when the view is changed, without being poked again', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    expect(API.getGuideManager).toHaveBeenCalledWith(false);
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText('Every channel'));
+
+    // Every channel needs the rows a run never stored, so it asks for them itself
+    await waitFor(() => expect(API.getGuideManager).toHaveBeenCalledWith(true));
+  });
+
   it('shows every channel looked at, including the ones nothing fits', async () => {
     const nothingFits = {
       channel: 3, channel_name: '┃USA┃ PBS 12', number: 12, uuid: 'uuid-three',

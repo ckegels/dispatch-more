@@ -417,6 +417,54 @@ def redis():
         return None
 
 
+def every_channel(settings, suggestions=None):
+    """
+    A row for every channel in scope, whether a run has ever looked at it or not.
+
+    "Every channel" has to mean every channel. Listing only what the last run stored made
+    it mean "every channel the last run happened to reach", which after a run that was
+    stopped, or narrowed to a group, or simply never done, is a handful -- and the
+    channels somebody is looking for there are exactly the ones nothing has been found
+    for.
+
+    What a run did find is kept over the top, so a channel with a suggestion keeps it.
+    """
+    stored = dict(suggestions if suggestions is not None else load_suggestions())
+    channels = list(channels_in_scope(settings))
+    on_now = [c.epg_data_id for c in channels if c.epg_data_id]
+    counts = programme_counts(on_now)
+    playing = what_is_on(on_now)
+
+    rows = {}
+    for channel in channels:
+        rows[str(channel.id)] = {
+            "channel": channel.id,
+            "channel_name": channel.name,
+            "uuid": str(channel.uuid) if getattr(channel, "uuid", None) else "",
+            "number": channel.channel_number,
+            "group": channel.channel_group.name if channel.channel_group_id else "",
+            "group_id": channel.channel_group_id,
+            "why": "",
+            "epg": None,
+            "name": "",
+            "tvg_id": "",
+            "source": "",
+            "programmes": 0,
+            "now": "",
+            "instead_of": channel.epg_data.name if channel.epg_data_id else "",
+            "instead_of_epg": channel.epg_data_id,
+            "instead_of_holds": counts.get(channel.epg_data_id, 0) if channel.epg_data_id else 0,
+            "instead_of_now": playing.get(channel.epg_data_id, "") if channel.epg_data_id else "",
+            "instead_of_source": (
+                channel.epg_data.epg_source.name
+                if channel.epg_data_id and channel.epg_data.epg_source_id
+                else ""
+            ),
+        }
+    rows.update(stored)
+    return list(rows.values())
+
+
 def run_state(redis_client):
     """How a run is going, for the page: nothing at all when none has ever been made."""
     if not redis_client:

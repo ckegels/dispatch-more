@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v140** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v141** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -460,6 +460,14 @@ with a name that reads alike (>= `TVG_NEEDS_NAME` 55) it is CERTAIN, with a name
 nothing like it it is LIKELY and says so. That last case is a renamed channel as often as it is
 a wrong id, and the two are indistinguishable from ids and names alone -- only what is on the
 guide now separates them, which is why the page shows it.
+
+**"Every channel" asks for every channel** (v141, `every_channel`, `GET guides/?all=1`). The
+rows a run stores are the run's; listing only those made the view mean "every channel the last
+run happened to reach", which after a run that was stopped, narrowed to a group or never done
+is a handful -- and the channels somebody looks for there are exactly the ones nothing was
+found for. It now builds a row for every channel in scope from the database and keeps what a
+run found over the top. Changing the view is what loads it, rather than the view changing and
+something else having to be poked.
 
 **Every channel is on the list** (v129): a run keeps a row for each channel it looked at, with
 `why` empty where there is nothing to suggest, and the tab's "Every channel" view shows them.

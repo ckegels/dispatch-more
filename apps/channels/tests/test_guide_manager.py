@@ -334,6 +334,47 @@ class ViewTests(_Setup):
         self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
         self.assertEqual(data["defaults"]["min_score"], 70)
 
+    def test_every_channel_means_every_channel_run_or_no_run(self):
+        """
+        Listing only what the last run stored made "every channel" mean "every channel
+        the last run happened to reach" -- and after a run that was stopped, narrowed to
+        a group, or never done, that is a handful. The channels somebody looks for there
+        are exactly the ones nothing was found for.
+        """
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        looked_at = self._channel("┃AT┃ ORF 1", 1)
+        never_looked_at = self._channel("┃AT┃ SOMETHING ELSE", 2)
+        guide_manager.save_suggestions(
+            {k: v for k, v in self._look().items() if k == str(looked_at.id)}
+        )
+
+        only_found = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        self.assertEqual([one["channel"] for one in only_found], [looked_at.id])
+
+        everything = self.client_api.get("/api/channels/guides/?all=1").json()["suggestions"]
+        self.assertEqual(
+            sorted(one["channel"] for one in everything),
+            sorted([looked_at.id, never_looked_at.id]),
+        )
+
+    def test_and_what_a_run_did_find_is_kept_over_the_top(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.save_suggestions(self._look())
+        everything = self.client_api.get("/api/channels/guides/?all=1").json()["suggestions"]
+        (row,) = [one for one in everything if one["channel"] == channel.id]
+        self.assertEqual(row["epg"], guide.id)
+        self.assertEqual(row["why"], "none")
+
+    def test_a_channel_nothing_was_found_for_still_says_what_it_is_on(self):
+        guide = self._guide("orf1.old", "ORF 1", programmes=4)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=guide)
+        everything = self.client_api.get("/api/channels/guides/?all=1").json()["suggestions"]
+        (row,) = [one for one in everything if one["channel"] == channel.id]
+        self.assertEqual(row["instead_of"], "ORF 1")
+        self.assertEqual(row["instead_of_holds"], 4)
+        self.assertEqual(row["why"], "")
+
     def test_a_run_is_started_and_can_be_stopped(self):
         self._channel("┃AT┃ ORF 1", 1)
         fake = FakeRedis()

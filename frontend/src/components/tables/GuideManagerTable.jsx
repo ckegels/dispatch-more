@@ -109,10 +109,10 @@ const GuideManagerTable = () => {
   const [showSettings, setShowSettings] = useState(false);
   const tableRef = useRef(null);
 
-  const look = useCallback(async (quietly) => {
+  const look = useCallback(async (quietly, everyChannel) => {
     if (!quietly) setLoading(true);
     try {
-      const data = await API.getGuideManager();
+      const data = await API.getGuideManager(everyChannel);
       setPage(data);
       setLevers((now) => now ?? data.settings);
       setError(null);
@@ -123,9 +123,14 @@ const GuideManagerTable = () => {
     }
   }, []);
 
+  // The view being changed is what loads, rather than the view being changed and then
+  // something else having to be poked to make it happen. "Every channel" needs the rows
+  // for channels nothing was found for, which are not kept with the suggestions.
+  const loadedOnce = useRef(false);
   useEffect(() => {
-    look();
-  }, [look]);
+    look(loadedOnce.current, why === 'all');
+    loadedOnce.current = true;
+  }, [look, why]);
 
   // While a run is going the page follows it, and stops asking once it is over
   const running = page?.run?.running;
