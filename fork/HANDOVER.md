@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v136** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v137** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -419,6 +419,27 @@ the country agreeing), **LIKELY** (>= `LIKELY_SCORE` 80, country agreeing, nothi
 still on the picker's list to be taken by hand, which is a different thing from putting it
 forward as a change to make. `MIN_GUIDE_SCORE` went 40 → 55.
 
+**Names are compared in words, not letters** (v137, and this was the PBS disaster).
+`fuzz.ratio` over a whole name gave "PBS Philadelphia" against **"CBS Philadelphia" 94 %**
+and against **"PBS WHYY Philadelphia" -- the right station -- 42 %**, under
+`MIN_GUIDE_SCORE`, so the wrong network was offered as near-certain and the right one was
+not offered at all. Two changes:
+
+- `_alike` pairs each word with the nearest word on the other side (`SAME_WORD` 85, enough
+  for a spelling or a plural) and scores how much of both names those pairs account for.
+  The right station now scores 90.
+- `_names_in` / the broadcaster gate: **a short word carrying few vowels is a name, not a
+  word** (`NAME_LIKE` 4, vowels × 2 < length -- which catches PBS, CBS, ABC, NBC, ORF, RTL,
+  BBC, ITV, ZDF and keeps out "it", "like", "one"). Where both names have such words and
+  they share none, it is a different broadcaster and the match is refused outright, like a
+  differing number. "PBS is not CBS."
+
+`guide_words` also splits letters from digits, so "BBC1" is "BBC 1" and matches "BBC One".
+
+**Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
+typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found
+nothing before, because the guide is called "PBS WHYY Philadelphia".
+
 **A tvg-id is a provider's word, not proof** (v130). v129 returned CERTAIN 100 on a matching
 tvg-id *before* the contradiction checks -- which is the mistake §7 already records, made
 again: providers hand one id to channels that are not the same (a Krone stream carrying
@@ -807,6 +828,11 @@ no longer play. Summary of how it works now:
   tvg-id as proof and answered before it had even looked for a contradiction -- the same
   mistake as the shared-tvg_id merge of §5.6, made again a year later in a new place. → an id
   a provider wrote is evidence; a name that contradicts it beats it.
+- **One broadcaster matched to another** (to v137): PBS and CBS differ by a letter, so
+  "PBS Philadelphia" and "CBS Philadelphia" were 94 % alike while the right station, with a
+  call sign in the middle of its name, was 42 % and below the bar to be offered. → compare
+  names in words, and treat a short consonant-heavy word as a name that either matches or
+  refuses (§5.6b).
 - **A wrong station offered as a certainty** (to v129): stock's normalising drops "east" and
   "west" as extraneous, so "PBS East" and "PBS West" were one word and matched at 100 %, and
   character similarity let "PBS 12" and "PBS 13" reach 83. → never compare on a name with its

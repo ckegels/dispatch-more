@@ -690,10 +690,67 @@ def guide_words(name):
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = re.sub(r"[^0-9a-z]+", " ", text)
+    # Letters and digits stuck together are two words: "BBC1" is "BBC 1", and has to be,
+    # or it never matches "BBC One"
+    text = re.sub(r"(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])", " ", text)
     words = []
     for word in text.split():
         words.append(NUMBER_WORDS.get(word, word))
     return words
+
+
+# A short word carrying few vowels is a name rather than a word: PBS, CBS, ABC, NBC, ORF,
+# RTL, BBC, ITV, ZDF. Two of them are two broadcasters, and the one letter between them is
+# the whole difference -- which comparing letters cannot see: "PBS Philadelphia" against
+# "CBS Philadelphia" is ninety-four per cent alike and a different television station.
+#
+# The vowels are what keep ordinary short words out of it. "Nothing like it" would
+# otherwise offer "like" and "it" as broadcasters and refuse everything.
+NAME_LIKE = 4
+VOWELS = set("aeiou")
+
+
+def _names_in(words):
+    return {
+        w for w in words
+        if w.isalpha() and len(w) <= NAME_LIKE
+        and sum(1 for letter in w if letter in VOWELS) * 2 < len(w)
+    }
+
+
+# How alike two words have to be to count as the same word: enough for a spelling or a
+# plural, not enough for a different name
+SAME_WORD = 85
+
+
+def _alike(mine, theirs):
+    """
+    How much of these two names is the same, counted in words rather than letters.
+
+    Letters are the wrong unit. "PBS Philadelphia" and "CBS Philadelphia" share all but
+    one of them and are two stations; "PBS Philadelphia" and "PBS WHYY Philadelphia" share
+    every word there is and are one, while being only forty per cent alike letter by
+    letter. So each word is paired with the nearest one on the other side -- near enough
+    for a spelling, not for a different name -- and the score is how much of both names
+    those pairs account for.
+    """
+    from rapidfuzz import fuzz
+
+    if not mine or not theirs:
+        return 0
+    taken, shared = set(), 0
+    for word in mine:
+        best, at = 0, None
+        for index, other in enumerate(theirs):
+            if index in taken:
+                continue
+            how = fuzz.ratio(word, other)
+            if how > best:
+                best, at = how, index
+        if at is not None and best >= SAME_WORD:
+            taken.add(at)
+            shared += 1
+    return round(200 * shared / (len(mine) + len(theirs)))
 
 
 def _identity_of(words):
@@ -768,8 +825,6 @@ def judge_guide(name, country, entry, tvg_id=""):
        _by_country), and it is only better than a guess when the names are close, the
        country agrees, and nothing at all contradicts.
     """
-    from rapidfuzz import fuzz
-
     theirs = f"{entry.get('name') or ''}"
     mine_words, their_words = guide_words(name), guide_words(theirs)
     if not mine_words or not their_words:
@@ -777,6 +832,14 @@ def judge_guide(name, country, entry, tvg_id=""):
 
     their_tvg = (entry.get("original_tvg_id") or entry.get("tvg_id") or "").strip().lower()
     same_id = bool(tvg_id and their_tvg and tvg_id.strip().lower() == their_tvg)
+
+    # Two broadcasters' names with nothing in common: a different channel, whatever the
+    # rest of the letters do. Only where both say one -- "PBS" against "Public
+    # Broadcasting Service" says nothing either way.
+    my_names, their_names = _names_in(mine_words), _names_in(their_words)
+    if my_names and their_names and not (my_names & their_names):
+        said = f"{sorted(my_names)[0].upper()} is not {sorted(their_names)[0].upper()}"
+        return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
 
     mine, theirs_id = _identity_of(mine_words), _identity_of(their_words)
     for what, said in (("number", "a different number"), ("side", "the other side of the country"),
@@ -786,7 +849,7 @@ def judge_guide(name, country, entry, tvg_id=""):
             # commoner mistake by far, and it is the mistake this fork has already made
             return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
 
-    alike = fuzz.ratio(" ".join(mine_words), " ".join(their_words))
+    alike = _alike(mine_words, their_words)
     if same_id:
         if alike >= TVG_NEEDS_NAME:
             return 100, CERTAIN, "its tvg-id and its name"
@@ -1070,13 +1133,22 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
 
     wanted = (search or "").strip()
     if wanted:
-        rows = (
-            active.filter(Q(name__icontains=wanted) | Q(tvg_id__icontains=wanted))
-            .exclude(id__in=seen)
-            .order_by("-epg_source__priority", "name")
-            .values_list("id", "tvg_id", "name", "epg_source__name")[:limit]
+        # Every word, anywhere, in any order -- not the phrase as typed. Somebody looking
+        # for the Philadelphia PBS station types "pbs philadelphia", and the guide calls
+        # it "PBS WHYY Philadelphia": the words are all there and the phrase is not.
+        rows = active.exclude(id__in=seen)
+        for word in wanted.split():
+            rows = rows.filter(Q(name__icontains=word) | Q(tvg_id__icontains=word))
+        rows = list(
+            rows.order_by("-epg_source__priority", "name")
+            .values_list("id", "tvg_id", "name", "epg_source__name")[: limit * 4]
         )
-        return _what_they_carry(found + [_guide_entry(*row, "search") for row in rows])
+        # Nearest to what was typed first, so the words being in a shorter name counts
+        typed = guide_words(wanted)
+        rows.sort(key=lambda row: _alike(typed, guide_words(row[2])), reverse=True)
+        return _what_they_carry(
+            found + [_guide_entry(*row, "search") for row in rows[:limit]]
+        )
 
     # An exact tvg-id is not a guess: whatever the names look like, it goes first
     if (tvg_id or "").strip():

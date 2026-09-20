@@ -611,6 +611,42 @@ class JudgingGuidesTests(TestCase):
         self.assertEqual(score, 0)
         self.assertIn("side", why)
 
+    def test_one_broadcaster_is_not_another_however_alike_the_letters(self):
+        """
+        The worst of them. "PBS Philadelphia" and "CBS Philadelphia" are ninety-four per
+        cent alike letter by letter and are two different television stations, while
+        "PBS WHYY Philadelphia" -- the right one -- is forty-one per cent alike and was
+        falling below the bar to be offered at all.
+        """
+        for theirs in ("CBS Philadelphia", "ABC Philadelphia", "NBC Philadelphia"):
+            score, _, why = self.judge("┃USA┃ PBS PHILADELPHIA", theirs)
+            self.assertEqual(score, 0, theirs)
+            self.assertIn("is not", why)
+
+    def test_and_the_right_station_is_found_instead(self):
+        score, _, _ = self.judge("┃USA┃ PBS PHILADELPHIA", "PBS WHYY Philadelphia", "whyy.us")
+        self.assertGreater(score, 80)
+
+    def test_a_name_is_compared_in_words_not_letters(self):
+        # Every word shared, in a longer name: most of both, rather than the little of
+        # each other they are letter by letter
+        self.assertEqual(channel_manager._alike(["pbs", "philadelphia"], ["pbs", "philadelphia"]), 100)
+        self.assertGreaterEqual(
+            channel_manager._alike(["pbs", "philadelphia"], ["pbs", "whyy", "philadelphia"]), 75
+        )
+        # ...and a spelling is still the same word
+        self.assertEqual(channel_manager._alike(["dreamworks"], ["dreamwork"]), 100)
+
+    def test_letters_and_digits_stuck_together_are_two_words(self):
+        self.assertEqual(channel_manager.guide_words("BBC1"), ["bbc", "1"])
+        score, tier, _ = self.judge("┃UK┃ BBC ONE", "BBC1", "bbc1.uk", country="gb")
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+
+    def test_ordinary_short_words_are_not_taken_for_broadcasters(self):
+        # "Nothing like it" would otherwise offer "like" and "it" and refuse everything
+        self.assertEqual(channel_manager._names_in(channel_manager.guide_words("Nothing like it")), set())
+        self.assertEqual(channel_manager._names_in(channel_manager.guide_words("PBS")), {"pbs"})
+
     def test_two_numbers_that_differ_are_two_channels(self):
         self.assertEqual(self.judge("┃USA┃ PBS 12", "PBS 13", "pbs13.us")[0], 0)
         self.assertEqual(self.judge("┃UK┃ SKY SPORTS 1", "Sky Sports 2")[0], 0)
@@ -728,6 +764,26 @@ class GuideChoiceTests(_Setup):
         EPGData.objects.create(tvg_id="x.1", name="ORF Eins", epg_source=self.local)
         (found,) = channel_manager.guide_candidates("┃AT┃ ORF 1")
         self.assertEqual(found["name"], "ORF Eins")
+
+    def test_searching_finds_the_words_anywhere_not_the_phrase_as_typed(self):
+        """
+        Somebody after the Philadelphia PBS station types "pbs philadelphia"; the guide
+        calls it "PBS WHYY Philadelphia". Every word is there and the phrase is not.
+        """
+        wanted = EPGData.objects.create(
+            tvg_id="whyy.us", name="PBS WHYY Philadelphia", epg_source=self.local
+        )
+        EPGData.objects.create(tvg_id="cbs.us", name="CBS Philadelphia", epg_source=self.local)
+        found = channel_manager.guide_candidates("┃USA┃ PBS", search="pbs philadelphia")
+        self.assertEqual([one["id"] for one in found], [wanted.id])
+
+    def test_and_the_nearest_to_what_was_typed_comes_first(self):
+        near = EPGData.objects.create(tvg_id="a.us", name="PBS Kids", epg_source=self.local)
+        EPGData.objects.create(
+            tvg_id="b.us", name="PBS Kids Something Else Entirely", epg_source=self.local
+        )
+        found = channel_manager.guide_candidates("┃USA┃ PBS KIDS", search="pbs kids")
+        self.assertEqual(found[0]["id"], near.id)
 
     def test_a_guide_the_matcher_cannot_see_is_still_there_to_search_for(self):
         EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
