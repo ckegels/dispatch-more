@@ -1,7 +1,7 @@
 // Drawn with the real table and the real Mantine rather than stand-ins: the table's own
 // tick box and row expansion are most of what this page is, and a stand-in cannot tell
 // whether they are wired up.
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
@@ -44,11 +44,14 @@ const guide = {
 
 const mergeRow = {
   key: 'ch:1', status: 'merge', adds: 1, removes: 0, changes: [], country: 'at',
-  channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', logo_url: '', epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' } },
+  channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', group_id: 1, logo_url: '', epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' } },
   before: {
     channel: {
-      id: 1, name: '┃AT┃ ORF 1', number: 1, logo_url: '',
-      epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' },
+      id: 1, name: '┃AT┃ ORF 1', number: 1, logo_url: '', group: '┃AT┃ AUSTRIA', group_id: 1,
+      epg: {
+        id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept',
+        programmes: 40, now: 'Bundesland heute',
+      },
     },
     streams: [stream(1, '┃AT┃ ORF 1'), fallback],
   },
@@ -370,9 +373,10 @@ describe('ChannelManagerTable', () => {
 
     expect(await screen.findByText('ORF1.at · no programmes')).toBeInTheDocument();
     expect(screen.getByText('Nothing on it now')).toBeInTheDocument();
-    // and the one it has says what it holds, next to it
-    expect(screen.getByText('ORF1.at · 40 programmes')).toBeInTheDocument();
-    expect(screen.getByText('Now: Bundesland heute')).toBeInTheDocument();
+    // and the one it has says what it holds, next to it -- in the window, not the row
+    const window_ = within(screen.getByRole('dialog'));
+    expect(window_.getByText('ORF1.at · 40 programmes')).toBeInTheDocument();
+    expect(window_.getByText('Now: Bundesland heute')).toBeInTheDocument();
   });
 
   it('keeps every candidate on the list, and what the channel has, while searching', async () => {
@@ -524,5 +528,56 @@ describe('ChannelManagerTable', () => {
     await screen.findAllByText('┃AT┃ ORF 1');
     expect(screen.getByText('No guide')).toBeInTheDocument();
     expect(screen.getByText('Guide: ORF 1 · Austria')).toBeInTheDocument();
+  });
+
+  it('says what is on the guide a channel is on, not just its name', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    // A name can be right and the guide still be somebody else's, or empty
+    expect(screen.getByText('Now: Bundesland heute')).toBeInTheDocument();
+  });
+
+  it('warns on a guide that holds no programmes at all', async () => {
+    API.previewChannelManager.mockResolvedValue({
+      ...plan,
+      rows: [
+        {
+          ...mergeRow,
+          before: {
+            ...mergeRow.before,
+            channel: {
+              ...mergeRow.before.channel,
+              epg: { ...mergeRow.before.channel.epg, programmes: 0, now: '' },
+            },
+          },
+        },
+      ],
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(screen.getByText('Holds no programmes')).toBeInTheDocument();
+  });
+
+  it('narrows to one group, new channels counting under the group they would go into', async () => {
+    const german = {
+      ...mergeRow,
+      key: 'ch:2',
+      channel: { ...mergeRow.channel, id: 2, name: '┃DE┃ ARD', group: '┃DE┃ GERMANY', group_id: 2 },
+      before: {
+        ...mergeRow.before,
+        channel: { ...mergeRow.before.channel, id: 2, name: '┃DE┃ ARD', group_id: 2 },
+      },
+    };
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [mergeRow, german] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(screen.getAllByText('┃DE┃ ARD').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which group' }));
+    fireEvent.click(await screen.findByText('┃AT┃ AUSTRIA'));
+
+    await waitFor(() => expect(screen.queryByText('┃DE┃ ARD')).toBeNull());
+    expect(screen.getAllByText('┃AT┃ ORF 1').length).toBeGreaterThan(0);
   });
 });

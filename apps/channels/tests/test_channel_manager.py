@@ -381,6 +381,16 @@ class NewChannelTests(_Setup):
         # After the last Austrian channel, 3, on a number nobody has
         self.assertEqual(row["channel"]["number"], 4)
 
+    def test_every_row_says_which_group_it_is_in_so_it_can_be_narrowed_to(self):
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        rows = channel_manager.build_plan(settings())["rows"]
+        have = self._row({"rows": rows}, f"ch:{self.orf1.id}")
+        self.assertEqual(have["channel"]["group_id"], self.austria.id)
+        self.assertEqual(have["before"]["channel"]["group_id"], self.austria.id)
+        # and a new channel by the group it is suggested for
+        (made,) = [r for r in rows if r["status"] == "new"]
+        self.assertIsNotNone(made["channel"]["group_id"])
+
     def test_a_group_chosen_on_the_page_is_used_and_numbered_there(self):
         self._channel("┃DE┃ ARD", 50, self.germany)
         self._stream("┃AT┃ PULS 4 HD", self.a)
@@ -573,6 +583,58 @@ class GuideChoiceTests(_Setup):
         found = {entry["id"]: entry for entry in channel_manager.guide_candidates("┃AT┃ ORF 1")}
         self.assertFalse(found[never_read.id]["in_use"])
         self.assertTrue(found[really_empty.id]["in_use"])
+
+    def test_a_guide_from_another_country_is_not_the_same_channel(self):
+        # The matcher never sees the country: normalize_name takes the box off, so both
+        # of these are "dreamworks" and score a flat 100 on the name alone
+        right = EPGData.objects.create(tvg_id="dreamworks.nl", name="DreamWorks", epg_source=self.big)
+        wrong = EPGData.objects.create(tvg_id="dreamworks.uk", name="DreamWorks", epg_source=self.big)
+        found = channel_manager.guide_candidates("┃NL┃ DREAMWORKS")
+        self.assertEqual(found[0]["id"], right.id)
+        self.assertGreater(found[0]["score"], 90)
+        theirs = next((one for one in found if one["id"] == wrong.id), None)
+        # Either well below the right one, or not worth offering at all
+        self.assertTrue(theirs is None or theirs["score"] < found[0]["score"] - 20)
+
+    def test_uk_and_gb_are_the_one_country(self):
+        # Playlists say UK, tvg-ids say .uk, and the country's code is gb
+        guide = EPGData.objects.create(tvg_id="BBCOne.uk", name="BBC One", epg_source=self.big)
+        (best,) = channel_manager.guide_candidates("┃UK┃ BBC ONE")
+        self.assertEqual(best["id"], guide.id)
+        self.assertGreaterEqual(best["score"], 100)
+
+    def test_a_guide_that_names_no_country_is_judged_on_its_name_alone(self):
+        guide = EPGData.objects.create(tvg_id="dreamworks", name="DreamWorks", epg_source=self.big)
+        (best,) = channel_manager.guide_candidates("┃NL┃ DREAMWORKS")
+        self.assertEqual(best["id"], guide.id)
+        self.assertGreaterEqual(best["score"], 90)
+
+    def test_what_is_on_each_guide_is_on_the_plan_for_both_sides(self):
+        from django.utils import timezone
+
+        from apps.epg.models import ProgramData
+
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        self.orf1.epg_data = guide
+        self.orf1.save(update_fields=["epg_data"])
+        moment = timezone.now()
+        ProgramData.objects.create(
+            epg=guide, title="Zeit im Bild",
+            start_time=moment - timedelta(minutes=5), end_time=moment + timedelta(minutes=25),
+        )
+        self._stream("┃AT┃ ORF 1 FHD", self.b)
+        row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
+        self.assertEqual(row["before"]["channel"]["epg"]["now"], "Zeit im Bild")
+        self.assertEqual(row["before"]["channel"]["epg"]["programmes"], 1)
+        self.assertEqual(row["channel"]["epg"]["now"], "Zeit im Bild")
+
+    def test_a_guide_holding_nothing_says_so_on_the_plan(self):
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        self.orf1.epg_data = guide
+        self.orf1.save(update_fields=["epg_data"])
+        row = self._row(channel_manager.build_plan(settings()), f"ch:{self.orf1.id}")
+        self.assertEqual(row["before"]["channel"]["epg"]["programmes"], 0)
+        self.assertEqual(row["before"]["channel"]["epg"]["now"], "")
 
     def test_the_guide_a_channel_is_on_is_shown_with_its_source_before_and_after(self):
         # So the two can be read against each other: two entries of one name are told

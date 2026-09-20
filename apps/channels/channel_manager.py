@@ -496,6 +496,10 @@ def _channel_summary(channel):
         "name": channel.name,
         "number": channel.channel_number,
         "group": channel.channel_group.name if channel.channel_group_id else "",
+        # By id as well as by name, so the page can narrow to a group without matching
+        # on text -- and so a new channel's suggested group and a channel you have are
+        # the same kind of thing to narrow by
+        "group_id": channel.channel_group_id,
         "logo_url": channel.logo.url if channel.logo_id else "",
         # The source is part of it: the page shows the guide a channel has beside the one
         # it would come out with, and two entries of one name are told apart by where
@@ -508,6 +512,46 @@ def _channel_summary(channel):
             "how": "kept",
         } if epg else None,
     }
+
+
+def _fill_what_is_on(rows):
+    """
+    What is on each guide the plan names, on both sides of every row.
+
+    The page shows the guide a channel is on beside the one it would come out with, and
+    a name is not enough to tell whether it is the right one: the programme on it at this
+    moment is. Worked out for the whole plan at once -- two queries on the index
+    ProgramData already has -- rather than per row, which on a thousand channels would be
+    a thousand of them.
+    """
+    from django.db.models import Count
+    from django.utils import timezone
+
+    from apps.epg.models import ProgramData
+
+    guides = []
+    for row in rows:
+        for side in (row.get("channel"), (row.get("before") or {}).get("channel")):
+            if side and side.get("epg"):
+                guides.append(side["epg"])
+    ids = {guide["id"] for guide in guides if guide.get("id")}
+    if not ids:
+        return rows
+    counts = dict(
+        ProgramData.objects.filter(epg_id__in=ids)
+        .values_list("epg_id")
+        .annotate(held=Count("id"))
+        .values_list("epg_id", "held")
+    )
+    moment = timezone.now()
+    playing = dict(
+        ProgramData.objects.filter(epg_id__in=ids, start_time__lte=moment, end_time__gt=moment)
+        .values_list("epg_id", "title")
+    )
+    for guide in guides:
+        guide["programmes"] = counts.get(guide["id"], 0)
+        guide["now"] = playing.get(guide["id"], "")
+    return rows
 
 
 class _Guides:
@@ -563,6 +607,51 @@ class _Guides:
 # "ORF 1" against "ORF Eins" scores 62 and belongs in the list; against "Sender Eins" it
 # scores 25 and does not. Anything under it is what the search is for.
 MIN_GUIDE_SCORE = 40
+
+# What a guide's country is worth when the channel says which one it is. The matcher
+# never sees it: normalize_name takes the box off before scoring, so "┃NL┃ DREAMWORKS"
+# and a British "DreamWorks" are both "dreamworks" and score a flat 100 -- the same
+# channel from the wrong country, offered as a certainty. The box is the surest thing
+# there is about a channel of this fork's, so it is worth more than a near miss in the
+# name: a guide from the country the channel says it is from is lifted, and one from a
+# country it says it is not from falls below every candidate that could still be right.
+SAME_COUNTRY = 10
+OTHER_COUNTRY = 30
+# The two letters a guide may be written with for one country. Playlists say "UK" and
+# XMLTV tvg-ids say ".uk", while the country's code is "gb", and without this a British
+# channel is penalised against a British guide.
+COUNTRY_ALSO = {"gb": ("gb", "uk"), "uk": ("gb", "uk")}
+
+
+def _country_of_guide(entry):
+    """
+    Which country a guide entry is for, as its two letters, or "".
+
+    A tvg-id carries it on the end -- "dreamworks.nl", "BBCOne.uk" -- which is how XMLTV
+    files are written; failing that the name may say it in a box, as a playlist's does.
+    """
+    found = re.findall(r"\.([A-Za-z]{2})(?![A-Za-z])", entry.get("tvg_id") or "")
+    if found:
+        return found[-1].lower()
+    return logo_library.country_of(entry.get("name") or "")
+
+
+def _by_country(country, entry):
+    """
+    What to add to a guide's score for the country it is for, given the channel's.
+
+    Nothing either way unless both say which country they are: a guide that names none
+    may well be the right one, and is left to be judged on its name alone.
+    """
+    if not country:
+        return 0
+    theirs = _country_of_guide(entry)
+    if not theirs:
+        return 0
+    ours = COUNTRY_ALSO.get(country, (country,))
+    if theirs in ours or country in COUNTRY_ALSO.get(theirs, (theirs,)):
+        return SAME_COUNTRY
+    return -OTHER_COUNTRY
 
 
 def _guide_entry(epg_id, tvg_id, name, source, how, score=None):
@@ -768,19 +857,35 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
     plain = _strip_country_box(name or "")
     normalized = epg_matching.normalize_name(plain)
     if normalized:
+        # The country is this fork's own doing, so the scoring for it is too, and the
+        # matcher is asked not to apply its own: its one preferred region is for a
+        # library where every channel is from the same place, and it reads a ".uk" as a
+        # country that is not "gb", which is the wrong answer for half of them.
+        country = logo_library.country_of(name or "") or epg_matching.get_preferred_region_code() or ""
+        # More candidates than will be shown, because one from the right country can sit
+        # below a wrongly-scored pile of them and has to be there to be lifted past it
         _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
-            normalized, epg_matching.get_preferred_region_code(), candidate_limit=limit + len(found)
+            normalized, None, candidate_limit=max(limit * 3, 20)
         )
         # The matcher works in source ids; the page shows which source an entry is from
         sources = dict(EPGSource.objects.values_list("id", "name"))
+        judged = []
         for score, row in candidates:
-            if row["id"] in seen or score < MIN_GUIDE_SCORE:
+            if row["id"] in seen:
                 continue
-            seen.add(row["id"])
-            found.append(_guide_entry(
+            entry = _guide_entry(
                 row["id"], row.get("original_tvg_id") or row.get("tvg_id"), row["name"],
-                sources.get(row["epg_source_id"], ""), "name", score,
-            ))
+                sources.get(row["epg_source_id"], ""), "name", score + _by_country(country, row),
+            )
+            if entry["score"] < MIN_GUIDE_SCORE:
+                continue
+            judged.append((entry["score"], row.get("epg_source_priority") or 0, entry))
+        judged.sort(key=lambda one: (one[0], one[1]), reverse=True)
+        for _, _, entry in judged:
+            if entry["id"] in seen:
+                continue
+            seen.add(entry["id"])
+            found.append(entry)
     return _what_they_carry(found[:limit])
 
 
@@ -1144,6 +1249,7 @@ def build_plan(settings):
                 "country": country,
             })
 
+    _fill_what_is_on(rows)
     order = {"new": 0, "merge": 1, "conflict": 2, "unchanged": 3}
     rows.sort(key=lambda r: (order[r["status"]], (r["channel"] or {}).get("number") or 0))
     summary = {status: sum(1 for r in rows if r["status"] == status) for status in order}

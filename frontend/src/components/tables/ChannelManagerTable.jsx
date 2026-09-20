@@ -260,15 +260,29 @@ const WhatItHolds = ({ guide, onLoad, loading }) => {
 // Which guide a channel is on, said the same way before and after so the two lines can
 // be read against each other
 const GuideLine = ({ guide, how }) => (
-  <Text
-    size="xs"
-    c={guide ? 'dimmed' : 'orange'}
-    style={{ wordBreak: 'break-word' }}
-  >
-    {guide
-      ? `Guide: ${guide.name}${guide.source ? ` · ${guide.source}` : ''}${how || ''}`
-      : 'No guide'}
-  </Text>
+  <>
+    <Text
+      size="xs"
+      c={guide ? 'dimmed' : 'orange'}
+      style={{ wordBreak: 'break-word' }}
+    >
+      {guide
+        ? `Guide: ${guide.name}${guide.source ? ` · ${guide.source}` : ''}${how || ''}`
+        : 'No guide'}
+    </Text>
+    {/* What is on it now, which is what says whether it is the right guide at all: a
+        name can be right and the guide still be somebody else's, or empty */}
+    {guide && guide.now && (
+      <Text size="xs" c="dimmed" lineClamp={1}>
+        Now: {guide.now}
+      </Text>
+    )}
+    {guide && !guide.now && guide.programmes === 0 && (
+      <Text size="xs" c="orange">
+        Holds no programmes
+      </Text>
+    )}
+  </>
 );
 
 const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
@@ -665,6 +679,10 @@ const ChannelManagerTable = () => {
   // Remounts the levers after a reset, so their text boxes show the reset values
   const [leverReset, setLeverReset] = useState(0);
   const [show, setShow] = useState('changes');
+  // Which group is being looked at; '' is every one. A new channel counts under the
+  // group it is suggested for, or the one chosen for it on the page, so that narrowing
+  // to a group shows what would go into it as well as what is in it.
+  const [group, setGroup] = useState('');
   const [search, setSearch] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(50);
@@ -734,6 +752,26 @@ const ChannelManagerTable = () => {
       })),
     [options]
   );
+  // Only the groups the plan actually has something in, named for the page. A new
+  // channel counts under the group it would go into.
+  const groupsOnShow = useMemo(() => {
+    const names = new Map();
+    for (const row of plan?.rows || []) {
+      const chosen = groupChoice[row.key];
+      const id = chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
+      if (id == null) continue;
+      if (!names.has(String(id))) {
+        names.set(
+          String(id),
+          row.channel?.group || row.before?.channel?.group || String(id)
+        );
+      }
+    }
+    return [...names.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [plan, groupChoice]);
+
   const groupNames = useMemo(
     () =>
       Object.fromEntries(
@@ -800,9 +838,16 @@ const ChannelManagerTable = () => {
             row.byHand
           : row.status === show
     );
+    const inGroup = group
+      ? byStatus.filter((row) => {
+          const chosen = groupChoice[row.key];
+          const its = chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
+          return String(its ?? '') === group;
+        })
+      : byStatus;
     const wanted = search.trim().toLowerCase();
-    if (!wanted) return byStatus;
-    return byStatus.filter((row) =>
+    if (!wanted) return inGroup;
+    return inGroup.filter((row) =>
       [
         row.channel?.name,
         row.before?.channel?.name,
@@ -821,6 +866,7 @@ const ChannelManagerTable = () => {
     drops,
     nameChoice,
     guideChoice,
+    group,
   ]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -1293,6 +1339,20 @@ const ChannelManagerTable = () => {
                   ]}
                   size="xs"
                   style={{ width: 170 }}
+                />
+                <Select
+                  aria-label="Which group"
+                  placeholder="Every group"
+                  value={group}
+                  onChange={(value) => {
+                    setGroup(value || '');
+                    setPageIndex(0);
+                  }}
+                  searchable
+                  clearable
+                  data={groupsOnShow}
+                  size="xs"
+                  style={{ width: 200 }}
                 />
               </Group>
 

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v121** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v122** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -305,6 +305,30 @@ question per row. Both travel on apply as `names` and `epgs` ({row key: guide id
 `drops`, worked out again rather than trusted from the page: a guide deleted since is applied
 to nothing, a name of only spaces is no name. Conflict rows have no channel, so they have
 neither.
+
+**The country decides between guides of one name** (v122). `normalize_name` takes the country
+box off before scoring, so "┃NL┃ DREAMWORKS" and a British "DreamWorks" are both "dreamworks"
+and score a flat 100 -- the same channel from the wrong country, offered as a certainty. The
+box is the surest thing there is about a name of this fork's, so `_by_country` adds
+`SAME_COUNTRY` (10) for a guide from the country the channel says it is from and takes off
+`OTHER_COUNTRY` (30) for one from a country it says it is not, with `COUNTRY_ALSO` for the
+"uk"/"gb" split (playlists say UK, tvg-ids say .uk, the code is gb -- without it every British
+channel is penalised against every British guide). A guide naming no country is judged on its
+name alone: it may well be the right one. The matcher's own region bonus is switched off
+(`region_code=None`) rather than added to this: its one preferred region is for a library where
+every channel is from one place, and it reads ".uk" as a country that is not "gb". Three times
+as many candidates are asked for as are shown, because a right-country one can sit below a pile
+of wrongly-scored ones and has to be there to be lifted past them.
+
+**What is on each guide, on the plan** (v122): `_fill_what_is_on` puts `now` and `programmes`
+on every guide the plan names, both sides of every row, in two queries for the whole plan
+rather than per row. A name is not enough to tell whether a guide is the right one; what is on
+it at this moment is, and a guide holding nothing says so in orange.
+
+**Narrowing to a group** (v122): `group_id` on every channel summary, and a group picker in the
+toolbar listing only the groups the plan has something in. A new channel counts under the group
+it would go into (or the one chosen for it on the page), so narrowing to a group shows what
+would go into it as well as what is in it.
 
 **The guide is shown on both sides** (v121): the Before column says which guide the channel is
 on now, with its source, and the After column says the one it would come out with, in the same
