@@ -25,6 +25,9 @@ RECORD=/root/.probation-slots-files
 EVER="
 apps/channels/api_urls.py
 apps/channels/channel_manager.py
+apps/channels/guide_layout.py
+apps/channels/guide_layout_views.py
+apps/channels/tests/test_guide_layout.py
 apps/channels/guide_manager.py
 apps/channels/guide_manager_views.py
 apps/channels/tests/test_guide_manager.py
@@ -93,6 +96,7 @@ frontend/src/components/overlap/OverlapActivity.jsx
 frontend/src/components/overlap/__tests__/OverlapActivity.test.jsx
 frontend/src/components/Sidebar.jsx
 frontend/src/components/tables/ChannelManagerTable.jsx
+frontend/src/components/tables/GuideLayoutTable.jsx
 frontend/src/components/tables/GuideManagerTable.jsx
 frontend/src/components/tables/GuidePicker.jsx
 frontend/src/components/tables/__tests__/GuideManagerTable.test.jsx

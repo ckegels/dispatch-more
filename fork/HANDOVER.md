@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v138** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v139** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -625,6 +625,30 @@ programmes. A queryset update would do neither. Waving a suggestion away is per 
 per channel: the guide comes off that channel's list and the next best is offered, so a
 better source added later is still found. Settings and results in CoreSettings
 (`guide-manager`, `guide-manager-suggestions`, `guide-manager-ignored`).
+
+### 5.6c Channel Manager: Guide Layout — `apps/channels/guide_layout.py` (+ `guide_layout_views.py`, `GuideLayoutTable.jsx`)
+
+A lineup is an arrangement, not a list, and Dispatcharr has the numbers but nowhere to
+arrange them. Drag a channel where it belongs, group by group, and the numbers follow.
+
+**Channels keep the numbers they have.** `numbers_for(order, existing, moved)` gives the
+dragged channel the place it was dropped in and pushes the others along **only as far as it
+must** -- a channel keeps its number unless the order would be wrong, and the pushing stops
+at the first gap. A lineup built over months is not rearranged because one channel moved.
+Renumbering a group outright (`renumbered`, from a number, by a step) is asked for
+separately, being a different intention and a far bigger change.
+
+The numbers are worked out **on the server** and the page asks after each drag
+(`POST guide-layout/arrange/`), so there is one set of rules rather than one in Python and
+another in JavaScript. Nothing is written until Apply, which sends only what would actually
+change; `apply` saves each channel with `update_fields` (a number or a group changing is
+something else in Dispatcharr watches for) and leaves alone a channel gone since.
+
+The page also says what nothing else does: **two channels on one number**. `channel_number`
+is a float and its uniqueness is only checked within a group, by `clean()`, which `save()`
+does not call -- so clashes across groups are easy to make and a media server, seeing one
+flat lineup, quietly shows one of them. Counted over every channel there is. It shows the
+room between one group and the next as well, so you can see whether a group can grow.
 
 ### 5.7 Channel Manager: Stream Check — `apps/channels/stream_check.py` (+ `stream_check_views.py`, `StreamCheckTable.jsx`, `StreamCheckSettings.jsx`, `ProviderLimits.jsx`)
 

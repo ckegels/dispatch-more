@@ -1,7 +1,13 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from . import channel_manager_views, guide_manager_views, logo_library_views, stream_check_views
+from . import (
+    channel_manager_views,
+    guide_layout_views,
+    guide_manager_views,
+    logo_library_views,
+    stream_check_views,
+)
 from .api_views import (
     StreamViewSet,
     ChannelViewSet,
@@ -77,6 +83,10 @@ urlpatterns = [
     path('channel-manager/guides/', channel_manager_views.channel_manager_guides, name='channel_manager_guides'),
     path('channel-manager/guides/reading/', channel_manager_views.channel_manager_reading, name='channel_manager_reading'),
     path('channel-manager/guides/load/', channel_manager_views.channel_manager_load_guide, name='channel_manager_load_guide'),
+    # What order the channels come in, and on which numbers (see guide_layout)
+    path('guide-layout/', guide_layout_views.guide_layout_page, name='guide_layout_page'),
+    path('guide-layout/arrange/', guide_layout_views.guide_layout_arrange, name='guide_layout_arrange'),
+    path('guide-layout/apply/', guide_layout_views.guide_layout_apply, name='guide_layout_apply'),
     # Which guide each channel should be on, and where that is wrong (see guide_manager)
     path('guides/', guide_manager_views.guide_manager_page, name='guide_manager_page'),
     path('guides/run/', guide_manager_views.guide_manager_run, name='guide_manager_run'),

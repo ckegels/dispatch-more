@@ -2935,6 +2935,29 @@ export default class API {
     });
   }
 
+  // ── Guide Layout: what order the channels come in (see guide_layout) ──
+
+  static async getGuideLayout(groups = []) {
+    const query = groups.length ? `?groups=${groups.join(',')}` : '';
+    return await request(`${host}/api/channels/guide-layout/${query}`);
+  }
+
+  // What the numbers would be, arranged like this. Worked out on the server so there is
+  // one set of rules rather than one there and another here.
+  static async arrangeGuideLayout(body) {
+    return await request(`${host}/api/channels/guide-layout/arrange/`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  static async applyGuideLayout(numbers, groups = {}) {
+    return await request(`${host}/api/channels/guide-layout/apply/`, {
+      method: 'POST',
+      body: { numbers, groups },
+    });
+  }
+
   // ── Guides: which guide each channel should be on (see guide_manager) ──
 
   static async getGuideManager() {

@@ -12,6 +12,7 @@ import {
 } from '@mantine/core';
 import { DatabaseBackup } from 'lucide-react';
 import ChannelManagerTable from '../components/tables/ChannelManagerTable';
+import GuideLayoutTable from '../components/tables/GuideLayoutTable';
 import GuideManagerTable from '../components/tables/GuideManagerTable';
 import LogoLibraryTable from '../components/tables/LogoLibraryTable';
 import StreamCheckTable from '../components/tables/StreamCheckTable';
@@ -23,6 +24,7 @@ const BLURB = {
   guides:
     'the channels whose programme guide is missing, empty, or not the best one there is',
   logos: 'the logo each channel has, next to the ones the collections would give it',
+  layout: 'what order your channels come in, and on which numbers',
 };
 
 // Headed the way the Logo Manager is, tabs and all, so the two read as parts of one set of
@@ -64,6 +66,7 @@ const ChannelManagerPage = () => {
               <TabsTab value="check">Stream Check</TabsTab>
               <TabsTab value="guides">Guides</TabsTab>
               <TabsTab value="logos">Logos</TabsTab>
+              <TabsTab value="layout">Guide Layout</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -93,6 +96,7 @@ const ChannelManagerPage = () => {
       {activeTab === 'check' && <StreamCheckTable />}
       {activeTab === 'guides' && <GuideManagerTable />}
       {activeTab === 'logos' && <LogoLibraryTable />}
+      {activeTab === 'layout' && <GuideLayoutTable />}
     </Box>
   );
 };
