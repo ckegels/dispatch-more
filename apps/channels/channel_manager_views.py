@@ -28,21 +28,40 @@ def channel_manager_options(request):
         .annotate(streams=Count("id"))
         .order_by("channel_group__name")
     )
-    # The groups worth offering as a home for a channel: the ones you have channels in,
-    # and the ones that are empty of everything. Every group there is runs to hundreds,
-    # nearly all of them a provider's own names carrying streams and no channel of yours;
-    # a group with neither channels nor streams is one somebody made by hand, very likely
-    # a moment ago on this page, and leaving it out was how a new group disappeared the
-    # instant it was made.
+    # Every group, each said to be one of four kinds, and the page shows the kinds the
+    # levers ask for. Which is the point: every group there is runs to hundreds on a real
+    # setup, nearly all of them a provider's own names that no channel is in, and which of
+    # those you want to see is not something to decide for somebody.
+    #
+    #   with_channels  you have channels in it
+    #   empty          nothing in it at all, so somebody made it by hand -- very likely a
+    #                  moment ago on this page
+    #   active_m3u     a provider's group, carrying streams of an account switched on
+    #   inactive_m3u   the same, of an account switched off
+    #
+    # Not "channels"/"streams" as annotation names: they are the relations themselves.
+    def kind_of(group):
+        if group.how_many:
+            return "with_channels"
+        if not group.their_streams:
+            return "empty"
+        return "active_m3u" if group.live_streams else "inactive_m3u"
+
     channel_groups = [
-        {"channel_group_id": g.id, "channel_group__name": g.name, "channels": g.how_many}
-        # Not "channels"/"streams" as names: they are the relations themselves
+        {
+            "channel_group_id": g.id,
+            "channel_group__name": g.name,
+            "channels": g.how_many,
+            "streams": g.their_streams,
+            "kind": kind_of(g),
+        }
         for g in ChannelGroup.objects.annotate(
             how_many=Count("channels", distinct=True),
             their_streams=Count("streams", distinct=True),
-        )
-        .filter(Q(how_many__gt=0) | Q(their_streams=0))
-        .order_by("name")
+            live_streams=Count(
+                "streams", filter=Q(streams__m3u_account__is_active=True), distinct=True
+            ),
+        ).order_by("name")
     ]
     return JsonResponse({
         "settings": channel_manager.load_settings(),
@@ -56,7 +75,10 @@ def channel_manager_options(request):
             for g in stream_groups
         ],
         "channel_groups": [
-            {"id": g["channel_group_id"], "name": g["channel_group__name"], "count": g["channels"]}
+            {
+                "id": g["channel_group_id"], "name": g["channel_group__name"],
+                "count": g["channels"], "streams": g["streams"], "kind": g["kind"],
+            }
             for g in channel_groups
         ],
         # A new channel may go into a group that has none yet

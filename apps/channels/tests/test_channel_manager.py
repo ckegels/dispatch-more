@@ -1005,25 +1005,37 @@ class ViewTests(_Setup):
         self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
         self.assertEqual(data["defaults"]["create_new"], True)
 
-    def test_the_groups_offered_are_yours_and_the_empty_ones(self):
+    def test_every_group_is_said_to_be_one_of_four_kinds(self):
         """
-        A group with channels is yours. A group with neither channels nor streams is one
-        somebody made by hand, very likely a moment ago on this page -- leaving those out
-        was how a group disappeared the instant it was made. A group carrying a
-        provider's streams and none of your channels is the provider's, and there are
-        hundreds of them.
+        Which groups the picker offers is a lever, so the page is told what each group is
+        rather than being handed a list somebody else chose. A group with channels is
+        yours; one with nothing in it at all was made by hand, very likely a moment ago on
+        this page; one carrying a provider's streams is the provider's, and whether that
+        provider is switched on is the difference between the two kinds of those.
         """
         from apps.channels.models import ChannelGroup
 
-        made_by_hand = ChannelGroup.objects.create(name="┃AT┃ KIDS")
+        ChannelGroup.objects.create(name="┃AT┃ KIDS")
         theirs = ChannelGroup.objects.create(name="AT | PROVIDER SPORT")
         self._stream("AT | SOME SPORT", self.a, group=theirs)
-        offered = {
-            g["name"] for g in self.client_api.get("/api/channels/channel-manager/").json()["channel_groups"]
+        switched_off = ChannelGroup.objects.create(name="AT | OLD PROVIDER")
+        self.b.is_active = False
+        self.b.save(update_fields=["is_active"])
+        self._stream("AT | SOMETHING OLD", self.b, group=switched_off)
+
+        kinds = {
+            g["name"]: g["kind"]
+            for g in self.client_api.get("/api/channels/channel-manager/").json()["channel_groups"]
         }
-        self.assertIn("┃AT┃ AUSTRIA", offered)
-        self.assertIn("┃AT┃ KIDS", offered)
-        self.assertNotIn("AT | PROVIDER SPORT", offered)
+        self.assertEqual(kinds["┃AT┃ AUSTRIA"], "with_channels")
+        self.assertEqual(kinds["┃AT┃ KIDS"], "empty")
+        self.assertEqual(kinds["AT | PROVIDER SPORT"], "active_m3u")
+        self.assertEqual(kinds["AT | OLD PROVIDER"], "inactive_m3u")
+
+    def test_by_default_only_your_own_groups_are_asked_for(self):
+        self.assertEqual(
+            channel_manager.DEFAULTS["group_choices"], ["with_channels", "empty"]
+        )
 
     def test_ignoring_through_the_page(self):
         self._stream("┃AT┃ PULS 4 HD", self.a)

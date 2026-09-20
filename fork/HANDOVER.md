@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v133** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v134** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -362,6 +362,13 @@ rather than `all_groups`: every group there is ran to hundreds on this setup, mo
 provider's own names that no channel is in, and finding your own among them was the hard part.
 The last entry of the list makes a new group (`API.addChannelGroup`) and chooses it for that
 row, because that is where you look when none of them is the one you want.
+
+Which groups, exactly, is a lever since v134 (`group_choices`). The page is told what kind
+each group is rather than handed a list somebody else chose: **with_channels** (you have
+channels in it), **empty** (nothing in it at all, so somebody made it by hand), **active_m3u**
+and **inactive_m3u** (a provider's group, carrying streams of an account switched on or off).
+The first two are the default; a provider's hundreds are there to be asked for. A group made
+on the page is always offered, whatever the lever says.
 
 That took two goes (v131). A group made on the page has **no channels in it yet**, so "groups
 you have channels in" hid it the moment it was made -- the offered set is now groups with

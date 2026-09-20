@@ -319,6 +319,28 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
                 checked={value.new_fallback !== false}
                 onChange={(e) => set({ new_fallback: e.currentTarget.checked })}
               />
+              <MultiSelect
+                size="xs"
+                label="Groups to choose between"
+                description="Which groups the picker on a row offers. Every group there is runs to hundreds, nearly all of them a provider's own names that no channel of yours is in, so by default it offers the ones you have channels in and the ones with nothing in them — the ones you made yourself. A group you make here is always offered."
+                value={value.group_choices || ['with_channels', 'empty']}
+                onChange={(kinds) =>
+                  set({ group_choices: kinds.length ? kinds : ['with_channels'] })
+                }
+                data={[
+                  { value: 'with_channels', label: 'Groups you have channels in' },
+                  { value: 'empty', label: 'Empty groups (ones you made)' },
+                  {
+                    value: 'active_m3u',
+                    label: "A provider's groups, from a playlist switched on",
+                  },
+                  {
+                    value: 'inactive_m3u',
+                    label: "A provider's groups, from a playlist switched off",
+                  },
+                ]}
+                clearable={false}
+              />
               <Select
                 size="xs"
                 label="Into group"

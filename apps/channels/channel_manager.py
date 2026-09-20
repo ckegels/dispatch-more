@@ -50,6 +50,11 @@ DEFAULTS = {
     "channel_groups": [],
     # Where new channels go; None puts each in the group its streams came from
     "target_group": None,
+    # Which groups the group picker offers, of the four kinds the page works out
+    # (see channel_manager_views): the ones you have channels in and the ones with
+    # nothing in them, which are the ones somebody made by hand. A provider's groups are
+    # not offered unless asked for: there are hundreds of them and no channel is in any.
+    "group_choices": ["with_channels", "empty"],
     # "all" joins every profile, as Dispatcharr does; "none", or a list of profile ids
     "profiles": "all",
     # ── Recognition ──

@@ -484,20 +484,28 @@ const ChannelManagerTable = () => {
   // Groups made on the page, which are not in what the server sent with it
   const [madeGroups, setMadeGroups] = useState([]);
 
-  // Only the groups you actually have channels in. Every group there is ran to hundreds
-  // on this setup, most of them a provider's own names that no channel of yours is in,
-  // and finding your own group among them was the hard part. Making a new one is the
-  // last entry rather than a button of its own, since that is where you look when none
-  // of them is the one you want.
-  const groupOptions = useMemo(
-    () => [
-      ...[...(options?.channel_groups || []), ...madeGroups]
+  // The groups the levers ask for. Every group there is runs to hundreds on a real setup,
+  // nearly all of them a provider's own names that no channel is in, so by default the
+  // picker offers the ones you have channels in and the ones with nothing in them, which
+  // are the ones you made yourself. Making a new one is the last entry rather than a
+  // button of its own, since that is where you look when none of them is the one you want.
+  const groupOptions = useMemo(() => {
+    const wanted = new Set(levers?.group_choices || ['with_channels', 'empty']);
+    const offered = [
+      // A group made on the page is offered whatever the levers say: it was made to be
+      // used, and it has nothing in it yet by definition
+      ...madeGroups.map((g) => ({ ...g, kind: 'empty' })),
+      ...(options?.channel_groups || []).filter(
+        (g) => wanted.has(g.kind) && !madeGroups.some((made) => made.id === g.id)
+      ),
+    ];
+    return [
+      ...offered
         .map((g) => ({ value: String(g.id), label: g.name }))
         .sort((a, b) => a.label.localeCompare(b.label)),
       { value: NEW_GROUP, label: '+ A new group…' },
-    ],
-    [options, madeGroups]
-  );
+    ];
+  }, [options, madeGroups, levers?.group_choices]);
   // Only the groups the plan actually has something in, named for the page. A new
   // channel counts under the group it would go into.
   const groupsOnShow = useMemo(() => {

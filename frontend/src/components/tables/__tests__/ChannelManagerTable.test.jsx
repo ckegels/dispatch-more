@@ -219,8 +219,8 @@ describe('ChannelManagerTable', () => {
       settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
       profiles: [],
       channel_groups: [
-        { id: 1, name: '┃AT┃ AUSTRIA', count: 20 },
-        { id: 2, name: '┃DE┃ GERMANY', count: 9 },
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
+        { id: 2, name: '┃DE┃ GERMANY', count: 9, kind: 'with_channels' },
       ],
       all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 2, name: '┃DE┃ GERMANY' }],
     });
@@ -625,8 +625,8 @@ describe('ChannelManagerTable', () => {
       settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
       profiles: [],
       channel_groups: [
-        { id: 1, name: '┃AT┃ AUSTRIA', count: 20 },
-        { id: 3, name: '┃AT┃ NEWS', count: 4 },
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
+        { id: 3, name: '┃AT┃ NEWS', count: 4, kind: 'with_channels' },
       ],
       all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 3, name: '┃AT┃ NEWS' }],
     });
@@ -664,7 +664,10 @@ describe('ChannelManagerTable', () => {
       settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
       profiles: [],
       // Every group there is runs to hundreds, most of them a provider's own names
-      channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA', count: 20 }],
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
+        { id: 99, name: 'A provider group no channel of yours is in', kind: 'active_m3u' },
+      ],
       all_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA' },
         { id: 99, name: 'A provider group no channel of yours is in' },
@@ -711,7 +714,7 @@ describe('ChannelManagerTable', () => {
     API.getChannelManagerOptions.mockResolvedValue({
       settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
       profiles: [],
-      channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA', count: 20 }],
+      channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' }],
       // It exists, it simply has no channels in it yet
       all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 5, name: '┃AT┃ KIDS' }],
     });
@@ -759,5 +762,40 @@ describe('ChannelManagerTable', () => {
     expect(
       await screen.findByText(/going through xmltv.at/, undefined, { timeout: 6000 })
     ).toBeInTheDocument();
+  });
+
+  it("offers a provider's groups when the levers ask for them", async () => {
+    const newRow = {
+      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      channel: {
+        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
+        group_why: 'where your channels are', logo_url: '', epg: null,
+      },
+      before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
+      streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
+    };
+    API.getChannelManagerOptions.mockResolvedValue({
+      // Asked for outright, so the hundreds of provider groups are offered too
+      settings: { order: 'quality', group_choices: ['with_channels', 'active_m3u'] },
+      defaults: {}, accounts: [], stream_groups: [], profiles: [],
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
+        { id: 99, name: 'AT | PROVIDER SPORT', kind: 'active_m3u' },
+        { id: 98, name: 'AT | OLD PROVIDER', kind: 'inactive_m3u' },
+      ],
+      all_groups: [],
+    });
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ PULS 4');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    fireEvent.click(
+      await screen.findByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' })
+    );
+
+    expect(await screen.findByText('AT | PROVIDER SPORT')).toBeInTheDocument();
+    // ...and the kind that was not asked for is still left out
+    expect(screen.queryByText('AT | OLD PROVIDER')).toBeNull();
   });
 });
