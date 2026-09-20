@@ -20,7 +20,6 @@ from core.utils import RedisClient
 from . import health
 from . import media_servers
 from . import probation
-from . import recovery
 from . import timing
 
 logger = logging.getLogger("live_proxy")
@@ -255,8 +254,8 @@ def diagnostics(request):
 
     return JsonResponse({
         "starts": _section("channel starts", lambda: _starts(redis_client), []),
-        # What has happened to the channels themselves (see recovery.py)
-        "health": _section("channel events", lambda: recovery.recent_events(redis_client), []),
+        # What has happened to the channels themselves (see health.recent_events)
+        "health": _section("channel events", lambda: health.recent_events(redis_client), []),
         # What the channels are doing now, and what the ones that stopped ended on
         "running": _section("running channels", lambda: health.running_now(redis_client), []),
         "stopped": _section(

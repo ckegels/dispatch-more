@@ -2703,23 +2703,6 @@ export default class API {
     );
   }
 
-  static async getStreamRecovery() {
-    // Stream Recovery: what happens when a provider closes a working connection
-    try {
-      return await request(`${host}/proxy/stream-recovery/`);
-    } catch (e) {
-      errorNotification('Failed to retrieve the stream recovery settings', e);
-      throw e;
-    }
-  }
-
-  static async saveStreamRecovery(settings) {
-    return await request(`${host}/proxy/stream-recovery/`, {
-      method: 'POST',
-      body: settings,
-    });
-  }
-
   static async getDiagnostics() {
     // Channel starts and Channel Switch Overlap activity for the Diagnostics page
     try {

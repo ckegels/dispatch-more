@@ -17,7 +17,6 @@ import {
 } from '@mantine/core';
 import API from '../../api';
 import MediaServerTuners from './MediaServerTuners';
-import StreamRecovery from './StreamRecovery';
 import ConfirmationDialog from '../ConfirmationDialog';
 
 const REFRESH_MS = 10000;
@@ -104,8 +103,6 @@ const MediaServers = ({ active }) => {
       </Text>
 
       {error && <Alert color="red">{error}</Alert>}
-
-      <StreamRecovery />
 
       {servers.map((server) => (
         <Card key={server.id} withBorder padding="sm">

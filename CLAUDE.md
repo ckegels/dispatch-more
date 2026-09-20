@@ -37,7 +37,7 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v131 is the latest. Users install one with
+   Releases run from v99; v132 is the latest. Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker.
 
@@ -63,7 +63,7 @@ the mistakes not to repeat.
   Releases go there with `fork/patcher/release.sh vNN --publish` (it names the fork in every gh
   command). Only the `fork-*` workflow is enabled there; upstream's are disabled on purpose.
 - `docs/channel-switch-overlap.md` — design of the first feature.
-- Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health, recovery,
+- Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health,
   diagnostics) and `apps/channels/` (logo_library, channel_manager, guide_manager,
   stream_check).
 - `git log bcbb68c4..HEAD` — every change, explained in its message.

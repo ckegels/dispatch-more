@@ -219,12 +219,10 @@ def _put_away_the_stopped(redis_client, running):
         if not samples:
             continue
 
-        from . import recovery
-
         # The name as it was while the channel ran. Asking now would only get its id back.
         named = next(
             (s["name"] for s in reversed(samples) if s.get("name")),
-            recovery._channel_name(channel_id),
+            channel_name(channel_id),
         )
         record = {
             "channel": named,
@@ -233,8 +231,59 @@ def _put_away_the_stopped(redis_client, running):
         }
         redis_client.lpush(STOPPED_KEY, json.dumps(record))
         redis_client.ltrim(STOPPED_KEY, 0, STOPPED_KEPT - 1)
-        redis_client.expire(STOPPED_KEY, recovery.EVENT_TTL)
+        redis_client.expire(STOPPED_KEY, EVENT_TTL)
         logger.debug(f"Kept the last {len(samples)} readings of channel {channel_id}")
+
+
+# What happened to each channel, for the health tab's "What happened": a small list,
+# newest first. It was Stream Recovery that wrote to it, and this outlived that feature
+# (see the handover, §5.3) -- anything worth telling somebody about a channel goes here.
+EVENTS_KEY = "live:recovery:events"
+EVENTS_KEPT = 200
+EVENT_TTL = 24 * 3600
+
+
+def channel_name(channel_id) -> str:
+    """The channel's name, or its id: what happened to it matters more than its name."""
+    try:
+        from .utils import resolve_channel_display_name
+
+        return resolve_channel_display_name(channel_id) or str(channel_id)
+    except Exception:
+        return str(channel_id)
+
+
+def record_event(redis_client, channel_id, action, detail=""):
+    """Remember what happened to a channel, for the health tab. Never raises."""
+    if not redis_client:
+        return
+    try:
+        event = {
+            "time": time.time(),
+            "channel": channel_name(channel_id),
+            "action": action,
+            "detail": detail,
+        }
+        redis_client.lpush(EVENTS_KEY, json.dumps(event))
+        redis_client.ltrim(EVENTS_KEY, 0, EVENTS_KEPT - 1)
+        redis_client.expire(EVENTS_KEY, EVENT_TTL)
+    except Exception as e:
+        logger.debug(f"Could not record a channel health event: {e}")
+
+
+def recent_events(redis_client):
+    """What has happened to the channels lately, newest first."""
+    events = []
+    try:
+        for raw in redis_client.lrange(EVENTS_KEY, 0, EVENTS_KEPT - 1) or ():
+            raw = raw.decode() if isinstance(raw, bytes) else raw
+            try:
+                events.append(json.loads(raw))
+            except ValueError:
+                continue
+    except Exception as e:
+        logger.debug(f"Could not read the channel health events: {e}")
+    return events
 
 
 def _read_samples(redis_client, key):
@@ -367,7 +416,6 @@ def running_now(redis_client):
     """Every channel that is running, with its readings, newest last."""
     channels = []
     try:
-        from . import recovery
         from .redis_keys import RedisKeys
 
         ids = _channel_ids(redis_client)
@@ -386,7 +434,7 @@ def running_now(redis_client):
             # only measure there is
             latest["kbps"] = samples[-1]["kbps"] if samples else 0.0
             channels.append({
-                "channel": recovery._channel_name(channel_id),
+                "channel": channel_name(channel_id),
                 "now": latest,
                 "samples": samples,
                 "details": details(redis_client, channel_id, profile_names),

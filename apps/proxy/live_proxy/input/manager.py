@@ -14,8 +14,8 @@ from core.utils import log_system_event
 from .buffer import StreamBuffer
 from ..utils import detect_stream_type, get_logger
 from ..redis_keys import RedisKeys
+from .. import health
 from .. import probation
-from .. import recovery
 from .. import timing
 from ..constants import ChannelState, EventType, StreamType, ChannelMetadataField, TS_PACKET_SIZE
 from ..config_helper import ConfigHelper
@@ -194,35 +194,9 @@ class StreamManager:
         return max(self.last_data_time - started, 0.0)
 
     def _record_connection_failure(self):
-        """
-        Count a failed connection towards the retry budget, unless the one that just ended had
-        been working.
-
-        Providers close and rotate a connection as normal behaviour, every few minutes on some
-        of them. Counting each of those as a failure means three rotations inside the retry
-        window (30 minutes by default) abandon a channel that was playing perfectly -- so the
-        longer someone watches, the more likely the stream is to die.
-
-        Stream Recovery (see recovery.py, off by default) forgives the close of a connection
-        that had been working: the count is cleared rather than increased. It decides the how
-        long, the which channels and the how often, because keeping a stream that drops every
-        minute is not always better than failing over to the next one.
-        """
+        """Count a failed connection towards the retry budget, as Dispatcharr does."""
         now = time.time()
-        stable_for = self._stable_seconds()
-        # The buffer may not be there yet on an early failure, so it is asked for carefully
-        if recovery.forgive_disconnect(
-            getattr(getattr(self, "buffer", None), "redis_client", None),
-            self.channel_id,
-            stable_for,
-        ):
-            logger.info(
-                f"Connection for channel {self.channel_id} had been working for "
-                f"{stable_for:.0f}s before the provider closed it; not counting it against "
-                f"the {self.max_retries} retries (Stream Recovery)"
-            )
-            self.retry_count = 0
-        elif (
+        if (
             self._last_failure_time is not None
             and (now - self._last_failure_time) > self._retry_window_seconds
         ):
@@ -694,7 +668,7 @@ class StreamManager:
                 # If URL failed and we're still running, try switching to another stream
                 if url_failed and self.running:
                     logger.info(f"URL {self.url} failed after {self.retry_count} attempts, trying next stream for channel: {self.channel_id}")
-                    recovery.record_event(
+                    health.record_event(
                         getattr(getattr(self, "buffer", None), "redis_client", None),
                         self.channel_id,
                         "stream given up",
@@ -2237,7 +2211,7 @@ class StreamManager:
                     logger.info(f"Stream metadata updated for channel {self.channel_id} to stream ID {stream_id} with M3U profile {profile_id}")
 
                 logger.info(f"Successfully switched to stream ID {stream_id} with URL {new_url} for channel {self.channel_id}")
-                recovery.record_event(
+                health.record_event(
                     getattr(getattr(self, "buffer", None), "redis_client", None),
                     self.channel_id,
                     "stream switched",
@@ -2247,7 +2221,7 @@ class StreamManager:
 
             # If we get here, we tried all streams but none worked
             logger.error(f"Tried {len(untried_streams)} alternate streams but none were suitable for channel {self.channel_id}")
-            recovery.record_event(
+            health.record_event(
                 getattr(getattr(self, "buffer", None), "redis_client", None),
                 self.channel_id,
                 "nothing left",

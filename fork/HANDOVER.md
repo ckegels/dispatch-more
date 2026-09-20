@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v131** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v132** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -245,11 +245,54 @@ before enabling them or you get "(69) 0 enabled").
 Cached logos (`?cachedlogos=`) default to **off** for media servers: the server hands the
 logo URL to the player, and a private address fails off the network.
 
-### 5.3 Stream Recovery — `recovery.py`
+### 5.3 Stream Recovery — **removed in v132**, and how to put it back
 
-A provider closing a working connection (rotation) is not treated as a failure, within a
-budget per hour; "Maximum retry attempts" was lowered on the user's setup (987 → 5). On for
-media servers.
+It existed from v-early to v131 as `apps/proxy/live_proxy/recovery.py`. Taken out because it
+was measured and did not earn its place. Kept here so nobody has to work it out again.
+
+**What it did.** Providers close and rotate connections as normal behaviour. Dispatcharr
+counts every close as a failure and gives up on a stream after `MAX_RETRIES` (3, via
+`ConfigHelper`) inside `RETRY_WINDOW_SECONDS` (1800) — so the longer somebody watched, the
+likelier the stream was to be abandoned. Recovery *forgave* a close when the connection had
+been delivering data for `stable_seconds` (30): the retry count was cleared instead of
+increased. Hooked in at one place, `input/manager.py::_record_connection_failure`. Settings in
+CoreSettings `stream-recovery` (`enabled`, `stable_seconds`, `scope` of "media_servers"/"all",
+`max_per_hour` 10), a tab under Media Servers, and `GET/POST /proxy/stream-recovery/`.
+
+**Why it went.** Seven firings in seven days on the real setup, and reading them decided it:
+
+| when | channel | had been working |
+|---|---|---|
+| 17 Sep 22:59–23:16 | four different channels | 38s, 30s, 62s, 38s |
+| 18 Sep 08:22–08:24 | one channel, three times | **797s**, 57s, 31s |
+
+Only the 797s one is the case it was built for — a connection that ran thirteen minutes and
+was rotated. The three on one channel, with the working time collapsing 797 → 57 → 31, are a
+stream *dying* being propped up instead of failing over, which is exactly the trade-off the
+module's own docstring warned about; `max_per_hour` (10) was nowhere near catching it. The
+other four cleared a 30-second bar by nought to eight seconds, which is not "it was working".
+And nothing at all fired in the two and a half days before it was removed.
+
+**Two claims that were in this file and were wrong.** That "Maximum retry attempts" was
+lowered 987 → 5: the log says `the 3 retries`, the stock default, so either it was never
+changed or it was changed back. And that the retry ratio fell 23 % → 4 % because of this:
+seven firings a week, four of them dubious, does not support that, and the figure was never
+separated from the other changes made at the same time. **Do not quote either.**
+
+**Putting it back**, if a provider ever does rotate often enough to matter:
+`git show v131:apps/proxy/live_proxy/recovery.py` has the module,
+`git show v131:apps/proxy/live_proxy/tests/test_reconnect_budget.py` the tests (whose
+docstring records the original symptom: thousands of "Server closed connection" and hundreds
+of "Maximum retry attempts (3) reached" on this setup), and `git show v131` the hook, the view,
+the route and the tab. **Raise `stable_seconds` well above 30 before trusting it** — 120 would
+have kept the one good rescue and dropped all six of the others.
+
+**What stayed.** The event list it wrote to is Channel health's, not its own, and lives in
+`health.py` now (`record_event`, `recent_events`, `channel_name`, still under the Redis key
+`live:recovery:events` so nothing already recorded is lost). Diagnostics → Channel health →
+What happened still shows stream given up / switched / nothing left, which come from
+`input/manager.py`. The CoreSettings row `stream-recovery` is left where it is: no migrations,
+and stock ignores it.
 
 ### 5.4 Diagnostics and Channel health — `diagnostics_views.py`, `health.py`, `timing.py`
 
@@ -651,7 +694,10 @@ no longer play. Summary of how it works now:
 2. **Plex start-up glitch:** Dispatcharr hands over the first video in 1.2 s (keyframe in the
    first chunk). The ~5 s glitch after that is Plex's transcoder starting cold; a bigger
    initial burst did not help. The lever is a native client (direct play), not Dispatcharr.
-3. **Stream Recovery:** with rotation not counted, retry ratio fell from 23 % to 4 %.
+3. **Stream Recovery: the 23 % → 4 % retry ratio once claimed here is withdrawn.** It was
+   never separated from the other changes made at the same time, and when the feature was
+   finally measured on its own it had fired seven times in a week, four of them on a stream
+   that was failing rather than rotating (§5.3). The feature was removed in v132.
 4. **TiviBridge / `line.one-zone.cc`:** a closed connection is off its `active_cons` 0.1 s
    later; three checks in a row all play. A run at 16/min stopped at stream 34 with HTTP 407 —
    which was most likely **a dead channel**, not a rate limit: the provider answers dead
