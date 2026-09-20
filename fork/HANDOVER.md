@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v149** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v150** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -837,6 +837,17 @@ no longer play. Summary of how it works now:
   count/span recorded, provider left completely alone, retried after 30 s…60 min until it
   plays, then limit = 80 % of the count per (span + block). Shown/editable/forgettable in
   settings; limits set by hand kept; `LIMITS_VERSION` drops old learned ones.
+- **The checks let go the moment somebody starts a channel** (v150, and it took a viewer's
+  channel before it did). Two faults, and the second is the one that mattered. `make_way`
+  was asked only *after* the viewer had already been refused a connection -- which is no
+  use when a check is holding the last connection of every provider that channel has, and
+  the viewer landed on the "Could Not Dispatch" fallback. It is asked now at the start of
+  the viewer's path, before a slot is even requested: one Redis lookup when nothing is
+  running. And a check that was reading could take **ten seconds** to notice, because the
+  wait for the next piece of video was one block of `READ_PAUSE_SECONDS` that nothing
+  interrupted; the viewer gives up after three. The wait is unchanged -- a provider that
+  bursts still gets its ten seconds -- but it is spent in fifths of a second with a look at
+  the signal between them (`_next_piece`, `STOP_POLL_SECONDS`).
 - **A viewer is never left with a dead channel** (v133, and it happened once). `make_way`
   answers whether a run was going, and `live_proxy/views.py` asks it **before** stock's test
   of the refusal's wording and lets that answer override it. Stock only retries when the
@@ -1015,6 +1026,12 @@ no longer play. Summary of how it works now:
   not in state beside it. The page's own tests could never have caught this: they stand in
   for the table and for Mantine both, so `LogoLibraryTable.redraw.test.jsx` draws the real
   ones.
+- **A viewer on the fallback while the checks held the connections** (to v150): the signal
+  to let go was sent only after the viewer had already been refused, and a check in the
+  middle of a read could take ten seconds to see it -- the viewer gives up after three.
+  Both halves had to be wrong for it to happen, and each half read as correct on its own.
+  → ask before the viewer can fail, not after; and never wait on anything in a block
+  longer than the time you have to answer in.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

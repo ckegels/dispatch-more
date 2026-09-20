@@ -2161,6 +2161,30 @@ class StreamTsSkippedChannelOrderTests(SimpleTestCase):
             ["get slot", "stop skipped (hold=True)", "get slot", "stop skipped (hold=False)"],
         )
 
+    def test_the_checks_are_told_to_let_go_before_a_slot_is_even_asked_for(self):
+        """
+        Somebody starting a channel is enough. It used to be asked only once the viewer
+        had already been refused, which is no use at all when a check is holding the last
+        connection of every provider the channel has: the viewer went to the fallback
+        stream while the connections they needed were still being held.
+        """
+        with patch(
+            "apps.channels.stream_check.make_way",
+            side_effect=lambda _redis: self.calls.append("let go") or False,
+        ):
+            calls = self._run([self.OK])
+
+        self.assertEqual(calls[0], "let go")
+        self.assertEqual(calls, ["let go", "get slot", "stop skipped (hold=False)"])
+
+    def test_and_a_check_that_cannot_be_asked_never_costs_the_viewer_the_channel(self):
+        with patch(
+            "apps.channels.stream_check.make_way", side_effect=RuntimeError("no Redis")
+        ):
+            calls = self._run([self.OK])
+
+        self.assertEqual(calls, ["get slot", "stop skipped (hold=False)"])
+
 
 @patch("apps.proxy.live_proxy.services.channel_service.ChannelService.is_channel_teardown_active", return_value=False)
 @patch.object(probation, "in_use", return_value=True)

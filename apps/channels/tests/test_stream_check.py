@@ -420,6 +420,60 @@ class WhenTests(TestCase):
         self.assertTrue(redis.exists(stream_check.YIELD_KEY))
 
 
+class LettingGoTests(TestCase):
+    """
+    How quickly a check that is reading notices it has been asked to let go. A viewer
+    starting a channel waits three seconds for a connection and then goes to the fallback
+    stream, so a check that takes ten to notice has already cost them their channel --
+    which is what happened.
+    """
+
+    def _pieces(self, *put):
+        import queue
+
+        held = queue.Queue()
+        for one in put:
+            held.put(one)
+        return held
+
+    def test_a_piece_that_is_there_comes_straight_back(self):
+        self.assertEqual(
+            stream_check._next_piece(self._pieces(b"video"), 10, lambda: False), b"video"
+        )
+
+    def test_nothing_in_the_time_given_is_still_nothing(self):
+        import queue
+
+        started = time.monotonic()
+        with self.assertRaises(queue.Empty):
+            stream_check._next_piece(self._pieces(), 0.5, lambda: False)
+        # The wait itself is unchanged: it waits the time it was given
+        self.assertGreaterEqual(time.monotonic() - started, 0.4)
+
+    def test_but_being_asked_to_let_go_is_noticed_at_once(self):
+        # The wait is ten seconds, as it is for a provider that sends in bursts; the
+        # check must still let go inside a fraction of one
+        asked = {"at": time.monotonic() + 0.3}
+        started = time.monotonic()
+        with self.assertRaises(stream_check.Stopped):
+            stream_check._next_piece(
+                self._pieces(), 10, lambda: time.monotonic() >= asked["at"]
+            )
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_and_a_read_with_nothing_coming_lets_go_too(self):
+        asked = {"yet": False}
+
+        def should_stop():
+            was, asked["yet"] = asked["yet"], True
+            return was
+
+        started = time.monotonic()
+        with self.assertRaises(stream_check.Stopped):
+            stream_check._next_piece(self._pieces(), 10, should_stop)
+        self.assertLess(time.monotonic() - started, 1.0)
+
+
 class _Setup(TestCase):
     def setUp(self):
         self.a = M3UAccount.objects.create(name="Provider A", account_type="STD", server_url="http://a", is_active=True)

@@ -321,6 +321,23 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
 
             if perform_setup:
                 try:
+                    # Stream Check: somebody is starting a channel, so every check lets go
+                    # of every connection it is holding, now, before this viewer is told
+                    # anything. It used to be asked only once the viewer had already been
+                    # refused, which is a moment too late in the worst case and was no use
+                    # at all when the check was holding the last connection of every
+                    # provider this channel has: the viewer went to the fallback stream
+                    # while the connections they needed were still being held.
+                    #
+                    # Costs one Redis lookup when no check is running, which is almost
+                    # always. See stream_check.make_way.
+                    try:
+                        from apps.channels.stream_check import make_way
+
+                        make_way(proxy_server.redis_client)
+                    except Exception as e:  # never let this cost a viewer their channel
+                        logger.debug(f"[{client_id}] Could not ask the checks to let go: {e}")
+
                     # Use fixed retry interval and timeout
                     retry_timeout = 3  # 3 seconds total timeout
                     retry_interval = 0.1  # 100ms between attempts

@@ -1090,6 +1090,37 @@ READ_PAUSE_SECONDS = 10
 PAUSE_ENDS_READ = 1.5
 
 
+# How long a read may go without looking at whether it has been asked to let go. The wait
+# for a piece of video was one block of up to READ_PAUSE_SECONDS, and nothing could
+# interrupt it: a viewer starting a channel had to wait out the whole ten seconds before
+# the check holding their connection even noticed. They had given up after three, on the
+# fallback stream. The waiting itself is unchanged -- a provider that bursts is still
+# given its ten seconds -- it is just spent in slices with a look between them.
+STOP_POLL_SECONDS = 0.2
+
+
+def _next_piece(pieces, wait, should_stop):
+    """
+    The next piece of the body, waiting up to wait seconds for it in slices.
+
+    Raises queue.Empty when nothing came in time, exactly as the plain wait did, and
+    Stopped as soon as the check is asked to let go.
+    """
+    import queue
+
+    ends = time.monotonic() + wait
+    while True:
+        if should_stop():
+            raise Stopped()
+        left = ends - time.monotonic()
+        if left <= 0:
+            raise queue.Empty()
+        try:
+            return pieces.get(timeout=min(STOP_POLL_SECONDS, left))
+        except queue.Empty:
+            continue
+
+
 def _read(session, url, headers, deadline, should_stop, limit=READ_BYTES):
     """
     Up to limit bytes of url, before the deadline; (response, bytes). The body is pumped by a
@@ -1135,7 +1166,7 @@ def _read(session, url, headers, deadline, should_stop, limit=READ_BYTES):
                 break
             wait = READ_PAUSE_SECONDS if not data else min(PAUSE_ENDS_READ, max(0.05, deadline - now))
             try:
-                piece = pieces.get(timeout=wait)
+                piece = _next_piece(pieces, wait, should_stop)
             except queue.Empty:
                 if not data:
                     raise _Stalled()
