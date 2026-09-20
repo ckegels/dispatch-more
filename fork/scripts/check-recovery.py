@@ -77,20 +77,43 @@ for key in redis_client.scan_iter("stream_profile:*"):
         print(f"      user agent: {agent!r}")
         print(f"      address:    {ip}")
 if not seen:
-    print("  Nothing is playing, so there is nothing to recognise. Run this again while")
-    print("  Plex is watching a channel: that is the check that matters.")
+    print("  NOTHING IS STREAMING THROUGH DISPATCHARR AT THIS MOMENT.")
+    print()
+    print("  This is not the same as Plex being open, or logged in, or even showing its")
+    print("  guide. What is looked for here is a channel being pulled through the proxy")
+    print("  right now -- so:")
+    print("      start playing a live TV channel in Plex, leave it playing,")
+    print("      and run this again.")
+    print("  Until then this question has no answer either way.")
 
 print()
 print("=" * 70)
 print("4. HOW MANY RETRIES BEFORE DISPATCHARR GIVES UP (a different setting)")
 print("=" * 70)
 try:
-    from core.models import CoreSettings
+    from apps.proxy.live_proxy.config_helper import ConfigHelper
 
-    for key in ("max-reconnect-attempts", "reconnect-window", "max_retries"):
-        row = CoreSettings.objects.filter(key=key).first()
-        if row:
-            print(f"  {key:26} {row.value}")
+    retries = ConfigHelper.max_retries()
+    window = ConfigHelper.retry_window_seconds()
+    print(f"  Maximum retry attempts     {retries}")
+    print(f"  Retry window               {window}s ({window / 60:.0f} min)")
+    print(f"  Stable before reconnect    {ConfigHelper.stable_connection_threshold()}s")
+    print()
+    print(f"  A stream is abandoned after {retries} failures inside {window / 60:.0f} minutes.")
+    if retries > 20:
+        print("  >> That is very high: a dead stream is retried for a long time instead of")
+        print("     failing over to the next one, which looks like a channel that hangs.")
 except Exception as e:
     print(f"  Could not read it: {e}")
+
+print()
+print("=" * 70)
+print("5. WHAT THE LOG SAYS (beyond the day Redis keeps)")
+print("=" * 70)
+print("  Every forgiveness also writes a line. Redis keeps 24 hours; the journal keeps")
+print("  longer, so this is the wider answer:")
+print()
+print("      journalctl -u dispatcharr --since '7 days ago' | grep -c 'Stream Recovery'")
+print()
+print("  A count of 0 there means it has never fired since the log begins.")
 print()
