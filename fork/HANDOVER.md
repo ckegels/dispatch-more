@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v119** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v120** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -337,6 +337,25 @@ install has a single Celery worker -- a dozen of them set off because a window w
 hold up the M3U and EPG refreshes behind them. A dummy source is refused outright: it makes its
 programmes up as they are asked for, so there is nothing to read.
 
+**Reading one guide costs the whole file** (v120, and the button did nothing before it).
+`parse_programs_for_tvg_id` streams the source's XMLTV from beginning to end and keeps the
+programmes whose `channel` is the one tvg_id asked for -- so reading one entry is as expensive
+as reading the file, and a window's worth read one at a time reads it a dozen times. Hence
+`apps/channels/tasks.read_guide_programmes`: **one pass of each source's file for every entry
+wanted from it**, using Dispatcharr's own helpers for everything inside a programme
+(`_open_xmltv_file`, `parse_xmltv_time`, `extract_custom_properties`,
+`extract_season_episode_from_description`, `clear_element`) so the rows are the ones its own
+parse would make, each guide's swapped in inside a transaction as its task does. A source being
+refreshed is left alone (`is_task_lock_held('refresh_epg_data', source_id)` -- the file is being
+rewritten). Schedules Direct is fetched rather than parsed, so it goes to Dispatcharr's task per
+entry. The window has **Read all N** for the unread ones on the list, and the page asks the list
+again every 3 s for three minutes before giving up.
+
+**`force=True` is the whole point.** `parse_programs_for_tvg_id` returns without doing anything
+when no channel uses the guide (`is_epg_mapped_to_channel`, `apps/epg/tasks.py`) -- and an
+unused guide is the only kind this is ever asked about. v119 called it without `force`, so the
+button did nothing at all, silently.
+
 **New channels are suggested** (`create_new`, on; only suggested — nothing is made until a row
 is ticked and applied). From the stream groups your channels already come from (`new_from`
 "followed"; "all" is tens of thousands). Each gets a group (`_NewHomes`: where your channels
@@ -493,6 +512,10 @@ no longer play. Summary of how it works now:
   bursts. → keep what came, wait up to ten seconds, and never call that "could not connect".
 - **Black/frozen measured as seconds anywhere** (to v115): "Black picture (3 of 29 s)" on a
   fade. → most of what was seen.
+- **A button that did nothing, quietly** (v119): "Read them, to see" called Dispatcharr's
+  per-guide task without `force`, and that task returns at once for a guide no channel uses --
+  which is every guide the button is for. It logged one INFO line and looked like a slow task.
+  → when reusing a stock task, read what it refuses to do before trusting it.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

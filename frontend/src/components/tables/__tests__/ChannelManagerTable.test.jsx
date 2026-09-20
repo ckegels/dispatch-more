@@ -86,7 +86,7 @@ describe('ChannelManagerTable', () => {
     API.saveChannelManagerSettings.mockResolvedValue({});
     API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
-    API.loadChannelManagerGuide.mockResolvedValue({ queued: true });
+    API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -456,12 +456,46 @@ describe('ChannelManagerTable', () => {
         name: 'Read the programmes of ORF 1 elsewhere',
       })
     );
-    await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalledWith(8));
+    await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([8]));
 
     // They arrive as a task, so the list is asked again until they show up
     expect(
       await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 5000 })
     ).toBeInTheDocument();
     expect(screen.getByText('Now: Bundesliga')).toBeInTheDocument();
+  });
+
+  it('reads every unread guide at once, which costs one pass of the file', async () => {
+    const first = { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: false };
+    const second = { ...guide, id: 9, name: 'ORF Eins', programmes: 0, now: '', in_use: false };
+    API.getChannelManagerGuides.mockResolvedValue({ guides: [held, first, second] });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+    );
+
+    // The one the channel has is read already, so it is not among them
+    const all = await screen.findByRole('button', {
+      name: 'Read the programmes of every guide shown',
+    });
+    expect(all).toHaveTextContent('Read all 2');
+
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [
+        held,
+        { ...first, programmes: 120, now: 'Bundesliga' },
+        { ...second, programmes: 90, now: 'Wetter' },
+      ],
+    });
+    fireEvent.click(all);
+    await waitFor(() =>
+      expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([8, 9])
+    );
+    expect(
+      await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 6000 })
+    ).toBeInTheDocument();
+    expect(screen.getByText('ORF1.at · 90 programmes')).toBeInTheDocument();
   });
 });

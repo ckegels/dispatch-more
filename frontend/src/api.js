@@ -2920,12 +2920,13 @@ export default class API {
     );
   }
 
-  // Read one guide's programmes now, so it can be looked at before it is chosen:
-  // Dispatcharr only reads them once a guide is on a channel
-  static async loadChannelManagerGuide(id) {
+  // Read these guides' programmes now, so they can be looked at before one is chosen:
+  // Dispatcharr only reads them once a guide is on a channel, and reading one costs a
+  // pass of the whole file either way -- so they are read together
+  static async loadChannelManagerGuide(ids) {
     return await request(`${host}/api/channels/channel-manager/guides/load/`, {
       method: 'POST',
-      body: { id },
+      body: { ids: Array.isArray(ids) ? ids : [ids] },
     });
   }
 

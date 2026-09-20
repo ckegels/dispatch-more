@@ -618,38 +618,69 @@ def _what_they_carry(entries):
     return entries
 
 
-def load_programmes(epg_id):
+def load_programmes(epg_ids):
     """
-    Read one guide's programmes now, without having to put it on a channel first.
+    Read these guides' programmes now, without having to put them on a channel first.
 
-    Dispatcharr reads them when a guide is assigned; before that there is nothing to look
-    at, which is exactly when someone is trying to decide. This asks for that one entry --
-    Dispatcharr's own task, the one the assignment would have set off.
+    Dispatcharr reads a guide's programmes when it is assigned to a channel, and not
+    before -- so the entries nobody has chosen hold nothing, which is exactly the state
+    they are in while someone is trying to choose between them.
 
-    One at a time and only when asked. The task reads the source's file looking for that
-    entry, and this install has a single Celery worker: setting a dozen of them off at
-    once because a window was opened would hold up the M3U and EPG refreshes behind them.
+    **Reading one costs the whole file.** Dispatcharr's own task streams the source's
+    XMLTV from beginning to end and keeps the programmes whose `channel` is the one
+    tvg_id it was asked for (`parse_programs_for_tvg_id`). So reading one entry is as
+    expensive as reading the file, and reading a window's worth one at a time would read
+    the same file a dozen times over. That is why they are read together: the fork's own
+    task goes through each source's file **once** for every entry wanted from it, using
+    Dispatcharr's own helpers for everything inside a programme so the rows come out the
+    same as its own parse would make them.
+
+    Anything that is not a plain XMLTV file -- Schedules Direct, which is fetched rather
+    than parsed -- goes to Dispatcharr's task per entry instead, which knows how. A dummy
+    source is refused: it makes its programmes up as they are asked for.
+
+    `force` matters. That task returns without doing anything for a guide no channel
+    uses, which is every guide this is for; asking without it is how the button came to
+    do nothing at all.
     """
     from apps.epg.models import EPGData
 
-    entry = (
-        EPGData.objects.filter(id=epg_id)
-        .select_related("epg_source")
-        .values("id", "epg_source__source_type")
-        .first()
+    wanted = []
+    for epg_id in epg_ids if isinstance(epg_ids, (list, tuple, set)) else [epg_ids]:
+        try:
+            wanted.append(int(epg_id))
+        except (TypeError, ValueError):
+            continue
+    entries = list(
+        EPGData.objects.filter(id__in=wanted)
+        .values("id", "tvg_id", "epg_source_id", "epg_source__source_type")
     )
-    if not entry:
-        return {"error": "That guide is gone"}
-    if entry["epg_source__source_type"] == "dummy":
-        # A dummy source makes its programmes up as they are asked for; there is
-        # nothing to read
-        return {"queued": False, "why": "A dummy guide has nothing to read"}
+    if not entries:
+        return {"error": "Those guides are gone", "reading": 0}
 
     from apps.epg.tasks import parse_programs_for_tvg_id
 
-    parse_programs_for_tvg_id.delay(epg_id)
-    logger.info(f"Channel Manager: asked for guide {epg_id}'s programmes, to choose by")
-    return {"queued": True}
+    reading = 0
+    by_source = {}
+    for entry in entries:
+        kind = entry["epg_source__source_type"]
+        if kind == "dummy" or not entry["epg_source_id"]:
+            continue
+        if kind == "xmltv" and (entry["tvg_id"] or "").strip():
+            by_source.setdefault(entry["epg_source_id"], []).append(entry["id"])
+        else:
+            # Not a file to go through: Dispatcharr's own task knows how to get it
+            parse_programs_for_tvg_id.delay(entry["id"], force=True)
+        reading += 1
+
+    if by_source:
+        from .tasks import read_guide_programmes
+
+        read_guide_programmes.delay(
+            {str(source): ids for source, ids in by_source.items()}
+        )
+    logger.info(f"Channel Manager: reading the programmes of {reading} guide(s), to choose by")
+    return {"queued": reading > 0, "reading": reading}
 
 
 def guide_candidates(name, tvg_id="", search="", limit=12, current=None):

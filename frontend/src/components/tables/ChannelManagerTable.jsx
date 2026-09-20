@@ -340,33 +340,44 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   // Reading a guide's programmes is a task on the server, so the answer is not the point
   // it comes back at: the list is asked again until they show up, and given up on after a
   // while rather than left turning for ever. What is still empty then is empty.
-  const readThem = useCallback(async (guide) => {
-    setReading((all) => ({ ...all, [guide.id]: true }));
-    try {
-      await API.loadChannelManagerGuide(guide.id);
-    } catch {
-      setReading((all) => ({ ...all, [guide.id]: false }));
-      return;
-    }
-    for (let tries = 0; tries < 15; tries += 1) {
-      await new Promise((done) => setTimeout(done, 2000));
-      let found = null;
+  const readThem = useCallback(
+    async (wanted) => {
+      const ids = (Array.isArray(wanted) ? wanted : [wanted]).map((one) => one.id);
+      if (!ids.length) return;
+      setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, true])) }));
       try {
-        const result = await API.getChannelManagerGuides({
-          name: channel?.name || '',
-          tvg_id: channel?.epg?.tvg_id || '',
-          q: search.trim(),
-          current: held?.id ?? '',
-        });
-        setGuides(result?.guides || []);
-        found = (result?.guides || []).find((one) => one.id === guide.id);
+        await API.loadChannelManagerGuide(ids);
       } catch {
-        // The next try asks again
+        setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, false])) }));
+        return;
       }
-      if (found?.programmes) break;
-    }
-    setReading((all) => ({ ...all, [guide.id]: false }));
-  }, [channel?.name, channel?.epg?.tvg_id, search, held?.id]);
+      // Reading is a task, and a pass of a big guide file is not quick, so the list is
+      // asked again for a few minutes and then given up on rather than turning for ever
+      for (let tries = 0; tries < 60; tries += 1) {
+        await new Promise((done) => setTimeout(done, 3000));
+        let back = null;
+        try {
+          const result = await API.getChannelManagerGuides({
+            name: channel?.name || '',
+            tvg_id: channel?.epg?.tvg_id || '',
+            q: search.trim(),
+            current: held?.id ?? '',
+          });
+          back = result?.guides || [];
+          setGuides(back);
+        } catch {
+          // The next try asks again
+        }
+        if (back && ids.every((id) => (back.find((one) => one.id === id) || {}).programmes)) {
+          break;
+        }
+      }
+      setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, false])) }));
+    },
+    [channel?.name, channel?.epg?.tvg_id, search, held?.id]
+  );
+
+
 
   // The server puts what the channel has at the top of every answer, said the same way
   // as the rest; only a choice it has not been asked about yet is added here
@@ -377,6 +388,13 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
 
   const pickedId = held?.id ?? null;
 
+  // The ones on the list nobody has read: reading them together costs one pass of the
+  // file, the same as reading any one of them on its own
+  const unread = useMemo(
+    () => shown.filter((guide) => !guide.programmes && !guide.in_use && !reading[guide.id]),
+    [shown, reading]
+  );
+
   return (
     <Modal
       opened
@@ -385,15 +403,33 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       size="lg"
     >
       <Stack gap="sm">
-        <TextInput
-          size="xs"
-          label="Search every guide"
-          placeholder="A name or a tvg-id"
-          aria-label="Search every guide"
-          value={search}
-          onChange={(event) => setSearch(event.currentTarget.value)}
-          rightSection={loading ? <Loader size={12} /> : undefined}
-        />
+        <Group gap="xs" align="flex-end" wrap="wrap">
+          <TextInput
+            size="xs"
+            label="Search every guide"
+            placeholder="A name or a tvg-id"
+            aria-label="Search every guide"
+            value={search}
+            onChange={(event) => setSearch(event.currentTarget.value)}
+            rightSection={loading ? <Loader size={12} /> : undefined}
+            style={{ flex: 1, minWidth: 200 }}
+          />
+          {unread.length > 0 && (
+            <Button
+              size="xs"
+              variant="default"
+              onClick={() => readThem(unread)}
+              aria-label="Read the programmes of every guide shown"
+            >
+              Read all {unread.length}
+            </Button>
+          )}
+        </Group>
+        <Text size="xs" c="dimmed">
+          A guide nobody uses has not been read yet: Dispatcharr reads a guide&apos;s
+          programmes when it goes on a channel. Reading one means going through the whole
+          guide file, so reading them all together costs no more than reading one.
+        </Text>
         <Stack gap={6} style={{ maxHeight: '50vh', overflowY: 'auto' }}>
           {shown.length === 0 && !loading && (
             <Text size="xs" c="dimmed">

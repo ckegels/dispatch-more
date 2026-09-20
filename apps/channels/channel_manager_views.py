@@ -106,14 +106,17 @@ def channel_manager_guides(request):
 @permission_classes([IsAdmin])
 def channel_manager_load_guide(request):
     """
-    Read one guide's programmes now, so it can be looked at before it is chosen.
-    Dispatcharr only reads them once a guide is on a channel; this asks for the one.
+    Read these guides' programmes now, so they can be looked at before one is chosen.
+    Dispatcharr only reads them once a guide is on a channel. Several at once because
+    reading one costs a pass of the whole file either way (see load_programmes).
     """
-    try:
-        epg_id = int(request.data.get("id"))
-    except (TypeError, ValueError):
-        return JsonResponse({"error": "Which guide?"}, status=400)
-    return JsonResponse(channel_manager.load_programmes(epg_id))
+    given = request.data.get("ids")
+    if given is None:
+        given = [request.data.get("id")]
+    if not isinstance(given, list) or not given:
+        return JsonResponse({"error": "Which guides?"}, status=400)
+    answer = channel_manager.load_programmes(given)
+    return JsonResponse(answer, status=400 if answer.get("error") else 200)
 
 
 @api_view(["POST"])

@@ -574,24 +574,41 @@ class GuideChoiceTests(_Setup):
         self.assertFalse(found[never_read.id]["in_use"])
         self.assertTrue(found[really_empty.id]["in_use"])
 
-    def test_one_guide_s_programmes_can_be_read_without_choosing_it_first(self):
-        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+    def test_guides_are_read_in_one_pass_of_each_source_s_file(self):
+        # Reading one costs a pass of the whole file, so a window's worth goes in one
+        a = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        b = EPGData.objects.create(tvg_id="ORF2.at", name="ORF 2", epg_source=self.local)
+        c = EPGData.objects.create(tvg_id="x.1", name="X", epg_source=self.big)
+        with patch("apps.channels.tasks.read_guide_programmes.delay") as reading:
+            answer = channel_manager.load_programmes([a.id, b.id, c.id])
+        self.assertEqual(answer, {"queued": True, "reading": 3})
+        (asked,) = reading.call_args[0]
+        self.assertEqual(sorted(asked[str(self.local.id)]), sorted([a.id, b.id]))
+        self.assertEqual(asked[str(self.big.id)], [c.id])
+
+    def test_a_guide_no_channel_uses_is_read_all_the_same(self):
+        # Dispatcharr's own task does nothing for an unused guide unless it is forced,
+        # and an unused guide is the only kind this is ever asked about
+        sd = EPGSource.objects.create(name="Schedules Direct", source_type="schedules_direct")
+        guide = EPGData.objects.create(tvg_id="sd.1", name="Some station", epg_source=sd)
         with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
-            self.assertEqual(channel_manager.load_programmes(guide.id), {"queued": True})
-        asked.assert_called_once_with(guide.id)
+            self.assertEqual(channel_manager.load_programmes([guide.id])["reading"], 1)
+        asked.assert_called_once_with(guide.id, force=True)
 
     def test_a_dummy_guide_has_nothing_to_read(self):
         dummy = EPGSource.objects.create(name="Made up", source_type="dummy")
         guide = EPGData.objects.create(tvg_id="d.1", name="Dummy", epg_source=dummy)
         with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
-            answer = channel_manager.load_programmes(guide.id)
-        self.assertFalse(answer["queued"])
+            with patch("apps.channels.tasks.read_guide_programmes.delay") as reading:
+                answer = channel_manager.load_programmes([guide.id])
+        self.assertEqual(answer, {"queued": False, "reading": 0})
         asked.assert_not_called()
+        reading.assert_not_called()
 
     def test_reading_a_guide_that_is_gone_says_so_rather_than_failing(self):
-        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
-            self.assertIn("error", channel_manager.load_programmes(9999))
-        asked.assert_not_called()
+        with patch("apps.channels.tasks.read_guide_programmes.delay") as reading:
+            self.assertIn("error", channel_manager.load_programmes([9999]))
+        reading.assert_not_called()
 
     def test_the_guide_a_channel_has_is_always_on_the_list(self):
         held = EPGData.objects.create(tvg_id="x.1", name="Sender Eins", epg_source=self.local)
@@ -753,11 +770,12 @@ class ViewTests(_Setup):
         source = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
         guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=source)
         url = "/api/channels/channel-manager/guides/load/"
-        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
-            response = self.client_api.post(url, {"id": guide.id}, format="json")
-        self.assertEqual(response.json(), {"queued": True})
-        asked.assert_called_once_with(guide.id)
+        with patch("apps.channels.tasks.read_guide_programmes.delay") as reading:
+            response = self.client_api.post(url, {"ids": [guide.id]}, format="json")
+        self.assertEqual(response.json(), {"queued": True, "reading": 1})
+        reading.assert_called_once()
         # Nothing to read is a refusal, not a 500
+        self.assertEqual(self.client_api.post(url, {"ids": []}, format="json").status_code, 400)
         self.assertEqual(self.client_api.post(url, {"id": "x"}, format="json").status_code, 400)
 
     def test_a_name_and_a_guide_set_on_a_row_are_applied_through_the_page(self):

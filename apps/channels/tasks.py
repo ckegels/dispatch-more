@@ -4570,3 +4570,124 @@ def stream_check_tick():
         start_round(redis_client, only=recheck)
         return run_stream_check(None)
     return "not due"
+
+
+@shared_task
+def read_guide_programmes(by_source):
+    """
+    Read the programmes of the guides someone is choosing between, one pass of each
+    source's file for all of them.
+
+    Dispatcharr reads a guide's programmes only once a channel uses it, so the entries on
+    the Channel Manager's guide window hold nothing -- and its own per-guide task streams
+    the whole XMLTV from beginning to end to pick out the one tvg_id it was asked for. A
+    window's worth read one at a time would therefore read the same file a dozen times.
+    This goes through each file once and keeps the programmes of every tvg_id wanted from
+    it, which costs what reading one costs.
+
+    Everything inside a programme is read with Dispatcharr's own helpers, so the rows are
+    the ones its own parse would have made. Each guide's programmes are swapped in one at
+    a time in a transaction, as its task does: a failure part way leaves what was there
+    before rather than a channel with nothing.
+
+    by_source is {source id as a string: [EPGData id, ...]}.
+    """
+    from django.db import transaction
+    from lxml import etree
+
+    from apps.epg.models import EPGSource, ProgramData
+    from apps.epg.tasks import (
+        _open_xmltv_file,
+        clear_element,
+        extract_custom_properties,
+        parse_xmltv_time,
+    )
+    from apps.epg.utils import extract_season_episode_from_description
+    from core.utils import is_task_lock_held
+
+    read = 0
+    title_max_length = ProgramData._meta.get_field("title").max_length
+    for source_id, epg_ids in (by_source or {}).items():
+        try:
+            source_id = int(source_id)
+        except (TypeError, ValueError):
+            continue
+        # The file is rewritten by a refresh; reading it half-written would store nonsense
+        if is_task_lock_held("refresh_epg_data", source_id):
+            logger.info(f"Guide programmes: source {source_id} is refreshing, leaving it be")
+            continue
+        source = EPGSource.objects.filter(id=source_id).first()
+        if not source:
+            continue
+        path = source.extracted_file_path or source.file_path or source.get_cache_file()
+        if not path or not os.path.exists(path):
+            logger.info(f"Guide programmes: no file for source {source.name}, nothing to read")
+            continue
+
+        wanted = {}
+        for epg in EPGData.objects.filter(id__in=epg_ids, epg_source_id=source_id):
+            if (epg.tvg_id or "").strip():
+                wanted.setdefault(epg.tvg_id, []).append(epg)
+        if not wanted:
+            continue
+
+        found = {epg.id: [] for entries in wanted.values() for epg in entries}
+        handle = None
+        try:
+            handle = _open_xmltv_file(path)
+            for _, elem in etree.iterparse(
+                handle, events=("end",), tag="programme", remove_blank_text=True, recover=True
+            ):
+                for epg in wanted.get(elem.get("channel"), ()):
+                    try:
+                        title = description = sub_title = None
+                        for child in elem:
+                            if child.tag == "title":
+                                title = child.text or "No Title"
+                            elif child.tag == "desc":
+                                description = child.text or ""
+                            elif child.tag == "sub-title":
+                                sub_title = child.text or ""
+                        extras = extract_custom_properties(elem) or None
+                        if description:
+                            season = (extras or {}).get("season")
+                            episode = (extras or {}).get("episode")
+                            if season is None or episode is None:
+                                from_desc = extract_season_episode_from_description(description)
+                                its_season, its_episode, cleaned = from_desc
+                                if its_season is not None and its_episode is not None:
+                                    extras = extras or {}
+                                    extras.setdefault("season", its_season)
+                                    extras.setdefault("episode", its_episode)
+                                    extras["season_episode_source"] = "description"
+                                    description = cleaned
+                        found[epg.id].append(ProgramData(
+                            epg=epg,
+                            start_time=parse_xmltv_time(elem.get("start")),
+                            end_time=parse_xmltv_time(elem.get("stop")),
+                            title=(title or "No Title")[:title_max_length],
+                            description=description,
+                            sub_title=sub_title,
+                            tvg_id=epg.tvg_id,
+                            custom_properties=extras,
+                        ))
+                    except Exception as e:
+                        logger.error(f"Guide programmes: a programme of {epg.tvg_id} could not be read: {e}")
+                clear_element(elem)
+        except Exception as e:
+            logger.error(f"Guide programmes: could not read {path}: {e}", exc_info=True)
+            continue
+        finally:
+            if handle:
+                handle.close()
+
+        for entries in wanted.values():
+            for epg in entries:
+                made = found.get(epg.id) or []
+                with transaction.atomic():
+                    ProgramData.objects.filter(epg=epg).delete()
+                    if made:
+                        ProgramData.objects.bulk_create(made, batch_size=1000)
+                read += 1
+                logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
+    return f"Read {read} guide(s)"
