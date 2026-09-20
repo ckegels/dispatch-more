@@ -59,32 +59,41 @@ print("=" * 70)
 print("3. IS ANYTHING RECOGNISED AS A MEDIA SERVER RIGHT NOW?")
 print("=" * 70)
 print("  (with scope 'media_servers', a channel no media server is watching is skipped)")
+print()
+# Every client on a channel being played is in live:channel:<uuid>:clients. Not
+# stream_profile:*, which is keyed by STREAM id and was the wrong thing to ask -- it is
+# why this said "nothing is playing" while Plex was watching.
 seen = 0
-for key in redis_client.scan_iter("stream_profile:*"):
+for key in redis_client.scan_iter("live:channel:*:clients"):
     name = key.decode() if isinstance(key, bytes) else key
-    channel_id = name.rsplit(":", 1)[-1]
+    channel_uuid = name.split(":")[2]
     try:
-        clients = probation._channel_clients(redis_client, channel_id)
+        clients = list(probation._channel_clients(redis_client, channel_uuid))
     except Exception as e:
-        print(f"  channel {channel_id}: could not read its viewers ({e})")
+        print(f"  channel {channel_uuid}: could not read its viewers ({e})")
         continue
     for client in clients:
         seen += 1
-        agent = (client.get("user_agent") or "")[:60]
+        agent = client.get("user_agent") or ""
         ip = client.get("ip_address")
         yes = probation.is_media_server(agent, ip)
-        print(f"  channel {channel_id}  {'MEDIA SERVER' if yes else 'not a media server'}")
+        print(f"  channel {channel_uuid}")
+        print(f"      {'RECOGNISED as a media server' if yes else 'NOT recognised as a media server'}")
         print(f"      user agent: {agent!r}")
         print(f"      address:    {ip}")
+        if not yes:
+            print("      >> With scope 'media_servers' this channel is skipped, so a")
+            print("         rotation on it can never be forgiven. This is the bug to")
+            print("         report back: the user agent above matches none of")
+            print("         jellyfin / emby / plex / lavf, and the address is not one")
+            print("         of a server configured under Media Servers.")
+        print()
 if not seen:
     print("  NOTHING IS STREAMING THROUGH DISPATCHARR AT THIS MOMENT.")
     print()
-    print("  This is not the same as Plex being open, or logged in, or even showing its")
-    print("  guide. What is looked for here is a channel being pulled through the proxy")
-    print("  right now -- so:")
-    print("      start playing a live TV channel in Plex, leave it playing,")
-    print("      and run this again.")
-    print("  Until then this question has no answer either way.")
+    print("  This is not the same as Plex being open, or logged in, or showing its guide:")
+    print("  what is looked for is a channel being pulled through the proxy right now.")
+    print("  Start playing a live TV channel in Plex, leave it playing, run this again.")
 
 print()
 print("=" * 70)
