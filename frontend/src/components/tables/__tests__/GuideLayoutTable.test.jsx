@@ -12,6 +12,7 @@ vi.mock('../../../api', () => ({
     getGuideLayout: vi.fn(),
     arrangeGuideLayout: vi.fn(),
     applyGuideLayout: vi.fn(),
+    renameGuideLayout: vi.fn(),
   },
 }));
 
@@ -43,6 +44,12 @@ const layout = (extra = {}) => ({
   ...extra,
 });
 
+// A thousand channels drawn as draggable rows is what made this page crawl, so a group
+// is shut until it is opened
+const openAll = async () => {
+  fireEvent.click(await screen.findByRole('button', { name: 'Open them all' }));
+};
+
 const draw = () =>
   render(
     <MantineProvider theme={theme}>
@@ -55,6 +62,7 @@ describe('GuideLayoutTable', () => {
     API.getGuideLayout.mockResolvedValue(layout());
     API.arrangeGuideLayout.mockResolvedValue({ numbers: {}, changing: [] });
     API.applyGuideLayout.mockResolvedValue({ changed: 0 });
+    API.renameGuideLayout.mockResolvedValue({ names: {} });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -63,11 +71,12 @@ describe('GuideLayoutTable', () => {
     draw();
     expect((await screen.findAllByText('┃AT┃ AUSTRIA')).length).toBeGreaterThan(0);
     expect(screen.getByText(/3 channels · 1–3/)).toBeInTheDocument();
-    expect(screen.getByText(/room for 46 more/)).toBeInTheDocument();
+    expect(screen.getByText(/room for 46/)).toBeInTheDocument();
   });
 
   it('points out a number two channels share, which nothing else does', async () => {
     draw();
+    await openAll();
     await screen.findByText('┃AT┃ PULS 4');
     expect(screen.getByText('same number')).toBeInTheDocument();
     expect(screen.getByText(/1 number is used by more than one channel/)).toBeInTheDocument();
@@ -79,6 +88,7 @@ describe('GuideLayoutTable', () => {
       changing: ['11', '12', '13'],
     });
     draw();
+    await openAll();
     await screen.findByText('┃AT┃ ORF 1');
     fireEvent.change(screen.getByLabelText('Renumber ┃AT┃ AUSTRIA from'), {
       target: { value: '100' },
@@ -108,6 +118,7 @@ describe('GuideLayoutTable', () => {
       changing: ['12'],
     });
     draw();
+    await openAll();
     await screen.findByText('┃AT┃ ORF 1');
     fireEvent.click(
       screen.getByRole('button', { name: 'Renumber every channel of ┃AT┃ AUSTRIA' })
@@ -123,6 +134,7 @@ describe('GuideLayoutTable', () => {
   it('can be started again, leaving the channels as they were', async () => {
     API.arrangeGuideLayout.mockResolvedValue({ numbers: { 12: 9 }, changing: ['12'] });
     draw();
+    await openAll();
     await screen.findByText('┃AT┃ ORF 1');
     fireEvent.click(
       screen.getByRole('button', { name: 'Renumber every channel of ┃AT┃ AUSTRIA' })
@@ -145,9 +157,67 @@ describe('GuideLayoutTable', () => {
         <GuideLayoutTable />
       </MantineProvider>
     );
+    await openAll();
     await screen.findByText('┃AT┃ PULS 4');
     // Every group is one place to drop into, so an empty one can receive a channel too
     expect(container.querySelectorAll('[role="button"]').length).toBeGreaterThan(0);
     expect(screen.getByText('┃AT┃ NEWS 1')).toBeInTheDocument();
+  });
+
+  it('keeps the groups shut until they are opened, which is what made it quick', async () => {
+    draw();
+    // Shut, a group still says what is worth knowing about it
+    expect(await screen.findByText(/3 channels · 1–3/)).toBeInTheDocument();
+    expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open ┃AT┃ AUSTRIA' }));
+    expect(await screen.findByText('┃AT┃ ORF 1')).toBeInTheDocument();
+    // ...and the other group is still shut, so only what is being worked on is drawn
+    expect(screen.queryByText('┃AT┃ NEWS 1')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close ┃AT┃ AUSTRIA' }));
+    await waitFor(() => expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull());
+  });
+
+  it('renames a channel where it stands', async () => {
+    draw();
+    await openAll();
+    fireEvent.click(await screen.findByText('┃AT┃ ORF 1'));
+    const box = await screen.findByLabelText('Name for ┃AT┃ ORF 1');
+    fireEvent.change(box, { target: { value: 'ORF Eins' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(API.renameGuideLayout).toHaveBeenCalledWith({ names: { 11: 'ORF Eins' } })
+    );
+  });
+
+  it('shows what taking something out of every name would leave, before it does it', async () => {
+    API.renameGuideLayout.mockResolvedValue({ names: { 11: 'ORF 1', 12: 'ORF 2' } });
+    draw();
+    await openAll();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.change(screen.getByLabelText('Take out of every name in ┃AT┃ AUSTRIA'), {
+      target: { value: '┃AT┃ ' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'See what taking that out of ┃AT┃ AUSTRIA would leave',
+      })
+    );
+
+    // Asked, not done: renaming a group's channels is many changes and there is no undo
+    expect(await screen.findByText('2 names would change')).toBeInTheDocument();
+    expect(screen.getByText('┃AT┃ ORF 1 → ORF 1')).toBeInTheDocument();
+    expect(API.renameGuideLayout).toHaveBeenCalledWith(
+      expect.objectContaining({ take_off: '┃AT┃', apply: false })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename them' }));
+    await waitFor(() =>
+      expect(API.renameGuideLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ take_off: '┃AT┃', apply: true })
+      )
+    );
   });
 });

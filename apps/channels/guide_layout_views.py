@@ -68,6 +68,38 @@ def guide_layout_arrange(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdmin])
+def guide_layout_rename(request):
+    """
+    Rename a group, or channels, or work out what taking something out of a group's names
+    would leave -- which is asked for before it is done, like everything else here.
+    """
+    if request.data.get("group"):
+        try:
+            return JsonResponse(guide_layout.rename_group(
+                int(request.data["group"]), request.data.get("name")
+            ))
+        except (TypeError, ValueError) as e:
+            return JsonResponse({"error": str(e) or "Which group?"}, status=400)
+
+    take_off = request.data.get("take_off")
+    if take_off:
+        from .models import Channel
+
+        try:
+            ids = [int(one) for one in request.data.get("channels") or ()]
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Channels are given by id"}, status=400)
+        names = dict(Channel.objects.filter(id__in=ids).values_list("id", "name"))
+        changed = guide_layout.renamed(names, take_off, request.data.get("replace_with", ""))
+        if request.data.get("apply"):
+            return JsonResponse(guide_layout.rename_channels(changed))
+        return JsonResponse({"names": {str(k): v for k, v in changed.items()}})
+
+    return JsonResponse(guide_layout.rename_channels(request.data.get("names") or {}))
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
 def guide_layout_apply(request):
     """Write the numbers, and any changes of group, worked out again as they are applied."""
     numbers = request.data.get("numbers")

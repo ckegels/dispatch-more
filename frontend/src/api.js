@@ -2951,6 +2951,16 @@ export default class API {
     });
   }
 
+  // Rename a group ({group, name}), rename channels ({names}), or ask what taking
+  // something out of a group's names would leave ({channels, take_off}) and then do it
+  // ({..., apply: true})
+  static async renameGuideLayout(body) {
+    return await request(`${host}/api/channels/guide-layout/rename/`, {
+      method: 'POST',
+      body,
+    });
+  }
+
   static async applyGuideLayout(numbers, groups = {}) {
     return await request(`${host}/api/channels/guide-layout/apply/`, {
       method: 'POST',

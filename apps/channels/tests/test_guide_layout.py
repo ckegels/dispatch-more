@@ -118,6 +118,44 @@ class ApplyTests(_Setup):
         self.assertEqual(guide_layout.apply({9999: 5}), {"changed": 0})
 
 
+class RenamingTests(_Setup):
+    def test_a_group_is_renamed_and_its_channels_are_left_alone(self):
+        guide_layout.rename_group(self.austria.id, "┃AT┃ ÖSTERREICH")
+        self.austria.refresh_from_db()
+        self.one.refresh_from_db()
+        self.assertEqual(self.austria.name, "┃AT┃ ÖSTERREICH")
+        self.assertEqual(self.one.name, "┃AT┃ ORF 1")
+
+    def test_a_name_another_group_already_has_is_refused(self):
+        with self.assertRaises(ValueError):
+            guide_layout.rename_group(self.austria.id, "┃AT┃ NEWS")
+
+    def test_taking_something_out_of_every_name_in_a_group(self):
+        names = {1: "┃DE┃ ARD", 2: "┃DE┃ ZDF", 3: "VIP | RTL"}
+        self.assertEqual(
+            guide_layout.renamed(names, "┃DE┃ "), {1: "ARD", 2: "ZDF"}
+        )
+
+    def test_what_is_taken_out_is_text_and_not_a_pattern(self):
+        # Somebody typing "┃DE┃" or "VIP |" means those characters. A name full of
+        # box-drawing and brackets is exactly what turns into a pattern nobody meant.
+        names = {1: "A (B) C", 2: "A B C"}
+        self.assertEqual(guide_layout.renamed(names, "(B)"), {1: "A C"})
+
+    def test_the_space_left_behind_is_tidied_up(self):
+        self.assertEqual(guide_layout.renamed({1: "┃DE┃ RTL HD"}, "HD"), {1: "┃DE┃ RTL"})
+
+    def test_a_name_that_would_be_left_empty_is_not_changed(self):
+        self.assertEqual(guide_layout.renamed({1: "VIP"}, "VIP"), {})
+
+    def test_channels_are_renamed(self):
+        self.assertEqual(
+            guide_layout.rename_channels({self.one.id: "ORF Eins"})["renamed"], 1
+        )
+        self.one.refresh_from_db()
+        self.assertEqual(self.one.name, "ORF Eins")
+
+
 class ViewTests(_Setup):
     def setUp(self):
         super().setUp()
@@ -159,6 +197,38 @@ class ViewTests(_Setup):
         self.assertEqual(
             self.api.post("/api/channels/guide-layout/apply/", {}, format="json").status_code, 400
         )
+
+    def test_renaming_through_the_page(self):
+        answer = self.api.post(
+            "/api/channels/guide-layout/rename/",
+            {"group": self.austria.id, "name": "┃AT┃ ÖSTERREICH"}, format="json",
+        )
+        self.assertEqual(answer.json()["name"], "┃AT┃ ÖSTERREICH")
+        # A name another group has is a refusal, not a 500
+        self.assertEqual(
+            self.api.post(
+                "/api/channels/guide-layout/rename/",
+                {"group": self.austria.id, "name": "┃AT┃ NEWS"}, format="json",
+            ).status_code,
+            400,
+        )
+
+    def test_asking_what_taking_something_out_would_leave_before_doing_it(self):
+        asked = self.api.post(
+            "/api/channels/guide-layout/rename/",
+            {"channels": [self.one.id, self.two.id], "take_off": "┃AT┃ "}, format="json",
+        ).json()
+        self.assertEqual(asked["names"][str(self.one.id)], "ORF 1")
+        self.one.refresh_from_db()
+        self.assertEqual(self.one.name, "┃AT┃ ORF 1")  # nothing written by asking
+
+        self.api.post(
+            "/api/channels/guide-layout/rename/",
+            {"channels": [self.one.id, self.two.id], "take_off": "┃AT┃ ", "apply": True},
+            format="json",
+        )
+        self.one.refresh_from_db()
+        self.assertEqual(self.one.name, "ORF 1")
 
     def test_only_an_admin(self):
         plain = APIClient()

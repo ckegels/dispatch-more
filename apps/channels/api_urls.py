@@ -86,6 +86,7 @@ urlpatterns = [
     # What order the channels come in, and on which numbers (see guide_layout)
     path('guide-layout/', guide_layout_views.guide_layout_page, name='guide_layout_page'),
     path('guide-layout/arrange/', guide_layout_views.guide_layout_arrange, name='guide_layout_arrange'),
+    path('guide-layout/rename/', guide_layout_views.guide_layout_rename, name='guide_layout_rename'),
     path('guide-layout/apply/', guide_layout_views.guide_layout_apply, name='guide_layout_apply'),
     # Which guide each channel should be on, and where that is wrong (see guide_manager)
     path('guides/', guide_manager_views.guide_manager_page, name='guide_manager_page'),

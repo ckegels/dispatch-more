@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v144** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v145** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -481,6 +481,12 @@ nothing like it it is LIKELY and says so. That last case is a renamed channel as
 a wrong id, and the two are indistinguishable from ids and names alone -- only what is on the
 guide now separates them, which is why the page shows it.
 
+**What a guide holds is taken again, not remembered** (v145, `freshen`). A run writes down how
+many programmes a guide had when it looked; reading a guide's programmes afterwards -- which
+the window's button is for -- does not go back and change that, so the page went on saying
+"not read yet" about a guide the window beside it was showing the programmes of. The counts are
+cheap and the run's are stale by definition, so the page takes them again.
+
 **"Every channel" asks for every channel** (v141, `every_channel`, `GET guides/?all=1`). The
 rows a run stores are the run's; listing only those made the view mean "every channel the last
 run happened to reach", which after a run that was stopped, narrowed to a group or never done
@@ -688,6 +694,16 @@ cursor is what would happen, and `moves` ({channel: group}) sent with the number
 `numbers_for` works the group's first number out **without** the channel being moved -- one
 coming from another group brings its old number with it, and a channel numbered 5 dropped at
 the top of a group starting at 100 must take 100, not 5.
+
+**Groups are shut until they are opened** (v145), two to a row, with Open them all. A thousand
+channels drawn as draggable rows is what made the page crawl; shut, a group still says how many
+channels it has, what range they are in, the room after it and whether any of its numbers
+clash. **Renaming** is there too: a group's name typed over, a channel's name typed over where
+it stands, and **taking something out of every name in a group** ("┃DE┃", "VIP") -- which is
+**asked first** and shows every name it would change, since it is a great many changes at once
+and there is no undo. What is taken out is **plain text, not a pattern**: somebody typing
+"┃DE┃" means those characters, and a name full of box-drawing is exactly what turns into a
+pattern nobody meant. A name that would be left empty is not changed.
 
 The page also says what nothing else does: **two channels on one number**. `channel_number`
 is a float and its uniqueness is only checked within a group, by `clean()`, which `save()`

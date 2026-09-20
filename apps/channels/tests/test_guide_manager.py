@@ -375,6 +375,39 @@ class ViewTests(_Setup):
         self.assertEqual(row["instead_of_holds"], 4)
         self.assertEqual(row["why"], "")
 
+    def test_what_a_guide_holds_is_taken_again_rather_than_remembered(self):
+        """
+        A run writes down what a guide held when it looked. Reading its programmes
+        afterwards -- which the window beside it is for -- does not go back and change
+        that, so the page went on saying "not read yet" about a guide that had been read.
+        """
+        guide = self._guide("ORF1.at", "ORF 1")  # nothing in it when the run looked
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.save_suggestions(self._look())
+        self.assertEqual(guide_manager.load_suggestions()[str(channel.id)]["programmes"], 0)
+
+        # ...and then somebody reads it
+        moment = timezone.now()
+        for n in range(3):
+            ProgramData.objects.create(
+                epg=guide, title=f"Programme {n}",
+                start_time=moment + timedelta(hours=n), end_time=moment + timedelta(hours=n + 1),
+            )
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        self.assertEqual(row["programmes"], 3)
+
+    def test_and_so_is_what_the_channel_is_on_now(self):
+        held = self._guide("orf1.old", "ORF 1 Old", programmes=2)
+        self._guide("ORF1.at", "ORF 1", programmes=9)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=held)
+        guide_manager.save_suggestions(self._look())
+        ProgramData.objects.filter(epg=held).delete()
+        (row,) = [
+            one for one in self.client_api.get("/api/channels/guides/").json()["suggestions"]
+            if one["channel"] == channel.id
+        ]
+        self.assertEqual(row["instead_of_holds"], 0)
+
     def test_a_run_is_started_and_can_be_stopped(self):
         self._channel("┃AT┃ ORF 1", 1)
         fake = FakeRedis()

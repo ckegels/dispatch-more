@@ -19,6 +19,7 @@ so there is one set of rules rather than one in Python and another in the page.
 """
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,73 @@ def layout(group_ids=()):
         if earlier["last"] is not None and later["first"] is not None:
             earlier["room_after"] = max(0, int(later["first"] - earlier["last"]) - 1)
     return {"groups": out, "clashes": sorted(clashing)}
+
+
+def renamed(names, take_off="", replace_with=""):
+    """
+    What these channels would be called with `take_off` taken out of their names.
+
+    `take_off` is plain text, not a pattern: people type "┃DE┃" or "VIP" and mean those
+    characters, and a name full of box-drawing and brackets is exactly the sort of thing
+    that turns into a pattern nobody meant. What is left is tidied of the double spaces
+    that taking something out of the middle leaves behind.
+
+    Returns {channel id: new name} for the ones that would actually change.
+    """
+    wanted = str(take_off or "")
+    if not wanted:
+        return {}
+    changed = {}
+    for channel_id, name in (names or {}).items():
+        now = re.sub(r"\s+", " ", str(name or "").replace(wanted, replace_with or "")).strip()
+        if now and now != name:
+            changed[channel_id] = now
+    return changed
+
+
+def rename_group(group_id, name):
+    """A group renamed. Its channels are untouched: their names are their own."""
+    from .models import ChannelGroup
+
+    name = str(name or "").strip()[:255]
+    if not name:
+        raise ValueError("A group needs a name")
+    group = ChannelGroup.objects.filter(id=group_id).first()
+    if not group:
+        raise ValueError("That group is gone")
+    if ChannelGroup.objects.filter(name=name).exclude(id=group.id).exists():
+        raise ValueError(f"There is already a group called {name}")
+    group.name = name
+    group.save(update_fields=["name"])
+    logger.info(f"Guide Layout: group {group_id} renamed to {name}")
+    return {"name": name}
+
+
+def rename_channels(names):
+    """
+    Channels renamed: {channel id: name}. Saved one at a time with update_fields, as
+    everything that changes a channel here is.
+    """
+    from .models import Channel
+
+    wanted = {}
+    for channel_id, name in (names or {}).items():
+        name = str(name or "").strip()[:255]
+        if name:
+            try:
+                wanted[int(channel_id)] = name
+            except (TypeError, ValueError):
+                continue
+    if not wanted:
+        return {"renamed": 0}
+    renamed_count = 0
+    for channel in Channel.objects.filter(id__in=wanted):
+        if channel.name != wanted[channel.id]:
+            channel.name = wanted[channel.id]
+            channel.save(update_fields=["name"])
+            renamed_count += 1
+    logger.info(f"Guide Layout: {renamed_count} channel(s) renamed")
+    return {"renamed": renamed_count}
 
 
 def apply(numbers, groups=None):

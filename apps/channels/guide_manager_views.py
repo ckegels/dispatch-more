@@ -36,6 +36,9 @@ def guide_manager_page(request):
         found = guide_manager.every_channel(guide_manager.load_settings(), stored)
     else:
         found = list(stored.values())
+    # As the guides are now, not as the run left them: reading a guide's programmes
+    # afterwards does not go back and change what it wrote down
+    guide_manager.freshen(found)
     return JsonResponse({
         "settings": guide_manager.load_settings(),
         "defaults": guide_manager.DEFAULTS,

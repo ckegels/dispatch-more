@@ -17,7 +17,14 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, RotateCcw } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  GripVertical,
+  RotateCcw,
+} from 'lucide-react';
 import {
   Alert,
   Badge,
@@ -29,9 +36,12 @@ import {
   NumberInput,
   Paper,
   Select,
+  SimpleGrid,
   Stack,
   Text,
+  TextInput,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
@@ -43,7 +53,7 @@ import ConfirmationDialog from '../ConfirmationDialog';
 // one channel moved. What the numbers would come to is worked out on the server, so there
 // is one set of rules and not one here and another there.
 
-const Channel = ({ channel, was }) => {
+const Channel = ({ channel, was, renaming, onRenaming, onRename }) => {
   const { transform, transition, setNodeRef, attributes, listeners, isDragging } =
     useSortable({ id: channel.id });
   const moved = was != null && was !== channel.number;
@@ -80,9 +90,29 @@ const Channel = ({ channel, was }) => {
           style={{ width: 24, height: 18, objectFit: 'contain', flexShrink: 0 }}
         />
       )}
-      <Text size="sm" style={{ minWidth: 0, wordBreak: 'break-word' }}>
-        {channel.name}
-      </Text>
+      {renaming ? (
+        <TextInput
+          size="xs"
+          autoFocus
+          aria-label={`Name for ${channel.name}`}
+          defaultValue={channel.name}
+          onBlur={(event) => onRename(channel.id, event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onRename(channel.id, event.currentTarget.value);
+            if (event.key === 'Escape') onRename(channel.id, null);
+          }}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+      ) : (
+        <Text
+          size="sm"
+          style={{ minWidth: 0, wordBreak: 'break-word', cursor: 'text' }}
+          onClick={() => onRenaming(channel.id)}
+          title="Click to rename"
+        >
+          {channel.name}
+        </Text>
+      )}
       {channel.clashes && (
         <Tooltip label="Another channel has this number too. A media server sees one lineup, so it shows only one of them.">
           <Badge size="xs" color="red" variant="light" style={{ flexShrink: 0 }}>
@@ -130,6 +160,13 @@ const GuideLayoutTable = () => {
   const [step, setStep] = useState(1);
   // Channels dragged into another group: {channel id: group id}
   const [moves, setMoves] = useState({});
+  // Groups are shut to begin with. A thousand channels as draggable rows is what made
+  // this page crawl, and most of the time one group is the one being worked on.
+  const [open, setOpen] = useState(() => new Set());
+  // The channel whose name is being typed, and what to take out of a group's names
+  const [renaming, setRenaming] = useState(null);
+  const [takeOff, setTakeOff] = useState({});
+  const [notice, setNotice] = useState(null);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
@@ -230,6 +267,55 @@ const GuideLayoutTable = () => {
     arrange({ order: arranged, moved: active.id });
   };
 
+  const renameChannel = async (channelId, name) => {
+    setRenaming(null);
+    if (name == null) return;
+    const now = name.trim();
+    if (!now || now === byId[channelId]?.name) return;
+    try {
+      await API.renameGuideLayout({ names: { [channelId]: now } });
+      await load();
+    } catch (e) {
+      setError(e?.body?.error || 'That name could not be used.');
+    }
+  };
+
+  const renameGroup = async (groupId, name) => {
+    const now = (name || '').trim();
+    if (!now) return;
+    try {
+      await API.renameGuideLayout({ group: groupId, name: now });
+      await load();
+    } catch (e) {
+      setError(e?.body?.error || 'That name could not be used.');
+    }
+  };
+
+  // Taking something out of every name in a group: asked first, done second
+  const takeOutOf = async (groupId, apply) => {
+    const wanted = (takeOff[groupId] || '').trim();
+    if (!wanted) return;
+    try {
+      const answer = await API.renameGuideLayout({
+        channels: order[groupId] || [],
+        take_off: wanted,
+        apply,
+      });
+      if (apply) {
+        setTakeOff((all) => ({ ...all, [groupId]: '' }));
+        await load();
+      } else {
+        setError(null);
+        setNotice({
+          group: groupId,
+          names: answer.names || {},
+        });
+      }
+    } catch (e) {
+      setError(e?.body?.error || 'Those names could not be worked out.');
+    }
+  };
+
   const renumber = (groupId) => {
     const ids = order[groupId] || [];
     if (ids.length) arrange({ order: ids, start: from, step });
@@ -271,6 +357,41 @@ const GuideLayoutTable = () => {
               {error}
             </Alert>
           )}
+          {/* What taking something out would leave, before it is left: renaming a group's
+              channels is a great many changes at once and there is no undo */}
+          {notice && (
+            <Alert
+              color="blue"
+              mb="sm"
+              withCloseButton
+              onClose={() => setNotice(null)}
+              title={`${Object.keys(notice.names).length} name${
+                Object.keys(notice.names).length === 1 ? '' : 's'
+              } would change`}
+            >
+              <Stack gap={2} style={{ maxHeight: 180, overflowY: 'auto' }}>
+                {Object.entries(notice.names)
+                  .slice(0, 40)
+                  .map(([id, name]) => (
+                    <Text key={id} size="xs">
+                      {byId[id]?.name} → {name}
+                    </Text>
+                  ))}
+              </Stack>
+              <Button
+                size="xs"
+                mt="xs"
+                disabled={!Object.keys(notice.names).length}
+                onClick={() => {
+                  const group = notice.group;
+                  setNotice(null);
+                  takeOutOf(group, true);
+                }}
+              >
+                Rename them
+              </Button>
+            </Alert>
+          )}
 
           <Group justify="space-between" mb="sm" wrap="wrap" gap="sm">
             <Group gap="sm" wrap="wrap">
@@ -294,6 +415,18 @@ const GuideLayoutTable = () => {
               )}
             </Group>
             <Group gap="sm" wrap="wrap">
+              <Button
+                size="xs"
+                variant="default"
+                leftSection={
+                  open.size ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />
+                }
+                onClick={() =>
+                  setOpen(open.size ? new Set() : new Set(shown.map((one) => one.id)))
+                }
+              >
+                {open.size ? 'Close them all' : 'Open them all'}
+              </Button>
               {changingCount > 0 && (
                 <Button
                   size="xs"
@@ -337,23 +470,59 @@ const GuideLayoutTable = () => {
               onDragOver={onDragOver}
               onDragEnd={onDragEnd}
             >
-            <Stack gap="lg">
+            <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
               {shown.map((one) => (
                 <Box key={one.id}>
                   <Group justify="space-between" mb={4} wrap="wrap" gap="xs">
                     <Group gap="xs">
-                      <Text size="sm" fw={600}>
-                        {one.name}
-                      </Text>
+                      <UnstyledButton
+                        onClick={() =>
+                          setOpen((all) => {
+                            const now = new Set(all);
+                            if (now.has(one.id)) now.delete(one.id);
+                            else now.add(one.id);
+                            return now;
+                          })
+                        }
+                        aria-label={`${open.has(one.id) ? 'Close' : 'Open'} ${one.name}`}
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        {open.has(one.id) ? (
+                          <ChevronDown size={14} />
+                        ) : (
+                          <ChevronRight size={14} />
+                        )}
+                        <Text size="sm" fw={600}>
+                          {one.name}
+                        </Text>
+                      </UnstyledButton>
+                      {open.has(one.id) && (
+                        <TextInput
+                          size="xs"
+                          aria-label={`Name for ${one.name}`}
+                          defaultValue={one.name}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter')
+                              renameGroup(one.id, event.currentTarget.value);
+                          }}
+                          placeholder="Rename this group"
+                          style={{ width: 200 }}
+                        />
+                      )}
                       <Text size="xs" c="dimmed">
                         {one.channels.length} channel
                         {one.channels.length === 1 ? '' : 's'}
                         {one.first != null && ` · ${one.first}–${one.last}`}
                         {one.room_after != null &&
-                          ` · room for ${one.room_after} more before the next group`}
+                          ` · room for ${one.room_after}`}
                       </Text>
+                      {one.channels.some((c) => c.clashes) && (
+                        <Badge size="xs" color="red" variant="light">
+                          same numbers
+                        </Badge>
+                      )}
                     </Group>
-                    <Group gap="xs" align="flex-end">
+                    <Group gap="xs" align="flex-end" style={{ display: open.has(one.id) ? undefined : 'none' }}>
                       <NumberInput
                         size="xs"
                         label="From"
@@ -379,8 +548,33 @@ const GuideLayoutTable = () => {
                       >
                         Renumber them all
                       </Button>
+                      <TextInput
+                        size="xs"
+                        label="Take out of every name"
+                        description="Typed as it is written, not as a pattern"
+                        aria-label={`Take out of every name in ${one.name}`}
+                        value={takeOff[one.id] || ''}
+                        onChange={(event) =>
+                          setTakeOff((all) => ({
+                            ...all,
+                            [one.id]: event.currentTarget.value,
+                          }))
+                        }
+                        placeholder="┃DE┃"
+                        style={{ width: 170 }}
+                      />
+                      <Button
+                        size="xs"
+                        variant="default"
+                        disabled={!(takeOff[one.id] || '').trim()}
+                        aria-label={`See what taking that out of ${one.name} would leave`}
+                        onClick={() => takeOutOf(one.id, false)}
+                      >
+                        Show me
+                      </Button>
                     </Group>
                   </Group>
+                  {open.has(one.id) && (
                   <GroupBox id={one.id}>
                       <SortableContext
                         items={order[one.id] || []}
@@ -390,6 +584,9 @@ const GuideLayoutTable = () => {
                           {(order[one.id] || []).map((id) => (
                             <Channel
                               key={id}
+                              renaming={renaming === id}
+                              onRenaming={setRenaming}
+                              onRename={renameChannel}
                               channel={{
                                 ...byId[id],
                                 number: numbers[id] ?? byId[id]?.number,
@@ -404,9 +601,10 @@ const GuideLayoutTable = () => {
                         </Stack>
                       </SortableContext>
                   </GroupBox>
+                  )}
                 </Box>
               ))}
-            </Stack>
+            </SimpleGrid>
             </DndContext>
           )}
         </Paper>

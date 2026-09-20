@@ -465,6 +465,37 @@ def every_channel(settings, suggestions=None):
     return list(rows.values())
 
 
+def freshen(rows):
+    """
+    What each guide on these rows holds, as it is now rather than as the run left it.
+
+    A run writes down how many programmes a guide had at the moment it looked. Reading a
+    guide's programmes afterwards -- which is what the button on the window is for --
+    does not go back and change that, so the page went on saying "not read yet" about a
+    guide that had been read, while the window beside it showed the programmes. The
+    counts are cheap and the run's are stale by definition, so they are taken again here.
+    """
+    ids = set()
+    for row in rows:
+        for key in ("epg", "instead_of_epg"):
+            if row.get(key):
+                ids.add(row[key])
+    if not ids:
+        return rows
+    counts = programme_counts(ids)
+    playing = what_is_on(ids)
+    used = guides_in_use(ids)
+    for row in rows:
+        if row.get("epg"):
+            row["programmes"] = counts.get(row["epg"], 0)
+            row["now"] = playing.get(row["epg"], "")
+            row["in_use"] = row["epg"] in used
+        if row.get("instead_of_epg"):
+            row["instead_of_holds"] = counts.get(row["instead_of_epg"], 0)
+            row["instead_of_now"] = playing.get(row["instead_of_epg"], "")
+    return rows
+
+
 def run_state(redis_client):
     """How a run is going, for the page: nothing at all when none has ever been made."""
     if not redis_client:
