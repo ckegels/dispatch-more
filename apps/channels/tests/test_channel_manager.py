@@ -647,6 +647,46 @@ class JudgingGuidesTests(TestCase):
         self.assertEqual(channel_manager._names_in(channel_manager.guide_words("Nothing like it")), set())
         self.assertEqual(channel_manager._names_in(channel_manager.guide_words("PBS")), {"pbs"})
 
+    def test_how_a_stream_is_sent_is_not_which_channel_it_is(self):
+        """
+        A guide has one entry for a channel however it is sent, so an unmatched "HD" was
+        costing a right answer a quarter of its score -- and half the names in a playlist
+        carry one.
+        """
+        for theirs in ("CNN HD", "CNN FHD", "CNN 1080p", "CNN"):
+            score, tier, _ = self.judge("┃USA┃ CNN", theirs)
+            self.assertEqual((score, tier), (100, channel_manager.CERTAIN), theirs)
+        self.assertEqual(channel_manager.guide_words("┃AT┃ ORF 1 FHD"), ["orf", "1"])
+
+    def test_words_written_as_one_come_apart(self):
+        self.assertEqual(channel_manager.guide_words("FoxSports1"), ["fox", "sports", "1"])
+        self.assertEqual(channel_manager.guide_words("PBSKids"), ["pbs", "kids"])
+        score, tier, _ = self.judge("┃USA┃ FOX SPORTS 1", "FoxSports1")
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+
+    def test_the_same_letters_parted_differently_are_the_same_name(self):
+        # A playlist writes DREAMWORKS and a guide writes DreamWorks: one comes apart at
+        # the camel and the other cannot, and word by word they then share nothing at all
+        score, tier, _ = self.judge("┃NL┃ DREAMWORKS", "DreamWorks", "dw.nl", country="nl")
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+
+    def test_a_shared_call_sign_is_the_station_itself(self):
+        """
+        Taken from the EPG Janitor plugin, which anchors on the call sign and rejects a
+        disagreement -- only the rejecting half was here. A call sign is allocated to one
+        station and nothing else, so two names carrying it are that station however little
+        else they share: "PBS WHYY" and "WHYY-DT" have one word of three in common.
+        """
+        score, tier, why = self.judge("┃USA┃ PBS WHYY", "WHYY-DT", "whyy.us")
+        self.assertEqual(tier, channel_manager.CERTAIN)
+        self.assertGreaterEqual(score, 90)
+        self.assertIn("WHYY", why)
+        # ...and written the way a guide writes it, in brackets after the network
+        self.assertEqual(self.judge("┃USA┃ ABC (WABC)", "WABC")[1], channel_manager.CERTAIN)
+
+    def test_but_two_different_call_signs_are_still_two_stations(self):
+        self.assertEqual(self.judge("┃USA┃ PBS WHYY", "KQED-DT")[0], 0)
+
     def test_two_numbers_that_differ_are_two_channels(self):
         self.assertEqual(self.judge("┃USA┃ PBS 12", "PBS 13", "pbs13.us")[0], 0)
         self.assertEqual(self.judge("┃UK┃ SKY SPORTS 1", "Sky Sports 2")[0], 0)

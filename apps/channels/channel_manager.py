@@ -674,27 +674,44 @@ NUMBER_WORDS = {
 SIDE_WORDS = {"east", "west", "eastern", "western", "atlantic", "pacific"}
 
 
+# How a stream is sent, and the mark an American station's name ends in. A guide has one
+# entry for a channel however it is sent, so "CNN" and "CNN HD" are the same channel and
+# an unmatched "HD" should not cost that match a quarter of its score. "DT" is digital
+# television, which every American station is.
+NOT_THE_CHANNEL = {
+    "hd", "fhd", "uhd", "sd", "4k", "8k", "hevc", "h264", "h265", "raw", "dt", "tv",
+    "1080p", "1080i", "720p", "576p", "480p", "50fps", "60fps",
+}
+
+
 def guide_words(name):
     """
     A name as the words that say which channel it is.
 
-    The country box comes off, accents are folded, punctuation becomes space and a number
-    written as a word becomes the number. Nothing else is thrown away -- not "east", not
-    "TV", not "network" -- because what looks like decoration next to one name is the
-    whole difference next to its sibling.
+    The country box comes off, words stuck together in camel case come apart
+    ("FoxSports1" is "Fox Sports 1"), accents are folded, punctuation becomes space, how
+    the stream is sent is dropped (NOT_THE_CHANNEL) and a number written as a word becomes
+    the number. Nothing else is thrown away -- not "east", not "network" -- because what
+    looks like decoration next to one name is the whole difference next to its sibling.
     """
     import unicodedata
 
-    text = _strip_country_box(str(name or "")).lower()
+    text = _strip_country_box(str(name or ""))
+    # Camel case is two words written as one, and guides are full of it
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", text).lower()
     text = text.replace("&", " and ").replace("+", " plus ")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = re.sub(r"[^0-9a-z]+", " ", text)
+    # Dropped before letters and digits are parted, so "4k" is still one word here
+    kept = " ".join(w for w in text.split() if w not in NOT_THE_CHANNEL)
     # Letters and digits stuck together are two words: "BBC1" is "BBC 1", and has to be,
     # or it never matches "BBC One"
-    text = re.sub(r"(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])", " ", text)
+    kept = re.sub(r"(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])", " ", kept)
     words = []
-    for word in text.split():
+    for word in kept.split():
+        if word in NOT_THE_CHANNEL:
+            continue
         words.append(NUMBER_WORDS.get(word, word))
     return words
 
@@ -738,6 +755,11 @@ def _alike(mine, theirs):
 
     if not mine or not theirs:
         return 0
+    # The same letters, parted differently. A playlist writes "DREAMWORKS" and a guide
+    # writes "DreamWorks": one comes apart at the camel and the other cannot, and word by
+    # word they then share nothing at all.
+    if "".join(mine) == "".join(theirs):
+        return 100
     taken, shared = set(), 0
     for word in mine:
         best, at = 0, None
@@ -850,6 +872,18 @@ def judge_guide(name, country, entry, tvg_id=""):
             return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
 
     alike = _alike(mine_words, their_words)
+    # A call sign is a station's own name, allocated to it and to nothing else, so two
+    # names carrying the same one are the same station however little else they share:
+    # "PBS WHYY" and "WHYY-DT" have one word in common out of three. Taken from the EPG
+    # Janitor plugin, which anchors a match on the call sign and rejects a disagreement --
+    # the rejecting half of that was already here.
+    if mine["call"] and mine["call"] == theirs_id["call"]:
+        agrees_on_country = _by_country(country, entry) >= 0
+        return (
+            max(alike, 90),
+            CERTAIN if agrees_on_country else LIKELY,
+            f"its call sign, {mine['call'].upper()}",
+        )
     if same_id:
         if alike >= TVG_NEEDS_NAME:
             return 100, CERTAIN, "its tvg-id and its name"
@@ -865,7 +899,7 @@ def judge_guide(name, country, entry, tvg_id=""):
     # well be the same channel written shorter, but it is not something to be sure about
     half_said = any(bool(mine[w]) != bool(theirs_id[w]) for w in ("number", "side", "call"))
 
-    if mine_words == their_words and agrees:
+    if "".join(mine_words) == "".join(their_words) and agrees:
         return max(score, 100 if not half_said else score), CERTAIN, "its name exactly"
     if score >= LIKELY_SCORE and agrees and not half_said:
         return score, LIKELY, "its name, and the country agrees"

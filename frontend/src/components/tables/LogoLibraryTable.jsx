@@ -41,7 +41,12 @@ const whenBuilt = (seconds) => {
 };
 
 // A logo the size the other tabs show one, growing under the pointer the way they do
-const Preview = ({ url, alt, width = 40, height = 30, grow = 1.5 }) => (
+// The sizes the page is laid out around. A logo you cannot make out is no use for
+// choosing between logos, and the rows were sized for text rather than for pictures.
+const SHOWN = { width: 56, height: 40 };
+const SMALLER = { width: 36, height: 26 };
+
+const Preview = ({ url, alt, width = SHOWN.width, height = SHOWN.height, grow = 1.5 }) => (
   <Image
     src={url}
     alt={alt || ''}
@@ -272,8 +277,12 @@ const LogoLibraryTable = () => {
         size: 200,
         enableSorting: false,
         cell: ({ row }) => (
-          <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
-            <Center style={{ width: 40, flexShrink: 0 }}>
+          <Group
+            gap="sm"
+            wrap="nowrap"
+            style={{ minWidth: 0, paddingTop: 6, paddingBottom: 6 }}
+          >
+            <Center style={{ width: SHOWN.width, flexShrink: 0 }}>
               {row.original.current ? (
                 <Preview url={row.original.current.url} alt={row.original.current.name} />
               ) : (
@@ -305,9 +314,19 @@ const LogoLibraryTable = () => {
           }
           const current = picked[original.channel_id] || 0;
           return (
-            <Group gap="sm" wrap="nowrap" align="flex-start" style={{ minWidth: 0, width: '100%' }}>
-              <Center style={{ width: 40, flexShrink: 0 }}>
-                <Preview url={chosen.url} alt={chosen.name} />
+            <Group
+              gap="sm"
+              wrap="nowrap"
+              align="flex-start"
+              style={{ minWidth: 0, width: '100%', paddingTop: 6, paddingBottom: 6 }}
+            >
+              <Center style={{ width: SHOWN.width, flexShrink: 0 }}>
+                {/* Named for what it is, not for the logo it happens to be: it is the one
+                    that would be applied, and the smaller ones beside it are not */}
+                <Preview
+                  url={chosen.url}
+                  alt={`Suggested logo for ${original.name}`}
+                />
               </Center>
               <Box style={{ flexShrink: 0, maxWidth: '40%' }}>
                 <About suggestion={chosen} byHand={!!custom[original.channel_id]} />
@@ -350,8 +369,8 @@ const LogoLibraryTable = () => {
                       <Preview
                         url={suggestion.url}
                         alt={suggestion.name}
-                        width={28}
-                        height={20}
+                        width={SMALLER.width}
+                        height={SMALLER.height}
                         grow={2}
                       />
                     </Box>

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v143** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v144** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -451,6 +451,20 @@ not offered at all. Two changes:
   differing number. "PBS is not CBS."
 
 `guide_words` also splits letters from digits, so "BBC1" is "BBC 1" and matches "BBC One".
+
+**What v144 added, measured against real names** (and the EPG Janitor plugin, which is worth
+reading: it anchors on US call signs from FCC data, folds number words, splits camel case, and
+rejects numbered and time-shifted siblings):
+
+- **How a stream is sent is not which channel it is** (`NOT_THE_CHANNEL`: hd/fhd/uhd/sd/4k/
+  hevc/raw/dt/tv/1080p…). A guide has one entry however the stream is sent, and an unmatched
+  "HD" was costing a right answer a quarter of its score. "CNN" against "CNN HD" went 77 → 100.
+- **Camel case comes apart**: "FoxSports1" is "Fox Sports 1" (50 → 100). With it, the same
+  letters parted differently count as the same name -- a playlist writes "DREAMWORKS" and a
+  guide "DreamWorks", one splits and the other cannot, and word by word they share nothing.
+- **A shared call sign anchors the match** (90, certain), which is the Janitor's idea; only the
+  rejecting half of it was here. "PBS WHYY" against "WHYY-DT" went 60 → 90, and "ABC (WABC)"
+  against "WABC" 77 → 90.
 
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found

@@ -489,4 +489,20 @@ describe('LogoLibraryTable', () => {
       expect(screen.getByRole('button', { name: /Apply \(1\)/ })).toBeEnabled()
     );
   });
+
+  it('pressing one suggestion and then another moves each one to the front', async () => {
+    render(<LogoLibraryTable />);
+    await screen.findByText('┃FR┃ TFX');
+    const main = () => screen.getByAltText('Suggested logo for ┃FR┃ TFX');
+
+    // Two to choose between; the first is shown to begin with
+    expect(main()).toHaveAttribute('src', TFX_FR);
+
+    fireEvent.click(screen.getByLabelText(/logo 2 for ┃FR┃ TFX/));
+    await waitFor(() => expect(main()).toHaveAttribute('src', TFX_BE));
+
+    // ...and back again, which is the part that was not working
+    fireEvent.click(screen.getByLabelText(/logo 1 for ┃FR┃ TFX/));
+    await waitFor(() => expect(main()).toHaveAttribute('src', TFX_FR));
+  });
 });
