@@ -329,9 +329,13 @@ const LogoLibraryTable = () => {
                       role="button"
                       aria-label={`Choose ${suggestion.source} logo ${index + 1} for ${original.name}`}
                       onClick={(event) => {
-                        // A pick is not a tick: the row stays as it was
+                        // Choosing one of these is choosing it: it becomes the suggested
+                        // logo and the row is ticked with it, the same as choosing one by
+                        // hand from the search. Picking without ticking meant the logo you
+                        // wanted was shown and then not applied.
                         event.stopPropagation();
                         setPicked({ ...picked, [original.channel_id]: index });
+                        tick(original.channel_id, true);
                       }}
                       style={{
                         borderRadius: 3,
@@ -381,7 +385,7 @@ const LogoLibraryTable = () => {
         ),
       },
     ],
-    [picked, custom, chosenFor, theme]
+    [picked, custom, chosenFor, theme, tick]
   );
 
   const renderHeaderCell = (header) => (

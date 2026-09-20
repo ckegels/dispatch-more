@@ -476,4 +476,17 @@ describe('LogoLibraryTable', () => {
       'iptv-org could not be reached'
     );
   });
+
+  it('choosing one of the other logos makes it the one that would be applied', async () => {
+    // It used to change the picture and leave the row unticked, so the logo you wanted
+    // was shown and then not applied
+    render(<LogoLibraryTable />);
+    await screen.findByText('┃BE┃ Eén');
+    const others = screen.getAllByLabelText(/logo 2 for/);
+    fireEvent.click(others[0]);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Apply \(1\)/ })).toBeEnabled()
+    );
+  });
 });

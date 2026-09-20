@@ -459,13 +459,37 @@ def _rank(entry, country):
     )
 
 
+def shorter_names(name):
+    """
+    The channel's name with words taken off it, longest first: what to look for when its
+    whole name finds nothing.
+
+    "PBS Philadelphia" is a station of a network whose logo the collections have under
+    "PBS", and the whole name finds nothing at all. The words are dropped from the end
+    first, because what a channel is called usually begins with who it belongs to and ends
+    with which one of them it is.
+
+    Only ever the channel's own name made shorter, never a longer one that contains it --
+    that way round is how "Eén" turns up "Nickelodeon Teen".
+    """
+    text = re.sub(r"[┃|\[(][^┃|\])]*[┃|\])]", " ", str(name or ""))
+    words = text.split()
+    if len(words) < 2:
+        return []
+    return [" ".join(words[:take]) for take in range(len(words) - 1, 0, -1)] + [
+        " ".join(words[drop:]) for drop in range(1, len(words))
+    ]
+
+
 def suggestions_for(name, index, limit=6):
     """
     The logos the collections have for a channel of this name, best first.
 
-    Whole names only. A logo whose name merely contains this one belongs to another channel
-    more often than not: looking for "een" as a part turns up "nickelodeon teen". When the
-    exact name finds nothing, the same name without "HD" and the like is tried.
+    Whole names first, and a logo whose name merely contains this one is never taken: that
+    is how looking for "een" turns up "nickelodeon teen". When the whole name finds
+    nothing, the same name without "HD" and the like is tried, and then the name with its
+    words taken off one at a time (see shorter_names) -- which is what finds the network's
+    logo for a station of it.
     """
     entries = (index or {}).get("entries") or {}
     key = match_key(name)
@@ -474,6 +498,11 @@ def suggestions_for(name, index, limit=6):
     found = list(entries.get(key) or ())
     if not found:
         found = list(entries.get(without_quality(key)) or ())
+    if not found:
+        for shorter in shorter_names(name):
+            found = list(entries.get(match_key(shorter)) or ())
+            if found:
+                break
     if not found:
         return []
 

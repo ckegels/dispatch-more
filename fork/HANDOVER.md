@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v139** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v140** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -321,7 +321,16 @@ A tab of the **Channel Manager** since v138 (it was "Find Logos" on the Logos pa
 a channel belongs with the other ways of changing channels): each channel's logo next to suggestions from public collections
 (tv-logo/tv-logos, iptv-org), the user's own added collections, their playlists' and every
 guide's icons — collections first, guides last. Search every logo by hand, use a link or a
-file. Matching uses `match_key` (accents folded, "+"/"&" as words, box removed).
+file. Matching uses `match_key` (accents folded, "+"/"&" as words, box removed). Whole names only,
+and never a longer name that contains the channel's -- that way round is how "Eén" turns up
+"Nickelodeon Teen". When the whole name finds nothing, **the channel's own name with words
+taken off it** is tried (`shorter_names`, v140, from the end first, since a name begins with
+who it belongs to and ends with which one): "PBS Philadelphia" finds nothing and "PBS" finds
+the network's logo, which is why a station used to be offered only the logo it already had
+from its provider. A name of one word is never made shorter, so the "Eén" case is untouched.
+
+Choosing one of the smaller logos on a row **ticks it** (v140). It used to change the picture
+and leave the row as it was, so the logo somebody picked was shown and then not applied.
 
 ### 5.6 Channel Manager: Lineup (was "Merge") — `apps/channels/channel_manager.py`, `ChannelManagerTable.jsx`
 

@@ -639,3 +639,38 @@ class WhatDispatcharrAlreadyHasTests(TestCase):
         data = self.client_api.get("/api/channels/logo-library/search/?q=een").json()
         self.assertFalse(data["built"])
         self.assertEqual([r["url"] for r in data["results"]], [self.icon])
+
+
+class ShorterNamesTests(TestCase):
+    """
+    A station's whole name finds nothing; its network's name finds the logo. Dropping
+    words off the channel's own name is safe in a way that matching longer names is not.
+    """
+
+    def test_the_network_is_found_for_a_station_of_it(self):
+        index = {"entries": {"pbs": [{"url": "u", "key": "pbs", "source": "tv-logos", "name": "PBS"}]}}
+        found = logo_library.suggestions_for("┃USA┃ PBS Philadelphia", index)
+        self.assertEqual([one["name"] for one in found], ["PBS"])
+
+    def test_the_whole_name_still_comes_first(self):
+        index = {
+            "entries": {
+                "pbsphiladelphia": [{"url": "a", "key": "pbsphiladelphia", "source": "tv-logos", "name": "PBS Philadelphia"}],
+                "pbs": [{"url": "b", "key": "pbs", "source": "tv-logos", "name": "PBS"}],
+            }
+        }
+        found = logo_library.suggestions_for("┃USA┃ PBS Philadelphia", index)
+        self.assertEqual([one["name"] for one in found], ["PBS Philadelphia"])
+
+    def test_words_come_off_the_end_first(self):
+        # What a channel is called begins with who it belongs to
+        self.assertEqual(
+            logo_library.shorter_names("┃USA┃ PBS WHYY Philadelphia")[:2],
+            ["PBS WHYY", "PBS"],
+        )
+
+    def test_a_name_of_one_word_is_never_made_shorter(self):
+        # Which is what keeps "Eén" away from "Nickelodeon Teen"
+        self.assertEqual(logo_library.shorter_names("Eén"), [])
+        index = {"entries": {"nickelodeonteen": [{"url": "u", "key": "nickelodeonteen", "source": "x", "name": "Nickelodeon Teen"}]}}
+        self.assertEqual(logo_library.suggestions_for("Eén", index), [])
