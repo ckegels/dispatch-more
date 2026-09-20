@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v123** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v124** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -426,6 +426,18 @@ every M3U and EPG refresh behind it. Progress in Redis (`guide-manager:run`), a 
 (`guide-manager:stop`) honoured between batches. No `close_old_connections()` inside the
 task — Celery's Django support already does it around every task, and by hand inside one it
 closes the connection the caller is using (it broke the tests, which is how it was found).
+
+**Unread is not empty, here either** (v124). The first cut suggested guides saying "holds
+nothing" for most rows, because a suggested guide is by definition one no channel uses and
+Dispatcharr has therefore never read (§5.6, the same trap). `guides_in_use` tells them apart:
+a guide something uses and that holds nothing is empty and passed over
+(`only_if_it_holds_something`); one nobody uses is **"not read yet"**, still offered, and read
+from the page with the Lineup's one-pass-per-source reader
+(`channel_manager.load_programmes`). A guide known to hold programmes is preferred to an
+unread one, since it can be judged on the spot. Each row also says **what is on the guide the
+channel is on now** (`instead_of_now`, `instead_of_source`) beside what is on the suggested
+one, and carries the channel's `uuid` for a **watch button** -- a guide can have the right
+name and the channel behind it be something else entirely.
 
 Applying saves each channel **one at a time with `update_fields`**, because that is what
 Dispatcharr's own signal watches: it drops the guide cache and reads the new guide's

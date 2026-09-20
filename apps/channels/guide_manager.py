@@ -154,9 +154,9 @@ def channels_in_scope(settings):
     """The channels this run looks at, in the order they are shown."""
     from .models import Channel
 
-    channels = Channel.objects.select_related("epg_data", "channel_group").order_by(
-        "channel_number", "id"
-    )
+    channels = Channel.objects.select_related(
+        "epg_data", "epg_data__epg_source", "channel_group"
+    ).order_by("channel_number", "id")
     groups = settings.get("channel_groups") or []
     if groups:
         channels = channels.filter(channel_group_id__in=groups)
@@ -179,7 +179,43 @@ def programme_counts(epg_ids):
     )
 
 
-def _score_against(name, catalogue, sources, counts, limit=6):
+def what_is_on(epg_ids):
+    """The programme on each of these guides at this moment, in one query."""
+    from django.utils import timezone
+
+    from apps.epg.models import ProgramData
+
+    if not epg_ids:
+        return {}
+    moment = timezone.now()
+    return dict(
+        ProgramData.objects.filter(
+            epg_id__in=epg_ids, start_time__lte=moment, end_time__gt=moment
+        ).values_list("epg_id", "title")
+    )
+
+
+def guides_in_use(epg_ids):
+    """
+    Which of these guides a channel is on, which is what says whether one holding nothing
+    is empty or merely unread.
+
+    Dispatcharr reads a guide's programmes when it goes on a channel and not before, so a
+    guide nobody uses holds nothing whatever it is really like. Suggesting one and calling
+    it empty would be telling someone a good guide is no good; suggesting one and saying
+    nothing about it is honest, and it can be read from the page.
+    """
+    from .models import Channel
+
+    if not epg_ids:
+        return set()
+    return set(
+        Channel.objects.filter(epg_data_id__in=epg_ids)
+        .values_list("epg_data_id", flat=True)
+    )
+
+
+def _score_against(name, catalogue, sources, counts, used, playing, limit=6):
     """
     The guides this channel could be, best first, with the country counting.
 
@@ -214,6 +250,9 @@ def _score_against(name, catalogue, sources, counts, limit=6):
             "source": sources.get(row["epg_source_id"], ""),
             "score": score,
             "programmes": counts.get(row["id"], 0),
+            "now": playing.get(row["id"], ""),
+            # Nobody uses it, so holding nothing says nothing: it has never been read
+            "in_use": row["id"] in used,
         }
         for score, _, row in judged[:limit]
     ]
@@ -232,12 +271,15 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     churned for nothing.
     """
     least = int(settings.get("min_score") or 0)
-    holding = bool(settings.get("only_if_it_holds_something", True))
     worth = [one for one in found if one["score"] >= least]
-    if holding:
-        with_programmes = [one for one in worth if one["programmes"]]
-    else:
-        with_programmes = worth
+    if settings.get("only_if_it_holds_something", True):
+        # A guide a channel is already on and that holds nothing is empty, and swapping
+        # one empty guide for another helps nobody. A guide nobody uses holds nothing
+        # because it has never been read, which is not the same thing and not a reason to
+        # pass it over -- it may be the right one, and can be read from the page.
+        worth = [one for one in worth if one["programmes"] or not one["in_use"]]
+    # What is known to hold programmes comes first, since it can be judged on the spot
+    with_programmes = [one for one in worth if one["programmes"]]
 
     on_now = channel.epg_data_id
     if not on_now:
@@ -250,7 +292,9 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     if not held:
         if not settings.get("suggest_empty", True):
             return None
-        best = next((one for one in with_programmes if one["epg"] != on_now), None)
+        best = next(
+            (one for one in (with_programmes or worth) if one["epg"] != on_now), None
+        )
         return {**best, "why": "empty"} if best else None
 
     if not settings.get("suggest_better", True):
@@ -259,13 +303,15 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     # same thing rather than better than nothing
     mine = catalogue_scores.get(on_now, 0)
     margin = int(settings.get("better_by") or 0)
-    best = next((one for one in with_programmes if one["epg"] != on_now), None)
+    best = next(
+        (one for one in (with_programmes or worth) if one["epg"] != on_now), None
+    )
     if best and best["score"] >= mine + margin:
         return {**best, "why": "better", "instead_of_score": mine}
     return None
 
 
-def look_at(channels, settings, catalogue, sources, counts):
+def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None):
     """
     What to suggest for these channels, as {channel id as a string: suggestion}.
 
@@ -275,10 +321,14 @@ def look_at(channels, settings, catalogue, sources, counts):
     """
     from . import epg_matching
 
+    if used is None:
+        used = guides_in_use([row["id"] for row in catalogue])
+    if playing is None:
+        playing = what_is_on([row["id"] for row in catalogue])
     ignored = load_ignored()
     found = {}
     for channel in channels:
-        candidates = _score_against(channel.name, catalogue, sources, counts)
+        candidates = _score_against(channel.name, catalogue, sources, counts, used, playing)
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,
         # so a better source added later is still found
@@ -308,11 +358,22 @@ def look_at(channels, settings, catalogue, sources, counts):
             **worth,
             "channel": channel.id,
             "channel_name": channel.name,
+            # So the channel itself can be watched from the page: a guide can look right
+            # and the channel behind it be something else entirely
+            "uuid": str(channel.uuid) if getattr(channel, "uuid", None) else "",
+            "number": channel.channel_number,
             "group": channel.channel_group.name if channel.channel_group_id else "",
             "group_id": channel.channel_group_id,
             "instead_of": channel.epg_data.name if channel.epg_data_id else "",
             "instead_of_epg": channel.epg_data_id,
             "instead_of_holds": counts.get(channel.epg_data_id, 0) if channel.epg_data_id else 0,
+            # What is on the guide it is on now, so the two can be read against each other
+            "instead_of_now": playing.get(channel.epg_data_id, "") if channel.epg_data_id else "",
+            "instead_of_source": (
+                channel.epg_data.epg_source.name
+                if channel.epg_data_id and channel.epg_data.epg_source_id
+                else ""
+            ),
         }
     return found
 

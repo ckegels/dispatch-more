@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { EyeOff, Play, RotateCcw, Square } from 'lucide-react';
+import { CirclePlay, EyeOff, Play, RotateCcw, Square } from 'lucide-react';
 import {
   ActionIcon,
   Alert,
@@ -20,6 +20,9 @@ import {
   Tooltip,
 } from '@mantine/core';
 import API from '../../api';
+import useVideoStore from '../../store/useVideoStore';
+import useSettingsStore from '../../store/settings';
+import { buildLiveStreamUrl } from '../../utils/components/FloatingVideoUtils.js';
 import ConfirmationDialog from '../ConfirmationDialog';
 import { CustomTable, useTable } from './CustomTable';
 
@@ -32,8 +35,44 @@ const WHY = {
   better: { label: 'Better match', color: 'blue' },
 };
 
-const holds = (count) =>
-  count ? `${count} programme${count === 1 ? '' : 's'}` : 'holds nothing';
+// Holding nothing means two things and the difference matters: Dispatcharr reads a guide's
+// programmes when it goes on a channel and not before, so a guide nobody uses holds nothing
+// whatever it is really like. Calling that empty would be telling someone a good guide is
+// no good.
+const holds = (count, inUse) => {
+  if (count) return `${count} programme${count === 1 ? '' : 's'}`;
+  return inUse === false ? 'not read yet' : 'holds nothing';
+};
+
+// Plays the channel itself in the preview player, so a suggestion can be checked against
+// what is actually on the screen: a guide can have the right name and the channel behind it
+// be something else entirely.
+const WatchChannel = ({ channel }) => {
+  const showVideo = useVideoStore((s) => s.showVideo);
+  const envMode = useSettingsStore((s) => s.environment?.env_mode);
+  if (!channel.uuid) return null;
+  return (
+    <Tooltip label="Watch this channel">
+      <ActionIcon
+        size="sm"
+        variant="subtle"
+        color="blue"
+        aria-label={`Watch ${channel.channel_name}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          const path = buildLiveStreamUrl(`/proxy/ts/stream/${channel.uuid}`);
+          let url = `${window.location.protocol}//${window.location.host}${path}`;
+          if (envMode === 'dev') {
+            url = `${window.location.protocol}//${window.location.hostname}:5656${path}`;
+          }
+          showVideo(url, 'live', { name: channel.channel_name, channelId: channel.channel });
+        }}
+      >
+        <CirclePlay size={16} />
+      </ActionIcon>
+    </Tooltip>
+  );
+};
 
 const GuideManagerTable = () => {
   const [page, setPage] = useState(null);
@@ -45,6 +84,7 @@ const GuideManagerTable = () => {
   const [why, setWhy] = useState('');
   const [ticked, setTicked] = useState(new Set());
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const tableRef = useRef(null);
@@ -145,6 +185,36 @@ const GuideManagerTable = () => {
     }
   };
 
+  // The guides suggested that nobody has read. Reading one costs a pass of its source's
+  // file either way, so they go together -- the same reader the Lineup's guide window uses.
+  const unread = useMemo(
+    () => [...new Set(rows.filter((one) => !one.programmes && !one.in_use).map((one) => one.epg))],
+    [rows]
+  );
+
+  const readThem = async () => {
+    if (!unread.length) return;
+    setReading(true);
+    setError(null);
+    try {
+      await API.loadChannelManagerGuide(unread);
+      // They arrive as a task, so the page keeps asking until they turn up
+      for (let tries = 0; tries < 60; tries += 1) {
+        await new Promise((done) => setTimeout(done, 3000));
+        const data = await API.getGuideManager();
+        setPage(data);
+        const still = (data.suggestions || []).filter(
+          (one) => unread.includes(one.epg) && !one.programmes && !one.in_use
+        );
+        if (!still.length) break;
+      }
+    } catch (e) {
+      setError(e?.body?.error || 'Could not read those guides.');
+    } finally {
+      setReading(false);
+    }
+  };
+
   const waveAway = useCallback(
     async (row) => {
       try {
@@ -182,14 +252,18 @@ const GuideManagerTable = () => {
         accessorKey: 'channel_name',
         grow: true,
         cell: ({ row }) => (
-          <Box style={{ minWidth: 0 }}>
-            <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
-              {row.original.channel_name}
-            </Text>
-            <Text size="xs" c="dimmed" lineClamp={1}>
-              {row.original.group || 'No group'}
-            </Text>
-          </Box>
+          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+            <WatchChannel channel={row.original} />
+            <Box style={{ minWidth: 0 }}>
+              <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
+                {row.original.channel_name}
+              </Text>
+              <Text size="xs" c="dimmed" lineClamp={1}>
+                {row.original.number ? `${row.original.number} · ` : ''}
+                {row.original.group || 'No group'}
+              </Text>
+            </Box>
+          </Group>
         ),
       },
       {
@@ -205,14 +279,20 @@ const GuideManagerTable = () => {
                 {one.instead_of || 'No guide'}
               </Text>
               {one.instead_of && (
-                <Text
-                  size="xs"
-                  c={one.instead_of_holds ? 'dimmed' : 'orange'}
-                  lineClamp={1}
-                >
-                  {holds(one.instead_of_holds)}
-                  {one.instead_of_score != null && ` · ${one.instead_of_score}%`}
-                </Text>
+                <>
+                  <Text
+                    size="xs"
+                    c={one.instead_of_holds ? 'dimmed' : 'orange'}
+                    lineClamp={1}
+                  >
+                    {one.instead_of_source ? `${one.instead_of_source} · ` : ''}
+                    {holds(one.instead_of_holds, true)}
+                    {one.instead_of_score != null && ` · ${one.instead_of_score}%`}
+                  </Text>
+                  <Text size="xs" c="dimmed" lineClamp={1}>
+                    {one.instead_of_now ? `Now: ${one.instead_of_now}` : 'Nothing on it now'}
+                  </Text>
+                </>
               )}
             </Box>
           );
@@ -238,8 +318,12 @@ const GuideManagerTable = () => {
                   {one.score}%
                 </Text>
               </Group>
-              <Text size="xs" c="dimmed" lineClamp={1}>
-                {one.tvg_id || 'no tvg-id'} · {holds(one.programmes)}
+              <Text
+                size="xs"
+                c={!one.programmes && one.in_use ? 'orange' : 'dimmed'}
+                lineClamp={1}
+              >
+                {one.tvg_id || 'no tvg-id'} · {holds(one.programmes, one.in_use)}
                 {one.now ? ` · Now: ${one.now}` : ''}
               </Text>
             </Box>
@@ -381,6 +465,17 @@ const GuideManagerTable = () => {
                   Look for guides
                 </Button>
               )}
+              {unread.length > 0 && (
+                <Button
+                  size="xs"
+                  variant="default"
+                  onClick={readThem}
+                  loading={reading}
+                  aria-label="Read the programmes of every suggested guide not read yet"
+                >
+                  Read {unread.length} guide{unread.length === 1 ? '' : 's'}
+                </Button>
+              )}
               <Button
                 size="xs"
                 disabled={!ticked.size || busy}
@@ -400,6 +495,15 @@ const GuideManagerTable = () => {
               </Text>
               <Progress value={done} size="sm" />
             </Box>
+          )}
+          {unread.length > 0 && (
+            <Text size="xs" c="dimmed" mb="sm">
+              {unread.length} suggested guide{unread.length === 1 ? '' : 's'} say
+              &quot;not read yet&quot;: Dispatcharr reads a guide&apos;s programmes when it
+              goes on a channel, so one nothing uses holds nothing whatever it is really
+              like. Reading one costs a pass of its whole guide file, so reading them
+              together costs no more than reading one.
+            </Text>
           )}
           {!run.running && run.state === 'done' && (
             <Text size="xs" c="dimmed" mb="sm">

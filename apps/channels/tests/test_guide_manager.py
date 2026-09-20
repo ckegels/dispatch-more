@@ -96,6 +96,23 @@ class SuggestionTests(_Setup):
         found = self._look()
         self.assertEqual(found[str(channel.id)]["epg"], guide.id)
         self.assertEqual(found[str(channel.id)]["why"], "none")
+        # and can be watched from the page, since a guide can be right and the channel
+        # behind it something else entirely
+        self.assertEqual(found[str(channel.id)]["uuid"], str(channel.uuid))
+
+    def test_what_is_on_the_guide_it_is_on_now_is_said_too(self):
+        # On a guide that is a worse match, and carrying somebody else's evening
+        on_it = self._guide("orfeins.old", "ORF Eins")
+        moment = timezone.now()
+        ProgramData.objects.create(
+            epg=on_it, title="Somebody else's evening",
+            start_time=moment - timedelta(minutes=5), end_time=moment + timedelta(minutes=25),
+        )
+        self._guide("ORF1.at", "ORF 1", programmes=9)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=on_it)
+        found = self._look()
+        self.assertEqual(found[str(channel.id)]["instead_of_now"], "Somebody else's evening")
+        self.assertEqual(found[str(channel.id)]["instead_of_source"], "xmltv.at")
 
     def test_a_guide_holding_nothing_is_swapped_for_one_that_holds_something(self):
         empty = self._guide("orf1.old", "ORF 1")
@@ -106,11 +123,32 @@ class SuggestionTests(_Setup):
         self.assertEqual(found[str(channel.id)]["why"], "empty")
         self.assertEqual(found[str(channel.id)]["instead_of_holds"], 0)
 
-    def test_but_not_for_another_that_holds_nothing_either(self):
+    def test_but_not_for_another_a_channel_uses_that_holds_nothing_either(self):
         empty = self._guide("orf1.old", "ORF 1")
-        self._guide("orf1.other", "ORF 1")
+        also_empty = self._guide("orf1.other", "ORF 1")
+        # Used by something, so it holds nothing because it is empty, not unread
+        self._channel("┃AT┃ ORF 1 HD", 2, epg=also_empty)
         self._channel("┃AT┃ ORF 1", 1, epg=empty)
-        self.assertEqual(self._look(), {})
+        found = self._look()
+        self.assertNotIn("1", {str(one["epg"]) for one in found.values()})
+        self.assertEqual([one["epg"] for one in found.values() if one["why"] == "empty"], [])
+
+    def test_a_guide_nobody_uses_is_unread_rather_than_empty(self):
+        # Dispatcharr reads a guide's programmes when it goes on a channel and not before,
+        # so one nothing uses holds nothing whatever it is really like. Passing it over
+        # would be calling a good guide no good.
+        never_read = self._guide("ORF1.at", "ORF 1")
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        found = self._look()
+        self.assertEqual(found[str(channel.id)]["epg"], never_read.id)
+        self.assertFalse(found[str(channel.id)]["in_use"])
+        self.assertEqual(found[str(channel.id)]["programmes"], 0)
+
+    def test_but_one_that_holds_programmes_is_preferred_to_one_not_read(self):
+        self._guide("orf1.unread", "ORF 1")
+        full = self._guide("ORF1.at", "ORF 1", programmes=5)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        self.assertEqual(self._look()[str(channel.id)]["epg"], full.id)
 
     def test_a_guide_from_the_wrong_country_is_bettered_by_the_right_one(self):
         wrong = self._guide("dreamworks.uk", "DreamWorks", programmes=4)

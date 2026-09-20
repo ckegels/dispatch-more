@@ -8,6 +8,14 @@ import theme from '../../../mantineTheme';
 import GuideManagerTable from '../GuideManagerTable.jsx';
 import API from '../../../api';
 
+const showVideo = vi.fn();
+vi.mock('../../../store/useVideoStore', () => ({
+  default: (select) => select({ showVideo }),
+}));
+vi.mock('../../../store/settings', () => ({
+  default: (select) => select({ environment: { env_mode: 'prod' } }),
+}));
+
 vi.mock('../../../api', () => ({
   default: {
     getGuideManager: vi.fn(),
@@ -15,20 +23,24 @@ vi.mock('../../../api', () => ({
     applyGuideManager: vi.fn(),
     ignoreGuideManager: vi.fn(),
     saveGuideManagerSettings: vi.fn(),
+    loadChannelManagerGuide: vi.fn(),
   },
 }));
 
 const onNothing = {
-  channel: 1, channel_name: '┃AT┃ ORF 1', group: '┃AT┃ AUSTRIA', group_id: 1,
+  channel: 1, channel_name: '┃AT┃ ORF 1', number: 1, uuid: 'uuid-one',
+  group: '┃AT┃ AUSTRIA', group_id: 1,
   epg: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'xmltv.at', score: 96,
-  programmes: 312, now: 'Zeit im Bild', why: 'none',
-  instead_of: '', instead_of_epg: null, instead_of_holds: 0,
+  programmes: 312, now: 'Zeit im Bild', in_use: true, why: 'none',
+  instead_of: '', instead_of_epg: null, instead_of_holds: 0, instead_of_now: '',
 };
 const onEmpty = {
-  channel: 2, channel_name: '┃NL┃ DREAMWORKS', group: '┃NL┃ HOLLAND', group_id: 2,
+  channel: 2, channel_name: '┃NL┃ DREAMWORKS', number: 20, uuid: 'uuid-two',
+  group: '┃NL┃ HOLLAND', group_id: 2,
   epg: 9, name: 'DreamWorks', tvg_id: 'dreamworks.nl', source: 'xmltv.nl', score: 98,
-  programmes: 140, now: 'Shrek', why: 'empty',
+  programmes: 140, now: 'Shrek', in_use: true, why: 'empty',
   instead_of: 'DreamWorks', instead_of_epg: 8, instead_of_holds: 0,
+  instead_of_now: '', instead_of_source: 'xmltv.uk',
 };
 
 const page = {
@@ -57,6 +69,7 @@ describe('GuideManagerTable', () => {
     API.applyGuideManager.mockResolvedValue({ changed: 1 });
     API.ignoreGuideManager.mockResolvedValue({});
     API.saveGuideManagerSettings.mockResolvedValue({});
+    API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -143,5 +156,43 @@ describe('GuideManagerTable', () => {
     API.getGuideManager.mockResolvedValue({ ...page, suggestions: [] });
     draw();
     expect(await screen.findByText(/Press "Look for guides"/)).toBeInTheDocument();
+  });
+
+  it('says what is on the guide a channel is on now, not just its name', async () => {
+    draw();
+    await screen.findByText('┃NL┃ DREAMWORKS');
+    // The guide it is on holds nothing and has nothing on: that is the whole complaint
+    expect(screen.getByText('xmltv.uk · holds nothing')).toBeInTheDocument();
+    expect(screen.getByText('Nothing on it now')).toBeInTheDocument();
+  });
+
+  it('watches the channel, since a guide can be right and the channel not', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Watch ┃AT┃ ORF 1' }));
+
+    expect(showVideo).toHaveBeenCalledWith(
+      expect.stringContaining('/proxy/ts/stream/uuid-one'),
+      'live',
+      { name: '┃AT┃ ORF 1', channelId: 1 }
+    );
+  });
+
+  it('does not call a guide nobody has read empty, and offers to read them', async () => {
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      suggestions: [{ ...onNothing, programmes: 0, now: '', in_use: false }],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    expect(screen.getByText('ORF1.at · not read yet')).toBeInTheDocument();
+
+    API.getGuideManager.mockResolvedValue(page);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Read the programmes of every suggested guide not read yet',
+      })
+    );
+    await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([7]));
   });
 });

@@ -4737,8 +4737,13 @@ def suggest_guides(settings, offset=0):
     sources = dict(EPGSource.objects.values_list("id", "name"))
     # Every guide's count, not only the ones suggested: the guide a channel is already on
     # has to be known to be empty before anything is suggested for it
-    counts = guide_manager.programme_counts([row["id"] for row in catalogue])
-    found = guide_manager.look_at(channels, settings, catalogue, sources, counts)
+    ids = [row["id"] for row in catalogue]
+    counts = guide_manager.programme_counts(ids)
+    # Which guides a channel is on, and what is on each: the first says whether a guide
+    # holding nothing is empty or merely unread, the second is what the page shows
+    used = guide_manager.guides_in_use(ids)
+    playing = guide_manager.what_is_on(ids)
+    found = guide_manager.look_at(channels, settings, catalogue, sources, counts, used, playing)
 
     if found:
         kept = guide_manager.load_suggestions()
