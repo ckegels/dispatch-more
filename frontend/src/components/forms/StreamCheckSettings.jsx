@@ -45,6 +45,16 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           />
           <Switch
             size="xs"
+            color="green"
+            label="Believe the playlist"
+            description="On: a stream its provider has stopped listing is taken as gone, without a connection being opened for it -- Dispatcharr already marks those on every refresh, and deletes them by itself after the account's stale days. Off: they are opened and checked like any other."
+            checked={!!draft.trust_the_playlist}
+            onChange={(e) =>
+              set({ trust_the_playlist: e.currentTarget.checked })
+            }
+          />
+          <Switch
+            size="xs"
             label="Check streams by itself"
             description="Off, it only runs when started here."
             checked={!!draft.enabled}
@@ -228,8 +238,9 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           />
           {(draft.remove_above ?? 0) > 0 && (draft.remove_above ?? 0) < 60 && (
             <Alert color="orange" variant="light">
-              Below about 60, a single bad run can be enough. A stream removed by
-              mistake is not watched for again — park is the one that undoes itself.
+              Below about 60, a single bad run can be enough. A stream removed
+              by mistake is not watched for again — park is the one that undoes
+              itself.
             </Alert>
           )}
           <Switch

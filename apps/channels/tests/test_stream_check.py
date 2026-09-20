@@ -500,6 +500,59 @@ class _Setup(TestCase):
         return list(ChannelStream.objects.filter(channel=channel).order_by("order").values_list("stream__name", flat=True))
 
 
+class PlaylistTests(_Setup):
+    """
+    A stream its provider has stopped listing. Dispatcharr marks those on every refresh
+    (Stream.is_stale) and deletes them after the account's stale days; the check can read
+    the same mark and spend no connection on them.
+    """
+
+    def _stale(self, *streams):
+        for stream in streams:
+            stream.is_stale = True
+            stream.save(update_fields=["is_stale"])
+
+    def _more_of(self, account, how_many):
+        """Streams of the account that are still listed, so it is not a failed refresh."""
+        return [self._stream(f"filler {account.id} {n}", account) for n in range(how_many)]
+
+    def test_a_stream_the_provider_dropped_is_the_providers_own_word(self):
+        self._more_of(self.a, 10)
+        self._stale(self.first)
+        self.assertEqual(
+            stream_check.unlisted_in(self.a.id, [self.first, self.third]), {self.first.id}
+        )
+
+    def test_an_account_nobody_ever_refreshed_says_nothing(self):
+        # Nothing marked, because nothing has ever looked
+        self.assertEqual(
+            stream_check.unlisted_in(self.a.id, [self.first, self.third]), set()
+        )
+
+    def test_a_refresh_that_went_wrong_is_not_a_provider_dropping_everything(self):
+        # A provider drops channels a few at a time; one that dropped its whole playlist
+        # overnight is a refresh that failed, and acting on it would empty every channel
+        others = self._more_of(self.a, 8)
+        self._stale(self.first, self.third, *others)
+        self.assertEqual(
+            stream_check.unlisted_in(self.a.id, [self.first, self.third]), set()
+        )
+
+    def test_it_is_broken_at_once_and_not_failing(self):
+        # Not a stream that failed once and may pass next time
+        record = {"ok": False, "kind": stream_check.UNLISTED, "failures": 1}
+        self.assertEqual(stream_check.state_of(record, {"broken_after": 3}), "broken")
+
+    def test_and_it_is_as_sure_as_this_gets(self):
+        score, why = stream_check.confidence_of(
+            {"ok": False, "kind": stream_check.UNLISTED, "failures": 1, "history": [0]}
+        )
+        self.assertGreaterEqual(score, 75)
+        self.assertIn("does not list this stream any more", " ".join(why))
+        # ...and "it may never have been right" says nothing about a stream since dropped
+        self.assertNotIn("never been seen working", " ".join(why))
+
+
 class ParkTests(_Setup):
     def test_a_parked_stream_comes_off_its_channels_and_the_rest_close_up(self):
         stream_check.park(self.second.id, "The provider answered HTTP 404")
@@ -666,6 +719,41 @@ class RunTests(_Setup):
         with_sibling, why = stream_check.confidence_of(twice, [{"ok": True}])
         self.assertGreater(with_sibling, surer)
         self.assertTrue(any("another provider" in one for one in why))
+
+    def test_a_stream_gone_from_the_playlist_costs_no_connection(self):
+        """
+        The provider has already said it is gone, in its own playlist. Opening it would
+        take a connection from a viewer and could learn nothing better.
+        """
+        # Enough still listed that this is a provider dropping one, not a failed refresh
+        for n in range(10):
+            self._stream(f"still there {n}", self.a)
+        self.first.is_stale = True
+        self.first.save(update_fields=["is_stale"])
+
+        found, probe = self._run({"*": {"ok": True}})
+
+        looked_at = [call.args[0] for call in probe.call_args_list]
+        self.assertNotIn(self.first.url, looked_at)
+        # ...and the others were looked at as usual
+        self.assertIn(self.second.url, looked_at)
+
+        record = stream_check.load_results()["streams"][str(self.first.id)]
+        self.assertEqual(record["kind"], stream_check.UNLISTED)
+        self.assertEqual(record["state"], "broken")
+
+    def test_unless_the_playlist_is_not_to_be_believed(self):
+        stream_check.save_settings({"trust_the_playlist": False})
+        for n in range(10):
+            self._stream(f"still there {n}", self.a)
+        self.first.is_stale = True
+        self.first.save(update_fields=["is_stale"])
+
+        _, probe = self._run({"*": {"ok": True}})
+
+        self.assertIn(
+            self.first.url, [call.args[0] for call in probe.call_args_list]
+        )
 
     def test_nothing_that_is_still_being_judged_has_a_confidence(self):
         for record in (

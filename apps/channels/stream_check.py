@@ -145,6 +145,10 @@ DEFAULTS = {
     # longer on a setup where something is nearly always playing; that is the trade, and
     # it is made this way round on purpose.
     "only_when_idle": True,
+    # A stream its provider has stopped listing is taken as gone, without a connection
+    # being opened for it (see unlisted_in). Dispatcharr's own record of the playlist,
+    # which is the provider's word rather than a guess.
+    "trust_the_playlist": True,
     # A provider whose first streams in a run all fail is down, not its streams: after this
     # many in a row it is left for the rest of the run, and those failures do not count
     "account_failures": 5,
@@ -240,12 +244,20 @@ PICTURE_KINDS = (BLACK, FROZEN, PLACEHOLDER)
 # it. Looked at again in the same run like a picture fault, and never counted: after RELOOKS
 # tries it is noted as not checked, and the next run looks again.
 UNREACHABLE = "unreachable"
+# The provider has stopped listing the stream. Not something a check found by opening it --
+# the provider said so itself, in its own playlist, and Dispatcharr wrote it down: every
+# refresh of an M3U account marks the streams it did not see this time (Stream.is_stale)
+# and deletes them once stale_stream_days have passed. It is the only answer here that is
+# not a judgement: it takes no connection, it costs nothing, and it cannot mistake a
+# working stream for a broken one, because nothing was tried.
+UNLISTED = "unlisted"
 KIND_TEXT = {
     DEAD: "does not play",
     REFUSED: "refused by the provider",
     BLACK: "black picture",
     FROZEN: "picture does not move",
     PLACEHOLDER: "shows the provider's \"no stream\" picture",
+    UNLISTED: "the provider stopped listing it",
 }
 # Less than this, and a stream that ended by itself did not really start
 TOO_LITTLE = 16 * 1024
@@ -1389,6 +1401,46 @@ def _targets(settings, only=None, due_before=None, skip_accounts=(), waiting_too
     return by_account
 
 
+# How much of a provider's playlist may be missing before it is read as a refresh that
+# went wrong rather than as a provider that dropped those streams. A provider does drop
+# channels, a few at a time; a provider that dropped nine tenths of its playlist overnight
+# is a refresh that failed part way, and acting on it would take nearly every channel of
+# that provider off at once.
+MOST_OF_A_PLAYLIST = 0.9
+
+
+def unlisted_in(account_id, streams):
+    """
+    Which of these streams the provider has stopped listing, as ids.
+
+    Dispatcharr's own record of it: a refresh of an M3U account marks every stream it did
+    not see this time as stale and clears the mark on the ones it did (`Stream.is_stale`,
+    set by `apps.m3u.tasks`, which then deletes them once `stale_stream_days` have
+    passed). The mark says "this was not in the playlist the last time we read it" -- the
+    provider's own word on whether the stream still exists, and worth more than anything a
+    check can learn by opening a connection.
+
+    An account nobody has ever refreshed has nothing marked, so nothing is said about it,
+    which is the right answer for it.
+    """
+    from .models import Stream
+
+    gone = {s.id for s in streams if getattr(s, "is_stale", False)}
+    if not gone:
+        return set()
+    counts = Stream.objects.filter(m3u_account_id=account_id)
+    total = counts.count()
+    missing = counts.filter(is_stale=True).count()
+    if not total or missing >= max(1, total * MOST_OF_A_PLAYLIST):
+        logger.info(
+            f"Stream Check: {missing} of {total} streams of account {account_id} are not in "
+            f"its playlist any more -- reading that as a refresh that went wrong, not as a "
+            f"provider that dropped them, and saying nothing about them"
+        )
+        return set()
+    return gone
+
+
 def _pick_next(left, urgent):
     """
     The next stream this provider looks at: one whose channel has just failed somewhere
@@ -1586,6 +1638,11 @@ def _keep_record(redis_client, results, stream, record, settings):
 # again, run after run, gets near a hundred, because the one thing this fork must never do
 # is call a working channel broken (§7 of the handover, more than once).
 EVIDENCE = {
+    # Not a piece of evidence like the others, and weighted accordingly: the provider took
+    # the stream out of its own playlist. Nothing was judged, nothing was tried, and there
+    # is nothing here to be wrong about -- Dispatcharr deletes such streams by itself after
+    # stale_stream_days, so this only says out loud what it already believes.
+    "not_listed": (75, "the provider does not list this stream any more"),
     "failed_twice": (25, "it failed on two runs in a row"),
     "failed_three": (15, "and on a third"),
     "failed_five": (10, "and has gone on failing"),
@@ -1622,6 +1679,8 @@ def confidence_of(record, others=()):
         picked.append("confirmed")
 
     kind = record.get("kind")
+    if kind == UNLISTED:
+        picked.append("not_listed")
     if kind == PLACEHOLDER:
         picked.append("providers_card")
     elif kind == DEAD:
@@ -1634,7 +1693,9 @@ def confidence_of(record, others=()):
     history = list(record.get("history") or [])
     if len(history) >= 3 and not any(history):
         picked.append("all_history")
-    if not record.get("last_ok"):
+    if not record.get("last_ok") and kind != UNLISTED:
+        # "It may never have been right" says nothing about a stream the provider has
+        # since dropped: what happened before it was dropped does not come into it
         picked.append("never_worked")
     if any(one.get("ok") for one in others):
         picked.append("sibling_plays")
@@ -1648,6 +1709,10 @@ def state_of(record, settings):
     if not record or record.get("skipped"):
         # Looked at, but nothing could be learned: the provider was full the whole time
         return "unchecked"
+    if record.get("kind") == UNLISTED:
+        # Not a stream that failed once and may pass next time: the provider has taken it
+        # out of its playlist, and waiting for it to fail twice is waiting for nothing
+        return "broken"
     if record.get("suspect"):
         # A picture fault seen once, to be looked at again before it counts
         return "suspect"
@@ -1834,6 +1899,43 @@ def run(redis_client, only=None, batch_seconds=None):
             return _relook_wait(redis_client, round_, pending) if pending else _finish(redis_client, round_)
         deadline = time.monotonic() + float(batch_seconds or BATCH_SECONDS)
         results = load_results()["streams"]
+
+        # What the provider has already said is gone, settled before a single connection is
+        # opened. A stream its provider stopped listing needs no checking: the answer is in
+        # the playlist and is better than any check could get, it costs nothing, and the
+        # connection it would have taken goes to a stream something can still be learned
+        # about -- which is the whole brake on a run.
+        if settings.get("trust_the_playlist", True):
+            settled = 0
+            for account_id, streams in list(by_account.items()):
+                gone = unlisted_in(account_id, streams)
+                if not gone:
+                    continue
+                for stream in streams:
+                    if stream.id in gone:
+                        _record(redis_client, results, stream, {
+                            "ok": False, "kind": UNLISTED, "bytes": 0, "seconds": 0.0,
+                            "reason": "The provider stopped listing this stream",
+                            "resolution": "", "codec": "",
+                        }, settings, round_id)
+                        settled += 1
+                left = [s for s in streams if s.id not in gone]
+                if left:
+                    by_account[account_id] = left
+                else:
+                    del by_account[account_id]
+            if settled:
+                logger.info(
+                    f"Stream Check: {settled} stream(s) are not in their provider's playlist "
+                    f"any more; no connection was opened for them"
+                )
+            if not by_account:
+                # Everything this batch had to look at was answered by the playlist. The
+                # next batch takes whatever is left of the round, or ends it.
+                _keep_results(results)
+                redis_client.delete(LIVE_RESULTS_KEY)
+                return "more"
+
         lock = threading.Lock()
         # Everything the providers' threads need from the database, read here: a thread has
         # a database connection of its own, and all it should do is talk to providers

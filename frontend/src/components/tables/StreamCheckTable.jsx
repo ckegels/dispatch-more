@@ -115,6 +115,9 @@ const KIND = {
     color: 'violet',
     needsYou: true,
   },
+  // Not something a check found: the provider took the stream out of its own playlist,
+  // which is its own word on whether the stream still exists
+  unlisted: { label: 'Gone from the playlist', color: 'red', needsYou: true },
 };
 
 const KindBadge = ({ result }) => {
@@ -303,9 +306,16 @@ const Expanded = ({ row, onAct }) => {
 const KIND_WORDS = {
   black: ['a black screen', 'black screens'],
   frozen: ['a picture that does not move', 'pictures that do not move'],
-  placeholder: ["the provider's \"no stream\" card", "the provider's \"no stream\" cards"],
+  placeholder: [
+    'the provider\'s "no stream" card',
+    'the provider\'s "no stream" cards',
+  ],
   refused: ['refused by its provider', 'refused by their providers'],
   dead: ['nothing at all', 'nothing at all'],
+  unlisted: [
+    "is not in its provider's playlist any more",
+    "are not in their providers' playlists any more",
+  ],
 };
 
 // The same in two or three words, for the badge on the row
@@ -314,6 +324,7 @@ const DEAD_BADGE = {
   frozen: 'All frozen',
   placeholder: 'All "no stream"',
   refused: 'All refused',
+  unlisted: 'All gone from the playlist',
 };
 
 const deadBadge = (row) => {

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v150** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v151** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -848,6 +848,21 @@ no longer play. Summary of how it works now:
   interrupted; the viewer gives up after three. The wait is unchanged -- a provider that
   bursts still gets its ten seconds -- but it is spent in fifths of a second with a look at
   the signal between them (`_next_piece`, `STOP_POLL_SECONDS`).
+- **The provider's own word beats any check** (v151, `unlisted_in`, kind `unlisted`, lever
+  "Believe the playlist", on). Dispatcharr already knows which streams a provider has
+  stopped listing: every refresh of an M3U account marks the ones it did not see this time
+  (`Stream.is_stale`, in `apps.m3u.tasks`) and clears the mark on the ones it did, then
+  deletes them once `stale_stream_days` have passed. A stream so marked needs no checking
+  at all -- the answer is in the playlist, it is the provider's own statement rather than a
+  guess, it cannot mistake a working stream for a broken one because nothing is tried, and
+  the connection it would have taken goes to a stream something can still be learned about.
+  They are settled before a single connection is opened, counted `broken` at once rather
+  than after `broken_after` runs (nothing is going to change next run), and worth 75 on
+  their own in `confidence_of`.
+  **The guard:** if more than `MOST_OF_A_PLAYLIST` (0.9) of an account's streams are marked,
+  that is a refresh that failed part way and not a provider that dropped its whole playlist,
+  and nothing is said about any of them. An account nobody has ever refreshed has nothing
+  marked, so it is quietly left alone, which is the right answer for it.
 - **A viewer is never left with a dead channel** (v133, and it happened once). `make_way`
   answers whether a run was going, and `live_proxy/views.py` asks it **before** stock's test
   of the refusal's wording and lets that answer override it. Stock only retries when the
