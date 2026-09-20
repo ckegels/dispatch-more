@@ -15,16 +15,6 @@ from . import guide_manager
 logger = logging.getLogger(__name__)
 
 
-def _redis():
-    from core.utils import RedisClient
-
-    try:
-        return RedisClient.get_client()
-    except Exception as e:
-        logger.warning(f"Guides: no Redis to say how a run is going ({e})")
-        return None
-
-
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def guide_manager_page(request):
@@ -44,7 +34,7 @@ def guide_manager_page(request):
         "settings": guide_manager.load_settings(),
         "defaults": guide_manager.DEFAULTS,
         "suggestions": list(guide_manager.load_suggestions().values()),
-        "run": guide_manager.run_state(_redis()),
+        "run": guide_manager.run_state(guide_manager.redis()),
         "channel_groups": [
             {"id": g["channel_group_id"], "name": g["channel_group__name"], "count": g["channels"]}
             for g in groups
@@ -60,11 +50,11 @@ def guide_manager_run(request):
     """Start looking, or ask a run to stop after the batch it is in."""
     action = request.data.get("action", "start")
     if action == "stop":
-        return JsonResponse(guide_manager.stop(_redis()))
+        return JsonResponse(guide_manager.stop(guide_manager.redis()))
     if action != "start":
         return JsonResponse({"error": f"Unknown action: {action}"}, status=400)
     settings = guide_manager.settings_from(request.data.get("settings"))
-    return JsonResponse(guide_manager.start(settings, _redis()))
+    return JsonResponse(guide_manager.start(settings, guide_manager.redis()))
 
 
 @api_view(["POST"])

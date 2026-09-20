@@ -311,7 +311,7 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     return None
 
 
-def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None):
+def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None, say=None):
     """
     What to suggest for these channels, as {channel id as a string: suggestion}.
 
@@ -327,7 +327,12 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         playing = what_is_on([row["id"] for row in catalogue])
     ignored = load_ignored()
     found = {}
-    for channel in channels:
+    for at, channel in enumerate(channels):
+        # Said as it goes rather than once the batch is over: a batch is a hundred and
+        # fifty channels against the whole catalogue, and a bar that only moves between
+        # batches looks like a page that has stopped
+        if say and at % 10 == 0:
+            say(at, channel.name)
         candidates = _score_against(channel.name, catalogue, sources, counts, used, playing)
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,
@@ -378,6 +383,22 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
     return found
 
 
+def redis():
+    """
+    The Redis a run says how it is going through, or None.
+
+    One way in, used by the page and by the task alike, so there is a single place to
+    look when a run says nothing.
+    """
+    from core.utils import RedisClient
+
+    try:
+        return RedisClient.get_client()
+    except Exception as e:
+        logger.warning(f"Guides: no Redis to say how a run is going ({e})")
+        return None
+
+
 def run_state(redis_client):
     """How a run is going, for the page: nothing at all when none has ever been made."""
     if not redis_client:
@@ -388,7 +409,7 @@ def run_state(redis_client):
         key = key.decode() if isinstance(key, bytes) else key
         value = value.decode() if isinstance(value, bytes) else value
         state[key] = value
-    for number in ("done", "total", "found"):
+    for number in ("done", "total", "found", "batches"):
         if number in state:
             try:
                 state[number] = int(state[number])
@@ -405,10 +426,19 @@ def start(settings, redis_client):
         return {"started": False, "why": "A run is already going", **state}
     total = channels_in_scope(settings).count()
     if redis_client:
+        from django.utils import timezone
+
         redis_client.delete(STOP_KEY)
         redis_client.delete(RUN_KEY)
         redis_client.hset(RUN_KEY, mapping={
-            "state": "running", "done": 0, "total": total, "found": 0,
+            "state": "running", "done": 0, "total": total, "found": 0, "batches": 0,
+            # Said before anything heavy starts, so the page has something to show the
+            # moment the button is pressed rather than a blank bar for a minute
+            "stage": "reading the guides there are",
+            "at": "",
+            # Not "started": that is the word start() answers with, and a run already
+            # going would have its own timestamp read as a yes
+            "since": timezone.now().isoformat(timespec="seconds"),
         })
         redis_client.expire(RUN_KEY, RUN_KEPT_SECONDS)
     save_suggestions({})

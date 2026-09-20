@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v125** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v126** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -289,7 +289,10 @@ the stream. Loose matching etc. are levers. Streams can be reordered on the page
 `DEFAULTS_VERSION` resets saved settings when defaults change (`CHANGED_IN` keeps the rest). A
 backup warning with a link to Settings → Backup & Restore sits above both tabs.
 
-**Combining channels that are the same channel** (v125, `combine_duplicates`, **off**). Until
+**Combining channels that are the same channel** (v125, `combine_duplicates`, **on** since
+v126 at the user's word -- having one channel twice is what people come here to fix, and like
+every other suggestion nothing happens until a row is ticked; `DEFAULTS_VERSION` 4 carries it
+and the new ignore word to sets saved before). Until
 then the Lineup only ever added streams to channels or made new ones -- it had never removed a
 channel. With `several_matches` "all" (the DispatcharrUtils default) the same channel in two of
 your groups got every matching stream **twice over**, one copy on each, which is duplication
@@ -303,6 +306,12 @@ apply. The group can be chosen on the row as a new channel's can, and choosing i
 channel is kept. The folded channels get no row of their own. `apply_plan` returns `combined`.
 It is the only thing in the Channel Manager that deletes a channel, hence off by default, the
 row naming every channel that goes, and the warning in the apply dialog.
+
+**The mark on a recording is not part of a name** (v126): `⏺ʳᵉᶜ`, which providers put on a
+stream they are recording, is in `ignore_tags` by default. `_tag_pattern` replaced the
+whole-word guard for tags: that guard only means anything at an edge that is a letter or a
+digit, and asking for a word boundary around `⏺ʳᵉᶜ` missed it the moment a provider wrote it up
+against the name ("NPO 1⏺ʳᵉᶜ"). A bare word like RAW is still only taken whole.
 
 **The group is on the Before side too** (v125): you cannot judge "one channel in one group"
 without seeing which groups they are in now.
@@ -437,6 +446,15 @@ plus `channel_manager._by_country`), over a catalogue held in memory rather than
 channel — over a thousand channels that difference is the whole run. **The guide a channel
 is already on is scored by the same measure**, so "better" means better at being this
 channel rather than a high number next to one nobody worked out.
+
+**It says where it has got to** (v126). Reading the guide catalogue is most of a batch on a
+setup with a lot of EPG and happens before a single channel is looked at, so the run writes a
+`stage` to Redis before each heavy step, the channel it is on (`at`) every tenth channel rather
+than once a batch, and `since` for the page's elapsed clock. A bar that only moves between
+batches reads as a page that has stopped. (`since`, not `started`: `start()` answers with
+`started`, and a run already going had its timestamp read as a yes.) Redis is reached through
+one seam, `guide_manager.redis()`, so tests patch one place and the package's other tests
+cannot leave a different client behind.
 
 **Batched, like Stream Check** (`tasks.suggest_guides`, `BATCH_CHANNELS` 150, each batch
 queues the next): one Celery worker, and a run holding it for two minutes would hold up

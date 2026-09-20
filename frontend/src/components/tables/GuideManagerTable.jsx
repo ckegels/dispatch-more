@@ -85,6 +85,7 @@ const GuideManagerTable = () => {
   const [ticked, setTicked] = useState(new Set());
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [confirming, setConfirming] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const tableRef = useRef(null);
@@ -111,8 +112,12 @@ const GuideManagerTable = () => {
   const running = page?.run?.running;
   useEffect(() => {
     if (!running) return undefined;
-    const timer = setInterval(() => look(true), 3000);
-    return () => clearInterval(timer);
+    const asking = setInterval(() => look(true), 3000);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      clearInterval(asking);
+      clearInterval(clock);
+    };
   }, [running, look]);
 
   const groups = useMemo(() => {
@@ -384,6 +389,13 @@ const GuideManagerTable = () => {
 
   const run = page?.run || {};
   const done = run.total ? Math.round((run.done / run.total) * 100) : 0;
+  // How long it has been going, so a slow run reads as slow rather than as stuck
+  const elapsed = useMemo(() => {
+    if (!run.since) return '';
+    const seconds = Math.max(0, Math.round((now - new Date(run.since).getTime()) / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+  }, [run.since, now]);
 
   return (
     <>
@@ -488,12 +500,28 @@ const GuideManagerTable = () => {
 
           {run.running && (
             <Box mb="sm">
-              <Text size="xs" c="dimmed" mb={4}>
-                Looking at every channel: {run.done || 0} of {run.total || 0},{' '}
-                {run.found || 0} worth changing so far. It runs a batch at a time so
-                playlist and guide refreshes are not held up behind it.
+              <Group justify="space-between" gap="xs" mb={4} wrap="wrap">
+                <Text size="xs" c="dimmed">
+                  {run.stage || 'looking at your channels'}
+                  {run.at ? ` · ${run.at}` : ''}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {run.done || 0} of {run.total || 0} · {run.found || 0} worth changing
+                  {elapsed ? ` · ${elapsed}` : ''}
+                </Text>
+              </Group>
+              {/* Striped while the guides are being read, since nothing can move yet */}
+              <Progress
+                value={run.stage && run.stage.startsWith('reading') ? 100 : done}
+                animated={!!(run.stage && !run.stage.startsWith('looking'))}
+                striped={!!(run.stage && !run.stage.startsWith('looking'))}
+                size="sm"
+              />
+              <Text size="xs" c="dimmed" mt={4}>
+                Every channel is scored against every guide there is, so this takes a
+                while with a lot of EPG. It runs a batch at a time, so playlist and guide
+                refreshes are not held up behind it, and it can be stopped.
               </Text>
-              <Progress value={done} size="sm" />
             </Box>
           )}
           {unread.length > 0 && (

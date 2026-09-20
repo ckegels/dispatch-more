@@ -202,6 +202,22 @@ class SuggestionTests(_Setup):
 class BatchTests(_Setup):
     """The looking runs in batches that queue the next, so one Celery worker is not held."""
 
+    def test_a_batch_says_where_it_has_got_to_as_it_goes(self):
+        from apps.channels.tasks import suggest_guides
+
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        for number in range(3):
+            self._channel(f"┃AT┃ ORF {number + 1}", number + 1)
+        fake = FakeRedis()
+        with patch("apps.channels.guide_manager.redis", return_value=fake):
+            with patch("apps.channels.tasks.suggest_guides.delay"):
+                suggest_guides(settings(), 0)
+        said = fake.hashes[guide_manager.RUN_KEY]
+        # Reading the catalogue is most of a batch and happens before a channel is looked
+        # at, so the page is told that is what is going on rather than shown a still bar
+        self.assertEqual(said["stage"], "looking at your channels")
+        self.assertEqual(said["done"], "3")
+
     def test_a_batch_looks_at_its_share_and_queues_the_one_after_it(self):
         from apps.channels.tasks import suggest_guides
 
@@ -209,7 +225,7 @@ class BatchTests(_Setup):
         for number in range(3):
             self._channel(f"┃AT┃ ORF {number + 1}", number + 1)
         fake = FakeRedis()
-        with patch("core.utils.RedisClient.get_client", return_value=fake):
+        with patch("apps.channels.guide_manager.redis", return_value=fake):
             with patch("apps.channels.guide_manager.BATCH_CHANNELS", 2):
                 with patch("apps.channels.tasks.suggest_guides.delay") as next_batch:
                     suggest_guides(settings(), 0)
@@ -220,7 +236,7 @@ class BatchTests(_Setup):
         from apps.channels.tasks import suggest_guides
 
         fake = FakeRedis()
-        with patch("core.utils.RedisClient.get_client", return_value=fake):
+        with patch("apps.channels.guide_manager.redis", return_value=fake):
             with patch("apps.channels.tasks.suggest_guides.delay") as next_batch:
                 suggest_guides(settings(), 0)
         next_batch.assert_not_called()
@@ -233,7 +249,7 @@ class BatchTests(_Setup):
         self._channel("┃AT┃ ORF 1", 1)
         fake = FakeRedis()
         guide_manager.stop(fake)
-        with patch("core.utils.RedisClient.get_client", return_value=fake):
+        with patch("apps.channels.guide_manager.redis", return_value=fake):
             with patch("apps.channels.tasks.suggest_guides.delay") as next_batch:
                 self.assertEqual(suggest_guides(settings(), 0), "Stopped")
         next_batch.assert_not_called()
@@ -302,7 +318,7 @@ class ViewTests(_Setup):
     def test_a_run_is_started_and_can_be_stopped(self):
         self._channel("┃AT┃ ORF 1", 1)
         fake = FakeRedis()
-        with patch("apps.channels.guide_manager_views._redis", return_value=fake):
+        with patch("apps.channels.guide_manager.redis", return_value=fake):
             with patch("apps.channels.tasks.suggest_guides.delay") as looking:
                 answer = self.client_api.post(
                     "/api/channels/guides/run/", {"action": "start"}, format="json"

@@ -91,12 +91,17 @@ describe('GuideManagerTable', () => {
     await screen.findByText('┃AT┃ ORF 1');
     API.getGuideManager.mockResolvedValue({
       ...page,
-      run: { running: true, state: 'running', done: 400, total: 1360, found: 12 },
+      run: {
+        running: true, state: 'running', done: 400, total: 1360, found: 12,
+        stage: 'looking at your channels', at: '┃AT┃ ORF 1',
+        since: new Date().toISOString(),
+      },
     });
     fireEvent.click(screen.getByRole('button', { name: /Look for guides/ }));
 
     await waitFor(() => expect(API.runGuideManager).toHaveBeenCalledWith('start', page.settings));
-    expect(await screen.findByText(/400 of 1360, 12 worth changing/)).toBeInTheDocument();
+    expect(await screen.findByText(/400 of 1360/)).toBeInTheDocument();
+    expect(screen.getByText(/12 worth changing/)).toBeInTheDocument();
     // and can be stopped
     fireEvent.click(await screen.findByRole('button', { name: /Stop/ }));
     await waitFor(() => expect(API.runGuideManager).toHaveBeenCalledWith('stop'));
@@ -194,5 +199,20 @@ describe('GuideManagerTable', () => {
       })
     );
     await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([7]));
+  });
+
+  it('says what it is doing before a single channel has been looked at', async () => {
+    // Reading the whole guide catalogue is most of a batch with a lot of EPG, and
+    // happens before anything can move: a still bar reads as a page that has stopped
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      run: {
+        running: true, state: 'running', done: 0, total: 1360, found: 0,
+        stage: 'reading the guides there are', at: '', since: new Date().toISOString(),
+      },
+    });
+    draw();
+    expect(await screen.findByText(/reading the guides there are/)).toBeInTheDocument();
+    expect(screen.getByText(/0 of 1360/)).toBeInTheDocument();
   });
 });

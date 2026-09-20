@@ -63,17 +63,22 @@ DEFAULTS = {
     # them, as those tools do; "conflict" shows it and leaves it alone
     "several_matches": "all",
     # Two channels that are the same channel are made one: the streams of all of them go
-    # on the one kept and the rest are deleted. Off by default, and the only thing here
-    # that removes a channel -- DispatcharrUtils never did, and a channel deleted is gone
-    # until a backup is restored.
-    "combine_duplicates": False,
+    # on the one kept and the rest are deleted. On, because having one channel twice is
+    # the thing people come here to fix and DispatcharrUtils leaves you with both. Like
+    # every other suggestion it is only a suggestion: nothing is deleted until its row is
+    # ticked and applied, and the row names every channel that would go. It is still the
+    # only thing here that removes a channel, and one removed is gone until a backup is
+    # restored, so the row says so and the apply warns again.
+    "combine_duplicates": True,
     # Off by default, as DispatcharrUtils has no such thing: providers give one tvg-id to
     # many channels -- every CBS station, an East and a West feed, and on one real setup a
     # Krone stream carrying Euronews' -- and trusting it merged them all
     "match_tvg_id": False,
     # Words that are about the stream, not the channel, taken off before matching. The two
     # the group merge people ran by hand took off; anything more is theirs to add.
-    "ignore_tags": "VIP, RAW",
+    # "⏺ʳᵉᶜ" is how providers mark a stream they are recording: it says nothing about
+    # which channel it is, and left on it makes one channel look like two
+    "ignore_tags": "VIP, RAW, ⏺ʳᵉᶜ",
     # [[find, replace], ...] applied to stream names before anything else
     "regex_rules": [],
     # {"Channel name": ["another name", ...]} for channels known by more than one
@@ -121,10 +126,12 @@ DEFAULTS = {
 # first defaults matched far more loosely than DispatcharrUtils, and a page opened once
 # saved them all, so they would have outlived the fix. What was chosen to look at is
 # kept; how matching is done goes back to the defaults.
-DEFAULTS_VERSION = 3
+DEFAULTS_VERSION = 4
 # What changed in each version, and so what a set saved before it takes from the defaults;
 # the rest of what was saved is kept. Version 3: new channels are suggested by default.
-CHANGED_IN = {3: ("create_new",)}
+# Version 4: channels that are the same channel are combined, and the mark providers put
+# on a stream they are recording is ignored.
+CHANGED_IN = {3: ("create_new",), 4: ("combine_duplicates", "ignore_tags")}
 SCOPE_SETTINGS = ("accounts", "stream_groups", "channel_groups", "target_group", "profiles")
 
 QUALITY_LABELS = ["4K", "FHD", "HD", "SD"]
@@ -185,6 +192,21 @@ def settings_from(given):
 # ── Recognising a channel in a name ──────────────────────────────────────────
 
 
+def _tag_pattern(tag):
+    """
+    How one word to ignore is looked for.
+
+    A bare word is only taken as a whole word, so "RAW" does not come out of "DRAWING".
+    But that guard only makes sense at an edge that is a letter or a digit: a tag like
+    "⏺ʳᵉᶜ", the mark providers put on a stream they are recording, starts and ends with
+    something that is neither, and asking for a word boundary there means it is missed
+    the moment a provider writes it up against the name -- "NPO 1⏺ʳᵉᶜ".
+    """
+    before = "(?<![0-9a-z])" if tag[:1].lower() in "0123456789abcdefghijklmnopqrstuvwxyz" else ""
+    after = "(?![0-9a-z])" if tag[-1:].lower() in "0123456789abcdefghijklmnopqrstuvwxyz" else ""
+    return re.compile(rf"{before}{re.escape(tag)}{after}", re.IGNORECASE)
+
+
 def _word_pattern(words):
     escaped = "|".join(re.escape(word) for word in sorted(words, key=len, reverse=True))
     return re.compile(rf"(?<![0-9a-z])(?:{escaped})(?![0-9a-z])", re.IGNORECASE)
@@ -221,11 +243,7 @@ def clean_name(name, settings):
         except (re.error, IndexError, TypeError) as e:
             logger.debug(f"Skipped a regex rule that does not work: {rule}: {e}")
     for tag in _tags(settings):
-        # A tag in brackets is taken as written; a bare word only as a whole word
-        if tag[:1] in "[(":
-            text = re.sub(re.escape(tag), " ", text, flags=re.IGNORECASE)
-        else:
-            text = _word_pattern([tag]).sub(" ", text)
+        text = _tag_pattern(tag).sub(" ", text)
     if settings.get("name_matching") == "loose":
         # Resolution in brackets, as some playlists write it: "ATV (Belgium) (1080p)".
         # Before the quality words, which would take the 1080p and leave the brackets.

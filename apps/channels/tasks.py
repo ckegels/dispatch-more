@@ -4710,16 +4710,14 @@ def suggest_guides(settings, offset=0):
     from apps.channels import guide_manager
     from apps.channels.epg_matching import build_epg_matching_catalog
     from apps.epg.models import EPGSource
-    from core.utils import RedisClient
 
-    try:
-        redis_client = RedisClient.get_client()
-    except Exception:
-        redis_client = None
+    redis_client = guide_manager.redis()
 
     if guide_manager.asked_to_stop(redis_client):
         if redis_client:
-            redis_client.hset(guide_manager.RUN_KEY, "state", "stopped")
+            redis_client.hset(
+                guide_manager.RUN_KEY, mapping={"state": "stopped", "stage": "", "at": ""}
+            )
         logger.info("Guides: asked to stop")
         return "Stopped"
 
@@ -4728,32 +4726,52 @@ def suggest_guides(settings, offset=0):
     )
     if not channels:
         if redis_client:
-            redis_client.hset(guide_manager.RUN_KEY, "state", "done")
+            redis_client.hset(
+                guide_manager.RUN_KEY,
+                mapping={"state": "done", "stage": "", "at": ""},
+            )
         found = len(guide_manager.load_suggestions())
         logger.info(f"Guides: done, {found} suggestion(s)")
         return f"Done, {found} suggestion(s)"
 
+    def say(mapping):
+        if not redis_client:
+            return
+        redis_client.hset(guide_manager.RUN_KEY, mapping=mapping)
+        redis_client.expire(guide_manager.RUN_KEY, guide_manager.RUN_KEPT_SECONDS)
+
+    # Reading the whole guide catalogue is most of a batch on a setup with a lot of EPG,
+    # and all of it happens before a single channel has been looked at. Saying so is the
+    # difference between a page that is working and a page that has stopped.
+    say({"stage": "reading the guides there are", "at": ""})
     catalogue, _ = build_epg_matching_catalog()
     sources = dict(EPGSource.objects.values_list("id", "name"))
     # Every guide's count, not only the ones suggested: the guide a channel is already on
     # has to be known to be empty before anything is suggested for it
     ids = [row["id"] for row in catalogue]
+    say({"stage": f"working out what {len(ids)} guides hold", "at": ""})
     counts = guide_manager.programme_counts(ids)
     # Which guides a channel is on, and what is on each: the first says whether a guide
     # holding nothing is empty or merely unread, the second is what the page shows
     used = guide_manager.guides_in_use(ids)
     playing = guide_manager.what_is_on(ids)
-    found = guide_manager.look_at(channels, settings, catalogue, sources, counts, used, playing)
+
+    say({"stage": "looking at your channels", "guides": len(ids)})
+    found = guide_manager.look_at(
+        channels, settings, catalogue, sources, counts, used, playing,
+        say=lambda at, name: say({"done": offset + at, "at": name}),
+    )
 
     if found:
         kept = guide_manager.load_suggestions()
         kept.update(found)
         guide_manager.save_suggestions(kept)
     if redis_client:
-        redis_client.hincrby(guide_manager.RUN_KEY, "done", len(channels))
+        # Set rather than added to: the batch has been saying where it got to as it went
+        say({"done": offset + len(channels), "at": ""})
+        redis_client.hincrby(guide_manager.RUN_KEY, "batches", 1)
         if found:
             redis_client.hincrby(guide_manager.RUN_KEY, "found", len(found))
-        redis_client.expire(guide_manager.RUN_KEY, guide_manager.RUN_KEPT_SECONDS)
 
     # No closing of connections here: Celery's Django support does it around every task,
     # and doing it by hand inside one closes the connection the caller is using
