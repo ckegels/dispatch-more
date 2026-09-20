@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from . import channel_manager_views, logo_library_views, stream_check_views
+from . import channel_manager_views, guide_manager_views, logo_library_views, stream_check_views
 from .api_views import (
     StreamViewSet,
     ChannelViewSet,
@@ -76,6 +76,12 @@ urlpatterns = [
     path('channel-manager/apply/', channel_manager_views.channel_manager_apply, name='channel_manager_apply'),
     path('channel-manager/guides/', channel_manager_views.channel_manager_guides, name='channel_manager_guides'),
     path('channel-manager/guides/load/', channel_manager_views.channel_manager_load_guide, name='channel_manager_load_guide'),
+    # Which guide each channel should be on, and where that is wrong (see guide_manager)
+    path('guides/', guide_manager_views.guide_manager_page, name='guide_manager_page'),
+    path('guides/run/', guide_manager_views.guide_manager_run, name='guide_manager_run'),
+    path('guides/apply/', guide_manager_views.guide_manager_apply, name='guide_manager_apply'),
+    path('guides/ignore/', guide_manager_views.guide_manager_ignore, name='guide_manager_ignore'),
+    path('guides/settings/', guide_manager_views.guide_manager_settings, name='guide_manager_settings'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
     path('stream-check/', stream_check_views.stream_check_overview, name='stream_check_overview'),

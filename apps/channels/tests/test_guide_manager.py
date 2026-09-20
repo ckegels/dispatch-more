@@ -1,0 +1,338 @@
+"""Which guide each channel should be on, and where that is wrong (apps.channels.guide_manager).
+
+The three things worth suggesting are three different problems: a channel on no guide, a
+channel on a guide that holds nothing, and a channel on a guide something else matches
+better. The last is the one to be careful with -- replacing a working guide because
+something scores a nose higher is how a good setup gets churned for nothing.
+"""
+
+from unittest.mock import patch
+
+from django.test import TestCase
+from django.utils import timezone
+from datetime import timedelta
+from rest_framework.test import APIClient
+
+from apps.accounts.models import User
+from apps.channels import guide_manager
+from apps.channels.epg_matching import build_epg_matching_catalog
+from apps.channels.models import Channel, ChannelGroup
+from apps.epg.models import EPGData, EPGSource, ProgramData
+
+
+def settings(**overrides):
+    return {**guide_manager.DEFAULTS, **overrides}
+
+
+class FakeRedis:
+    """Enough Redis for a run to say how it is going, without one running."""
+
+    def __init__(self):
+        self.values = {}
+        self.hashes = {}
+
+    def hgetall(self, key):
+        return dict(self.hashes.get(key, {}))
+
+    def hset(self, key, field=None, value=None, mapping=None):
+        held = self.hashes.setdefault(key, {})
+        held.update({k: str(v) for k, v in (mapping or {}).items()})
+        if field is not None:
+            held[field] = str(value)
+
+    def hincrby(self, key, field, by=1):
+        held = self.hashes.setdefault(key, {})
+        held[field] = str(int(held.get(field, 0)) + by)
+
+    def set(self, key, value, ex=None):
+        self.values[key] = value
+
+    def exists(self, key):
+        return key in self.values
+
+    def delete(self, key):
+        self.values.pop(key, None)
+        self.hashes.pop(key, None)
+
+    def expire(self, key, seconds):
+        return True
+
+
+class _Setup(TestCase):
+    def setUp(self):
+        self.austria = ChannelGroup.objects.create(name="┃AT┃ AUSTRIA")
+        self.holland = ChannelGroup.objects.create(name="┃NL┃ HOLLAND")
+        self.source = EPGSource.objects.create(name="xmltv.at", source_type="xmltv", priority=5)
+
+    def _channel(self, name, number, group=None, epg=None):
+        return Channel.objects.create(
+            name=name, channel_number=number, channel_group=group or self.austria, epg_data=epg
+        )
+
+    def _guide(self, tvg_id, name, programmes=0):
+        guide = EPGData.objects.create(tvg_id=tvg_id, name=name, epg_source=self.source)
+        moment = timezone.now()
+        for n in range(programmes):
+            ProgramData.objects.create(
+                epg=guide, title=f"Programme {n}",
+                start_time=moment + timedelta(hours=n), end_time=moment + timedelta(hours=n + 1),
+            )
+        return guide
+
+    def _look(self, levers=None, channels=None):
+        catalogue, _ = build_epg_matching_catalog()
+        counts = guide_manager.programme_counts([row["id"] for row in catalogue])
+        sources = dict(EPGSource.objects.values_list("id", "name"))
+        return guide_manager.look_at(
+            channels if channels is not None else list(guide_manager.channels_in_scope(levers or settings())),
+            levers or settings(), catalogue, sources, counts,
+        )
+
+
+class SuggestionTests(_Setup):
+    def test_a_channel_on_no_guide_is_offered_one(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        found = self._look()
+        self.assertEqual(found[str(channel.id)]["epg"], guide.id)
+        self.assertEqual(found[str(channel.id)]["why"], "none")
+
+    def test_a_guide_holding_nothing_is_swapped_for_one_that_holds_something(self):
+        empty = self._guide("orf1.old", "ORF 1")
+        full = self._guide("ORF1.at", "ORF 1", programmes=5)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=empty)
+        found = self._look()
+        self.assertEqual(found[str(channel.id)]["epg"], full.id)
+        self.assertEqual(found[str(channel.id)]["why"], "empty")
+        self.assertEqual(found[str(channel.id)]["instead_of_holds"], 0)
+
+    def test_but_not_for_another_that_holds_nothing_either(self):
+        empty = self._guide("orf1.old", "ORF 1")
+        self._guide("orf1.other", "ORF 1")
+        self._channel("┃AT┃ ORF 1", 1, epg=empty)
+        self.assertEqual(self._look(), {})
+
+    def test_a_guide_from_the_wrong_country_is_bettered_by_the_right_one(self):
+        wrong = self._guide("dreamworks.uk", "DreamWorks", programmes=4)
+        right = self._guide("dreamworks.nl", "DreamWorks", programmes=4)
+        channel = self._channel("┃NL┃ DREAMWORKS", 20, group=self.holland, epg=wrong)
+        found = self._look()
+        self.assertEqual(found[str(channel.id)]["epg"], right.id)
+        self.assertEqual(found[str(channel.id)]["why"], "better")
+
+    def test_a_guide_that_works_is_left_alone_when_the_difference_is_a_nose(self):
+        on_it = self._guide("ORF1.at", "ORF 1", programmes=4)
+        self._guide("ORF1b.at", "ORF 1 Austria", programmes=4)
+        self._channel("┃AT┃ ORF 1", 1, epg=on_it)
+        self.assertEqual(self._look(), {})
+
+    def test_nothing_is_suggested_that_is_not_good_enough(self):
+        self._guide("x.at", "Something else entirely", programmes=4)
+        self._channel("┃AT┃ ORF 1", 1)
+        self.assertEqual(self._look(), {})
+
+    def test_each_kind_can_be_turned_off_on_its_own(self):
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        self._channel("┃AT┃ ORF 1", 1)
+        self.assertEqual(self._look(settings(suggest_none=False)), {})
+
+    def test_only_the_groups_chosen_are_looked_at(self):
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        self._guide("npo1.nl", "NPO 1", programmes=3)
+        self._channel("┃AT┃ ORF 1", 1)
+        dutch = self._channel("┃NL┃ NPO 1", 50, group=self.holland)
+        found = self._look(settings(channel_groups=[self.holland.id]))
+        self.assertEqual(list(found), [str(dutch.id)])
+
+    def test_a_suggestion_waved_away_is_not_made_again(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.ignore(channel.id, channel.name, guide.id)
+        self.assertEqual(self._look(), {})
+
+    def test_but_a_different_guide_later_is_offered_all_the_same(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.ignore(channel.id, channel.name, guide.id)
+        better = self._guide("ORF1.at.new", "ORF 1", programmes=99)
+        found = self._look()
+        # Whichever wins, it is not the one waved away that is offered again
+        self.assertIn(str(channel.id), found)
+        self.assertIn(found[str(channel.id)]["epg"], [better.id])
+
+
+class BatchTests(_Setup):
+    """The looking runs in batches that queue the next, so one Celery worker is not held."""
+
+    def test_a_batch_looks_at_its_share_and_queues_the_one_after_it(self):
+        from apps.channels.tasks import suggest_guides
+
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        for number in range(3):
+            self._channel(f"┃AT┃ ORF {number + 1}", number + 1)
+        fake = FakeRedis()
+        with patch("core.utils.RedisClient.get_client", return_value=fake):
+            with patch("apps.channels.guide_manager.BATCH_CHANNELS", 2):
+                with patch("apps.channels.tasks.suggest_guides.delay") as next_batch:
+                    suggest_guides(settings(), 0)
+        next_batch.assert_called_once_with(settings(), 2)
+        self.assertEqual(fake.hashes[guide_manager.RUN_KEY]["done"], "2")
+
+    def test_the_last_batch_says_the_run_is_done_and_queues_nothing(self):
+        from apps.channels.tasks import suggest_guides
+
+        fake = FakeRedis()
+        with patch("core.utils.RedisClient.get_client", return_value=fake):
+            with patch("apps.channels.tasks.suggest_guides.delay") as next_batch:
+                suggest_guides(settings(), 0)
+        next_batch.assert_not_called()
+        self.assertEqual(fake.hashes[guide_manager.RUN_KEY]["state"], "done")
+
+    def test_a_run_asked_to_stop_stops_at_the_batch_it_is_in(self):
+        from apps.channels.tasks import suggest_guides
+
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        self._channel("┃AT┃ ORF 1", 1)
+        fake = FakeRedis()
+        guide_manager.stop(fake)
+        with patch("core.utils.RedisClient.get_client", return_value=fake):
+            with patch("apps.channels.tasks.suggest_guides.delay") as next_batch:
+                self.assertEqual(suggest_guides(settings(), 0), "Stopped")
+        next_batch.assert_not_called()
+        self.assertEqual(guide_manager.load_suggestions(), {})
+
+
+class ApplyTests(_Setup):
+    def test_the_guide_chosen_goes_on_the_channel_with_its_tvg_id(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            self.assertEqual(guide_manager.apply({channel.id: guide.id}), {"changed": 1})
+        channel.refresh_from_db()
+        self.assertEqual(channel.epg_data_id, guide.id)
+        self.assertEqual(channel.tvg_id, "ORF1.at")
+
+    def test_applying_reads_the_new_guides_programmes(self):
+        # Saved one at a time with update_fields, because that is what the signal watches
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as read:
+            guide_manager.apply({channel.id: guide.id})
+        read.assert_called_once_with(guide.id)
+
+    def test_no_guide_can_be_chosen_too(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=guide)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            guide_manager.apply({channel.id: None})
+        channel.refresh_from_db()
+        self.assertIsNone(channel.epg_data_id)
+
+    def test_a_guide_gone_since_the_page_was_looked_at_changes_nothing(self):
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        self.assertEqual(guide_manager.apply({channel.id: 9999}), {"changed": 0})
+        channel.refresh_from_db()
+        self.assertIsNone(channel.epg_data_id)
+
+    def test_what_was_applied_comes_off_the_list_of_suggestions(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.save_suggestions(self._look())
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            guide_manager.apply({channel.id: guide.id})
+        self.assertEqual(guide_manager.load_suggestions(), {})
+
+
+class ViewTests(_Setup):
+    def setUp(self):
+        super().setUp()
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+
+    def test_the_page_says_what_was_found_and_what_can_be_chosen(self):
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.save_suggestions(self._look())
+        data = self.client_api.get("/api/channels/guides/").json()
+        self.assertEqual(len(data["suggestions"]), 1)
+        self.assertEqual(data["suggestions"][0]["why"], "none")
+        self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
+        self.assertEqual(data["defaults"]["min_score"], 70)
+
+    def test_a_run_is_started_and_can_be_stopped(self):
+        self._channel("┃AT┃ ORF 1", 1)
+        fake = FakeRedis()
+        with patch("apps.channels.guide_manager_views._redis", return_value=fake):
+            with patch("apps.channels.tasks.suggest_guides.delay") as looking:
+                answer = self.client_api.post(
+                    "/api/channels/guides/run/", {"action": "start"}, format="json"
+                ).json()
+            self.assertTrue(answer["started"])
+            self.assertEqual(answer["total"], 1)
+            looking.assert_called_once()
+
+            # While one is going, another is not started on top of it
+            with patch("apps.channels.tasks.suggest_guides.delay") as again:
+                second = self.client_api.post(
+                    "/api/channels/guides/run/", {"action": "start"}, format="json"
+                ).json()
+            self.assertFalse(second["started"])
+            again.assert_not_called()
+
+            self.assertTrue(
+                self.client_api.post(
+                    "/api/channels/guides/run/", {"action": "stop"}, format="json"
+                ).json()["stopping"]
+            )
+            self.assertTrue(guide_manager.asked_to_stop(fake))
+
+    def test_applying_through_the_page(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            answer = self.client_api.post(
+                "/api/channels/guides/apply/",
+                {"choices": {str(channel.id): guide.id}}, format="json",
+            )
+        self.assertEqual(answer.json(), {"changed": 1})
+        # Nothing chosen is a refusal, not a 500
+        self.assertEqual(
+            self.client_api.post("/api/channels/guides/apply/", {"choices": {}}, format="json").status_code,
+            400,
+        )
+
+    def test_waving_a_suggestion_away_through_the_page(self):
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.save_suggestions(self._look())
+        url = "/api/channels/guides/ignore/"
+        self.client_api.post(
+            url, {"action": "ignore", "channel": channel.id, "name": channel.name, "epg": guide.id},
+            format="json",
+        )
+        self.assertIn(str(channel.id), guide_manager.load_ignored())
+        # and off the list it was on
+        self.assertEqual(guide_manager.load_suggestions(), {})
+        self.client_api.post(url, {"action": "unignore", "channel": channel.id}, format="json")
+        self.assertEqual(guide_manager.load_ignored(), {})
+
+    def test_the_settings_are_kept_and_checked(self):
+        self.client_api.put(
+            "/api/channels/guides/settings/", {"settings": {"min_score": 85}}, format="json"
+        )
+        self.assertEqual(guide_manager.load_settings()["min_score"], 85)
+        self.assertEqual(
+            self.client_api.put(
+                "/api/channels/guides/settings/", {"settings": {"min_score": "lots"}}, format="json"
+            ).status_code,
+            400,
+        )
+
+    def test_only_an_admin(self):
+        plain = APIClient()
+        plain.force_authenticate(
+            user=User.objects.create_user(username="someone", password="x", user_level=1)
+        )
+        self.assertEqual(plain.get("/api/channels/guides/").status_code, 403)

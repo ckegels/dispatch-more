@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v122** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v123** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -398,6 +398,41 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+### 5.6b Channel Manager: Guides — `apps/channels/guide_manager.py` (+ `guide_manager_views.py`, `GuideManagerTable.jsx`)
+
+The third tab. Dispatcharr matches a channel to a guide when asked and leaves it there,
+which goes stale in ways nobody sees. This goes and looks, and suggests a change for three
+different problems, each switchable on its own:
+
+- **none** — the channel is on no guide and something fits.
+- **empty** — the guide it is on holds no programmes and one that holds some fits. The one
+  that matters most: an empty guide looks exactly like a working one everywhere in
+  Dispatcharr except on the channel, where there is simply nothing on.
+- **better** — something matches it better by a margin (`better_by`, 20). Deliberately a
+  margin and not a nose: replacing a working guide because another scores one point higher
+  is how a good setup gets churned for nothing. A channel on the British feed of a Dutch
+  channel is this, and it is what the country scoring of v122 finds.
+
+Scoring is the Channel Manager's (`_score_against` → `epg_matching.fuzzy_scan_epg_list`
+plus `channel_manager._by_country`), over a catalogue held in memory rather than a query per
+channel — over a thousand channels that difference is the whole run. **The guide a channel
+is already on is scored by the same measure**, so "better" means better at being this
+channel rather than a high number next to one nobody worked out.
+
+**Batched, like Stream Check** (`tasks.suggest_guides`, `BATCH_CHANNELS` 150, each batch
+queues the next): one Celery worker, and a run holding it for two minutes would hold up
+every M3U and EPG refresh behind it. Progress in Redis (`guide-manager:run`), a stop flag
+(`guide-manager:stop`) honoured between batches. No `close_old_connections()` inside the
+task — Celery's Django support already does it around every task, and by hand inside one it
+closes the connection the caller is using (it broke the tests, which is how it was found).
+
+Applying saves each channel **one at a time with `update_fields`**, because that is what
+Dispatcharr's own signal watches: it drops the guide cache and reads the new guide's
+programmes. A queryset update would do neither. Waving a suggestion away is per guide, not
+per channel: the guide comes off that channel's list and the next best is offered, so a
+better source added later is still found. Settings and results in CoreSettings
+(`guide-manager`, `guide-manager-suggestions`, `guide-manager-ignored`).
 
 ### 5.7 Channel Manager: Stream Check — `apps/channels/stream_check.py` (+ `stream_check_views.py`, `StreamCheckTable.jsx`, `StreamCheckSettings.jsx`, `ProviderLimits.jsx`)
 

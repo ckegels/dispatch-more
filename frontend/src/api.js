@@ -2945,6 +2945,41 @@ export default class API {
     });
   }
 
+  // ── Guides: which guide each channel should be on (see guide_manager) ──
+
+  static async getGuideManager() {
+    return await request(`${host}/api/channels/guides/`);
+  }
+
+  static async runGuideManager(action, settings) {
+    return await request(`${host}/api/channels/guides/run/`, {
+      method: 'POST',
+      body: { action, settings },
+    });
+  }
+
+  // choices: {channel id: guide id, or null for no guide}
+  static async applyGuideManager(choices) {
+    return await request(`${host}/api/channels/guides/apply/`, {
+      method: 'POST',
+      body: { choices },
+    });
+  }
+
+  static async ignoreGuideManager(action, row = {}) {
+    return await request(`${host}/api/channels/guides/ignore/`, {
+      method: 'POST',
+      body: { action, ...row },
+    });
+  }
+
+  static async saveGuideManagerSettings(settings) {
+    return await request(`${host}/api/channels/guides/settings/`, {
+      method: 'PUT',
+      body: { settings },
+    });
+  }
+
   static async getStreamCheck(show = 'problems') {
     // The channels with a stream that does not play, the parked streams, and how a run is going
     return await request(`${host}/api/channels/stream-check/?${new URLSearchParams({ show })}`);

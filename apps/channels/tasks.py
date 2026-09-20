@@ -4691,3 +4691,66 @@ def read_guide_programmes(by_source):
                 read += 1
                 logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
     return f"Read {read} guide(s)"
+
+
+@shared_task
+def suggest_guides(settings, offset=0):
+    """
+    Look at one batch of channels for a guide worth suggesting, then queue the next.
+
+    In batches because every channel is scored against the whole guide catalogue, and
+    this install has one Celery worker: a run that held it for two minutes would hold up
+    every M3U and EPG refresh queued behind it. Each batch queues the one after it, so a
+    refresh waiting gets its turn in between.
+
+    The catalogue is built per batch rather than carried between them. It is one read of
+    the EPG table, against a hundred and fifty channels each scored against all of it --
+    and a catalogue carried across tasks would be a catalogue going stale mid-run.
+    """
+    from apps.channels import guide_manager
+    from apps.channels.epg_matching import build_epg_matching_catalog
+    from apps.epg.models import EPGSource
+    from core.utils import RedisClient
+
+    try:
+        redis_client = RedisClient.get_client()
+    except Exception:
+        redis_client = None
+
+    if guide_manager.asked_to_stop(redis_client):
+        if redis_client:
+            redis_client.hset(guide_manager.RUN_KEY, "state", "stopped")
+        logger.info("Guides: asked to stop")
+        return "Stopped"
+
+    channels = list(
+        guide_manager.channels_in_scope(settings)[offset:offset + guide_manager.BATCH_CHANNELS]
+    )
+    if not channels:
+        if redis_client:
+            redis_client.hset(guide_manager.RUN_KEY, "state", "done")
+        found = len(guide_manager.load_suggestions())
+        logger.info(f"Guides: done, {found} suggestion(s)")
+        return f"Done, {found} suggestion(s)"
+
+    catalogue, _ = build_epg_matching_catalog()
+    sources = dict(EPGSource.objects.values_list("id", "name"))
+    # Every guide's count, not only the ones suggested: the guide a channel is already on
+    # has to be known to be empty before anything is suggested for it
+    counts = guide_manager.programme_counts([row["id"] for row in catalogue])
+    found = guide_manager.look_at(channels, settings, catalogue, sources, counts)
+
+    if found:
+        kept = guide_manager.load_suggestions()
+        kept.update(found)
+        guide_manager.save_suggestions(kept)
+    if redis_client:
+        redis_client.hincrby(guide_manager.RUN_KEY, "done", len(channels))
+        if found:
+            redis_client.hincrby(guide_manager.RUN_KEY, "found", len(found))
+        redis_client.expire(guide_manager.RUN_KEY, guide_manager.RUN_KEPT_SECONDS)
+
+    # No closing of connections here: Celery's Django support does it around every task,
+    # and doing it by hand inside one closes the connection the caller is using
+    suggest_guides.delay(settings, offset + len(channels))
+    return f"Looked at {len(channels)} channel(s)"
