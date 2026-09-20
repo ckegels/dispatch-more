@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v124** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v125** (2026-09-20). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -288,6 +288,24 @@ Euronews and every CBS station into one), no country guessing, every same-named 
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
 `DEFAULTS_VERSION` resets saved settings when defaults change (`CHANGED_IN` keeps the rest). A
 backup warning with a link to Settings → Backup & Restore sits above both tabs.
+
+**Combining channels that are the same channel** (v125, `combine_duplicates`, **off**). Until
+then the Lineup only ever added streams to channels or made new ones -- it had never removed a
+channel. With `several_matches` "all" (the DispatcharrUtils default) the same channel in two of
+your groups got every matching stream **twice over**, one copy on each, which is duplication
+rather than merging. On: `_duplicate_sets` finds channels sharing a match key whose countries
+do not contradict (same country, or either unstated -- "┃AT┃ ORF 1" and "┃DE┃ ORF 1" are never
+combined, whatever names they share; the whole fork is built on telling those apart). One
+`combine` row per set: `_which_to_keep` keeps the lowest-numbered channel **already in the
+group suggested for the set** (`_NewHomes.by_country`, or where most of them already are),
+every member's streams go on it with the fallback still last, and the others are **deleted** on
+apply. The group can be chosen on the row as a new channel's can, and choosing it changes which
+channel is kept. The folded channels get no row of their own. `apply_plan` returns `combined`.
+It is the only thing in the Channel Manager that deletes a channel, hence off by default, the
+row naming every channel that goes, and the warning in the apply dialog.
+
+**The group is on the Before side too** (v125): you cannot judge "one channel in one group"
+without seeing which groups they are in now.
 
 **The name and the guide are set by hand on the row** (v117), in the After column: a text box
 for the name -- what a new channel is called, or a rename of a channel you have -- and a window

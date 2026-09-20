@@ -55,6 +55,7 @@ const PAGE_SIZES = ['25', '50', '100', '250'];
 const STATUS = {
   new: { label: 'New', color: 'green' },
   merge: { label: 'Merge', color: 'blue' },
+  combine: { label: 'Combine', color: 'grape' },
   conflict: { label: 'Conflict', color: 'orange' },
   unchanged: { label: 'Unchanged', color: 'gray' },
 };
@@ -550,7 +551,7 @@ const Expanded = ({
       p="sm"
       style={{ background: 'rgba(0,0,0,0.18)', minWidth: 0, maxWidth: '100%' }}
     >
-      {row.status === 'new' && (
+      {(row.status === 'new' || row.status === 'combine') && (
         <Group gap="xs" mb="sm" align="flex-end" wrap="wrap">
           <Select
             size="xs"
@@ -564,9 +565,13 @@ const Expanded = ({
             style={{ width: 260 }}
           />
           <Text size="xs" c="dimmed" pb={6}>
-            {chosenGroup && chosenGroup !== row.channel.group_id
-              ? 'Chosen by you; numbered after the last channel of that group when applied.'
-              : `Suggested: ${row.channel.group_why || 'its streams’ group'}. Number ${row.channel.number}.`}
+            {row.status === 'combine'
+              ? chosenGroup && chosenGroup !== row.channel.group_id
+                ? 'Chosen by you; the lowest-numbered of these channels already in that group is the one kept.'
+                : `Suggested: ${row.group_why || 'where most of them are'}. ${row.channel.name} (${row.channel.number}) is kept.`
+              : chosenGroup && chosenGroup !== row.channel.group_id
+                ? 'Chosen by you; numbered after the last channel of that group when applied.'
+                : `Suggested: ${row.channel.group_why || 'its streams’ group'}. Number ${row.channel.number}.`}
           </Text>
         </Group>
       )}
@@ -833,6 +838,7 @@ const ChannelManagerTable = () => {
         : show === 'changes'
           ? row.status === 'new' ||
             row.status === 'merge' ||
+            row.status === 'combine' ||
             row.status === 'conflict' ||
             row.reordered ||
             row.byHand
@@ -884,6 +890,7 @@ const ChannelManagerTable = () => {
             ticked.has(row.key) &&
             (row.status === 'new' ||
               row.status === 'merge' ||
+              row.status === 'combine' ||
               row.reordered ||
               row.dropped ||
               row.byHand)
@@ -1131,6 +1138,10 @@ const ChannelManagerTable = () => {
                       : 'No channel yet'}
                 </Text>
                 <Text size="xs" c="dimmed" lineClamp={1}>
+                  {channel?.number != null ? `${channel.number} · ` : ''}
+                  {channel?.group || (channel ? 'No group' : '')}
+                </Text>
+                <Text size="xs" c="dimmed" lineClamp={1}>
                   {r.before.streams.length} stream
                   {r.before.streams.length === 1 ? '' : 's'}
                   {providers > 0 &&
@@ -1171,6 +1182,14 @@ const ChannelManagerTable = () => {
                       : `${channel.number}${channel.group ? ` · ${channel.group}` : ''}`}
                   </Text>
                 </Group>
+                {(row.original.combining || []).length > 0 && (
+                  <Text size="xs" c="orange" style={{ wordBreak: 'break-word' }}>
+                    {row.original.combining
+                      .map((one) => `${one.name} (${one.number})`)
+                      .join(', ')}{' '}
+                    {row.original.combining.length === 1 ? 'is' : 'are'} deleted
+                  </Text>
+                )}
                 <GuideLine
                   guide={epg}
                   how={
@@ -1329,6 +1348,7 @@ const ChannelManagerTable = () => {
                     { value: 'changes', label: 'What would change' },
                     { value: 'new', label: 'New channels' },
                     { value: 'merge', label: 'Merge' },
+                    { value: 'combine', label: 'Combine duplicates' },
                     { value: 'conflict', label: 'Conflicts' },
                     { value: 'unchanged', label: 'Unchanged' },
                     { value: 'all', label: 'Everything' },
@@ -1618,7 +1638,7 @@ const ChannelManagerTable = () => {
         onClose={() => setConfirming(false)}
         onConfirm={apply}
         title={`Apply ${tickedKeys.length} channel${tickedKeys.length === 1 ? '' : 's'}?`}
-        message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. Streams you took out are not added, or come off the channel. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
+        message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. Streams you took out are not added, or come off the channel. A Combine row keeps one channel and deletes the others named on it, which cannot be undone except from a backup. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
         confirmLabel="Apply"
       />
     </>

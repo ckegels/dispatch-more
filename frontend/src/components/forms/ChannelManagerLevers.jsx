@@ -170,6 +170,13 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
         />
         <Switch
           size="xs"
+          label="Combine channels that are the same channel"
+          description="Where you have one channel twice — the same channel in two of your groups — the streams of all of them go on the one kept and the rest are deleted. The one kept is the lowest-numbered already in the group suggested for it, and the group can be chosen on the row. Channels of two different countries are never combined, whatever names they share. Off by default: this is the only thing here that deletes a channel, and a deleted channel is gone until a backup is restored."
+          checked={!!value.combine_duplicates}
+          onChange={(e) => set({ combine_duplicates: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
           label="Trust tvg-id first"
           description="A stream with the same tvg-id as a channel is that channel, whatever it is called. Off in DispatcharrUtils: providers give one tvg-id to channels that are not the same, such as every CBS station, or East and West."
           checked={!!value.match_tvg_id}

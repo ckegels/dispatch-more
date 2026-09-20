@@ -62,6 +62,11 @@ DEFAULTS = {
     # When more than one channel is the one a stream belongs to: "all" gives it to each of
     # them, as those tools do; "conflict" shows it and leaves it alone
     "several_matches": "all",
+    # Two channels that are the same channel are made one: the streams of all of them go
+    # on the one kept and the rest are deleted. Off by default, and the only thing here
+    # that removes a channel -- DispatcharrUtils never did, and a channel deleted is gone
+    # until a backup is restored.
+    "combine_duplicates": False,
     # Off by default, as DispatcharrUtils has no such thing: providers give one tvg-id to
     # many channels -- every CBS station, an East and a West feed, and on one real setup a
     # Krone stream carrying Euronews' -- and trusting it merged them all
@@ -1022,6 +1027,55 @@ def _usual_fallback():
     return stream_id if count * 2 >= len(last) else None
 
 
+def _duplicate_sets(by_key, same_country=False):
+    """
+    The channels that are the same channel as each other, as {key: [records]}.
+
+    Only ones whose countries do not contradict each other. "┃UK┃ BBC ONE" in your news
+    group and the same channel in your entertainment group are one channel in two places,
+    which is the thing worth combining; "┃AT┃ ORF 1" and "┃DE┃ ORF 1" are two channels
+    that share a name, and the whole of this fork is built on telling those apart. A
+    channel stating no country joins whichever set it matches, since saying nothing is
+    not saying something different.
+    """
+    sets = {}
+    for key, records in by_key.items():
+        if len(records) < 2:
+            continue
+        stated = {r["country"] for r in records if r["country"]}
+        if len(stated) > 1:
+            # Two countries named: these are different channels, whatever their names say
+            for country in stated:
+                theirs = [r for r in records if r["country"] in (country, "")]
+                if len(theirs) > 1:
+                    sets[f"{country}:{key}"] = theirs
+            continue
+        if same_country and not stated:
+            continue
+        sets[f"{next(iter(stated), '')}:{key}"] = records
+    return sets
+
+
+def _which_to_keep(records, group_id):
+    """
+    Which of these channels survives being combined: the one already in the group the
+    combined channel is to be in, and of those the one with the lowest number.
+
+    The lowest number because that is the one set up on purpose and the one media servers
+    already point at; the group first because the point of combining is to end with one
+    channel where it belongs, and a channel already there needs no moving.
+    """
+    def order(record):
+        channel = record["channel"]
+        return (
+            0 if group_id and channel.channel_group_id == group_id else 1,
+            float(channel.channel_number) if channel.channel_number is not None else float("inf"),
+            channel.id,
+        )
+
+    return sorted(records, key=order)[0]
+
+
 def build_plan(settings):
     """
     Every channel as it would come out: what goes into it, and what it would look like.
@@ -1093,10 +1147,53 @@ def build_plan(settings):
     guides = _Guides()
     rows = []
 
+    # ── Channels that are the same channel as each other ──
+    # Worked out before the rows, so the ones being folded into another do not also get a
+    # row of their own saying what streams they would gain: they are not going to be here.
+    combining = {}
+    clusters = {}
+    if settings.get("combine_duplicates"):
+        into = _NewHomes()
+        for set_key, records in _duplicate_sets(by_key, bool(settings.get("same_country"))).items():
+            if f"combine:{set_key}" in ignored:
+                continue
+            country = set_key.split(":", 1)[0]
+            target = settings.get("target_group")
+            if target:
+                group_id, why = int(target), "the group chosen in the levers"
+            elif country and country in into.by_country:
+                group_id, why = into.by_country[country], f"where most of your {country} channels are"
+            else:
+                # No country to go on: whichever group most of them are in already
+                from collections import Counter
+
+                theirs = Counter(
+                    r["channel"].channel_group_id for r in records if r["channel"].channel_group_id
+                )
+                group_id = theirs.most_common(1)[0][0] if theirs else None
+                why = "where most of them are already"
+            keeper = _which_to_keep(records, group_id)
+            clusters[set_key] = {
+                "records": records, "keeper": keeper, "group_id": group_id, "why": why,
+                "country": country,
+            }
+            for record in records:
+                combining[record["channel"].id] = set_key
+
     # ── Channels there already are ──
     for channel_id, record in existing.items():
+        if channel_id in combining and clusters[combining[channel_id]]["keeper"] is not record:
+            # Folded into another channel, and deleted with it: its own row would say what
+            # it is about to gain, moments before it stops existing
+            continue
         channel = record["channel"]
-        attached_now = [by_id[s] for s in record["stream_ids"] if s in by_id]
+        # The one kept out of a set of duplicates carries all of their streams
+        folding = clusters.get(combining.get(channel_id)) if channel_id in combining else None
+        others = [r for r in folding["records"] if r is not record] if folding else []
+        held = list(record["stream_ids"])
+        for other in others:
+            held += [s for s in other["stream_ids"] if s not in held]
+        attached_now = [by_id[s] for s in held if s in by_id]
         # A custom stream on a channel is its fallback -- the screen that says the channel
         # could not be played -- and belongs at the end, after every real stream. Anything
         # added goes in before it, or it would never be tried before the fallback.
@@ -1104,7 +1201,16 @@ def build_plan(settings):
         normal = [s for s in attached_now if not s["custom"]]
         # Streams a person said not to suggest for this channel again, either way
         left_alone = set((ignored.get(f"ch:{channel_id}") or {}).get("streams") or ())
-        added = [s for s in additions.get(channel_id, []) if s["id"] not in left_alone]
+        coming = list(additions.get(channel_id, []))
+        for other in others:
+            coming += [
+                s for s in additions.get(other["channel"].id, [])
+                if s["id"] not in {one["id"] for one in coming}
+            ]
+        added = [
+            s for s in coming
+            if s["id"] not in left_alone and s["id"] not in {one["id"] for one in attached_now}
+        ]
         if settings.get("drop_sd_when_hd"):
             if any(s["quality_rank"] < 3 for s in normal + added):
                 added = [s for s in added if s["quality"] != "SD"]
@@ -1146,10 +1252,20 @@ def build_plan(settings):
                 summary["logo_url"] = url
                 changes.append("logo")
 
-        status = "merge" if (added or removed or changes or reordered) else "unchanged"
+        if folding:
+            status = "combine"
+            if folding["group_id"] and folding["group_id"] != channel.channel_group_id:
+                summary["group_id"] = folding["group_id"]
+                summary["group"] = _NewHomes().names.get(folding["group_id"], "")
+                changes.append("group")
+        else:
+            status = "merge" if (added or removed or changes or reordered) else "unchanged"
         rows.append({
-            "key": f"ch:{channel_id}",
+            "key": f"combine:{combining[channel_id]}" if folding else f"ch:{channel_id}",
             "status": status,
+            # The channels that stop existing when this is applied, named before it is
+            "combining": [_channel_summary(o["channel"]) for o in others] if folding else [],
+            "group_why": folding["why"] if folding else "",
             "channel": summary,
             "before": {
                 "channel": _channel_summary(channel),
@@ -1250,7 +1366,7 @@ def build_plan(settings):
             })
 
     _fill_what_is_on(rows)
-    order = {"new": 0, "merge": 1, "conflict": 2, "unchanged": 3}
+    order = {"new": 0, "combine": 1, "merge": 2, "conflict": 3, "unchanged": 4}
     rows.sort(key=lambda r: (order[r["status"]], (r["channel"] or {}).get("number") or 0))
     summary = {status: sum(1 for r in rows if r["status"] == status) for status in order}
     summary["streams"] = len(streams)
@@ -1367,12 +1483,12 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     rows = [
         r for r in plan["rows"]
         if r["key"] in wanted
-        and (r["status"] in ("new", "merge") or (
+        and (r["status"] in ("new", "merge", "combine") or (
             r["status"] == "unchanged"
             and (r["key"] in orders or r["key"] in drops or r["key"] in names or r["key"] in epgs)
         ))
     ]
-    created = updated = streams_added = 0
+    created = updated = streams_added = combined = 0
 
     with transaction.atomic():
         for row in rows:
@@ -1388,6 +1504,10 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 continue
             info = row["channel"]
             chosen_name = names.get(row["key"])
+            if row["status"] == "combine":
+                chosen_group = groups.get(row["key"])
+                if chosen_group:
+                    info = {**info, "group_id": int(chosen_group)}
             if row["key"] in epgs:
                 epg_id = epgs[row["key"]]
                 info = {**info, "epg": {
@@ -1421,6 +1541,9 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
             else:
                 channel = Channel.objects.get(id=info["id"])
                 fields = []
+                if row["status"] == "combine" and info.get("group_id") != channel.channel_group_id:
+                    channel.channel_group_id = info.get("group_id")
+                    fields.append("channel_group")
                 if chosen_name and chosen_name != channel.name:
                     channel.name = chosen_name
                     fields.append("name")
@@ -1454,8 +1577,23 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                     ChannelStream.objects.create(channel=channel, stream_id=stream_id, order=order)
             streams_added += row["adds"]
 
+            if row["status"] == "combine":
+                # Their streams are on this channel now, so the channels themselves go.
+                # Only the ones the plan named, worked out again a moment ago -- never a
+                # channel that has come along since the page was looked at.
+                going = [
+                    one["id"] for one in row.get("combining") or ()
+                    if one.get("id") and one["id"] != channel.id
+                ]
+                if going:
+                    Channel.objects.filter(id__in=going).delete()
+                    combined += len(going)
+
     logger.info(
         f"Channel Manager: {created} channel(s) made, {updated} merged, "
-        f"{streams_added} stream(s) added"
+        f"{streams_added} stream(s) added, {combined} duplicate channel(s) deleted"
     )
-    return {"created": created, "updated": updated, "streams_added": streams_added}
+    return {
+        "created": created, "updated": updated,
+        "streams_added": streams_added, "combined": combined,
+    }

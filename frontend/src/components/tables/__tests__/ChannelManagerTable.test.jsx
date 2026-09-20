@@ -580,4 +580,62 @@ describe('ChannelManagerTable', () => {
     await waitFor(() => expect(screen.queryByText('┃DE┃ ARD')).toBeNull());
     expect(screen.getAllByText('┃AT┃ ORF 1').length).toBeGreaterThan(0);
   });
+
+  it('shows which group each channel is in, on both sides', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    // The point of combining is to end with one channel in one group, which you cannot
+    // judge without seeing where they are now
+    expect(screen.getAllByText('1 · ┃AT┃ AUSTRIA').length).toBeGreaterThan(0);
+  });
+
+  it('names the channels a combine would delete, before it is applied', async () => {
+    const combineRow = {
+      ...mergeRow,
+      key: 'combine:at:orf1',
+      status: 'combine',
+      group_why: 'where most of your at channels are',
+      combining: [
+        { id: 2, name: '┃AT┃ ORF 1', number: 300, group: '┃AT┃ NEWS', group_id: 3 },
+      ],
+    };
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [combineRow] });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(screen.getByText('Combine')).toBeInTheDocument();
+    expect(screen.getByText('┃AT┃ ORF 1 (300) is deleted')).toBeInTheDocument();
+  });
+
+  it('lets the group be chosen on a combine row, which decides what is kept', async () => {
+    const combineRow = {
+      ...mergeRow,
+      key: 'combine:at:orf1',
+      status: 'combine',
+      group_why: 'where most of your at channels are',
+      combining: [{ id: 2, name: '┃AT┃ ORF 1', number: 300, group: '┃AT┃ NEWS', group_id: 3 }],
+    };
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      channel_groups: [], profiles: [],
+      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 3, name: '┃AT┃ NEWS' }],
+    });
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [combineRow] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(
+      await screen.findByText(/is kept/)
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Channel group for ┃AT┃ ORF 1' }));
+    fireEvent.click(await screen.findByText('┃AT┃ NEWS'));
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['combine:at:orf1'], {}, { 'combine:at:orf1': 3 }, {}, {}, {}
+      )
+    );
+  });
 });

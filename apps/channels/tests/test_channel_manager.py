@@ -250,7 +250,9 @@ class MergeTests(_Setup):
         self.assertEqual(len(conflict["candidates"]), 2)
         # And applying it does nothing
         result = channel_manager.apply_plan(settings(several_matches="conflict"), [conflict["key"]])
-        self.assertEqual(result, {"created": 0, "updated": 0, "streams_added": 0})
+        self.assertEqual(
+            result, {"created": 0, "updated": 0, "streams_added": 0, "combined": 0}
+        )
 
     def test_what_the_group_merge_did_is_what_this_does(self):
         """
@@ -315,6 +317,76 @@ class HandOrderTests(_Setup):
         key = f"ch:{self.orf1.id}"
         channel_manager.apply_plan(settings(), [key], {key: [fhd.id, self.fallback.id]})
         self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "┃AT┃ ORF 1 FHD", "could not dispatch"])
+
+
+class CombineTests(_Setup):
+    """Two channels that are the same channel made one, and the other deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.news = ChannelGroup.objects.create(name="┃AT┃ NEWS")
+        # The same channel again, in another group, with a stream of its own
+        self.twin = self._channel("┃AT┃ ORF 1", 300, self.news)
+        self.twins_own = self._stream("┃AT┃ ORF 1 HD", self.b)
+        self._attach(self.twin, [self.twins_own])
+
+    def test_nothing_is_combined_unless_it_is_asked_for(self):
+        plan = channel_manager.build_plan(settings())
+        self.assertFalse(any(r["status"] == "combine" for r in plan["rows"]))
+        # and both channels are still there after applying everything
+        channel_manager.apply_plan(settings(), [r["key"] for r in plan["rows"]])
+        self.assertTrue(Channel.objects.filter(id=self.twin.id).exists())
+
+    def test_the_two_become_one_row_saying_which_channel_goes(self):
+        plan = channel_manager.build_plan(settings(combine_duplicates=True))
+        (row,) = [r for r in plan["rows"] if r["status"] == "combine"]
+        # The one kept is the lowest number in the group its country's channels are in
+        self.assertEqual(row["channel"]["id"], self.orf1.id)
+        self.assertEqual([c["id"] for c in row["combining"]], [self.twin.id])
+        # and neither of them has a row of its own
+        self.assertFalse(any(r["key"] == f"ch:{self.twin.id}" for r in plan["rows"]))
+
+    def test_the_streams_of_both_end_up_on_the_one_kept_and_the_other_goes(self):
+        levers = settings(combine_duplicates=True)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "combine"]
+        answer = channel_manager.apply_plan(levers, [row["key"]])
+        self.assertEqual(answer["combined"], 1)
+        self.assertFalse(Channel.objects.filter(id=self.twin.id).exists())
+        self.assertEqual(
+            self._order(self.orf1), ["┃AT┃ ORF 1", "┃AT┃ ORF 1 HD", "could not dispatch"]
+        )
+
+    def test_the_fallback_stays_last_when_two_channels_are_made_one(self):
+        self._attach(self.twin, [self.fallback])
+        levers = settings(combine_duplicates=True)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "combine"]
+        channel_manager.apply_plan(levers, [row["key"]])
+        self.assertEqual(self._order(self.orf1)[-1], "could not dispatch")
+
+    def test_channels_of_two_different_countries_are_never_combined(self):
+        # The whole fork is built on telling these apart; a name they share is not enough
+        german = self._channel("┃DE┃ ORF 1", 400, self.germany)
+        plan = channel_manager.build_plan(settings(combine_duplicates=True))
+        (row,) = [r for r in plan["rows"] if r["status"] == "combine"]
+        self.assertNotIn(german.id, [c["id"] for c in row["combining"]])
+        self.assertNotEqual(row["channel"]["id"], german.id)
+
+    def test_the_group_chosen_on_the_page_decides_which_one_is_kept(self):
+        levers = settings(combine_duplicates=True)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "combine"]
+        # Asked for the news group, where the twin already is
+        channel_manager.apply_plan(levers, [row["key"]], groups={row["key"]: self.news.id})
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.channel_group_id, self.news.id)
+
+    def test_a_set_waved_away_is_not_suggested_again(self):
+        levers = settings(combine_duplicates=True)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "combine"]
+        channel_manager.ignore(row["key"], name=row["channel"]["name"], kind="combine")
+        plan = channel_manager.build_plan(levers)
+        self.assertFalse(any(r["status"] == "combine" for r in plan["rows"]))
+        # and both channels have their own rows again
+        self.assertTrue(any(r["key"] == f"ch:{self.twin.id}" for r in plan["rows"]))
 
 
 class ReplaceTests(_Setup):
