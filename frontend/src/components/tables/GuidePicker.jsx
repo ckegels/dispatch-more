@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Badge,
   Box,
@@ -179,6 +185,14 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   // Guides whose programmes were asked for and have not arrived yet: {id: true}
   const [reading, setReading] = useState({});
   const [readState, setReadState] = useState({});
+  // Reading a guide is a loop of up to twenty minutes; closing the window must end it
+  const onScreen = useRef(true);
+  useEffect(() => {
+    onScreen.current = true;
+    return () => {
+      onScreen.current = false;
+    };
+  }, []);
 
   // The typed search is the only thing that drives the question. It is deliberately not
   // touched by choosing one: the first try let a choice write itself into the search box,
@@ -255,6 +269,7 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       // of tries, and says so: a spinner that says nothing looks like one that has hung.
       for (let tries = 0; tries < 400; tries += 1) {
         await new Promise((done) => setTimeout(done, 3000));
+        if (!onScreen.current) return;
         let state = {};
         try {
           state = (await API.getChannelManagerReading())?.reading || {};

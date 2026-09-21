@@ -215,6 +215,14 @@ const LogoLibraryTable = () => {
   // The table keeps what is ticked, the way the other tabs' tables do; it is told here
   // when a tick is made from somewhere else, such as choosing a logo by hand
   const tableRef = React.useRef(null);
+  // Downloading the collections is minutes of asking; leaving the page must end it
+  const onScreen = React.useRef(true);
+  useEffect(() => {
+    onScreen.current = true;
+    return () => {
+      onScreen.current = false;
+    };
+  }, []);
   const setTickedEverywhere = useCallback((next) => {
     setTicked(next);
     tableRef.current?.setSelectedTableIds?.([...next]);
@@ -240,6 +248,7 @@ const LogoLibraryTable = () => {
       await API.refreshLogoLibrary();
       for (let tries = 0; tries < 40; tries += 1) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (!onScreen.current) return;
         const status = await API.getLogoLibraryStatus();
         if (status.built_at && status.built_at > before) {
           setSourcesChanged(false);

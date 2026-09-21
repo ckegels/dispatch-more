@@ -239,6 +239,7 @@ const StreamLine = ({ stream, channel, onAct }) => (
             color="yellow"
             fullWidth
             onClick={() => onAct('park', stream)}
+            title="Off every channel this stream is on, remembered with where it was, and checked again on every run"
           >
             Park
           </Button>

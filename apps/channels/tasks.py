@@ -4615,6 +4615,8 @@ def read_guide_programmes(by_source, tries=0):
     from apps.channels import channel_manager
 
     read = 0
+    # What each guide came back with, written down once at the end
+    what_was_found = {}
     # Guides handed to somebody else or put off until later: neither read nor failed, and
     # the page must not be told they were done
     waiting = 0
@@ -4749,13 +4751,17 @@ def read_guide_programmes(by_source, tries=0):
                 read += 1
                 # Written down, including the noughts: a guide listed in a source's
                 # channels with no programme of its own in it is common, and looks exactly
-                # like a read that failed
-                channel_manager.note_read({epg.id: len(made)})
+                # like a read that failed. Gathered and written once at the end: the record
+                # holds every guide ever read, and writing it back per guide is that whole
+                # record read and written again for each one.
+                what_was_found[epg.id] = len(made)
                 channel_manager.say_reading({
                     "stage": f"keeping what {source.name} had", "at": epg.name or epg.tvg_id,
                     "done": read, "total": wanted_in_all,
                 })
                 logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
+    if what_was_found:
+        channel_manager.note_read(what_was_found)
     channel_manager.say_reading({
         "state": "reading" if waiting else "done",
         "stage": f"waiting on {waiting} more" if waiting else "",

@@ -366,6 +366,64 @@ class LoopTests(_Setup):
         self.assertFalse(found[str(loop.id)].get("epg"))
 
 
+class NotPerChannelTests(_Setup):
+    """
+    What is the same for every channel in a run is worked out once. Doing it per channel
+    was a thousand passes of the whole catalogue, which is the run.
+    """
+
+    def test_the_catalogue_is_narrowed_once_not_once_per_channel(self):
+        from unittest.mock import patch
+
+        other = EPGSource.objects.create(name="not wanted", source_type="xmltv")
+        for n in range(5):
+            EPGData.objects.create(tvg_id=f"x{n}.at", name=f"X {n}", epg_source=other)
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        for n in range(4):
+            self._channel(f"┃AT┃ Channel {n}", n + 1)
+
+        channel_manager.save_matching({"sources": [self.source.id]})
+        with patch.object(
+            channel_manager, "guides_in_play", wraps=channel_manager.guides_in_play
+        ) as narrowing:
+            self._look()
+        self.assertEqual(
+            narrowing.call_count, 1,
+            "the sources are the same for every channel and are taken out once",
+        )
+
+    def test_the_country_is_looked_up_rather_than_asked_of_every_guide(self):
+        # An index of the catalogue by country, built once, so the per-channel question
+        # is a dict lookup instead of thirty-six thousand comparisons
+        rows = [
+            {"id": 1, "name": "ORF 1", "tvg_id": "orf1.at", "epg_source_id": 1},
+            {"id": 2, "name": "BBC One", "tvg_id": "bbcone.uk", "epg_source_id": 1},
+            {"id": 3, "name": "Some Channel", "tvg_id": "some", "epg_source_id": 1},
+        ]
+        index = channel_manager.by_country(rows)
+        self.assertEqual([r["id"] for r in index["at"]], [1])
+        self.assertEqual([r["id"] for r in index["gb"]], [2])
+        # One that names no country belongs to every channel
+        self.assertEqual([r["id"] for r in index[""]], [3])
+        here = channel_manager.in_this_country(index, "at")
+        self.assertEqual(sorted(r["id"] for r in here), [1, 3])
+        # A channel that names no country is not narrowed at all
+        self.assertIsNone(channel_manager.in_this_country(index, ""))
+
+    def test_asking_about_every_guide_does_not_name_them_all(self):
+        # Thirty-six thousand ids is half a megabyte of SQL, sent three times a batch
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        ids = list(range(1, guide_manager.TOO_MANY_TO_NAME + 50))
+        with CaptureQueriesContext(connection) as asked:
+            guide_manager.programme_counts(ids)
+        self.assertNotIn(str(guide_manager.TOO_MANY_TO_NAME + 20), asked[0]["sql"])
+        # ...and the answer is still right for the guides that exist
+        self.assertEqual(guide_manager.programme_counts([guide.id])[guide.id], 3)
+
+
 class BatchTests(_Setup):
     """The looking runs in batches that queue the next, so one Celery worker is not held."""
 

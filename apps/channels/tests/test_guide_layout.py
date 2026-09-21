@@ -236,3 +236,101 @@ class ViewTests(_Setup):
             user=User.objects.create_user(username="someone", password="x", user_level=1)
         )
         self.assertEqual(plain.get("/api/channels/guide-layout/").status_code, 403)
+
+
+class BadInputTests(TestCase):
+    """Three ways this answered with a 500 where it meant to say "no"."""
+
+    def setUp(self):
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+        self.group = ChannelGroup.objects.create(name="g")
+        self.channel = Channel.objects.create(
+            name="A", channel_number=1, channel_group=self.group
+        )
+
+    def test_a_group_that_is_not_a_number(self):
+        answer = self.client_api.get("/api/channels/guide-layout/?groups=abc")
+        self.assertEqual(answer.status_code, 400)
+
+    def test_a_moved_channel_that_is_not_a_number(self):
+        answer = self.client_api.post(
+            "/api/channels/guide-layout/arrange/",
+            {"order": [self.channel.id], "moved": "abc"},
+            format="json",
+        )
+        self.assertEqual(answer.status_code, 400)
+
+    def test_and_it_says_what_other_groups_those_numbers_land_on(self):
+        # Numbers are worked out inside one group, and pushing channels along can reach
+        # the numbers of the group above without anybody being told
+        other = ChannelGroup.objects.create(name="above")
+        Channel.objects.create(name="Theirs", channel_number=2, channel_group=other)
+        second = Channel.objects.create(
+            name="B", channel_number=5, channel_group=self.group
+        )
+        answer = self.client_api.post(
+            "/api/channels/guide-layout/arrange/",
+            {"order": [self.channel.id, second.id], "start": 1, "step": 1},
+            format="json",
+        ).json()
+        self.assertEqual([one["name"] for one in answer["in_the_way"]], ["Theirs"])
+
+
+class SafetyTests(TestCase):
+    """The ways this could go wrong quietly, and what it does instead."""
+
+    def setUp(self):
+        self.group = ChannelGroup.objects.create(name="┃AT┃ AUSTRIA")
+        self.other = ChannelGroup.objects.create(name="┃DE┃ GERMANY")
+
+    def _channel(self, name, number, group=None):
+        return Channel.objects.create(
+            name=name, channel_number=number, channel_group=group or self.group
+        )
+
+    def test_renumbering_is_all_of_it_or_none_of_it(self):
+        # A group renumbered one channel at a time and stopped half way leaves an
+        # arrangement nobody asked for, and no way to tell which half is which
+        from unittest.mock import patch
+
+        one = self._channel("A", 1)
+        two = self._channel("B", 2)
+        real_save = Channel.save
+
+        def fail_on_the_second(self, *args, **kwargs):
+            if self.id == two.id:
+                raise RuntimeError("the database went away")
+            return real_save(self, *args, **kwargs)
+
+        with patch.object(Channel, "save", fail_on_the_second):
+            with self.assertRaises(RuntimeError):
+                guide_layout.apply({one.id: 100, two.id: 101})
+
+        one.refresh_from_db()
+        self.assertEqual(one.channel_number, 1, "the first one was rolled back too")
+
+    def test_a_long_name_is_not_cut_in_half(self):
+        # Channel.name holds 512; renaming used to cut at 255
+        long_name = "N" * 400
+        channel = self._channel("short", 1)
+        guide_layout.rename_channels({channel.id: long_name})
+        channel.refresh_from_db()
+        self.assertEqual(len(channel.name), 400)
+
+    def test_a_group_name_already_taken_says_so_rather_than_failing(self):
+        with self.assertRaises(ValueError) as caught:
+            guide_layout.rename_group(self.group.id, "┃DE┃ GERMANY")
+        self.assertIn("already a group", str(caught.exception))
+        # ...however it is capitalised
+        with self.assertRaises(ValueError):
+            guide_layout.rename_group(self.group.id, "┃de┃ germany")
+
+    def test_a_group_name_is_not_shortened_at_all(self):
+        # ChannelGroup.name is a TextField: there is no length to cut it to
+        long_name = "G" * 400
+        guide_layout.rename_group(self.group.id, long_name)
+        self.group.refresh_from_db()
+        self.assertEqual(len(self.group.name), 400)

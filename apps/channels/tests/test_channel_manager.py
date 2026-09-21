@@ -1253,6 +1253,15 @@ class GuideChoiceTests(_Setup):
         self.assertEqual(sorted(asked[str(self.local.id)]), sorted([a.id, b.id]))
         self.assertEqual(asked[str(self.big.id)], [c.id])
 
+    def test_and_records_of_guides_that_are_gone_are_dropped(self):
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        # Enough to be worth the sweep, and all but one of them imaginary
+        channel_manager.note_read({n: 0 for n in range(9000, 9000 + channel_manager.READS_KEPT)})
+        channel_manager.note_read({guide.id: 5})
+        kept = channel_manager.reads()
+        self.assertIn(str(guide.id), kept)
+        self.assertNotIn("9001", kept)
+
     def test_a_source_being_refreshed_is_waited_for_not_dropped(self):
         """
         The file is rewritten by a refresh, so its guides cannot be read while one is

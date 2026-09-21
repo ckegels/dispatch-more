@@ -256,23 +256,34 @@ def channels_in_scope(settings):
     return channels
 
 
-def programme_counts(epg_ids):
-    """How many programmes each of these guides holds, in one query."""
+# Past this many guides, naming them all in the query costs more than not filtering at
+# all: a run asks about every guide there is, which on this install is a list of thirty-six
+# thousand ids -- half a megabyte of SQL -- sent three times over, ten times a run.
+TOO_MANY_TO_NAME = 2000
+
+
+def programme_counts(epg_ids=None):
+    """
+    How many programmes each of these guides holds, in one query.
+
+    `epg_ids` of None means every guide. So does a list longer than TOO_MANY_TO_NAME:
+    counting them all and looking up the ones wanted is cheaper than naming them.
+    """
     from django.db.models import Count
 
     from apps.epg.models import ProgramData
 
-    if not epg_ids:
+    if epg_ids is not None and not epg_ids:
         return {}
+    rows = ProgramData.objects.all()
+    if epg_ids is not None and len(epg_ids) <= TOO_MANY_TO_NAME:
+        rows = rows.filter(epg_id__in=epg_ids)
     return dict(
-        ProgramData.objects.filter(epg_id__in=epg_ids)
-        .values_list("epg_id")
-        .annotate(held=Count("id"))
-        .values_list("epg_id", "held")
+        rows.values_list("epg_id").annotate(held=Count("id")).values_list("epg_id", "held")
     )
 
 
-def programmes_soon(epg_ids, hours=12):
+def programmes_soon(epg_ids=None, hours=12):
     """
     Which of these guides have a programme in the next `hours`, in one query.
 
@@ -288,34 +299,33 @@ def programmes_soon(epg_ids, hours=12):
 
     from apps.epg.models import ProgramData
 
-    if not epg_ids:
+    if epg_ids is not None and not epg_ids:
         return set()
     moment = timezone.now()
-    return set(
-        ProgramData.objects.filter(
-            epg_id__in=epg_ids, end_time__gt=moment,
-            start_time__lt=moment + timedelta(hours=hours),
-        ).values_list("epg_id", flat=True).distinct()
+    rows = ProgramData.objects.filter(
+        end_time__gt=moment, start_time__lt=moment + timedelta(hours=hours)
     )
+    if epg_ids is not None and len(epg_ids) <= TOO_MANY_TO_NAME:
+        rows = rows.filter(epg_id__in=epg_ids)
+    return set(rows.values_list("epg_id", flat=True).distinct())
 
 
-def what_is_on(epg_ids):
+def what_is_on(epg_ids=None):
     """The programme on each of these guides at this moment, in one query."""
     from django.utils import timezone
 
     from apps.epg.models import ProgramData
 
-    if not epg_ids:
+    if epg_ids is not None and not epg_ids:
         return {}
     moment = timezone.now()
-    return dict(
-        ProgramData.objects.filter(
-            epg_id__in=epg_ids, start_time__lte=moment, end_time__gt=moment
-        ).values_list("epg_id", "title")
-    )
+    rows = ProgramData.objects.filter(start_time__lte=moment, end_time__gt=moment)
+    if epg_ids is not None and len(epg_ids) <= TOO_MANY_TO_NAME:
+        rows = rows.filter(epg_id__in=epg_ids)
+    return dict(rows.values_list("epg_id", "title"))
 
 
-def guides_in_use(epg_ids):
+def guides_in_use(epg_ids=None):
     """
     Which of these guides a channel is on, which is what says whether one holding nothing
     is empty or merely unread.
@@ -327,17 +337,17 @@ def guides_in_use(epg_ids):
     """
     from .models import Channel
 
-    if not epg_ids:
+    if epg_ids is not None and not epg_ids:
         return set()
-    return set(
-        Channel.objects.filter(epg_data_id__in=epg_ids)
-        .values_list("epg_data_id", flat=True)
-    )
+    rows = Channel.objects.filter(epg_data__isnull=False)
+    if epg_ids is not None and len(epg_ids) <= TOO_MANY_TO_NAME:
+        rows = rows.filter(epg_data_id__in=epg_ids)
+    return set(rows.values_list("epg_data_id", flat=True))
 
 
 def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
                    channel_tvg_id="", matching=None, fresh=None, known_calls=None,
-                   reference=None):
+                   reference=None, countries=None):
     """
     The guides this channel could be, best first, with the country counting.
 
@@ -352,12 +362,15 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
     if not normalized:
         return []
     country = logo_library.country_of(name or "") or ""
-    # What is left out is left out of the catalogue before the shortlist is cut. Scanning
-    # all of it, keeping the best twenty and then dropping the ones from a source that was
-    # turned off leaves nothing to suggest, which is how turning one off looked like
-    # turning the whole thing off.
-    if matching is not None and channel_manager.narrows(matching, country):
-        catalogue = channel_manager.guides_in_play(catalogue, matching, country)
+    # What is left out is left out before the shortlist is cut -- but the sources and the
+    # tvg-id are the same for every channel and were taken out of the catalogue once, by
+    # look_at. Only the country is this channel's own, and it is looked up rather than
+    # asked of every guide: doing that per channel was a thousand passes of thirty-six
+    # thousand guides, which is the run.
+    if countries is not None:
+        here = channel_manager.in_this_country(countries, country)
+        if here is not None:
+            catalogue = here
     _, _, candidates, _ = epg_matching.fuzzy_scan_epg_list(
         normalized, catalogue, None, candidate_limit=max(limit * 3, 20)
     )
@@ -481,6 +494,14 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         playing = what_is_on([row["id"] for row in catalogue])
     if matching is None:
         matching = channel_manager.load_matching()
+    # The sources and the tvg-id are the same for every channel in the run, so they come
+    # out of the catalogue once here rather than once per channel. The country is the
+    # channel's own, so it is indexed instead and looked up per channel.
+    if channel_manager.narrows(matching):
+        catalogue = channel_manager.guides_in_play(
+            catalogue, {**matching, "country_must_agree": False}
+        )
+    countries = channel_manager.by_country(catalogue) if matching.get("country_must_agree") else None
     if fresh is None and settings.get("must_be_fresh"):
         fresh = programmes_soon(
             [row["id"] for row in catalogue], int(settings.get("fresh_hours") or 12)
@@ -506,7 +527,7 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         candidates = _score_against(
             channel.name, catalogue, sources, counts, used, playing,
             channel_tvg_id=channel.tvg_id or "", matching=matching, fresh=fresh,
-            known_calls=known_calls, reference=reference,
+            known_calls=known_calls, reference=reference, countries=countries,
         )
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,

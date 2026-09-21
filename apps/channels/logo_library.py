@@ -222,6 +222,9 @@ SOURCE_TYPES = (GITHUB, M3U, XMLTV, JSON_LIST, PAGE)
 # and following everything a stray page links to is how one address becomes a download of
 # the internet.
 PAGE_FOLLOWS = 30
+# ...and how much may be read from them altogether. Thirty files at a hundred megabytes
+# each is three gigabytes, which is not a logo collection however the page is written.
+PAGE_BUDGET = 400 * 1024 * 1024
 
 SOURCES_KEY = "logo-library-sources"
 IMAGE_EXTENSIONS = (".png", ".svg", ".jpg", ".jpeg", ".webp", ".gif")
@@ -516,10 +519,18 @@ def _from_page(url, label):
     entries = []
     for one in images[: PAGE_FOLLOWS * 2000]:
         entries.extend(_from_file_name(one, label))
-    read, failed = 0, []
+    read, failed, spent = 0, [], 0
     for guide in guides[:PAGE_FOLLOWS]:
+        if spent > PAGE_BUDGET:
+            logger.warning(
+                f"Logo library: stopped after {read} file(s) of {url}: a page of guides is "
+                f"a few dozen megabytes, and this one is past {PAGE_BUDGET // 1024 // 1024} MB"
+            )
+            break
         try:
+            before = len(entries)
             entries.extend(_from_xmltv(guide, label))
+            spent += max(1, len(entries) - before) * 512
             read += 1
         except Exception as e:
             # One guide of thirty being unreachable is not a reason to have none of them

@@ -148,18 +148,26 @@ def renamed(names, take_off="", replace_with=""):
 
 def rename_group(group_id, name):
     """A group renamed. Its channels are untouched: their names are their own."""
+    from django.db import IntegrityError
+
     from .models import ChannelGroup
 
-    name = str(name or "").strip()[:255]
+    # ChannelGroup.name is a TextField: there is no length to cut it to, and cutting it
+    # to 255 silently shortened a name somebody meant
+    name = str(name or "").strip()
     if not name:
         raise ValueError("A group needs a name")
     group = ChannelGroup.objects.filter(id=group_id).first()
     if not group:
         raise ValueError("That group is gone")
-    if ChannelGroup.objects.filter(name=name).exclude(id=group.id).exists():
+    if ChannelGroup.objects.filter(name__iexact=name).exclude(id=group.id).exists():
         raise ValueError(f"There is already a group called {name}")
     group.name = name
-    group.save(update_fields=["name"])
+    try:
+        group.save(update_fields=["name"])
+    except IntegrityError:
+        # The name was taken between the asking and the saving: the same answer, not a 500
+        raise ValueError(f"There is already a group called {name}")
     logger.info(f"Guide Layout: group {group_id} renamed to {name}")
     return {"name": name}
 
@@ -171,9 +179,14 @@ def rename_channels(names):
     """
     from .models import Channel
 
+    from .models import Channel as _Channel
+
+    # As long as the field really is, not a number picked out of the air: names were being
+    # cut at 255 where the column holds 512
+    longest = _Channel._meta.get_field("name").max_length
     wanted = {}
     for channel_id, name in (names or {}).items():
-        name = str(name or "").strip()[:255]
+        name = str(name or "").strip()[:longest]
         if name:
             try:
                 wanted[int(channel_id)] = name
@@ -217,6 +230,20 @@ def apply(numbers, groups=None):
     if not wanted and not moving:
         return {"changed": 0}
 
+    from django.db import transaction
+
+    changed = 0
+    # All of it or none of it. Renumbering a group one channel at a time and stopping half
+    # way leaves an arrangement nobody asked for and no way to tell which half is which.
+    with transaction.atomic():
+        changed = _write(wanted, moving)
+    logger.info(f"Guide Layout: {changed} channel(s) renumbered or moved")
+    return {"changed": changed}
+
+
+def _write(wanted, moving):
+    from .models import Channel
+
     changed = 0
     for channel in Channel.objects.filter(id__in=set(wanted) | set(moving)):
         fields = []
@@ -230,5 +257,4 @@ def apply(numbers, groups=None):
         if fields:
             channel.save(update_fields=fields)
             changed += 1
-    logger.info(f"Guide Layout: {changed} channel(s) renumbered or moved")
-    return {"changed": changed}
+    return changed

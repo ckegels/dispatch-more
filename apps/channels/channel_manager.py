@@ -1343,6 +1343,9 @@ def say_reading(mapping, redis_client=None):
 # and have not one programme in its programme section, which is common and looks exactly
 # like a read that failed.
 READS_KEY = "guide-reads"
+# Past this many, the record is swept of guides that no longer exist. Small enough that
+# an ordinary setup never pays for the sweep, large enough not to run it every read.
+READS_KEPT = 500
 
 
 def reads():
@@ -1365,10 +1368,29 @@ def note_read(found, why=""):
 
     from core.models import CoreSettings
 
+    if not found:
+        return reads()
     kept = reads()
     at = timezone.now().isoformat(timespec="seconds")
-    for epg_id, how_many in (found or {}).items():
+    for epg_id, how_many in found.items():
         kept[str(epg_id)] = {"at": at, "found": int(how_many or 0), "why": why}
+    # Guides gone from Dispatcharr are not kept: this is written down for ever otherwise,
+    # and a record of a guide nobody can see is a record of nothing. Only looked for once
+    # it is big enough to be worth a query.
+    if len(kept) > READS_KEPT:
+        from apps.epg.models import EPGData
+
+        alive = {
+            str(one)
+            for one in EPGData.objects.filter(
+                id__in=[int(k) for k in kept if k.isdigit()]
+            ).values_list("id", flat=True)
+        }
+        gone = [k for k in kept if k not in alive]
+        for k in gone:
+            del kept[k]
+        if gone:
+            logger.info(f"Guides read: {len(gone)} record(s) of guides that are gone dropped")
     CoreSettings.objects.update_or_create(
         key=READS_KEY, defaults={"name": "Guides read", "value": kept}
     )
@@ -1558,6 +1580,30 @@ def narrows(matching, country=None):
     )
 
 
+def by_country(catalogue):
+    """
+    A catalogue indexed by the country each guide is for: {code: [rows], "": [rows]}.
+
+    Worked out once for a whole run. Asking "is this guide from the channel's country?"
+    of every guide for every channel is thirty-six thousand questions times a thousand
+    channels; asking it once per guide and then looking the answer up is thirty-six
+    thousand. A guide that names no country is in the "" list and belongs to every
+    channel, since saying nothing is not saying something different.
+    """
+    index = {}
+    for row in catalogue:
+        index.setdefault(_one_country(_country_of_guide(row)), []).append(row)
+    return index
+
+
+def in_this_country(index, country):
+    """The rows of an indexed catalogue a channel of this country may match against."""
+    if not country:
+        return None
+    mine = _one_country(country)
+    return index.get(mine, []) + index.get("", [])
+
+
 def guides_to_scan(matching, country=""):
     """
     Every guide worth matching against, one row at a time, straight from the database.
@@ -1623,6 +1669,11 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
     except (TypeError, ValueError):
         limit = 12
 
+    # Read once for the whole window: it used to be read again for the exact-tvg-id
+    # shortcut, so opening one row unpacked three and a half megabytes twice
+    known_calls = known_channels.call_signs()
+    reference = known_channels.known()
+
     found = []
     seen = set()
     if current not in (None, "", 0, "0"):
@@ -1672,7 +1723,7 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
             country = logo_library.country_of(name or "") or ""
             score, tier, why = judge_guide(
                 name, country, {"name": exact[2], "tvg_id": exact[1]}, tvg_id,
-                known_calls=known_channels.call_signs(), reference=known_channels.known(),
+                known_calls=known_calls, reference=reference,
             )
             if score:
                 entry = _guide_entry(*exact, "tvg-id", score)
@@ -1688,21 +1739,19 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
         # library where every channel is from the same place, and it reads a ".uk" as a
         # country that is not "gb", which is the wrong answer for half of them.
         country = logo_library.country_of(name or "") or epg_matching.get_preferred_region_code() or ""
-        known_calls = known_channels.call_signs()
-        reference = known_channels.known()
         # More candidates than will be shown, because one from the right country can sit
         # below a wrongly-scored pile of them and has to be there to be lifted past it
         # Where something is left out, it is left out before the shortlist is cut: a
         # scan of everything that keeps the best twenty and then drops the ones from the
         # wrong source keeps nothing at all
-        wanted = max(limit * 3, 20)
+        how_many = max(limit * 3, 20)
         if narrows(matching, country):
             _, _, candidates, _ = epg_matching._fuzzy_scan_core(
-                normalized, guides_to_scan(matching, country), None, wanted
+                normalized, guides_to_scan(matching, country), None, how_many
             )
         else:
             _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
-                normalized, None, candidate_limit=wanted
+                normalized, None, candidate_limit=how_many
             )
         # The matcher works in source ids; the page shows which source an entry is from
         sources = dict(EPGSource.objects.values_list("id", "name"))

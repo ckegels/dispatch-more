@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 @permission_classes([IsAdmin])
 def guide_layout_page(request):
     """Every group with its channels in number order, and where numbers clash."""
-    groups = [g for g in (request.GET.get("groups") or "").split(",") if g.strip()]
+    try:
+        groups = [int(g) for g in (request.GET.get("groups") or "").split(",") if g.strip()]
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Groups are given by id"}, status=400)
     return JsonResponse(guide_layout.layout(groups))
 
 
@@ -54,15 +57,36 @@ def guide_layout_arrange(request):
             return JsonResponse({"error": "Numbers only, please"}, status=400)
     else:
         moved = request.data.get("moved")
-        numbers = guide_layout.numbers_for(
-            order, existing, int(moved) if moved not in (None, "") else None
-        )
+        try:
+            moved = int(moved) if moved not in (None, "") else None
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Channels are given by id"}, status=400)
+        numbers = guide_layout.numbers_for(order, existing, moved)
+    # Pushing channels along can run into the group above: the numbers are worked out
+    # within one group, and nothing was stopping them reaching the next one's. Said rather
+    # than prevented -- a drag that silently did nothing would be worse -- and the page
+    # can warn before it is applied.
+    from .models import Channel
+
+    highest = max((v for v in numbers.values() if v is not None), default=None)
+    ours = set(order)
+    in_the_way = []
+    if highest is not None:
+        lowest = min((v for v in numbers.values() if v is not None), default=highest)
+        in_the_way = [
+            {"id": c.id, "name": c.name, "number": c.channel_number}
+            for c in Channel.objects.filter(
+                channel_number__gte=lowest, channel_number__lte=highest
+            ).exclude(id__in=ours).order_by("channel_number")[:20]
+        ]
     return JsonResponse({
         "numbers": {str(k): v for k, v in numbers.items()},
         # What would actually change, which is what the page shows before applying
         "changing": sorted(
             str(k) for k, v in numbers.items() if existing.get(k) != v
         ),
+        # Channels of other groups these numbers would land on
+        "in_the_way": in_the_way,
     })
 
 
@@ -73,7 +97,7 @@ def guide_layout_rename(request):
     Rename a group, or channels, or work out what taking something out of a group's names
     would leave -- which is asked for before it is done, like everything else here.
     """
-    if request.data.get("group"):
+    if request.data.get("group") is not None:
         try:
             return JsonResponse(guide_layout.rename_group(
                 int(request.data["group"]), request.data.get("name")

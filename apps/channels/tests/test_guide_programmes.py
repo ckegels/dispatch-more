@@ -50,6 +50,22 @@ class ReadGuideProgrammesTests(TestCase):
     def _read(self, *entries):
         return read_guide_programmes({str(self.source.id): [e.id for e in entries]})
 
+    def test_what_was_found_is_written_down_once_not_once_per_guide(self):
+        """
+        The record holds every guide ever read. Writing it back inside the loop is that
+        whole record read and written again for each guide.
+        """
+        from unittest.mock import patch
+
+        from apps.channels import channel_manager
+
+        with patch.object(
+            channel_manager, "note_read", wraps=channel_manager.note_read
+        ) as noting:
+            self._read(self.one, self.two)
+        self.assertEqual(noting.call_count, 1, "written once, for all of them")
+        self.assertEqual(noting.call_args[0][0], {self.one.id: 2, self.two.id: 1})
+
     def test_every_guide_asked_for_is_read_in_the_one_pass(self):
         self._read(self.one, self.two)
         self.assertEqual(

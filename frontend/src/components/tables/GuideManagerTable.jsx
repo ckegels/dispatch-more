@@ -164,6 +164,16 @@ const GuideManagerTable = () => {
   // The view being changed is what loads, rather than the view being changed and then
   // something else having to be poked to make it happen. "Every channel" needs the rows
   // for channels nothing was found for, which are not kept with the suggestions.
+  // Reading guides is a loop of up to twenty minutes. Left to itself it carries on
+  // asking the server and setting state on a page nobody is looking at any more.
+  const onScreen = useRef(true);
+  useEffect(() => {
+    onScreen.current = true;
+    return () => {
+      onScreen.current = false;
+    };
+  }, []);
+
   const loadedOnce = useRef(false);
   useEffect(() => {
     // "Chosen" needs every channel too: a settled channel has nothing to suggest, so it
@@ -318,6 +328,7 @@ const GuideManagerTable = () => {
       // of tries: as long as it is still reading, the page waits.
       for (let tries = 0; tries < 400; tries += 1) {
         await new Promise((done) => setTimeout(done, 3000));
+        if (!onScreen.current) return;
         let state = {};
         try {
           state = (await API.getChannelManagerReading())?.reading || {};
@@ -325,7 +336,12 @@ const GuideManagerTable = () => {
         } catch {
           // The next try asks again
         }
-        const data = await API.getGuideManager();
+        // The same view that is being looked at: asking without it swapped every row for
+        // the suggestions alone, so the table emptied itself half way through a read
+        const data = await API.getGuideManager(
+          ['all', 'chosen', 'waved'].includes(why)
+        );
+        if (!onScreen.current) return;
         setPage(data);
         const still = (data.suggestions || []).filter(
           (one) => unread.includes(one.epg) && !one.programmes && !one.in_use

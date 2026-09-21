@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v163** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v164** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -650,6 +650,22 @@ opposite things doing about them. Every one of those reasons now names both side
 tvg-id and its name, but this channel says CA and the guide is for US" -- and the plain
 name path says it too, since "how the names read" sounded like the names were the problem
 when the country was.
+
+**What is the same for every channel is worked out once** (v164). A read of every line of
+the fork found the v162 narrowing running *inside* the per-channel loop: with a source
+chosen, a run over a thousand channels was a thousand passes of a thirty-six-thousand-guide
+catalogue. The sources and the tvg-id are the same for the whole run and come out of the
+catalogue once in `look_at`; the country is the channel's own, so the catalogue is
+**indexed by country** once (`by_country`) and the per-channel question is a dict lookup.
+
+**And asking about every guide does not name them all** (`TOO_MANY_TO_NAME`, 2000). A batch
+asked `programme_counts`, `guides_in_use` and `what_is_on` for every guide there is -- a
+list of thirty-six thousand ids, half a megabyte of SQL, three times a batch and ten times
+a run. Past two thousand it is cheaper to ask about all of them and look up the ones wanted.
+
+**The reference is unpacked once a minute, not once a batch** (`known_channels._HELD`).
+Three and a half megabytes to gunzip and parse is nothing once and a great deal ten times;
+the picker was doing it twice for one window.
 
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found

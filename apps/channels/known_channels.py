@@ -100,6 +100,7 @@ def build_known(cache=None):
                 continue
             found[key] = entry
     size = logo_library.keep_json(cache, KNOWN_KEY, found, KEPT_SECONDS, KNOWN_SIZE_KEY)
+    forget_what_is_held()
     logger.info(
         f"Channel reference built: {len(found)} names, {len(clashes)} names dropped for "
         f"belonging to more than one channel, {size / 1024 / 1024:.1f} MB kept"
@@ -107,12 +108,30 @@ def build_known(cache=None):
     return {"names": len(found), "dropped": len(clashes), "bytes": size}
 
 
+# The reference unpacked, kept for a moment so a run does not unpack it again for every
+# batch and the picker not twice for one window. Three and a half megabytes of JSON to
+# gunzip and parse is nothing once and a great deal ten times.
+_HELD = {"at": 0.0, "known": None, "calls": None}
+HELD_SECONDS = 60
+
+
 def known(cache=None):
     """The reference as it was last built, or {} when it has never been."""
+    import time
+
     from . import logo_library
 
-    cache = _cache() if cache is None else cache
-    return logo_library.read_json(cache, KNOWN_KEY) or {}
+    if cache is None and _HELD["known"] is not None and time.time() - _HELD["at"] < HELD_SECONDS:
+        return _HELD["known"]
+    unpacked = logo_library.read_json(_cache() if cache is None else cache, KNOWN_KEY) or {}
+    if cache is None:
+        _HELD["known"], _HELD["at"] = unpacked, time.time()
+    return unpacked
+
+
+def forget_what_is_held():
+    """Drop what is held, so the next ask reads it again. For tests and after a build."""
+    _HELD.update(at=0.0, known=None, calls=None)
 
 
 def known_size(cache=None):
@@ -131,6 +150,7 @@ def forget(cache=None):
     cache.delete(KNOWN_KEY)
     cache.delete(KNOWN_SIZE_KEY)
     cache.delete(CALL_SIGNS_KEY)
+    forget_what_is_held()
     logger.info(f"Channel reference forgotten ({size} bytes freed)")
     return size
 
@@ -175,11 +195,13 @@ def call_signs_in(catalogue):
 
 def build_call_signs(catalogue, cache=None):
     """Work out the call signs in these guides and keep them, so a run does it once."""
-    import json
+    from . import logo_library
 
     cache = _cache() if cache is None else cache
     found = sorted(call_signs_in(catalogue))
-    cache.set(CALL_SIGNS_KEY, json.dumps(found), KEPT_SECONDS)
+    # Packed like everything else beside it, so one way in and one way out
+    logo_library.keep_json(cache, CALL_SIGNS_KEY, found, KEPT_SECONDS)
+    forget_what_is_held()
     logger.info(f"Channel reference: {len(found)} call sign(s) found in the guides")
     return found
 
@@ -191,12 +213,14 @@ def call_signs(cache=None):
     None and an empty set are different answers: nothing looked yet means judge a call
     sign the way it was always judged, and nothing found means there are none.
     """
-    import json
+    import time
 
-    cache = _cache() if cache is None else cache
-    try:
-        raw = cache.get(CALL_SIGNS_KEY)
-        return set(json.loads(raw)) if raw else None
-    except Exception as e:
-        logger.debug(f"Could not read the call signs: {e}")
-        return None
+    from . import logo_library
+
+    if cache is None and _HELD["calls"] is not None and time.time() - _HELD["at"] < HELD_SECONDS:
+        return _HELD["calls"]
+    found = logo_library.read_json(_cache() if cache is None else cache, CALL_SIGNS_KEY)
+    found = set(found) if found is not None else None
+    if cache is None:
+        _HELD["calls"] = found
+    return found

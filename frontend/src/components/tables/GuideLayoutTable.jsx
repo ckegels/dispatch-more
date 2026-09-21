@@ -260,10 +260,15 @@ const GuideLayoutTable = () => {
   }, [groups]);
 
   // What the numbers would be, asked of the server after each drag
+  // Channels of other groups these numbers would land on. Numbers are worked out within
+  // one group, so pushing channels along can run into the group above without saying so.
+  const [inTheWay, setInTheWay] = useState([]);
+
   const arrange = useCallback(async (body) => {
     try {
       const answer = await API.arrangeGuideLayout(body);
       setNumbers((all) => ({ ...all, ...answer.numbers }));
+      setInTheWay(answer.in_the_way || []);
       setError(null);
     } catch (e) {
       setError(e?.body?.error || 'Could not work out those numbers.');
@@ -414,6 +419,21 @@ const GuideLayoutTable = () => {
               onClose={() => setError(null)}
             >
               {error}
+            </Alert>
+          )}
+          {/* Numbers are worked out inside one group, so pushing channels along can reach
+              the numbers of the group above. Said before it is applied, rather than left
+              to turn up as a clash afterwards. */}
+          {inTheWay.length > 0 && (
+            <Alert color="orange" mb="sm">
+              These numbers land on {inTheWay.length} channel
+              {inTheWay.length === 1 ? '' : 's'} of other groups:{' '}
+              {inTheWay
+                .slice(0, 6)
+                .map((one) => `${one.name} (${one.number})`)
+                .join(', ')}
+              {inTheWay.length > 6 ? ', and more' : ''}. Two channels on one
+              number is one channel as far as a media server is concerned.
             </Alert>
           )}
           {/* What taking something out would leave, before it is left: renaming a group's
