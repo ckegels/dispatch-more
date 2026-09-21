@@ -357,13 +357,13 @@ describe('GuideManagerTable', () => {
     expect(screen.queryByText('┃AT┃ ORF 2')).toBeNull();
 
     fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
-    fireEvent.click(await screen.findByText(/^Kept, not suggested for/));
+    fireEvent.click(await screen.findByText(/^Left alone/));
 
     // ...and a settled channel has nothing to suggest, so the rows come from every channel
     await waitFor(() => expect(API.getGuideManager).toHaveBeenCalledWith(true));
     expect(await screen.findByText('┃AT┃ ORF 2')).toBeInTheDocument();
     expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull();
-    expect(screen.getByText('Chosen')).toBeInTheDocument();
+    expect(screen.getByText('Left alone')).toBeInTheDocument();
   });
 
   it('settles the guide a channel is already on, and unsettles it again', async () => {
@@ -385,7 +385,7 @@ describe('GuideManagerTable', () => {
     Element.prototype.scrollIntoView = vi.fn();
     draw();
     fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
-    fireEvent.click(await screen.findByText(/^Kept, not suggested for/));
+    fireEvent.click(await screen.findByText(/^Left alone/));
     fireEvent.click(
       await screen.findByRole('button', { name: 'Suggest for ┃NL┃ DREAMWORKS again' })
     );
@@ -538,8 +538,8 @@ describe('GuideManagerTable', () => {
 
     // Each has a view of its own, and says how many are in it
     fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
-    expect(await screen.findByText('Kept, not suggested for (1)')).toBeInTheDocument();
-    expect(screen.getByText('Not that guide (1)')).toBeInTheDocument();
+    expect(await screen.findByText('Left alone (1)')).toBeInTheDocument();
+    expect(screen.getByText('Wrong guide, try again (1)')).toBeInTheDocument();
   });
 
   it('and shows the ones waved away when asked', async () => {
@@ -551,7 +551,7 @@ describe('GuideManagerTable', () => {
     expect(screen.queryByText('┃NL┃ DREAMWORKS')).toBeNull();
 
     fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
-    fireEvent.click(await screen.findByText(/^Not that guide/));
+    fireEvent.click(await screen.findByText(/^Wrong guide, try again/));
 
     expect(await screen.findByText('┃NL┃ DREAMWORKS')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull());

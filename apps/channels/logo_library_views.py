@@ -60,7 +60,9 @@ def logo_library_suggestions(request):
     # mapped to: read once for the whole page
     guide_icons = logo_library.guide_icons_by_key()
     channels = (
-        Channel.objects.select_related("logo", "epg_data", "epg_data__epg_source")
+        Channel.objects.select_related(
+            "logo", "epg_data", "epg_data__epg_source", "channel_group"
+        )
         .prefetch_related(
             Prefetch("streams", queryset=Stream.objects.only("id", "name", "logo_url"))
         )
@@ -102,11 +104,26 @@ def logo_library_suggestions(request):
             "number": channel.channel_number,
             "name": channel.name,
             "country": logo_library.country_of(channel.name),
+            "group": channel.channel_group.name if channel.channel_group_id else "",
+            "group_id": channel.channel_group_id,
             "current": current,
             "suggestions": suggestions,
         })
 
-    return JsonResponse({"status": _status(index), "channels": rows})
+    # Every group there is with a channel in it, for the filter -- worked out from the
+    # channels themselves so it never offers a group with nothing on this page
+    groups = {}
+    for channel in channels:
+        if channel.channel_group_id:
+            groups[channel.channel_group_id] = channel.channel_group.name
+    return JsonResponse({
+        "status": _status(index),
+        "channels": rows,
+        "channel_groups": [
+            {"id": group_id, "name": name}
+            for group_id, name in sorted(groups.items(), key=lambda pair: pair[1])
+        ],
+    })
 
 
 @api_view(["POST"])

@@ -372,6 +372,11 @@ describe('StreamCheckTable', () => {
   it('turns autopark on, off by default', async () => {
     draw();
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    // Every setting carries a sentence or two, and all of them at once is a wall nobody
+    // reads, so the sections are shut until they are opened
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open Failing streams' })
+    );
     const autopark = screen.getByRole('switch', { name: /Park streams automatically after repeated failures/ });
     expect(autopark).not.toBeChecked();
     fireEvent.click(autopark);
@@ -525,5 +530,31 @@ describe('StreamCheckTable', () => {
     await waitFor(() => expect(order()[0]).toContain('ORF 2'));
     // still every channel, not a filter
     expect(order()).toHaveLength(2);
+  });
+
+  // Working through a bad provider is dozens of channels wanting the same thing done to
+  // them, and a row at a time is the afternoon gone
+  it('does one thing to every channel ticked', async () => {
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [channelRow, unlistedRow] }));
+    API.streamCheckAction.mockResolvedValue({});
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+
+    const boxes = screen.getAllByRole('checkbox');
+    fireEvent.click(boxes[1]);
+
+    expect(
+      await screen.findByText(/1 channel ticked/)
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove them' }));
+    // The dialog's button carries the same words as the one that opened it
+    const inDialog = within(await screen.findByRole('dialog'));
+    fireEvent.click(inDialog.getByRole('button', { name: 'Remove them' }));
+
+    await waitFor(() => expect(API.streamCheckAction).toHaveBeenCalled());
+    const [action, ids] = API.streamCheckAction.mock.calls[0];
+    expect(action).toBe('remove');
+    // only the broken ones: what plays is left alone
+    expect(ids).toEqual([12]);
   });
 });

@@ -451,6 +451,33 @@ def _from_json(url, label):
     return entries
 
 
+def _from_file_name(url, label):
+    """
+    One picture in a folder of them, under every name its file could be meant as.
+
+    A picon folder has no names in it, only file names, and they are written squashed with
+    the country on the end: "skynewsarabiauk.png". Filed under that, it answers to nobody:
+    the channel is "Sky News Arabia", whose key is "skynewsarabia", and the two letters on
+    the end are the whole difference.
+
+    So it is filed under both -- with the country still on it and with it taken off. Two
+    letters that end a name are sometimes a country and sometimes the name ("MTV" ends in
+    Tuvalu), and there is no telling which from the file name alone. Filing it both ways
+    costs one more key and cannot be wrong; guessing can, and a wrong guess loses the logo
+    for good.
+    """
+    stem = url.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    readable = stem.replace("_", " ").replace("-", " ").strip()
+    made = [_entry(readable, url, label)]
+    squashed = re.sub(r"[^0-9a-z]", "", stem.lower())
+    if len(squashed) > 4 and squashed[-2:] in ISO_COUNTRIES:
+        country = squashed[-2:]
+        without = squashed[:-2]
+        if match_key(without) != match_key(readable):
+            made.append(_entry(without, url, label, country))
+    return made
+
+
 def _links_on(url, text):
     """Every link on a page, made absolute, in the order they appear and without repeats."""
     from urllib.parse import urljoin
@@ -486,10 +513,9 @@ def _from_page(url, label):
         one for one in links
         if one.lower().rsplit("?", 1)[0].endswith((".xml", ".xml.gz", ".xmltv", ".xmltv.gz"))
     ]
-    entries = [
-        _entry(one.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("_", " ").replace("-", " "), one, label)
-        for one in images[: PAGE_FOLLOWS * 40]
-    ]
+    entries = []
+    for one in images[: PAGE_FOLLOWS * 2000]:
+        entries.extend(_from_file_name(one, label))
     read, failed = 0, []
     for guide in guides[:PAGE_FOLLOWS]:
         try:

@@ -129,6 +129,9 @@ const LogoLibraryTable = () => {
   const [loading, setLoading] = useState(true);
   const [show, setShow] = useState('suggested');
   const [search, setSearch] = useState('');
+  // One group at a time, which is how anybody works through logos: a country's channels
+  // share a look, and judging them together is the only way to see that one is wrong
+  const [group, setGroup] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
@@ -182,10 +185,13 @@ const LogoLibraryTable = () => {
       by_hand: custom[row.channel_id] || null,
     }));
     const wanted = search.trim().toLowerCase();
-    return wanted
+    const found = wanted
       ? all.filter((row) => row.name.toLowerCase().includes(wanted))
       : all;
-  }, [data, search, picked, custom]);
+    return group
+      ? found.filter((row) => String(row.group_id ?? '') === group)
+      : found;
+  }, [data, search, group, picked, custom]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const paginatedRows = useMemo(
@@ -550,6 +556,23 @@ const LogoLibraryTable = () => {
                     setSearch(event.currentTarget.value);
                     setPageIndex(0);
                   }}
+                  size="xs"
+                  style={{ width: 200 }}
+                />
+                <Select
+                  aria-label="Which group"
+                  placeholder="Every group"
+                  value={group}
+                  onChange={(value) => {
+                    setGroup(value || '');
+                    setPageIndex(0);
+                  }}
+                  data={(data?.channel_groups || []).map((one) => ({
+                    value: String(one.id),
+                    label: one.name,
+                  }))}
+                  searchable
+                  clearable
                   size="xs"
                   style={{ width: 200 }}
                 />

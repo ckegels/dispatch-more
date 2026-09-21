@@ -603,10 +603,10 @@ const GuideManagerTable = () => {
                 variant="light"
                 color={one.chosen ? 'teal' : kind.color}
               >
-                {one.chosen ? 'Chosen' : kind.label}
+                {one.chosen ? 'Left alone' : kind.label}
               </Badge>
               {one.chosen ? (
-                <Tooltip label="Start suggesting for this channel again">
+                <Tooltip label="Put this channel back on the list, so guides are suggested for it again">
                   <ActionIcon
                     size="xs"
                     variant="light"
@@ -646,7 +646,7 @@ const GuideManagerTable = () => {
                   )}
                   {/* Two different things, and they looked alike: one is about the
                       channel and one is about the guide being offered for it. */}
-                  <Tooltip label="Keep the guide it is on now, and stop suggesting for this channel">
+                  <Tooltip label="Leave this channel alone from now on. No guide is ever suggested for it again, whatever it is on, until you undo it here.">
                     <ActionIcon
                       size="xs"
                       variant="light"
@@ -660,7 +660,7 @@ const GuideManagerTable = () => {
                       <Lock size={12} />
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip label="Not that guide: suggest a different one for this channel next time">
+                  <Tooltip label="Wrong guide. This one is never offered for this channel again, but a better one still can be — the channel stays on the list.">
                     <ActionIcon
                       size="xs"
                       variant="light"
@@ -775,13 +775,13 @@ const GuideManagerTable = () => {
                     { value: 'all', label: 'Every channel' },
                     {
                       value: 'chosen',
-                      label: `Kept, not suggested for (${
-                        (page?.chosen || []).length
-                      })`,
+                      label: `Left alone (${(page?.chosen || []).length})`,
                     },
                     {
                       value: 'waved',
-                      label: `Not that guide (${(page?.ignored || []).length})`,
+                      label: `Wrong guide, try again (${
+                        (page?.ignored || []).length
+                      })`,
                     },
                     { value: 'none', label: 'On no guide' },
                     { value: 'empty', label: 'Guide holds nothing' },

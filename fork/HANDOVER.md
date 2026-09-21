@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v162** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v163** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -328,6 +328,16 @@ taken off it** is tried (`shorter_names`, v140, from the end first, since a name
 who it belongs to and ends with which one): "PBS Philadelphia" finds nothing and "PBS" finds
 the network's logo, which is why a station used to be offered only the logo it already had
 from its provider. A name of one word is never made shorter, so the "Eén" case is untouched.
+
+**A folder of picons is filed under two names** (v163). epg.guru is 57,784 images and no
+names at all -- a picon folder has only file names, written squashed with the country on
+the end: `skynewsarabiauk.png`. Filed under that, it answers to nobody: the channel is "Sky
+News Arabia", whose key is `skynewsarabia`, and those two letters are the whole difference,
+so the collection added perfectly and suggested nothing. Each picture is filed under both
+now, with the country and without it. Two letters that end a name are sometimes a country
+and sometimes the name ("MTV" ends in Tuvalu) and there is no telling which from a file
+name, so it is filed both ways rather than guessed at: one more key cannot be wrong, and a
+wrong guess loses the logo for good.
 
 **Collections anyone can add** come in five shapes (`SOURCE_TYPES`): a GitHub repository of
 images, an M3U's `tvg-logo`s, an XMLTV guide's channel icons, a JSON list -- and, from v155,
@@ -1276,6 +1286,11 @@ no longer play. Summary of how it works now:
   *that*. Choosing one source to match against therefore returned nothing at all, because
   the twenty were from everywhere else. → a filter belongs before whatever cuts the list,
   never after it; the same mistake would follow any "top N then narrow" pair.
+- **A collection that added perfectly and suggested nothing** (to v163): epg.guru's 57,784
+  picons were filed under their file names, `orf1at.png` as `orf1at`, which no channel
+  answers to. The add checked it, the count was right, the index held it, and not one logo
+  was ever offered. → a count is not a match; when something is indexed by a key, check the
+  key against a real one from the other side.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

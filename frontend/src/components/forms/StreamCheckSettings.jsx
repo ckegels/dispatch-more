@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import {
   Alert,
+  Box,
   Button,
   Group,
   MultiSelect,
@@ -11,19 +13,53 @@ import {
   Switch,
   Text,
   TextInput,
+  UnstyledButton,
 } from '@mantine/core';
 
 // How and when Stream Check runs. Saved with a button rather than on every change: a
 // change to when it runs is best made once, not keystroke by keystroke.
 
-const Section = ({ title, children }) => (
-  <Stack gap={8}>
-    <Text size="xs" fw={700} tt="uppercase" c="dimmed">
-      {title}
-    </Text>
-    {children}
-  </Stack>
-);
+// Every setting carries a sentence or two saying what it does, and all of them at once
+// is a wall nobody reads. Shut, each section is one line saying what it is for; open, its
+// settings get two columns of room instead of four cramped ones.
+const Section = ({ title, about, children, openAtFirst = false }) => {
+  const [open, setOpen] = useState(openAtFirst);
+  return (
+    <Box
+      style={{
+        border: '1px solid #3f3f46',
+        borderRadius: 'var(--mantine-radius-sm)',
+      }}
+    >
+      <UnstyledButton
+        onClick={() => setOpen(!open)}
+        aria-label={`${open ? 'Close' : 'Open'} ${title}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          padding: '8px 12px',
+        }}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+          {title}
+        </Text>
+        <Text size="xs" c="dimmed" style={{ minWidth: 0 }}>
+          {about}
+        </Text>
+      </UnstyledButton>
+      {open && (
+        <Box p="md" pt={0}>
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+            {children}
+          </SimpleGrid>
+        </Box>
+      )}
+    </Box>
+  );
+};
 
 const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
   const [draft, setDraft] = useState(value);
@@ -33,8 +69,12 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
 
   return (
     <Stack gap="md">
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="lg">
-        <Section title="When">
+      <Stack gap="xs">
+        <Section
+          title="When"
+          about="how often it runs, and whether it runs while people are watching"
+          openAtFirst
+        >
           <Switch
             size="xs"
             color="green"
@@ -90,7 +130,10 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           </Group>
         </Section>
 
-        <Section title="How">
+        <Section
+          title="How"
+          about="how long to wait for a stream, and how long to wait between them"
+        >
           <NumberInput
             size="xs"
             label="Wait for a picture (seconds)"
@@ -127,7 +170,10 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           />
         </Section>
 
-        <Section title="Failing streams">
+        <Section
+          title="Failing streams"
+          about="when a stream counts as broken, and what is done about it by itself"
+        >
           <Switch
             size="xs"
             label="Look for black, frozen and 'no stream' pictures"
@@ -263,7 +309,7 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           />
         </Section>
 
-        <Section title="What">
+        <Section title="What" about="which channels are checked at all">
           <MultiSelect
             size="xs"
             label="Channel groups"
@@ -278,7 +324,7 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             clearable
           />
         </Section>
-      </SimpleGrid>
+      </Stack>
       <Alert color="gray" p="xs">
         <Text size="xs">
           Before a provider&apos;s streams, its logins are looked at: an expired

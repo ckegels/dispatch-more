@@ -542,6 +542,34 @@ class SourcesViewTests(TestCase):
         self.assertIn("orf 1", [one["name"].lower() for one in found])
         self.assertIn("NPO 1".lower(), [one["name"].lower() for one in found])
 
+    def test_a_picon_folder_is_filed_under_the_name_without_its_country(self):
+        """
+        A picon folder has no names in it, only file names, written squashed with the
+        country on the end: "skynewsarabiauk.png". Filed under that alone it answers to
+        nobody -- the channel is "Sky News Arabia", whose key is "skynewsarabia", and the
+        two letters on the end are the whole difference.
+        """
+        page = b'''<a href="skynewsarabiauk.png">x</a><a href="orf1at.png">x</a>'''
+        with patch("apps.channels.logo_library._download", return_value=page):
+            found = logo_library._from_page("https://picons.example/", "picons")
+
+        keys = {one["key"] for one in found}
+        self.assertIn("skynewsarabia", keys)
+        self.assertIn("orf1", keys)
+        # ...and under the name as written too, in case those two letters are the name
+        self.assertIn("skynewsarabiauk", keys)
+        # the country taken off the end is kept, since it is worth knowing
+        shorter = next(one for one in found if one["key"] == "orf1")
+        self.assertEqual(shorter["country"], "at")
+
+    def test_but_a_short_name_is_not_split_for_a_country(self):
+        # "MTV" ends in Tuvalu. Two letters that end a name are sometimes a country and
+        # sometimes the name, and a wrong guess loses the logo for good.
+        page = b'''<a href="mtv.png">x</a>'''
+        with patch("apps.channels.logo_library._download", return_value=page):
+            found = logo_library._from_page("https://picons.example/", "picons")
+        self.assertEqual([one["key"] for one in found], ["mtv"])
+
     def test_a_page_with_nothing_on_it_says_so_rather_than_adding_nothing(self):
         # A link typed wrong and a page with no logos on it look alike from the outside,
         # and only one of them is worth telling somebody about

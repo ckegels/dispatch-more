@@ -401,6 +401,18 @@ const ACT_TEXT = {
     message: `"${stream.name}" stays off the channels it was parked from, and is no longer checked or offered to be put back.`,
     confirmLabel: 'Stop keeping it',
   }),
+  'park-ticked': (_stream, _channel, howMany) => ({
+    title: `Park the broken streams on ${howMany} channel${howMany === 1 ? '' : 's'}?`,
+    message:
+      'Every broken and failing stream on the channels you ticked comes off them, and is remembered with where it was. They are checked on every run and put back where they were if they work again. Streams that play are left alone.',
+    confirmLabel: 'Park them',
+  }),
+  'remove-ticked': (_stream, _channel, howMany) => ({
+    title: `Remove the broken streams from ${howMany} channel${howMany === 1 ? '' : 's'}?`,
+    message:
+      "Every broken and failing stream on the channels you ticked comes off them for good. The streams themselves stay in Dispatcharr, since they are the provider's. Park them instead to have them checked again and put back if they work. Streams that play are left alone.",
+    confirmLabel: 'Remove them',
+  }),
 };
 
 const StreamCheckTable = () => {
@@ -415,6 +427,9 @@ const StreamCheckTable = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [saving, setSaving] = useState(false);
   const [asking, setAsking] = useState(null);
+  // The channels ticked, for doing one thing to many of them
+  const [ticked, setTicked] = useState(new Set());
+  const tableRef = useRef(null);
   // Channels acted on, listed whatever the view says until the view is changed
   const [keepShowing, setKeepShowing] = useState(() => new Set());
 
@@ -503,6 +518,48 @@ const StreamCheckTable = () => {
     } catch (e) {
       setError(e?.body?.error || 'That did not work.');
     }
+  };
+
+  // The same thing the row's own "Park all" does, over every channel ticked. Working
+  // through a bad provider is dozens of channels wanting the same thing done to them,
+  // and doing it a row at a time is the whole afternoon.
+  const actOnTicked = async (action) => {
+    const wanted = rows.filter(
+      (row) => ticked.has(row.id) && row.kind === 'channel'
+    );
+    if (!wanted.length) return;
+    setError(null);
+    setNotice(null);
+    let touched = 0;
+    for (const row of wanted) {
+      const bad = (row.streams || []).filter(
+        (one) => !one.custom && ['failing', 'broken'].includes(one.state)
+      );
+      if (!bad.length) continue;
+      setKeepShowing((all) => new Set(all).add(row.channel.id));
+      try {
+        await API.streamCheckAction(
+          action,
+          bad.map((one) => one.id),
+          row.channel.id
+        );
+        touched += bad.length;
+      } catch (e) {
+        setError(
+          e?.body?.error || `That did not work on "${row.channel.name}".`
+        );
+        break;
+      }
+    }
+    setTicked(new Set());
+    tableRef.current?.setSelectedTableIds?.([]);
+    setNotice(
+      {
+        park: `${touched} stream${touched === 1 ? '' : 's'} parked: off their channels, and checked again on every run.`,
+        remove: `${touched} stream${touched === 1 ? '' : 's'} removed from their channels.`,
+      }[action] || 'Done.'
+    );
+    await load(true);
   };
 
   // Removing and forgetting cannot be undone here, so they are asked about first
@@ -601,6 +658,8 @@ const StreamCheckTable = () => {
   const channelColumns = useMemo(
     () => [
       { id: 'expand', size: 30, enableSorting: false },
+      // Drawn by the table itself, with the shift-click ranges the other tabs have
+      { id: 'select', size: 40, enableSorting: false },
       {
         header: 'Status',
         accessorKey: 'status',
@@ -821,7 +880,10 @@ const StreamCheckTable = () => {
     data: paginatedRows,
     allRowIds: paginatedRows.map((row) => row.id),
     enablePagination: false,
-    enableRowSelection: false,
+    // Channels can be ticked, so one thing can be done to many of them; the parked view
+    // is a list of streams and has its own buttons on each
+    enableRowSelection: show !== 'parked',
+    onRowSelectionChange: (selected) => setTicked(new Set(selected)),
     enableRowVirtualization: false,
     renderTopToolbar: false,
     manualSorting: false,
@@ -840,6 +902,10 @@ const StreamCheckTable = () => {
     },
   });
 
+  useEffect(() => {
+    tableRef.current = table;
+  }, [table]);
+
   const progress = data?.progress || {};
   const lastRun = data?.last_run || {};
   const rule = data?.settings?.only_when_idle
@@ -850,7 +916,8 @@ const StreamCheckTable = () => {
   const first = rows.length ? pageIndex * pageSize + 1 : 0;
   const last = Math.min((pageIndex + 1) * pageSize, rows.length);
   const asked =
-    asking && ACT_TEXT[asking.action](asking.stream, asking.channel);
+    asking &&
+    ACT_TEXT[asking.action](asking.stream, asking.channel, ticked.size);
 
   return (
     <>
@@ -1006,6 +1073,49 @@ const StreamCheckTable = () => {
                 )}
               </Group>
             </Box>
+
+            {/* What to do with the channels ticked. Working through a bad provider is
+                dozens of channels wanting the same thing, and a row at a time is the
+                afternoon gone. */}
+            {ticked.size > 0 && show !== 'parked' && (
+              <Box
+                style={{
+                  padding: '8px 16px',
+                  borderBottom: '1px solid #3f3f46',
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                }}
+              >
+                <Text size="xs" c="dimmed">
+                  {ticked.size} channel{ticked.size === 1 ? '' : 's'} ticked ·
+                  what is done goes to every broken and failing stream on them
+                </Text>
+                <Group gap={6} ml="auto" wrap="wrap">
+                  <Button
+                    size="compact-xs"
+                    variant="light"
+                    color="yellow"
+                    onClick={() =>
+                      setAsking({ action: 'park-ticked', stream: {} })
+                    }
+                  >
+                    Park them
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="light"
+                    color="red"
+                    onClick={() =>
+                      setAsking({ action: 'remove-ticked', stream: {} })
+                    }
+                  >
+                    Remove them
+                  </Button>
+                </Group>
+              </Box>
+            )}
 
             {/* How a run is going, or how the last one went */}
             <Box
@@ -1306,7 +1416,8 @@ const StreamCheckTable = () => {
         onConfirm={() => {
           const { action, stream, channel } = asking;
           setAsking(null);
-          act(action, stream, channel);
+          if (action.endsWith('-ticked')) actOnTicked(action.split('-')[0]);
+          else act(action, stream, channel);
         }}
         title={asked?.title}
         message={asked?.message}
