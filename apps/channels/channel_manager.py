@@ -1147,6 +1147,14 @@ def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=Non
     # is how a Belgian channel was offered a Slovak guide as the better of the two.
     by_country = _by_country(country, entry)
     elsewhere = by_country < 0
+    # Both halves of the disagreement, named. It used to say only "that guide is US's",
+    # which tells you nothing about why that is a disagreement: without what the channel
+    # itself says, there is no way to tell a channel marked wrong from a guide from the
+    # wrong place, and those want opposite things doing about them.
+    two_countries = (
+        f"this channel says {_one_country(country).upper()} and the guide is for "
+        f"{_one_country(their_country).upper()}"
+    )
     if mine["call"] and mine["call"] == theirs_id["call"]:
         anchored = max(0, min(100, int(round(max(alike, 90) + by_country))))
         if elsewhere:
@@ -1154,15 +1162,14 @@ def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=Non
             # the list to be taken by hand, since a tvg-id's country is the provider's
             # word and not gospel; never put forward as a change to make.
             return anchored, GUESS, (
-                f"its call sign, {mine['call'].upper()}, but that guide is "
-                f"{their_country.upper()}'s"
+                f"its call sign, {mine['call'].upper()}, but {two_countries}"
             )
         return anchored, CERTAIN, f"its call sign, {mine['call'].upper()}"
     if same_id:
         if alike >= TVG_NEEDS_NAME:
             if elsewhere:
                 return max(0, min(100, 100 + by_country)), LIKELY, (
-                    f"its tvg-id and its name, though that guide is {their_country.upper()}'s"
+                    f"its tvg-id and its name, but {two_countries}"
                 )
             return 100, CERTAIN, "its tvg-id and its name"
         # The id says yes and the name says nothing of the kind. That is a channel that
@@ -1171,7 +1178,8 @@ def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=Non
         return (
             max(0, min(100, int(round(max(alike, 80) + by_country)))),
             GUESS if elsewhere else LIKELY,
-            "its tvg-id, though the names do not read alike",
+            "its tvg-id, though the names do not read alike"
+            + (f", and {two_countries}" if elsewhere else ""),
         )
 
     score = max(0, min(100, int(round(alike + by_country))))
@@ -1186,6 +1194,10 @@ def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=Non
         return max(score, 100 if not half_said else score), CERTAIN, "its name exactly"
     if score >= LIKELY_SCORE and agrees and not half_said:
         return score, LIKELY, "its name, and the country agrees"
+    # The plain name path: where the country is what stopped it being more than a guess,
+    # say so, since "how the names read" sounds like the names were the problem
+    if elsewhere:
+        return score, GUESS, f"how the names read, but {two_countries}"
     return score, GUESS, "how the names read"
 
 

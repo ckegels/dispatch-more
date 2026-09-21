@@ -733,6 +733,25 @@ class JudgingGuidesTests(TestCase):
         self.assertLessEqual(score, 70)
         self.assertIn("CA", why)
 
+    def test_a_country_that_disagrees_says_which_two(self):
+        """
+        It used to say only "that guide is US's", which tells you nothing about why that
+        is a disagreement. Without what the channel itself says there is no telling a
+        channel marked wrong from a guide from the wrong place, and those two want
+        opposite things doing about them.
+        """
+        _, tier, why = self.judge("┃CA┃ PBS Detroit", "PBS Detroit", "WTVS.us",
+                                  country="ca", mine="WTVS.us")
+        self.assertEqual(tier, channel_manager.LIKELY)
+        self.assertIn("this channel says CA", why)
+        self.assertIn("the guide is for US", why)
+
+        # ...and where they agree it says nothing about countries at all
+        self.assertEqual(
+            self.judge("┃USA┃ PBS", "PBS", "PBS.us", country="usa", mine="PBS.us")[2],
+            "its tvg-id and its name",
+        )
+
     def test_a_country_written_long_is_the_same_country(self):
         # A playlist's box says "USA" or "GER" and a tvg-id says ".us" or ".de"
         for box, tvg in (("usa", "us"), ("ger", "de"), ("uk", "gb"), ("ned", "nl")):

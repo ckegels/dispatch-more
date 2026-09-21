@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v159** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v160** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -622,6 +622,14 @@ Both are asked **after** the contradiction rules, and a half-said number, side, 
 or shift stops the reference being believed: a reference that puts ITV2 and its +1 under
 one entry would otherwise hand the one guide to both, and a rule a download can overrule is
 not a rule.
+
+**A country that disagrees says which two** (v160). It used to say "that guide is US's",
+which tells you nothing: without what the *channel* says, there is no telling a channel
+marked with the wrong country from a guide from the wrong place, and those two want
+opposite things doing about them. Every one of those reasons now names both sides -- "its
+tvg-id and its name, but this channel says CA and the guide is for US" -- and the plain
+name path says it too, since "how the names read" sounded like the names were the problem
+when the country was.
 
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found
