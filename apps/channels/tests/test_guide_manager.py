@@ -14,7 +14,7 @@ from datetime import timedelta
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
-from apps.channels import guide_manager
+from apps.channels import channel_manager, guide_manager
 from apps.channels.epg_matching import build_epg_matching_catalog
 from apps.channels.models import Channel, ChannelGroup
 from apps.epg.models import EPGData, EPGSource, ProgramData
@@ -413,6 +413,62 @@ class ViewTests(_Setup):
         self.assertEqual(data["suggestions"][0]["why"], "none")
         self.assertIn("┃AT┃ AUSTRIA", [g["name"] for g in data["channel_groups"]])
         self.assertEqual(data["defaults"]["min_score"], 70)
+
+    def test_which_guides_are_matched_against_is_said_and_kept(self):
+        """
+        The same settings for a run and for the window on a Lineup row: a guide one of
+        them has been told to leave out and the other still offers is worse than either.
+        """
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1, epg=guide)
+
+        answer = self.client_api.get("/api/channels/channel-manager/matching/").json()
+        self.assertEqual(answer["matching"]["sources"], [])
+        said = next(s for s in answer["sources"] if s["id"] == self.source.id)
+        # How much each source holds and how many channels are on it, because "leave this
+        # source out" is not a question anybody can answer from a name alone
+        self.assertEqual((said["holds"], said["channels"]), (1, 1))
+
+        kept = self.client_api.put(
+            "/api/channels/channel-manager/matching/",
+            {"matching": {"sources": [self.source.id], "tvg_id_like": ".at"}},
+            format="json",
+        ).json()
+        self.assertEqual(kept["matching"]["sources"], [self.source.id])
+        self.assertEqual(channel_manager.load_matching()["tvg_id_like"], ".at")
+
+    def test_a_source_left_out_is_not_offered_for_a_channel(self):
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        offered = self.client_api.get(
+            f"/api/channels/channel-manager/guides/?name={channel.name}"
+        ).json()
+        self.assertTrue(offered["guides"])
+
+        channel_manager.save_matching({"sources": [self.source.id + 999]})
+        offered = self.client_api.get(
+            f"/api/channels/channel-manager/guides/?name={channel.name}"
+        ).json()
+        self.assertEqual(offered["guides"], [])
+
+    def test_and_one_source_can_be_tried_on_its_own(self):
+        # A question about this channel, not a setting: it does not change what is kept
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        offered = self.client_api.get(
+            f"/api/channels/channel-manager/guides/?name={channel.name}"
+            f"&source={self.source.id + 999}"
+        ).json()
+        self.assertEqual(offered["guides"], [])
+        self.assertEqual(channel_manager.load_matching()["sources"], [])
+
+    def test_a_run_leaves_out_what_the_matching_settings_leave_out(self):
+        self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        self.assertTrue(self._look()[str(channel.id)]["epg"])
+
+        channel_manager.save_matching({"tvg_id_like": ".uk"})
+        self.assertFalse(self._look()[str(channel.id)].get("epg"))
 
     def test_every_channel_means_every_channel_run_or_no_run(self):
         """

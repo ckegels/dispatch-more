@@ -26,6 +26,8 @@ vi.mock('../../../api', () => ({
     saveGuideManagerSettings: vi.fn(),
     loadChannelManagerGuide: vi.fn(),
     getChannelManagerGuides: vi.fn(),
+    getGuideMatching: vi.fn(),
+    saveGuideMatching: vi.fn(),
     getChannelManagerReading: vi.fn(),
   },
 }));
@@ -77,6 +79,8 @@ describe('GuideManagerTable', () => {
     API.saveGuideManagerSettings.mockResolvedValue({});
     API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
+    API.getGuideMatching.mockResolvedValue({ matching: null, sources: [] });
+    API.saveGuideMatching.mockResolvedValue({});
     API.getChannelManagerReading.mockResolvedValue({ reading: {} });
   });
 
@@ -389,6 +393,59 @@ describe('GuideManagerTable', () => {
       expect(API.chooseGuideManager).toHaveBeenCalledWith('unchoose', {
         channel: 2, name: 'DreamWorks', epg: 8,
       })
+    );
+  });
+
+  // Which guides are matched against at all: the same settings the window on a Lineup row
+  // obeys, so one of them cannot offer what the other has been told to leave out
+  it('lets a source be left out of the matching without switching it off', async () => {
+    API.getGuideMatching.mockResolvedValue({
+      matching: { sources: [], tvg_id_like: '', country_must_agree: false },
+      sources: [
+        { id: 7, name: 'epg ripper ALL', active: true, holds: 4000, channels: 12 },
+        { id: 8, name: 'open epg', active: true, holds: 900, channels: 3 },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    // How much each holds and how many channels are on it, since a name alone says nothing
+    fireEvent.click(
+      await screen.findByRole('textbox', { name: 'Match against these sources' })
+    );
+    fireEvent.click(await screen.findByText(/epg ripper ALL · 4000 guides · 12 channels/));
+
+    await waitFor(() =>
+      expect(API.saveGuideMatching).toHaveBeenCalledWith(
+        expect.objectContaining({ sources: [7] })
+      )
+    );
+  });
+
+  it('and a tvg-id to match, and another country refused outright', async () => {
+    API.getGuideMatching.mockResolvedValue({
+      matching: { sources: [], tvg_id_like: '', country_must_agree: false },
+      sources: [],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    const box = await screen.findByRole('textbox', { name: /Only tvg-ids like/ });
+    fireEvent.change(box, { target: { value: '.uk' } });
+    fireEvent.blur(box);
+    await waitFor(() =>
+      expect(API.saveGuideMatching).toHaveBeenCalledWith(
+        expect.objectContaining({ tvg_id_like: '.uk' })
+      )
+    );
+
+    fireEvent.click(screen.getByLabelText(/Refuse another country/));
+    await waitFor(() =>
+      expect(API.saveGuideMatching).toHaveBeenCalledWith(
+        expect.objectContaining({ country_must_agree: true })
+      )
     );
   });
 });

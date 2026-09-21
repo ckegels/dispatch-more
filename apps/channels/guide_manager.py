@@ -285,7 +285,8 @@ def guides_in_use(epg_ids):
     )
 
 
-def _score_against(name, catalogue, sources, counts, used, playing, limit=6, channel_tvg_id=""):
+def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
+                   channel_tvg_id="", matching=None):
     """
     The guides this channel could be, best first, with the country counting.
 
@@ -305,6 +306,10 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6, cha
     )
     judged = []
     for _, row in candidates:
+        # The sources being matched against, what a tvg-id has to look like, and whether
+        # a country that disagrees is refused outright: see channel_manager.load_matching
+        if matching is not None and not channel_manager.in_play(row, matching, country):
+            continue
         # Judged by what kind of match it is, not only how alike the letters are: see
         # channel_manager.judge_guide, and why "PBS 12" and "PBS 13" used to score 83
         score, tier, why = channel_manager.judge_guide(name, country, row, channel_tvg_id)
@@ -392,7 +397,8 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     return None
 
 
-def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None, say=None):
+def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None, say=None,
+            matching=None):
     """
     What to suggest for these channels, as {channel id as a string: suggestion}.
 
@@ -406,6 +412,8 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         used = guides_in_use([row["id"] for row in catalogue])
     if playing is None:
         playing = what_is_on([row["id"] for row in catalogue])
+    if matching is None:
+        matching = channel_manager.load_matching()
     ignored = load_ignored()
     chosen = load_chosen()
     found = {}
@@ -417,7 +425,7 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
             say(at, channel.name)
         candidates = _score_against(
             channel.name, catalogue, sources, counts, used, playing,
-            channel_tvg_id=channel.tvg_id or "",
+            channel_tvg_id=channel.tvg_id or "", matching=matching,
         )
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,

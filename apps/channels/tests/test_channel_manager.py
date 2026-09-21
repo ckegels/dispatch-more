@@ -780,6 +780,43 @@ class JudgingGuidesTests(TestCase):
             channel_manager.GUESS,
         )
 
+    def test_a_tvg_id_filter_is_plain_text_until_it_is_a_pattern(self):
+        like = channel_manager._id_is_like
+        self.assertTrue(like("BBCOne.uk", ".uk"))
+        self.assertFalse(like("ORF1.at", ".uk"))
+        # ...and a * or a ? plainly means a pattern
+        self.assertTrue(like("SkySportsMainEvent.uk", "sky*.uk"))
+        self.assertFalse(like("BBCOne.uk", "sky*.uk"))
+        # nothing typed is everything
+        self.assertTrue(like("anything.at", ""))
+
+    def test_which_guides_are_matched_against(self):
+        rows = [
+            {"id": 1, "name": "BBC One", "tvg_id": "BBCOne.uk", "epg_source_id": 7},
+            {"id": 2, "name": "BBC One", "tvg_id": "BBCOne.de", "epg_source_id": 8},
+        ]
+        # a source left out is not matched against at all
+        self.assertEqual(
+            [r["id"] for r in channel_manager.guides_in_play(rows, {"sources": [7]})], [1]
+        )
+        # ...and so is a tvg-id that is not what was asked for
+        self.assertEqual(
+            [r["id"] for r in channel_manager.guides_in_play(rows, {"tvg_id_like": ".de"})],
+            [2],
+        )
+        # ...and a country that disagrees, when that is asked for
+        self.assertEqual(
+            [
+                r["id"]
+                for r in channel_manager.guides_in_play(
+                    rows, {"country_must_agree": True}, country="uk"
+                )
+            ],
+            [1],
+        )
+        # with none of them set, every guide is in play and the list is not even copied
+        self.assertIs(channel_manager.guides_in_play(rows, {}), rows)
+
     def test_two_call_signs_are_never_the_same_station(self):
         score, _, why = self.judge("┃USA┃ PBS WNET", "PBS KQED", "kqed.us")
         self.assertEqual(score, 0)

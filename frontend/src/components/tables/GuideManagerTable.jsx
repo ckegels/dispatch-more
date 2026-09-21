@@ -23,8 +23,10 @@ import {
   Box,
   Button,
   Center,
+  Divider,
   Group,
   LoadingOverlay,
+  MultiSelect,
   NumberInput,
   Paper,
   Progress,
@@ -126,6 +128,12 @@ const GuideManagerTable = () => {
   const [now, setNow] = useState(() => Date.now());
   const [confirming, setConfirming] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // Which guides are matched against at all: the sources, what a tvg-id has to look
+  // like, and whether another country's guide is refused outright. Kept apart from the
+  // levers above because these are about the guides, not about what is worth suggesting,
+  // and the window on a Lineup row obeys them too.
+  const [matching, setMatching] = useState(null);
+  const [sources, setSources] = useState([]);
   const tableRef = useRef(null);
 
   const look = useCallback(async (quietly, everyChannel) => {
@@ -354,6 +362,24 @@ const GuideManagerTable = () => {
     },
     [look]
   );
+
+  useEffect(() => {
+    API.getGuideMatching()
+      .then((answer) => {
+        setMatching(answer?.matching || null);
+        setSources(answer?.sources || []);
+      })
+      .catch(() => setMatching(null));
+  }, []);
+
+  const saveMatching = async (changed) => {
+    setMatching(changed);
+    try {
+      await API.saveGuideMatching(changed);
+    } catch (e) {
+      setError(e?.body?.error || 'Those matching settings were not kept.');
+    }
+  };
 
   const saveLevers = async (changed) => {
     setLevers(changed);
@@ -900,6 +926,73 @@ const GuideManagerTable = () => {
                       style={{ width: 240 }}
                     />
                   </Group>
+                  {matching && (
+                    <>
+                      <Divider
+                        my={4}
+                        label="Which guides are matched against"
+                        labelPosition="left"
+                      />
+                      <Group gap="lg" wrap="wrap" align="flex-start">
+                        <MultiSelect
+                          size="xs"
+                          label="Match against these sources"
+                          description="Nothing chosen is every source. A source left out is still read and still used by the channels already on it."
+                          placeholder={
+                            matching.sources?.length
+                              ? undefined
+                              : 'Every source'
+                          }
+                          value={(matching.sources || []).map(String)}
+                          onChange={(value) =>
+                            saveMatching({
+                              ...matching,
+                              sources: value.map(Number),
+                            })
+                          }
+                          data={sources.map((one) => ({
+                            value: String(one.id),
+                            label: `${one.name} · ${one.holds} guides · ${one.channels} channels${
+                              one.active ? '' : ' · switched off'
+                            }`,
+                          }))}
+                          searchable
+                          clearable
+                          style={{ width: 340 }}
+                        />
+                        <TextInput
+                          size="xs"
+                          label="Only tvg-ids like"
+                          description='Plain text, or a pattern with * and ?. Try ".uk".'
+                          placeholder="Any tvg-id"
+                          value={matching.tvg_id_like || ''}
+                          onChange={(event) =>
+                            setMatching({
+                              ...matching,
+                              tvg_id_like: event.currentTarget.value,
+                            })
+                          }
+                          onBlur={() => saveMatching(matching)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') saveMatching(matching);
+                          }}
+                          style={{ width: 190 }}
+                        />
+                        <Switch
+                          size="xs"
+                          mt={22}
+                          label="Refuse another country's guide"
+                          checked={!!matching.country_must_agree}
+                          onChange={(event) =>
+                            saveMatching({
+                              ...matching,
+                              country_must_agree: event.currentTarget.checked,
+                            })
+                          }
+                        />
+                      </Group>
+                    </>
+                  )}
                   {(page?.chosen || []).length > 0 && (
                     <Group gap="sm">
                       <Text size="xs" c="dimmed">

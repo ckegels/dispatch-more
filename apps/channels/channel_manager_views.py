@@ -143,7 +143,61 @@ def channel_manager_guides(request):
         request.GET.get("q", ""),
         request.GET.get("limit", 12),
         request.GET.get("current", ""),
+        request.GET.get("source", ""),
     )})
+
+
+@api_view(["GET", "PUT"])
+@permission_classes([IsAdmin])
+def channel_manager_matching(request):
+    """
+    Which guides are matched against, and on what terms: the sources, what a tvg-id has
+    to look like, and whether a guide from another country is refused outright.
+
+    The same settings for the Guides tab's runs and for the window on a Lineup row, since
+    a guide one of them has been told to leave out and the other still offers is worse
+    than either.
+
+    The listing says how many entries each source holds and how many channels are on it,
+    because "switch this source off for matching" is not a question anybody can answer
+    about a name alone.
+    """
+    from django.db.models import Count
+
+    from apps.epg.models import EPGData, EPGSource
+
+    from .models import Channel
+
+    if request.method == "PUT":
+        try:
+            saved = channel_manager.save_matching(request.data.get("matching"))
+        except ValueError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+        return JsonResponse({"matching": saved})
+
+    holds = dict(
+        EPGData.objects.values_list("epg_source_id").annotate(n=Count("id")).values_list("epg_source_id", "n")
+    )
+    on_it = dict(
+        Channel.objects.filter(epg_data__isnull=False)
+        .values_list("epg_data__epg_source_id")
+        .annotate(n=Count("id"))
+        .values_list("epg_data__epg_source_id", "n")
+    )
+    return JsonResponse({
+        "matching": channel_manager.load_matching(),
+        "defaults": channel_manager.MATCHING_DEFAULTS,
+        "sources": [
+            {
+                "id": source.id,
+                "name": source.name,
+                "active": bool(source.is_active),
+                "holds": holds.get(source.id, 0),
+                "channels": on_it.get(source.id, 0),
+            }
+            for source in EPGSource.objects.order_by("-priority", "name")
+        ],
+    })
 
 
 @api_view(["POST"])

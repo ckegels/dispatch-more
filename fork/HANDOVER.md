@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v153** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v154** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -506,6 +506,28 @@ it scored ninety. So `FAMILY_WORDS` -- wild, junior, kids, science, people, crim
 joins the number, the side and the call sign in `half_said`: one name saying which of the
 family it is and the other saying none is never a certainty and never likely, only a guess.
 Nick Jr is not Nickelodeon and Discovery Science is not Discovery.
+
+**Which guides are matched against at all** (v154, `MATCHING_KEY`, `load_matching`,
+`in_play`). Three things, kept in **one** place because the Guides tab's runs and the
+window on a Lineup row both read them -- a guide one of them has been told to leave out and
+the other still offers is worse than either:
+
+- **Sources.** Empty is every active source, which is stock. A source left out is still
+  read, still refreshed and still used by every channel already on it: this is only the
+  matching, which is the question "what should this channel be on?" and nobody else's.
+- **A tvg-id to match.** Plain text unless it carries a `*` or a `?`, and then a pattern:
+  ".uk" finds every British id without anyone having to learn a pattern language, and
+  "sky*.uk" plainly does mean a pattern. Taken from epgmatcharr, which filters sources by
+  tvg-id pattern.
+- **Refuse another country's guide** (off). We demote one to a guess, which keeps it on
+  the picker's list to be taken by hand; a setup whose names all carry a country box and
+  whose guides all carry a country suffix can have it thrown out instead.
+
+**And one source tried on its own** (v154), in the guide window: a `Select` beside the
+search, each source with how many entries it holds. Two sources rarely call a channel the
+same thing, and the way to find out which one has it is to look at them one at a time --
+which is a question about that channel and not a setting, so it is in the window and
+changes nothing that is kept.
 
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found

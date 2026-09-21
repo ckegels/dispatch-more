@@ -8,6 +8,7 @@ import {
   Modal,
   Stack,
   Text,
+  Select,
   TextInput,
 } from '@mantine/core';
 import API from '../../api';
@@ -85,7 +86,6 @@ const WhatItHolds = ({ guide, onLoad, loading }) => {
   );
 };
 
-
 const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
   <Box
     role="button"
@@ -127,7 +127,8 @@ const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
                   { certain: 'green', likely: 'blue' }[guide.tier] || 'gray'
                 }
               >
-                {{ certain: 'Certain', likely: 'Likely' }[guide.tier] || 'A guess'}
+                {{ certain: 'Certain', likely: 'Likely' }[guide.tier] ||
+                  'A guess'}
                 {guide.score != null ? ` · ${guide.score}%` : ''}
               </Badge>
             ) : (
@@ -160,6 +161,12 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   const [guides, setGuides] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // One source to try on its own, rather than all of them at once. Two sources rarely
+  // call a channel the same thing, and the way to find out which one has it is to look at
+  // them one at a time -- which is a question about this channel, not a setting, so it is
+  // here and not in the levers.
+  const [source, setSource] = useState('');
+  const [sources, setSources] = useState([]);
   // Guides whose programmes were asked for and have not arrived yet: {id: true}
   const [reading, setReading] = useState({});
   const [readState, setReadState] = useState({});
@@ -179,6 +186,7 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
             tvg_id: channel?.epg?.tvg_id || '',
             q: wanted,
             current: held?.id ?? '',
+            source,
           });
           if (!dropped) setGuides(result?.guides || []);
         } catch {
@@ -193,20 +201,44 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       dropped = true;
       clearTimeout(timer);
     };
-  }, [search, channel?.name, channel?.epg?.tvg_id, held?.id]);
+  }, [search, source, channel?.name, channel?.epg?.tvg_id, held?.id]);
+
+  // What sources there are, so one can be tried on its own; how much each holds is said,
+  // because "try this source" is not a question anybody can answer from a name alone
+  useEffect(() => {
+    let dropped = false;
+    API.getGuideMatching()
+      .then((answer) => {
+        if (!dropped) setSources(answer?.sources || []);
+      })
+      .catch(() => {
+        if (!dropped) setSources([]);
+      });
+    return () => {
+      dropped = true;
+    };
+  }, []);
 
   // Reading a guide's programmes is a task on the server, so the answer is not the point
   // it comes back at: the list is asked again until they show up, and given up on after a
   // while rather than left turning for ever. What is still empty then is empty.
   const readThem = useCallback(
     async (wanted) => {
-      const ids = (Array.isArray(wanted) ? wanted : [wanted]).map((one) => one.id);
+      const ids = (Array.isArray(wanted) ? wanted : [wanted]).map(
+        (one) => one.id
+      );
       if (!ids.length) return;
-      setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, true])) }));
+      setReading((all) => ({
+        ...all,
+        ...Object.fromEntries(ids.map((id) => [id, true])),
+      }));
       try {
         await API.loadChannelManagerGuide(ids);
       } catch {
-        setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, false])) }));
+        setReading((all) => ({
+          ...all,
+          ...Object.fromEntries(ids.map((id) => [id, false])),
+        }));
         return;
       }
       // Reading is a pass of each source's whole file, which on a big guide is minutes.
@@ -234,18 +266,24 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
         } catch {
           // The next try asks again
         }
-        if (back && ids.every((id) => (back.find((one) => one.id === id) || {}).programmes)) {
+        if (
+          back &&
+          ids.every(
+            (id) => (back.find((one) => one.id === id) || {}).programmes
+          )
+        ) {
           break;
         }
         if (!state.reading && tries > 2) break;
       }
-      setReading((all) => ({ ...all, ...Object.fromEntries(ids.map((id) => [id, false])) }));
+      setReading((all) => ({
+        ...all,
+        ...Object.fromEntries(ids.map((id) => [id, false])),
+      }));
       setReadState({});
     },
     [channel?.name, channel?.epg?.tvg_id, search, held?.id]
   );
-
-
 
   // The server puts what the channel has at the top of every answer, said the same way
   // as the rest; only a choice it has not been asked about yet is added here
@@ -261,7 +299,8 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   const unread = useMemo(
     () =>
       shown.filter(
-        (guide) => !guide.programmes && guide.in_use === false && !reading[guide.id]
+        (guide) =>
+          !guide.programmes && guide.in_use === false && !reading[guide.id]
       ),
     [shown, reading]
   );
@@ -285,6 +324,23 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
             rightSection={loading ? <Loader size={12} /> : undefined}
             style={{ flex: 1, minWidth: 200 }}
           />
+          <Select
+            size="xs"
+            label="From one source"
+            placeholder="Every source"
+            aria-label="From one source"
+            value={source}
+            onChange={(value) => setSource(value || '')}
+            data={(sources || [])
+              .filter((one) => one.active)
+              .map((one) => ({
+                value: String(one.id),
+                label: `${one.name} (${one.holds})`,
+              }))}
+            searchable
+            clearable
+            style={{ width: 200 }}
+          />
           {unread.length > 0 && (
             <Button
               size="xs"
@@ -297,15 +353,16 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
           )}
         </Group>
         <Text size="xs" c="dimmed">
-          A guide nobody uses has not been read yet: Dispatcharr reads a guide&apos;s
-          programmes when it goes on a channel. Reading one means going through the whole
-          guide file, so reading them all together costs no more than reading one.
+          A guide nobody uses has not been read yet: Dispatcharr reads a
+          guide&apos;s programmes when it goes on a channel. Reading one means
+          going through the whole guide file, so reading them all together costs
+          no more than reading one.
         </Text>
         {readState.reading && (
           <Text size="xs" c="dimmed">
             Reading guides · {readState.stage || 'asking for them'}
-            {readState.at ? ` · ${readState.at}` : ''} ·{' '}
-            {readState.done || 0} of {readState.total || 0}
+            {readState.at ? ` · ${readState.at}` : ''} · {readState.done || 0}{' '}
+            of {readState.total || 0}
           </Text>
         )}
         <Stack gap={6} style={{ maxHeight: '50vh', overflowY: 'auto' }}>
@@ -368,7 +425,6 @@ const GuidePicker = ({ row, chosen, onChoose }) => {
     </Group>
   );
 };
-
 
 export { GuideWindow, GuidePicker };
 export default GuidePicker;

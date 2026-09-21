@@ -27,6 +27,7 @@ has already been taught what goes wrong: accents folded rather than dropped, "+"
 as words, and the country box in front taken off.
 """
 
+import fnmatch
 import logging
 import re
 
@@ -1267,7 +1268,106 @@ def load_programmes(epg_ids):
     return {"queued": reading > 0, "reading": reading}
 
 
-def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
+# Which guides are matched against at all, and on what terms. Kept in one place because
+# the Guides tab's runs and the window on a Lineup row have to agree: a guide the Guides
+# tab has been told to leave out that the window still offers is worse than either.
+#
+# Nothing here changes what is on a channel now. A source switched off here is still read,
+# still refreshed and still used by every channel already on it -- it is only left out of
+# the matching, which is the question "what should this channel be on?" and nobody else's.
+MATCHING_KEY = "guide-matching"
+MATCHING_DEFAULTS = {
+    # EPG source ids to match against. Empty is every active source, which is stock.
+    "sources": [],
+    # The guide's tvg-id has to carry this. Plain text, unless it has a * or a ? in it,
+    # and then it is a pattern: ".uk" finds every British id, "sky*.uk" the Sky ones.
+    "tvg_id_like": "",
+    # A guide whose country disagrees with the channel's is not offered at all, rather
+    # than offered as a guess. For a setup whose names all carry a country box and whose
+    # guides all carry a country suffix, this is the single biggest thing that can be
+    # said; for anyone else it throws away right answers, so it is off.
+    "country_must_agree": False,
+}
+
+
+def load_matching():
+    from core.models import CoreSettings
+
+    row = CoreSettings.objects.filter(key=MATCHING_KEY).first()
+    stored = row.value if row and isinstance(row.value, dict) else {}
+    values = dict(MATCHING_DEFAULTS)
+    values.update({k: v for k, v in stored.items() if k in MATCHING_DEFAULTS})
+    try:
+        values["sources"] = [int(s) for s in values["sources"] or ()]
+    except (TypeError, ValueError):
+        values["sources"] = []
+    values["tvg_id_like"] = str(values.get("tvg_id_like") or "").strip()
+    values["country_must_agree"] = bool(values.get("country_must_agree"))
+    return values
+
+
+def save_matching(given):
+    from core.models import CoreSettings
+
+    values = load_matching()
+    values.update({k: v for k, v in (given or {}).items() if k in MATCHING_DEFAULTS})
+    try:
+        values["sources"] = [int(s) for s in values["sources"] or ()]
+    except (TypeError, ValueError):
+        raise ValueError("Those are not EPG sources")
+    values["tvg_id_like"] = str(values.get("tvg_id_like") or "").strip()
+    values["country_must_agree"] = bool(values.get("country_must_agree"))
+    CoreSettings.objects.update_or_create(
+        key=MATCHING_KEY, defaults={"name": "Guide matching", "value": values}
+    )
+    return values
+
+
+def _id_is_like(tvg_id, pattern):
+    """
+    Whether a guide's tvg-id answers to what was typed.
+
+    Plain text unless there is a * or a ? in it. Somebody typing ".uk" means ids with
+    ".uk" in them and should not have to learn a pattern language to say so; somebody
+    typing "sky*.uk" plainly does mean a pattern, and gets one.
+    """
+    if not pattern:
+        return True
+    tvg_id = (tvg_id or "").strip().lower()
+    pattern = pattern.strip().lower()
+    if any(c in pattern for c in "*?["):
+        return fnmatch.fnmatch(tvg_id, pattern)
+    return pattern in tvg_id
+
+
+def in_play(entry, matching, country=None):
+    """
+    Whether this guide is one to match against at all, given the settings.
+
+    `entry` is a catalogue row or anything else carrying a name, a tvg-id and a source id.
+    """
+    sources = matching.get("sources") or []
+    if sources and entry.get("epg_source_id") not in sources:
+        return False
+    if not _id_is_like(entry.get("original_tvg_id") or entry.get("tvg_id"), matching.get("tvg_id_like")):
+        return False
+    if matching.get("country_must_agree") and country:
+        theirs = _country_of_guide(entry)
+        if theirs and _one_country(theirs) != _one_country(country):
+            return False
+    return True
+
+
+def guides_in_play(catalogue, matching=None, country=None):
+    """The rows of a catalogue worth matching against, given the settings."""
+    matching = load_matching() if matching is None else matching
+    if not (matching.get("sources") or matching.get("tvg_id_like") or
+            (matching.get("country_must_agree") and country)):
+        return catalogue
+    return [row for row in catalogue if in_play(row, matching, country)]
+
+
+def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None):
     """
     The guide entries one channel could be, best first, for the picker on its row.
 
@@ -1296,6 +1396,16 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
     from . import epg_matching
 
     active = EPGData.objects.exclude(epg_source__is_active=False)
+    # What is being matched against: the settings, narrowed further to one source when
+    # the window is being used to try them one at a time
+    matching = load_matching()
+    if source not in (None, "", 0, "0", "all"):
+        try:
+            matching = {**matching, "sources": [int(source)]}
+        except (TypeError, ValueError):
+            pass
+    if matching["sources"]:
+        active = active.filter(epg_source_id__in=matching["sources"])
     try:
         limit = max(1, min(int(limit or 12), 50))
     except (TypeError, ValueError):
@@ -1324,10 +1434,11 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
         rows = active.exclude(id__in=seen)
         for word in wanted.split():
             rows = rows.filter(Q(name__icontains=word) | Q(tvg_id__icontains=word))
-        rows = list(
-            rows.order_by("-epg_source__priority", "name")
-            .values_list("id", "tvg_id", "name", "epg_source__name")[: limit * 4]
-        )
+        rows = [
+            row for row in rows.order_by("-epg_source__priority", "name")
+            .values_list("id", "tvg_id", "name", "epg_source__name")[: limit * 8]
+            if _id_is_like(row[1], matching["tvg_id_like"])
+        ][: limit * 4]
         # Nearest to what was typed first, so the words being in a shorter name counts
         typed = guide_words(wanted)
         rows.sort(key=lambda row: _alike(typed, guide_words(row[2])), reverse=True)
@@ -1374,6 +1485,8 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None):
         judged = []
         for _, row in candidates:
             if row["id"] in seen:
+                continue
+            if not in_play(row, matching, country):
                 continue
             score, tier, why = judge_guide(name, country, row, tvg_id)
             if score < MIN_GUIDE_SCORE:

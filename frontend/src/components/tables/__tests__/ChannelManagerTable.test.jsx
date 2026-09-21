@@ -26,6 +26,8 @@ vi.mock('../../../api', () => ({
     getChannelManagerReading: vi.fn(),
     addChannelGroup: vi.fn(),
     getChannelManagerGuides: vi.fn(),
+    getGuideMatching: vi.fn(),
+    saveGuideMatching: vi.fn(),
     loadChannelManagerGuide: vi.fn(),
   },
 }));
@@ -97,6 +99,8 @@ describe('ChannelManagerTable', () => {
     API.saveChannelManagerSettings.mockResolvedValue({});
     API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
+    API.getGuideMatching.mockResolvedValue({ matching: null, sources: [] });
+    API.saveGuideMatching.mockResolvedValue({});
     API.getChannelManagerReading.mockResolvedValue({ reading: {} });
     API.loadChannelManagerGuide.mockResolvedValue({ queued: true, reading: 1 });
   });

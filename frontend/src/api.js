@@ -2894,10 +2894,12 @@ export default class API {
     tvg_id = '',
     q = '',
     current = '',
+    source = '',
   } = {}) {
     // current: the guide the channel has, which comes back on the list whatever the
     // search finds, so what it is now is always there to go back to
-    const query = new URLSearchParams({ name, tvg_id, q, current });
+    // source: one EPG source to try on its own, rather than all of them at once
+    const query = new URLSearchParams({ name, tvg_id, q, current, source });
     return await request(
       `${host}/api/channels/channel-manager/guides/?${query}`
     );
@@ -2996,6 +2998,17 @@ export default class API {
     return await request(`${host}/api/channels/guides/ignore/`, {
       method: 'POST',
       body: { action, ...row },
+    });
+  }
+
+  static async getGuideMatching() {
+    return await request(`${host}/api/channels/channel-manager/matching/`);
+  }
+
+  static async saveGuideMatching(matching) {
+    return await request(`${host}/api/channels/channel-manager/matching/`, {
+      method: 'PUT',
+      body: { matching },
     });
   }
 
