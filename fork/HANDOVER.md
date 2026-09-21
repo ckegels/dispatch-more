@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v152** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v153** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -884,6 +884,15 @@ no longer play. Summary of how it works now:
   viewer needs it, and even so a viewer changing channel onto a provider a check was on lost
   their channel. Once is enough. Runs take longer on a setup that is rarely idle; that is the
   trade, made this way round on purpose.
+- **The row's actions keep still** (v153). Check again, Park, Remove and Ignore each have a
+  slot of their own, and the slot is there whether or not the action applies. Ignore only
+  applies to a stream that is failing, and leaving it out moved the three buttons beside it
+  along -- so the same button sat somewhere different on each line and had to be looked for
+  every time. Park all / Remove all moved to the right, over the buttons they are the
+  wholesale version of.
+- **What comes to the top is a lever** (v153, "Bring to the top"): broken, failing, not
+  checked or plays. Not a filter -- nothing leaves the list, and everything else keeps the
+  order it had, since the sort is stable and the list is in channel order underneath.
 - **A channel is dealt with a channel at a time:** Park all / Remove all on the row, and the
   action endpoint takes `stream_ids` as well as `stream_id` (one stream that cannot be done
   does not stop the rest). Doing it a stream at a time took the row out from under you --

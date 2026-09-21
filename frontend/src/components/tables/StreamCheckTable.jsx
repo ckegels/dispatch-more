@@ -176,6 +176,9 @@ const Finding = ({ result }) => {
   );
 };
 
+// The width of each action, so a row with no Ignore still lines up with one that has it
+const ACTION = { check: 84, park: 46, remove: 62, ignore: 54 };
+
 const StreamLine = ({ stream, channel, onAct }) => (
   <Group gap={6} wrap="nowrap" align="flex-start">
     {stream.custom ? (
@@ -209,42 +212,63 @@ const StreamLine = ({ stream, channel, onAct }) => (
       )}
     </Box>
     {!stream.custom && (
-      <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
-        <Button
-          size="compact-xs"
-          variant="subtle"
-          onClick={() => onAct('check', stream)}
-        >
-          Check again
-        </Button>
-        <Button
-          size="compact-xs"
-          variant="light"
-          color="yellow"
-          onClick={() => onAct('park', stream)}
-        >
-          Park
-        </Button>
-        <Button
-          size="compact-xs"
-          variant="light"
-          color="red"
-          onClick={() => onAct('remove', stream, channel)}
-        >
-          Remove
-        </Button>
-        {['failing', 'broken', 'suspect'].includes(stream.state) && (
-          <Tooltip label="Off this list and not checked again. Nothing on the channel changes.">
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              color="gray"
-              onClick={() => onAct('ignore', stream)}
-            >
-              Ignore
-            </Button>
-          </Tooltip>
-        )}
+      // Every action in the same place on every row. Ignore only applies to a stream that
+      // is failing, and leaving its slot out moved the three buttons beside it along --
+      // so the same button sat somewhere different on each line and had to be looked for.
+      <Group
+        gap={4}
+        wrap="nowrap"
+        style={{ flexShrink: 0 }}
+        justify="flex-end"
+        data-testid="stream-actions"
+      >
+        <Box w={ACTION.check} style={{ flexShrink: 0 }}>
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            fullWidth
+            onClick={() => onAct('check', stream)}
+          >
+            Check again
+          </Button>
+        </Box>
+        <Box w={ACTION.park} style={{ flexShrink: 0 }}>
+          <Button
+            size="compact-xs"
+            variant="light"
+            color="yellow"
+            fullWidth
+            onClick={() => onAct('park', stream)}
+          >
+            Park
+          </Button>
+        </Box>
+        <Box w={ACTION.remove} style={{ flexShrink: 0 }}>
+          <Button
+            size="compact-xs"
+            variant="light"
+            color="red"
+            fullWidth
+            onClick={() => onAct('remove', stream, channel)}
+          >
+            Remove
+          </Button>
+        </Box>
+        <Box w={ACTION.ignore} style={{ flexShrink: 0 }}>
+          {['failing', 'broken', 'suspect'].includes(stream.state) && (
+            <Tooltip label="Off this list and not checked again. Nothing on the channel changes.">
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                color="gray"
+                fullWidth
+                onClick={() => onAct('ignore', stream)}
+              >
+                Ignore
+              </Button>
+            </Tooltip>
+          )}
+        </Box>
       </Group>
     )}
   </Group>
@@ -264,26 +288,30 @@ const Expanded = ({ row, onAct }) => {
         {real.length > 1 && (
           // When every stream of a channel is broken the channel is dealt with, not the
           // streams one at a time -- which is also how the row came out from under you
-          <Group gap={4} wrap="wrap">
+          // Over on the right, above the buttons they belong with: these do to every
+          // stream what the buttons underneath do to one
+          <Group gap={4} wrap="wrap" justify="space-between">
             <Text size="xs" c="dimmed">
               All {real.length} streams at once:
             </Text>
-            <Button
-              size="compact-xs"
-              variant="light"
-              color="yellow"
-              onClick={() => onAct('park', real, row.channel)}
-            >
-              Park all
-            </Button>
-            <Button
-              size="compact-xs"
-              variant="light"
-              color="red"
-              onClick={() => onAct('remove', real, row.channel)}
-            >
-              Remove all
-            </Button>
+            <Group gap={4} wrap="nowrap">
+              <Button
+                size="compact-xs"
+                variant="light"
+                color="yellow"
+                onClick={() => onAct('park', real, row.channel)}
+              >
+                Park all
+              </Button>
+              <Button
+                size="compact-xs"
+                variant="light"
+                color="red"
+                onClick={() => onAct('remove', real, row.channel)}
+              >
+                Remove all
+              </Button>
+            </Group>
           </Group>
         )}
         {row.streams.map((stream) => (
@@ -523,6 +551,10 @@ const StreamCheckTable = () => {
     [data]
   );
 
+  // Which kind of stream brings its channel to the top. Not a filter: everything stays on
+  // the list, in the order it was in, and the channels with one of these come first.
+  const [top, setTop] = useState('');
+
   const rows = useMemo(() => {
     const all =
       show === 'parked'
@@ -539,7 +571,7 @@ const StreamCheckTable = () => {
             ? (data?.rows || []).filter((row) => row.unlisted > 0)
             : data?.rows || [];
     const wanted = search.trim().toLowerCase();
-    const found = wanted
+    let found = wanted
       ? all.filter((row) =>
           [
             row.channel?.name,
@@ -550,8 +582,15 @@ const StreamCheckTable = () => {
             .some((name) => name.toLowerCase().includes(wanted))
         )
       : all;
+    if (top) {
+      // A stable sort, so everything else keeps the order it had: by channel number
+      const has = (row) =>
+        (row.streams || []).some((s) => !s.custom && s.state === top) ||
+        (row.state === top && !row.streams);
+      found = [...found].sort((a, b) => (has(b) ? 1 : 0) - (has(a) ? 1 : 0));
+    }
     return found.map((row) => ({ ...row, id: row.key }));
-  }, [data, show, search]);
+  }, [data, show, search, top]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const paginatedRows = useMemo(
@@ -888,6 +927,26 @@ const StreamCheckTable = () => {
                   size="xs"
                   style={{ width: 190 }}
                 />
+                {/* Not a filter: everything stays on the list and keeps its order, and
+                    the channels with one of these come to the top */}
+                <Select
+                  aria-label="Bring to the top"
+                  placeholder="In channel order"
+                  value={top}
+                  onChange={(value) => {
+                    setTop(value || '');
+                    setPageIndex(0);
+                  }}
+                  clearable
+                  data={[
+                    { value: 'broken', label: 'Broken first' },
+                    { value: 'failing', label: 'Failing first' },
+                    { value: 'unchecked', label: 'Not checked first' },
+                    { value: 'ok', label: 'Plays first' },
+                  ]}
+                  size="xs"
+                  style={{ width: 170 }}
+                />
               </Group>
 
               <Group gap="sm">
@@ -987,7 +1046,9 @@ const StreamCheckTable = () => {
                 <Group gap="xs" mt={4}>
                   <Text size="xs" c="red.5" fw={500}>
                     {unlistedCount} channel
-                    {unlistedCount === 1 ? ' has a stream' : 's have streams'}{' '}
+                    {unlistedCount === 1
+                      ? ' has a stream'
+                      : 's have streams'}{' '}
                     the provider has stopped listing. Nothing needs checking to
                     know that.
                   </Text>

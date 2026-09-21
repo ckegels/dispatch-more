@@ -470,4 +470,60 @@ describe('StreamCheckTable', () => {
     expect(await screen.findByText('┃AT┃ ORF 2')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull());
   });
+
+  // Every action in the same place on every line. Ignore only applies to a stream that is
+  // failing, and leaving its slot out moved the three buttons beside it along.
+  it('keeps the row actions in the same place whether or not Ignore applies', async () => {
+    API.getStreamCheck.mockResolvedValue(overview());
+    draw();
+    const name = await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(name.closest('.tr').querySelector('.td:nth-child(1) > div > div'));
+
+    // One stream plays (no Ignore) and one is broken (Ignore). Both lines have the same
+    // four slots in the same order, and on the one that plays the last is simply empty --
+    // which is what keeps Remove under Remove.
+    const lines = await screen.findAllByTestId('stream-actions');
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line.children).toHaveLength(4);
+      expect([...line.children].slice(0, 3).map((slot) => slot.textContent)).toEqual([
+        'Check again',
+        'Park',
+        'Remove',
+      ]);
+    }
+    expect([...lines].map((line) => line.children[3].textContent)).toEqual([
+      '',
+      'Ignore',
+    ]);
+  });
+
+  it('brings the streams asked for to the top, without hiding the rest', async () => {
+    const plays = {
+      ...channelRow,
+      key: 'ch:3',
+      channel: { id: 3, name: '┃AT┃ ORF 3', number: 3, group: '', logo_url: '' },
+      streams: [
+        { id: 31, name: 'ORF 3 A', account: 'Provider A', custom: false, hash: 'h31', state: 'ok', result: result(true) },
+      ],
+      broken: 0,
+      working: 1,
+    };
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [plays, unlistedRow] }));
+    draw();
+    await screen.findByText('┃AT┃ ORF 3');
+
+    const order = () =>
+      [...document.querySelectorAll('.tr')]
+        .map((row) => row.textContent)
+        .filter((text) => text.includes('ORF'));
+    expect(order()[0]).toContain('ORF 3');
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Bring to the top' }));
+    fireEvent.click(await screen.findByText('Broken first'));
+
+    await waitFor(() => expect(order()[0]).toContain('ORF 2'));
+    // still every channel, not a filter
+    expect(order()).toHaveLength(2);
+  });
 });
