@@ -530,6 +530,31 @@ class ViewTests(_Setup):
         self.assertEqual(offered["guides"], [])
         self.assertEqual(channel_manager.load_matching()["sources"], [])
 
+    def test_choosing_a_source_still_finds_what_that_source_has(self):
+        """
+        The scan goes over every guide and keeps the best handful it sees. Filtering
+        after that meant choosing one source scanned all of them, kept the best twenty
+        from everywhere, and then dropped the ones from the other sources -- often every
+        one of them. Choosing a source to match against was a way of getting no matches.
+        """
+        other = EPGSource.objects.create(name="a big one", source_type="xmltv", priority=9)
+        # The same channel, under the same name, in a source that is not wanted -- forty
+        # of them, which is twice the shortlist. Made first, so they are what the scan
+        # sees first and what the shortlist fills up with.
+        for n in range(40):
+            EPGData.objects.create(
+                tvg_id=f"orf1.copy{n}.at", name="ORF 1", epg_source=other
+            )
+        wanted = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+
+        channel_manager.save_matching({"sources": [self.source.id]})
+        found = self._look()[str(channel.id)]
+        self.assertEqual(
+            found.get("epg"), wanted.id,
+            "the one source chosen has the channel, and it should be found",
+        )
+
     def test_a_run_leaves_out_what_the_matching_settings_leave_out(self):
         self._guide("ORF1.at", "ORF 1", programmes=3)
         channel = self._channel("┃AT┃ ORF 1", 1)

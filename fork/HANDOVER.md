@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v161** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v162** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -565,6 +565,16 @@ against to begin with and clicking one takes it out, which is the way round anyb
 it: they know the source they do not trust, not the eleven they do. What is kept is what is
 *on*, and it is emptied again the moment they are all on, so a source added later is
 matched against -- which is what "all of them" has to keep meaning.
+
+**What is left out is left out before the shortlist is cut** (v162). Stock's scan goes over
+every active guide and keeps the best handful it sees; the settings were applied to what
+came *back* from it. So choosing one source to match against scanned all of them anyway,
+kept the best twenty from everywhere, and then dropped the ones from the other sources --
+often every one of them. Choosing a source was a way of getting no matches at all, which is
+the opposite of what choosing it is for, and the same went for a tvg-id filter. The run
+narrows the catalogue it is given (it is already in memory, so this costs nothing), and the
+window streams the rows itself through `guides_to_scan` and hands them to stock's own
+scoring. Where nothing is left out, stock's scan is used exactly as before.
 
 **And one source tried on its own** (v154), in the guide window: a `Select` beside the
 search, each source with how many entries it holds. Two sources rarely call a channel the
@@ -1261,6 +1271,11 @@ no longer play. Summary of how it works now:
   picture, the writing down -- with nothing open to the provider at all, so there was
   nothing left for the signal to interrupt. → when something is being held, find where it
   is given back, not where the work looks like it ends.
+- **Filtering after the shortlist** (to v162): the scan keeps the best twenty guides it
+  sees out of all of them, and the sources that had been switched off were dropped from
+  *that*. Choosing one source to match against therefore returned nothing at all, because
+  the twenty were from everywhere else. → a filter belongs before whatever cuts the list,
+  never after it; the same mistake would follow any "top N then narrow" pair.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

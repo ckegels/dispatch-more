@@ -352,15 +352,17 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
     if not normalized:
         return []
     country = logo_library.country_of(name or "") or ""
+    # What is left out is left out of the catalogue before the shortlist is cut. Scanning
+    # all of it, keeping the best twenty and then dropping the ones from a source that was
+    # turned off leaves nothing to suggest, which is how turning one off looked like
+    # turning the whole thing off.
+    if matching is not None and channel_manager.narrows(matching, country):
+        catalogue = channel_manager.guides_in_play(catalogue, matching, country)
     _, _, candidates, _ = epg_matching.fuzzy_scan_epg_list(
         normalized, catalogue, None, candidate_limit=max(limit * 3, 20)
     )
     judged = []
     for _, row in candidates:
-        # The sources being matched against, what a tvg-id has to look like, and whether
-        # a country that disagrees is refused outright: see channel_manager.load_matching
-        if matching is not None and not channel_manager.in_play(row, matching, country):
-            continue
         # Judged by what kind of match it is, not only how alike the letters are: see
         # channel_manager.judge_guide, and why "PBS 12" and "PBS 13" used to score 83
         score, tier, why = channel_manager.judge_guide(

@@ -1544,10 +1544,39 @@ def in_play(entry, matching, country=None):
 def guides_in_play(catalogue, matching=None, country=None):
     """The rows of a catalogue worth matching against, given the settings."""
     matching = load_matching() if matching is None else matching
-    if not (matching.get("sources") or matching.get("tvg_id_like") or
-            (matching.get("country_must_agree") and country)):
+    if not narrows(matching, country):
         return catalogue
     return [row for row in catalogue if in_play(row, matching, country)]
+
+
+def narrows(matching, country=None):
+    """Whether these settings leave anything out at all."""
+    return bool(
+        matching.get("sources")
+        or matching.get("tvg_id_like")
+        or (matching.get("country_must_agree") and country)
+    )
+
+
+def guides_to_scan(matching, country=""):
+    """
+    Every guide worth matching against, one row at a time, straight from the database.
+
+    Stock's own scan goes over every active guide and keeps the best handful it sees. That
+    is the right shape until something is left out: asked to match against one source, it
+    still scanned all of them, kept the best twenty, and *then* the ones from other sources
+    were dropped -- often every one of them, so choosing a source to match against was a
+    way of getting no matches at all. What is left out is left out here, before the
+    shortlist is cut, so the best of what remains is what comes back.
+    """
+    from . import epg_matching
+
+    for values_row in epg_matching._active_epg_fuzzy_queryset().iterator(chunk_size=500):
+        row = epg_matching._row_from_epg_values(values_row)
+        if not in_play(row, matching, country):
+            continue
+        row["norm_name"] = epg_matching.normalize_name(row["name"])
+        yield row
 
 
 def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None):
@@ -1663,9 +1692,18 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
         reference = known_channels.known()
         # More candidates than will be shown, because one from the right country can sit
         # below a wrongly-scored pile of them and has to be there to be lifted past it
-        _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
-            normalized, None, candidate_limit=max(limit * 3, 20)
-        )
+        # Where something is left out, it is left out before the shortlist is cut: a
+        # scan of everything that keeps the best twenty and then drops the ones from the
+        # wrong source keeps nothing at all
+        wanted = max(limit * 3, 20)
+        if narrows(matching, country):
+            _, _, candidates, _ = epg_matching._fuzzy_scan_core(
+                normalized, guides_to_scan(matching, country), None, wanted
+            )
+        else:
+            _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
+                normalized, None, candidate_limit=wanted
+            )
         # The matcher works in source ids; the page shows which source an entry is from
         sources = dict(EPGSource.objects.values_list("id", "name"))
         judged = []
