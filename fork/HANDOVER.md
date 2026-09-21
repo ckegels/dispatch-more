@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v157** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v158** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -340,6 +340,20 @@ unreachable file never loses the rest, and a page linking to neither says so out
 than quietly adding nothing -- a link typed wrong and a page with no logos on it look exactly
 alike from the outside. XMLTV published **gzipped** is now unpacked (`_unzipped`), which is
 how most guides are served.
+
+**What the lists cost, measured** (v158): 10,777 logos from tv-logos and 47,001 from
+iptv-org is 57,778 entries under **36,325 names**, and as plain JSON that was **11.8 MB
+sitting in Redis for a week at a time**; the channel reference of v156 was another 3.7 MB.
+It is almost all names and addresses, which is exactly what compresses, so both are kept
+gzipped now: **11.8 MB → 1.34 MB**, the same 36,325 names, nothing left out. What was
+measured and rejected: dropping the repeated key and the empty fields saves 17 % before
+packing and nothing after, and capping how many logos a name may keep saves **0.03 MB**
+once packed while losing 2,143 logos -- a feature given up for nothing. An index kept
+before v158 is still read, so an upgrade does not throw a good one away.
+
+**And they can be thrown away** (`forget_index`, the "Free 1.3 MB" button). The lists are a
+copy of something public, so forgetting them costs the next download and nothing else; the
+collections themselves are kept, since what is forgotten is the copy and not the choice.
 
 **Adding a collection does not download it** (`out_of_date`, v157). It is kept, and the
 index is built from every collection at once, so until the lists are next updated the new

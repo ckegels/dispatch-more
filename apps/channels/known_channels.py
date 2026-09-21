@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 KEPT_SECONDS = 24 * 3600
 KNOWN_KEY = "channel-manager:known-channels"
 CALL_SIGNS_KEY = "channel-manager:call-signs"
+KNOWN_SIZE_KEY = "channel-manager:known-channels-size"
 
 # What an American station's name ends in, which is what says the letters in front of it
 # are a call sign and not a word: digital television, a low-power or class-A licence.
@@ -72,8 +73,6 @@ def build_known(cache=None):
     A name two different channels both go by is dropped rather than guessed at: pointing
     "Sports" at whichever entry happened to be read last would be worse than not knowing.
     """
-    import json
-
     from . import logo_library
 
     cache = _cache() if cache is None else cache
@@ -100,25 +99,40 @@ def build_known(cache=None):
                 clashes.add(key)
                 continue
             found[key] = entry
-    cache.set(KNOWN_KEY, json.dumps(found), KEPT_SECONDS)
+    size = logo_library.keep_json(cache, KNOWN_KEY, found, KEPT_SECONDS, KNOWN_SIZE_KEY)
     logger.info(
         f"Channel reference built: {len(found)} names, {len(clashes)} names dropped for "
-        f"belonging to more than one channel"
+        f"belonging to more than one channel, {size / 1024 / 1024:.1f} MB kept"
     )
-    return {"names": len(found), "dropped": len(clashes)}
+    return {"names": len(found), "dropped": len(clashes), "bytes": size}
 
 
 def known(cache=None):
     """The reference as it was last built, or {} when it has never been."""
-    import json
+    from . import logo_library
 
     cache = _cache() if cache is None else cache
+    return logo_library.read_json(cache, KNOWN_KEY) or {}
+
+
+def known_size(cache=None):
+    """How much room the kept reference takes, in bytes."""
+    cache = _cache() if cache is None else cache
     try:
-        raw = cache.get(KNOWN_KEY)
-        return json.loads(raw) if raw else {}
-    except Exception as e:
-        logger.debug(f"Could not read the channel reference: {e}")
-        return {}
+        return int(cache.get(KNOWN_SIZE_KEY) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def forget(cache=None):
+    """Throw the downloaded reference away; it is one file and comes back in a second."""
+    cache = _cache() if cache is None else cache
+    size = known_size(cache)
+    cache.delete(KNOWN_KEY)
+    cache.delete(KNOWN_SIZE_KEY)
+    cache.delete(CALL_SIGNS_KEY)
+    logger.info(f"Channel reference forgotten ({size} bytes freed)")
+    return size
 
 
 def which_channel(name, reference=None):

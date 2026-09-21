@@ -115,6 +115,13 @@ const About = ({ suggestion, byHand }) => {
   );
 };
 
+// How much room something takes, in the words somebody would use for it
+const roomTaken = (bytes) => {
+  if (!bytes) return '0 MB';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
 const LogoLibraryTable = () => {
   const theme = useMantineTheme();
 
@@ -135,6 +142,7 @@ const LogoLibraryTable = () => {
   const [ticked, setTicked] = useState(new Set());
   const [confirming, setConfirming] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [forgetting, setForgetting] = useState(false);
   // The channel a logo is being chosen for by hand, if any
   const [pickerRow, setPickerRow] = useState(null);
   // The collections panel, folded away until wanted
@@ -240,6 +248,19 @@ const LogoLibraryTable = () => {
       setError(e?.body?.error || 'Could not update the logo lists.');
     } finally {
       setBuilding(false);
+    }
+  };
+
+  const forget = async () => {
+    setForgetting(true);
+    setError(null);
+    try {
+      await API.forgetLogoLibrary();
+      await load();
+    } catch (e) {
+      setError(e?.body?.error || 'Could not forget the downloaded lists.');
+    } finally {
+      setForgetting(false);
     }
   };
 
@@ -570,6 +591,22 @@ const LogoLibraryTable = () => {
                 >
                   {status.built ? 'Update Lists' : 'Download Lists'}
                 </Button>
+
+                {/* The lists are a copy of something public. Keeping them costs room and
+                    forgetting them costs the next download, which is seconds. */}
+                {status.built && (
+                  <Tooltip label="Throw the downloaded lists away. The collections are kept; only the copy is forgotten, and it comes back on the next update.">
+                    <Button
+                      variant="subtle"
+                      color="gray"
+                      size="xs"
+                      loading={forgetting}
+                      onClick={forget}
+                    >
+                      Free {roomTaken(status.bytes)}
+                    </Button>
+                  </Tooltip>
+                )}
 
                 <Button
                   leftSection={<Check size={18} />}

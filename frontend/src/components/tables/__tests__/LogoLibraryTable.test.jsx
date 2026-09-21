@@ -13,6 +13,7 @@ vi.mock('../../../api', () => ({
     getLogoLibrary: vi.fn(),
     getLogoLibraryStatus: vi.fn(),
     refreshLogoLibrary: vi.fn(),
+    forgetLogoLibrary: vi.fn(),
     applyLogoLibrary: vi.fn(),
     searchLogoLibrary: vi.fn(),
     uploadLogo: vi.fn(),
@@ -531,5 +532,31 @@ describe('LogoLibraryTable', () => {
     render(<LogoLibraryTable />);
     await screen.findByText('┃BE┃ Eén');
     expect(screen.queryByText(/not in the last download/)).toBeNull();
+  });
+
+  // The lists are a copy of something public: keeping them costs room, and forgetting
+  // them costs the next download
+  it('says what the downloaded lists take up, and frees it', async () => {
+    API.getLogoLibrary.mockResolvedValue({
+      ...library,
+      status: { ...library.status, bytes: 1406000, out_of_date: [] },
+    });
+    API.forgetLogoLibrary.mockResolvedValue({ freed: 1406000, built: false });
+    render(<LogoLibraryTable />);
+
+    const free = await screen.findByRole('button', { name: /Free 1.3 MB/ });
+    fireEvent.click(free);
+
+    await waitFor(() => expect(API.forgetLogoLibrary).toHaveBeenCalled());
+  });
+
+  it('and offers nothing to free when nothing has been downloaded', async () => {
+    API.getLogoLibrary.mockResolvedValue({
+      ...library,
+      status: { built: false, counts: {}, errors: {}, bytes: 0 },
+    });
+    render(<LogoLibraryTable />);
+    await screen.findByText('┃BE┃ Eén');
+    expect(screen.queryByRole('button', { name: /^Free / })).toBeNull();
   });
 });

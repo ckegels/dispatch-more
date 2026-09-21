@@ -3097,6 +3097,14 @@ export default class API {
     return await request(`${host}/api/channels/logo-library/status/`);
   }
 
+  static async forgetLogoLibrary(reference = false) {
+    // Throws the downloaded lists away; everything in them is public and comes back
+    return await request(`${host}/api/channels/logo-library/forget/`, {
+      method: 'POST',
+      body: { reference },
+    });
+  }
+
   static async refreshLogoLibrary() {
     // Downloads the collections again, in the background
     return await request(`${host}/api/channels/logo-library/refresh/`, {

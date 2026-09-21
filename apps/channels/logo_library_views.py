@@ -31,6 +31,8 @@ def _status(index):
         # Collections switched on that this index was built without: their logos are not
         # being suggested, and nothing else on the page would say so
         "out_of_date": logo_library.out_of_date(index),
+        # What the downloaded lists take up, so it is a number and not a worry
+        "bytes": logo_library.index_size(),
     }
 
 
@@ -124,6 +126,25 @@ def logo_library_refresh(request):
 @permission_classes([IsAdmin])
 def logo_library_status(request):
     return JsonResponse(_status(logo_library.load_index()))
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def logo_library_forget(request):
+    """
+    Throw the downloaded lists away, freeing what they take up.
+
+    Everything in them is public and comes back in seconds, so this is not a deletion of
+    anything: the collections are kept, and only the copy is forgotten. Until the next
+    download no logos are suggested, which the page says in the same words it uses for a
+    collection that has not been downloaded yet.
+    """
+    from . import known_channels
+
+    freed = logo_library.forget_index()
+    if request.data.get("reference"):
+        freed += known_channels.forget()
+    return JsonResponse({"freed": freed, **_status(logo_library.load_index())})
 
 
 @api_view(["POST"])

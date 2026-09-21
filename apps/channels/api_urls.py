@@ -71,6 +71,7 @@ urlpatterns = [
     path('dvr/comskip-config/', ComskipConfigAPIView.as_view(), name='comskip_config'),
     # Logos from public collections, suggested per channel (see logo_library)
     path('logo-library/', logo_library_views.logo_library_suggestions, name='logo_library'),
+    path('logo-library/forget/', logo_library_views.logo_library_forget, name='logo_library_forget'),
     path('logo-library/status/', logo_library_views.logo_library_status, name='logo_library_status'),
     path('logo-library/refresh/', logo_library_views.logo_library_refresh, name='logo_library_refresh'),
     path('logo-library/apply/', logo_library_views.logo_library_apply, name='logo_library_apply'),

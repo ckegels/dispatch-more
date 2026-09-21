@@ -612,6 +612,78 @@ class SourcesViewTests(TestCase):
         sources = {"added": [{"id": "a1", "name": "epg.guru", "enabled": True}], "off": []}
         self.assertEqual(logo_library.out_of_date(None, sources), [])
 
+    def test_what_is_kept_is_packed_and_says_how_big_it_is(self):
+        """
+        Sixty thousand logos is 11.8 MB of JSON, which sat in Redis at that size for a
+        week at a time. It is almost all names and addresses, which is what compresses.
+        """
+        class _Cache:
+            def __init__(self):
+                self.held = {}
+
+            def set(self, key, value, ttl=None):
+                self.held[key] = value
+
+            def get(self, key):
+                return self.held.get(key)
+
+            def delete(self, key):
+                self.held.pop(key, None)
+
+        cache = _Cache()
+        big = {"entries": {f"channel {n}": [{"name": f"Channel {n}", "url": f"https://logos.example/{n}.png"}] for n in range(500)}}
+        size = logo_library.keep_json(cache, "k", big, 60, "k-size")
+        self.assertEqual(logo_library.read_json(cache, "k"), big)
+        self.assertLess(size, len(json.dumps(big)) / 3, "packed to under a third")
+        self.assertEqual(cache.get("k-size"), size)
+
+    def test_an_index_kept_before_it_was_packed_is_still_read(self):
+        # An install upgrading keeps whatever it had until the next download, and reading
+        # only the packed kind would have thrown away a good index
+        class _Cache:
+            def __init__(self):
+                self.held = {}
+
+            def set(self, key, value, ttl=None):
+                self.held[key] = value
+
+            def get(self, key):
+                return self.held.get(key)
+
+            def delete(self, key):
+                self.held.pop(key, None)
+
+        cache = _Cache()
+        cache.set(logo_library.INDEX_KEY, json.dumps({"entries": {"cnn": []}, "counts": {}}))
+        self.assertEqual(logo_library.load_index(cache)["entries"], {"cnn": []})
+
+    def test_the_lists_can_be_thrown_away_and_come_back(self):
+        # Everything in them is public, so forgetting them costs the next download
+        class _Cache:
+            def __init__(self):
+                self.held = {}
+
+            def set(self, key, value, ttl=None):
+                self.held[key] = value
+
+            def get(self, key):
+                return self.held.get(key)
+
+            def delete(self, key):
+                self.held.pop(key, None)
+
+        cache = _Cache()
+        logo_library.keep_json(
+            cache, logo_library.INDEX_KEY, {"entries": {}, "counts": {}}, 60,
+            logo_library.INDEX_SIZE_KEY,
+        )
+        self.assertGreater(logo_library.index_size(cache), 0)
+        self.assertGreater(logo_library.forget_index(cache), 0)
+        self.assertIsNone(logo_library.load_index(cache))
+        self.assertEqual(logo_library.index_size(cache), 0)
+        # ...and the collections themselves are untouched: only the copy is forgotten
+        self.assertIn("added", logo_library.load_sources())
+
     def test_a_built_in_one_can_be_switched_off_and_is_then_not_downloaded(self):
         self.client_api.patch(
             "/api/channels/logo-library/sources/",
