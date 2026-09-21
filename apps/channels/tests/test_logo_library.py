@@ -505,6 +505,74 @@ class SourcesViewTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Could not read that as json", response.json()["error"])
 
+    def test_a_page_that_links_to_them_is_a_collection_of_its_own(self):
+        """
+        Plenty of places publish files rather than a list -- a guide per country, a folder
+        of picons -- and the page is the only address there is.
+        """
+        page = b"""
+            <html><body>
+              <a href="guides/austria.xml">Austria</a>
+              <a href="/picons/orf-1.png">ORF 1</a>
+              <a href="https://elsewhere.example/npo_1.PNG">NPO 1</a>
+              <a href="#top">top</a>
+              <a href="about.html">About</a>
+            </body></html>
+        """
+        guide = b"""<?xml version="1.0"?>
+            <tv><channel id="ORF1.at">
+              <display-name>ORF 1</display-name>
+              <icon src="https://guide.example/orf1.png"/>
+            </channel></tv>
+        """
+
+        def downloaded(url):
+            return guide if url.endswith(".xml") else page
+
+        with patch("apps.channels.logo_library._download", side_effect=downloaded):
+            found = logo_library._from_page("https://www.example.com/", "epg.guru")
+
+        urls = sorted(one["url"] for one in found)
+        self.assertEqual(urls, [
+            "https://elsewhere.example/npo_1.PNG",
+            "https://guide.example/orf1.png",
+            "https://www.example.com/picons/orf-1.png",
+        ])
+        # An image is named after its file, tidied; a guide's icon by its display name
+        self.assertIn("orf 1", [one["name"].lower() for one in found])
+        self.assertIn("NPO 1".lower(), [one["name"].lower() for one in found])
+
+    def test_a_page_with_nothing_on_it_says_so_rather_than_adding_nothing(self):
+        # A link typed wrong and a page with no logos on it look alike from the outside,
+        # and only one of them is worth telling somebody about
+        with patch("apps.channels.logo_library._download", return_value=b"<html>nothing</html>"):
+            with self.assertRaises(ValueError) as caught:
+                logo_library._from_page("https://example.com/", "nowhere")
+        self.assertIn("no logos and no guides", str(caught.exception))
+
+    def test_one_guide_of_a_page_being_unreachable_does_not_lose_the_rest(self):
+        page = b'<a href="a.xml">a</a><a href="b.xml">b</a>'
+        good = b'<tv><channel id="x"><display-name>X</display-name><icon src="https://e/x.png"/></channel></tv>'
+
+        def downloaded(url):
+            if url.endswith("a.xml"):
+                raise OSError("no")
+            return good if url.endswith("b.xml") else page
+
+        with patch("apps.channels.logo_library._download", side_effect=downloaded):
+            found = logo_library._from_page("https://example.com/", "some page")
+        self.assertEqual([one["url"] for one in found], ["https://e/x.png"])
+
+    def test_a_guide_published_gzipped_is_read_all_the_same(self):
+        import gzip
+
+        body = gzip.compress(
+            b'<tv><channel id="x"><display-name>X</display-name><icon src="https://e/x.png"/></channel></tv>'
+        )
+        with patch("apps.channels.logo_library._download", return_value=body):
+            found = logo_library._from_xmltv("https://example.com/g.xml.gz", "zipped")
+        self.assertEqual([one["url"] for one in found], ["https://e/x.png"])
+
     def test_a_built_in_one_can_be_switched_off_and_is_then_not_downloaded(self):
         self.client_api.patch(
             "/api/channels/logo-library/sources/",

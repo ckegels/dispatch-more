@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v154** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v155** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -329,6 +329,18 @@ who it belongs to and ends with which one): "PBS Philadelphia" finds nothing and
 the network's logo, which is why a station used to be offered only the logo it already had
 from its provider. A name of one word is never made shorter, so the "Eén" case is untouched.
 
+**Collections anyone can add** come in five shapes (`SOURCE_TYPES`): a GitHub repository of
+images, an M3U's `tvg-logo`s, an XMLTV guide's channel icons, a JSON list -- and, from v155,
+**a page that links to them** (`PAGE`, `_from_page`). That last one is for the places that
+publish files rather than a list: a guide per country, a folder of picons, where the page is
+the only address there is (epg.guru is one). It reads the page, takes its links, and follows
+them: an image is a logo named after its file, and anything ending .xml/.xml.gz is read for
+its channels' icons like a guide given directly. At most `PAGE_FOLLOWS` (30) files, one
+unreachable file never loses the rest, and a page linking to neither says so outright rather
+than quietly adding nothing -- a link typed wrong and a page with no logos on it look exactly
+alike from the outside. XMLTV published **gzipped** is now unpacked (`_unzipped`), which is
+how most guides are served.
+
 Choosing one of the smaller logos on a row **ticks it** (v140). It used to change the picture
 and leave the row as it was, so the logo somebody picked was shown and then not applied.
 
@@ -522,6 +534,12 @@ the other still offers is worse than either:
 - **Refuse another country's guide** (off). We demote one to a guess, which keeps it on
   the picker's list to be taken by hand; a setup whose names all carry a country box and
   whose guides all carry a country suffix can have it thrown out instead.
+
+The sources are **badges to click, not a list to add to** (v155). Everything is matched
+against to begin with and clicking one takes it out, which is the way round anybody wants
+it: they know the source they do not trust, not the eleven they do. What is kept is what is
+*on*, and it is emptied again the moment they are all on, so a source added later is
+matched against -- which is what "all of them" has to keep meaning.
 
 **And one source tried on its own** (v154), in the guide window: a `Select` beside the
 search, each source with how many entries it holds. Two sources rarely call a channel the

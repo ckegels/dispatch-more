@@ -398,7 +398,7 @@ describe('GuideManagerTable', () => {
 
   // Which guides are matched against at all: the same settings the window on a Lineup row
   // obeys, so one of them cannot offer what the other has been told to leave out
-  it('lets a source be left out of the matching without switching it off', async () => {
+  it('lets a source be clicked out of the matching without switching it off', async () => {
     API.getGuideMatching.mockResolvedValue({
       matching: { sources: [], tvg_id_like: '', country_must_agree: false },
       sources: [
@@ -410,11 +410,9 @@ describe('GuideManagerTable', () => {
     await screen.findByText('┃AT┃ ORF 1');
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
 
-    // How much each holds and how many channels are on it, since a name alone says nothing
-    fireEvent.click(
-      await screen.findByRole('textbox', { name: 'Match against these sources' })
-    );
-    fireEvent.click(await screen.findByText(/epg ripper ALL · 4000 guides · 12 channels/));
+    // Every source is on to begin with; clicking one takes it out, which is the way
+    // round somebody wants it -- they know the source they do not trust
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave out open epg' }));
 
     await waitFor(() =>
       expect(API.saveGuideMatching).toHaveBeenCalledWith(
@@ -445,6 +443,29 @@ describe('GuideManagerTable', () => {
     await waitFor(() =>
       expect(API.saveGuideMatching).toHaveBeenCalledWith(
         expect.objectContaining({ country_must_agree: true })
+      )
+    );
+  });
+
+  it('and puts every source back on when none is left out', async () => {
+    API.getGuideMatching.mockResolvedValue({
+      matching: { sources: [7], tvg_id_like: '', country_must_agree: false },
+      sources: [
+        { id: 7, name: 'epg ripper ALL', active: true, holds: 4000, channels: 12 },
+        { id: 8, name: 'open epg', active: true, holds: 900, channels: 3 },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    // Clicking the last one back on means all of them, which is kept as nothing chosen,
+    // so a source added later is matched against too
+    fireEvent.click(await screen.findByRole('button', { name: 'Match against open epg' }));
+
+    await waitFor(() =>
+      expect(API.saveGuideMatching).toHaveBeenCalledWith(
+        expect.objectContaining({ sources: [] })
       )
     );
   });

@@ -26,7 +26,6 @@ import {
   Divider,
   Group,
   LoadingOverlay,
-  MultiSelect,
   NumberInput,
   Paper,
   Progress,
@@ -934,32 +933,81 @@ const GuideManagerTable = () => {
                         labelPosition="left"
                       />
                       <Group gap="lg" wrap="wrap" align="flex-start">
-                        <MultiSelect
-                          size="xs"
-                          label="Match against these sources"
-                          description="Nothing chosen is every source. A source left out is still read and still used by the channels already on it."
-                          placeholder={
-                            matching.sources?.length
-                              ? undefined
-                              : 'Every source'
-                          }
-                          value={(matching.sources || []).map(String)}
-                          onChange={(value) =>
-                            saveMatching({
-                              ...matching,
-                              sources: value.map(Number),
-                            })
-                          }
-                          data={sources.map((one) => ({
-                            value: String(one.id),
-                            label: `${one.name} · ${one.holds} guides · ${one.channels} channels${
-                              one.active ? '' : ' · switched off'
-                            }`,
-                          }))}
-                          searchable
-                          clearable
-                          style={{ width: 340 }}
-                        />
+                        {/* One to click, not a list to add things to. Every source is
+                            on by default, and clicking one takes it out of the matching --
+                            which is the way round somebody wants it: they know the source
+                            they do not trust, not the twelve they do. */}
+                        <Box>
+                          <Text size="xs" fw={500}>
+                            Match against these sources
+                          </Text>
+                          <Text size="xs" c="dimmed" mb={6}>
+                            All of them unless you click some away. One left out
+                            is still read, and still used by the channels
+                            already on it.
+                          </Text>
+                          <Group gap={6} wrap="wrap">
+                            {sources.length === 0 && (
+                              <Text size="xs" c="dimmed">
+                                No EPG sources yet.
+                              </Text>
+                            )}
+                            {sources.map((one) => {
+                              // Nothing chosen means every source, so a chip is on when
+                              // the list is empty as well as when it names this one
+                              const some = (matching.sources || []).length > 0;
+                              const on =
+                                !some || matching.sources.includes(one.id);
+                              return (
+                                <Tooltip
+                                  key={one.id}
+                                  label={`${one.holds} guides · ${one.channels} channel${
+                                    one.channels === 1 ? '' : 's'
+                                  } on it${
+                                    one.active
+                                      ? ''
+                                      : ' · switched off in Dispatcharr'
+                                  }`}
+                                >
+                                  <Badge
+                                    size="lg"
+                                    variant={on ? 'filled' : 'outline'}
+                                    color={on ? 'blue' : 'gray'}
+                                    style={{
+                                      cursor: 'pointer',
+                                      textTransform: 'none',
+                                      opacity: on ? 1 : 0.55,
+                                    }}
+                                    role="button"
+                                    aria-label={`${on ? 'Leave out' : 'Match against'} ${one.name}`}
+                                    onClick={() => {
+                                      // Starting from "all of them", clicking one off
+                                      // means naming the others. Kept as what is on
+                                      // rather than what is off, and emptied again when
+                                      // they are all on, so a source added later is
+                                      // matched against -- which is what anyone expects.
+                                      const now = some
+                                        ? matching.sources
+                                        : sources.map((s) => s.id);
+                                      const next = now.includes(one.id)
+                                        ? now.filter((id) => id !== one.id)
+                                        : [...now, one.id];
+                                      saveMatching({
+                                        ...matching,
+                                        sources:
+                                          next.length === sources.length
+                                            ? []
+                                            : next,
+                                      });
+                                    }}
+                                  >
+                                    {one.name}
+                                  </Badge>
+                                </Tooltip>
+                              );
+                            })}
+                          </Group>
+                        </Box>
                         <TextInput
                           size="xs"
                           label="Only tvg-ids like"

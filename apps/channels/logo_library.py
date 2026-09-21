@@ -183,7 +183,15 @@ GITHUB = "github"
 M3U = "m3u"
 XMLTV = "xmltv"
 JSON_LIST = "json"
-SOURCE_TYPES = (GITHUB, M3U, XMLTV, JSON_LIST)
+# A page that links to them, rather than the list itself. Plenty of places publish a page
+# of files -- a guide per country, a folder of picons -- and there is no single list
+# anywhere to point at, so the page is the only address there is.
+PAGE = "page"
+SOURCE_TYPES = (GITHUB, M3U, XMLTV, JSON_LIST, PAGE)
+# How many of a page's links are followed. A page of guides is a few dozen files at most,
+# and following everything a stray page links to is how one address becomes a download of
+# the internet.
+PAGE_FOLLOWS = 30
 
 SOURCES_KEY = "logo-library-sources"
 IMAGE_EXTENSIONS = (".png", ".svg", ".jpg", ".jpeg", ".webp", ".gif")
@@ -317,6 +325,15 @@ def _from_m3u(url, label):
     return entries
 
 
+def _unzipped(body):
+    """The bytes, unpacked when they are gzipped: guides are published .xml.gz as often as .xml."""
+    if body[:2] == b"\x1f\x8b":
+        import gzip
+
+        return gzip.decompress(body)
+    return body
+
+
 def _from_xmltv(url, label):
     """
     The icon of every channel in an XMLTV guide, under each of its display names.
@@ -328,7 +345,7 @@ def _from_xmltv(url, label):
     import xml.etree.ElementTree as ET
 
     entries = []
-    for _event, element in ET.iterparse(io.BytesIO(_download(url)), events=("end",)):
+    for _event, element in ET.iterparse(io.BytesIO(_unzipped(_download(url))), events=("end",)):
         if element.tag == "channel":
             icon = element.find("icon")
             src = icon.get("src") if icon is not None else ""
@@ -363,7 +380,71 @@ def _from_json(url, label):
     return entries
 
 
-READERS = {GITHUB: _from_github, M3U: _from_m3u, XMLTV: _from_xmltv, JSON_LIST: _from_json}
+def _links_on(url, text):
+    """Every link on a page, made absolute, in the order they appear and without repeats."""
+    from urllib.parse import urljoin
+
+    kept, seen = [], set()
+    for href in re.findall(r"""href\s*=\s*["']([^"']+)["']""", text, re.I):
+        if href.startswith(("#", "mailto:", "javascript:", "?")):
+            continue
+        whole = urljoin(url, href)
+        if whole not in seen:
+            seen.add(whole)
+            kept.append(whole)
+    return kept
+
+
+def _from_page(url, label):
+    """
+    A page that links to them, for the places that publish files rather than a list.
+
+    An image behind a link is a logo, named after its file -- which is what a folder of
+    picons is. Anything that looks like an XMLTV guide is read for its channels' icons,
+    the way one given directly would be, so a page offering a guide per country gives the
+    logos of every country in it.
+
+    A page that links to neither is not a collection, and says so rather than quietly
+    adding nothing: a link that was typed wrong and a page with no logos on it look
+    exactly alike from the outside, and only one of them is worth telling somebody about.
+    """
+    page = _download(url).decode("utf-8", "replace")
+    links = _links_on(url, page)
+    images = [one for one in links if one.lower().rsplit("?", 1)[0].endswith(IMAGE_EXTENSIONS)]
+    guides = [
+        one for one in links
+        if one.lower().rsplit("?", 1)[0].endswith((".xml", ".xml.gz", ".xmltv", ".xmltv.gz"))
+    ]
+    entries = [
+        _entry(one.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("_", " ").replace("-", " "), one, label)
+        for one in images[: PAGE_FOLLOWS * 40]
+    ]
+    read, failed = 0, []
+    for guide in guides[:PAGE_FOLLOWS]:
+        try:
+            entries.extend(_from_xmltv(guide, label))
+            read += 1
+        except Exception as e:
+            # One guide of thirty being unreachable is not a reason to have none of them
+            failed.append(f"{guide.rsplit('/', 1)[-1]}: {type(e).__name__}")
+    if failed:
+        logger.warning(f"Logo library: {len(failed)} file(s) on {url} could not be read ({'; '.join(failed[:3])})")
+    if not entries:
+        raise ValueError(
+            "That page links to no logos and no guides. A page of images or of XMLTV "
+            "files is what this reads; for a list published as one file, use its own kind."
+        )
+    logger.info(
+        f"Logo library: {url} gave {len(entries)} logos from {len(images)} image(s) and "
+        f"{read} guide(s)"
+    )
+    return entries
+
+
+READERS = {
+    GITHUB: _from_github, M3U: _from_m3u, XMLTV: _from_xmltv, JSON_LIST: _from_json,
+    PAGE: _from_page,
+}
 
 
 def read_source(source):

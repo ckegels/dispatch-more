@@ -34,6 +34,12 @@ const KINDS = {
     label: 'JSON list of logos',
     placeholder: 'https://…/logos.json',
   },
+  // For the places that publish files rather than a list: a page of guides, a folder of
+  // picons. The page is the only address there is, so the page is what you give it.
+  page: {
+    label: 'A page that links to guides or images',
+    placeholder: 'https://www.epg.guru/',
+  },
 };
 
 const emptySource = { type: 'github', url: '', name: '' };
