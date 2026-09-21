@@ -559,7 +559,11 @@ const LogoLibraryTable = () => {
 
                 <Button
                   leftSection={<RefreshCw size={16} />}
-                  variant={sourcesChanged ? 'filled' : 'light'}
+                  variant={
+                    sourcesChanged || (status.out_of_date || []).length > 0
+                      ? 'filled'
+                      : 'light'
+                  }
                   size="xs"
                   loading={building}
                   onClick={rebuild}
@@ -611,6 +615,7 @@ const LogoLibraryTable = () => {
 
             {(error ||
               sourcesChanged ||
+              (status.out_of_date || []).length > 0 ||
               Object.keys(status.errors || {}).length > 0) && (
               <Stack
                 gap="xs"
@@ -626,9 +631,13 @@ const LogoLibraryTable = () => {
                     </Alert>
                   )
                 )}
-                {sourcesChanged && (
+                {(sourcesChanged || (status.out_of_date || []).length > 0) && (
                   <Alert color="blue">
-                    The collections have changed. Update the lists to use them.
+                    {(status.out_of_date || []).length > 0
+                      ? `${status.out_of_date.join(', ')} ${
+                          status.out_of_date.length === 1 ? 'is' : 'are'
+                        } switched on but was not in the last download, so none of its logos are being suggested yet. Update the lists to use it.`
+                      : 'The collections have changed. Update the lists to use them.'}
                   </Alert>
                 )}
               </Stack>

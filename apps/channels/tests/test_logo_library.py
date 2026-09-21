@@ -573,6 +573,45 @@ class SourcesViewTests(TestCase):
             found = logo_library._from_xmltv("https://example.com/g.xml.gz", "zipped")
         self.assertEqual([one["url"] for one in found], ["https://e/x.png"])
 
+    def test_a_collection_added_since_the_last_download_is_said_to_be_missing(self):
+        """
+        Adding a collection keeps it; it does not download it. Until the lists are
+        updated its logos are not suggested at all, which looks exactly like a collection
+        that does not work -- and the page only knew while it stayed open, so a reload
+        took the reminder away and left the collection still missing.
+        """
+        index = {"built_at": 1, "counts": {logo_library.TV_LOGOS: 10}, "errors": {}, "entries": {}}
+        sources = {"added": [{"id": "a1", "name": "epg.guru", "type": "page",
+                              "url": "https://www.epg.guru/", "enabled": True}], "off": []}
+        self.assertEqual(
+            logo_library.out_of_date(index, sources), [logo_library.IPTV_ORG, "epg.guru"]
+        )
+
+        # ...and once it has been downloaded, nothing is said
+        index["counts"]["epg.guru"] = 42
+        index["counts"][logo_library.IPTV_ORG] = 7
+        self.assertEqual(logo_library.out_of_date(index, sources), [])
+
+    def test_one_that_could_not_be_reached_is_not_called_missing(self):
+        # It was downloaded, and it failed: that is said in its own words elsewhere, and
+        # saying "update the lists" about it would send somebody round in a circle
+        index = {"built_at": 1, "counts": {}, "errors": {"epg.guru": "timed out"},
+                 "entries": {}}
+        sources = {"added": [{"id": "a1", "name": "epg.guru", "enabled": True}],
+                   "off": [logo_library.TV_LOGOS, logo_library.IPTV_ORG]}
+        self.assertEqual(logo_library.out_of_date(index, sources), [])
+
+    def test_a_collection_switched_off_is_not_waiting_for_anything(self):
+        index = {"built_at": 1, "counts": {logo_library.TV_LOGOS: 10}, "errors": {}, "entries": {}}
+        sources = {"added": [{"id": "a1", "name": "epg.guru", "enabled": False}],
+                   "off": [logo_library.IPTV_ORG]}
+        self.assertEqual(logo_library.out_of_date(index, sources), [])
+
+    def test_nothing_downloaded_at_all_is_not_one_collection_being_late(self):
+        # The page says that on its own, and in its own words
+        sources = {"added": [{"id": "a1", "name": "epg.guru", "enabled": True}], "off": []}
+        self.assertEqual(logo_library.out_of_date(None, sources), [])
+
     def test_a_built_in_one_can_be_switched_off_and_is_then_not_downloaded(self):
         self.client_api.patch(
             "/api/channels/logo-library/sources/",

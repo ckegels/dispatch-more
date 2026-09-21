@@ -99,7 +99,9 @@ const LogoSources = ({ onChanged }) => {
   };
 
   const toggle = async (source, enabled) => {
-    const result = await run(() => API.setLogoSourceEnabled(source.id, enabled));
+    const result = await run(() =>
+      API.setLogoSourceEnabled(source.id, enabled)
+    );
     if (result) {
       setData(result);
       onChanged && onChanged();
@@ -277,7 +279,11 @@ const LogoSources = ({ onChanged }) => {
                   src={logo.url}
                   alt={logo.name}
                   loading="lazy"
-                  style={{ maxWidth: '92%', maxHeight: '92%', objectFit: 'contain' }}
+                  style={{
+                    maxWidth: '92%',
+                    maxHeight: '92%',
+                    objectFit: 'contain',
+                  }}
                 />
               </Box>
             ))}
@@ -285,12 +291,23 @@ const LogoSources = ({ onChanged }) => {
         </Stack>
       )}
 
+      {(data?.out_of_date || []).length > 0 && (
+        <Alert color="blue">
+          {data.out_of_date.join(', ')}{' '}
+          {data.out_of_date.length === 1 ? 'is' : 'are'} switched on but not in
+          the lists yet, so none of{' '}
+          {data.out_of_date.length === 1 ? 'its' : 'their'} logos are being
+          suggested. Press Update Lists above.
+        </Alert>
+      )}
+
       <Text size="xs" c="dimmed">
         A collection is read when it is added, to see what it holds, and then
-        again each time the logo lists are updated. Its logos are suggested after
+        again each time the logo lists are updated. Adding one does not download
+        it: its logos are suggested from the next update onwards, and the same
+        goes for switching one off or removing it. Its logos are suggested after
         tv-logos, whose links last, and before iptv-org, whose images live on
-        sites that come and go. Switching one off, or removing it, takes effect
-        at the next update.
+        sites that come and go.
       </Text>
 
       <ConfirmationDialog

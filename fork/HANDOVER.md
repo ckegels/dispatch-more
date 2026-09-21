@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v156** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v157** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -340,6 +340,17 @@ unreachable file never loses the rest, and a page linking to neither says so out
 than quietly adding nothing -- a link typed wrong and a page with no logos on it look exactly
 alike from the outside. XMLTV published **gzipped** is now unpacked (`_unzipped`), which is
 how most guides are served.
+
+**Adding a collection does not download it** (`out_of_date`, v157). It is kept, and the
+index is built from every collection at once, so until the lists are next updated the new
+one is not in the index and **none of its logos are suggested** -- which looks exactly like
+a collection that does not work. The page did say so, from a flag it kept while it stayed
+open; a reload threw the flag away and left the collection still missing with nothing to
+explain it. It is worked out on the server now, by comparing the collections that are
+switched on against what the index was actually built from, so it survives a reload and
+cannot be out of step with the download. A collection that *was* downloaded and failed is
+not called missing -- that is said in its own words next to it, and "update the lists"
+about it would send somebody round in a circle.
 
 Choosing one of the smaller logos on a row **ticks it** (v140). It used to change the picture
 and leave the row as it was, so the logo somebody picked was shown and then not applied.
@@ -1162,6 +1173,11 @@ no longer play. Summary of how it works now:
   under the full suite. → when a test waits longer than its own timeout, the wait is the
   bug; and capture a suite's output to a file, because a run piped through `tail` loses the
   one thing worth having.
+- **A reminder that a reload threw away** (to v157): adding a logo collection told you to
+  update the lists, from a flag held in the page. Reload, and the reminder was gone while
+  the collection was still not downloaded and still suggesting nothing. → state that
+  explains why something is missing belongs where the missing thing is worked out, not in
+  the session that happened to notice.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

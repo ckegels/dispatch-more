@@ -19,12 +19,18 @@ MAX_APPLY = 5000
 
 def _status(index):
     if not index:
-        return {"built": False, "counts": {}, "errors": {}, "built_at": None}
+        return {
+            "built": False, "counts": {}, "errors": {}, "built_at": None,
+            "out_of_date": [],
+        }
     return {
         "built": True,
         "counts": index.get("counts") or {},
         "errors": index.get("errors") or {},
         "built_at": index.get("built_at"),
+        # Collections switched on that this index was built without: their logos are not
+        # being suggested, and nothing else on the page would say so
+        "out_of_date": logo_library.out_of_date(index),
     }
 
 
@@ -223,7 +229,12 @@ def _sources_page():
             "count": status["counts"].get(name),
             "error": status["errors"].get(name),
         })
-    return {"sources": rows, "types": list(logo_library.SOURCE_TYPES)}
+    return {
+        "sources": rows,
+        "types": list(logo_library.SOURCE_TYPES),
+        # Switched on, but not in the index: their logos are not being suggested yet
+        "out_of_date": logo_library.out_of_date(sources=sources),
+    }
 
 
 def _checked(source):

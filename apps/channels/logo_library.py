@@ -531,6 +531,43 @@ def build_index(cache=None):
     return {"counts": counts, "errors": errors, "names": len(by_key)}
 
 
+_ASK_FOR_IT = object()
+
+
+def out_of_date(index=_ASK_FOR_IT, sources=None):
+    """
+    The collections that are switched on but are not in the index, by name.
+
+    Adding a collection keeps it; it does not download it, because a download is every
+    collection and minutes of work. So until the lists are updated the new one is not in
+    the index and none of its logos are suggested -- which looks exactly like a collection
+    that does not work.
+
+    The page used to say so from a flag it kept while it was open, which a reload threw
+    away: the reminder disappeared and the collection still was not there. Worked out here
+    instead, from what the index actually holds, so it survives a reload and cannot be
+    out of step with what was really downloaded.
+    """
+    # None is an answer -- nothing has ever been downloaded -- so "not given" has to be
+    # something else, or the caller who knows there is no index cannot say so
+    index = load_index() if index is _ASK_FOR_IT else index
+    sources = load_sources() if sources is None else sources
+    counts = (index or {}).get("counts") or {}
+    errors = (index or {}).get("errors") or {}
+    known = set(counts) | set(errors)
+    if not index:
+        # Nothing has ever been downloaded: that is not one collection being out of date,
+        # it is the lists never having been fetched, which the page says on its own
+        return []
+    wanted = [name for name in (TV_LOGOS, IPTV_ORG) if name not in sources["off"]]
+    wanted += [
+        (added.get("name") or added.get("url"))
+        for added in sources["added"]
+        if added.get("enabled", True)
+    ]
+    return [name for name in wanted if name and name not in known]
+
+
 def load_index(cache=None):
     """The index as it was last built, or None when it has not been."""
     if cache is None:

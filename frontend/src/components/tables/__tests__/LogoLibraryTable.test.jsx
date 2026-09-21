@@ -505,4 +505,31 @@ describe('LogoLibraryTable', () => {
     fireEvent.click(screen.getByLabelText(/logo 1 for ┃FR┃ TFX/));
     await waitFor(() => expect(main()).toHaveAttribute('src', TFX_FR));
   });
+
+  // Adding a collection keeps it; it does not download it. The page said so from a flag
+  // it kept while it stayed open, and a reload took the reminder away -- so the
+  // collection was missing and nothing said why.
+  it('says a collection is not in the lists yet, and goes on saying it', async () => {
+    API.getLogoLibrary.mockResolvedValue({
+      ...library,
+      status: { ...library.status, out_of_date: ['epg.guru'] },
+    });
+    render(<LogoLibraryTable />);
+
+    // Said on a fresh load, with nothing clicked and no flag from this session
+    expect(
+      await screen.findByText(/epg.guru is switched on but was not in the last download/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/none of its logos are being suggested yet/)).toBeInTheDocument();
+  });
+
+  it('and says nothing when every collection is in them', async () => {
+    API.getLogoLibrary.mockResolvedValue({
+      ...library,
+      status: { ...library.status, out_of_date: [] },
+    });
+    render(<LogoLibraryTable />);
+    await screen.findByText('┃BE┃ Eén');
+    expect(screen.queryByText(/not in the last download/)).toBeNull();
+  });
 });
