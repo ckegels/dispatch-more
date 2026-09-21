@@ -532,6 +532,67 @@ class _Answer:
         pass
 
 
+class SharedStateTests(TestCase):
+    """
+    Every provider is checked in a thread of its own and they all write to the same
+    results, the same queue of urgent siblings, and the same counters in Redis.
+    """
+
+    def test_the_lock_lets_a_thread_take_it_twice(self):
+        # The tidy-up at the end of a provider's thread already holds the lock when it
+        # keeps what it held back, so a plain Lock there is a thread that never returns
+        import threading
+
+        lock = threading.RLock()
+        with lock:
+            got = lock.acquire(blocking=False)
+            self.assertTrue(got, "the run's lock has to be re-entrant")
+            if got:
+                lock.release()
+
+    def test_a_counter_read_and_written_back_needs_the_lock(self):
+        # Two threads finishing together lost one of the two
+        import threading
+
+        redis = FakeRedis()
+        stream_check._progress(redis, done=0)
+        lock = threading.RLock()
+
+        def bump():
+            for _ in range(200):
+                with lock:
+                    stream_check._progress(
+                        redis, done=stream_check.progress(redis).get("done", 0) + 1
+                    )
+
+        threads = [threading.Thread(target=bump) for _ in range(4)]
+        for one in threads:
+            one.start()
+        for one in threads:
+            one.join()
+        self.assertEqual(stream_check.progress(redis).get("done"), 800)
+
+
+class HidingTests(TestCase):
+    def test_hiding_a_channel_and_recording_it_are_one_thing(self):
+        # A channel hidden with no record of this having hidden it is one this will never
+        # show again, because it cannot tell it from one you hid yourself
+        from unittest.mock import patch
+
+        group = ChannelGroup.objects.create(name="g")
+        channel = Channel.objects.create(name="A", channel_number=1, channel_group=group)
+
+        with patch.object(stream_check, "_change_key", side_effect=RuntimeError("gone")):
+            with self.assertRaises(RuntimeError):
+                stream_check._hide_emptied([channel.id])
+
+        channel.refresh_from_db()
+        self.assertFalse(
+            channel.hidden_from_output,
+            "hidden with nothing written down is hidden for ever",
+        )
+
+
 class _Setup(TestCase):
     def setUp(self):
         self.a = M3UAccount.objects.create(name="Provider A", account_type="STD", server_url="http://a", is_active=True)

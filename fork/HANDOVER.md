@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v164** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v165** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1101,6 +1101,17 @@ no longer play. Summary of how it works now:
 - **What comes to the top is a lever** (v153, "Bring to the top"): broken, failing, not
   checked or plays. Not a filter -- nothing leaves the list, and everything else keeps the
   order it had, since the sort is stable and the list is in channel order underneath.
+- **What is kept is kept under the lock** (v165). Every provider is checked in a thread of
+  its own, and they all write to the same results, the same queue of urgent siblings and the
+  same counters in Redis. `count()` said "under the lock" in its own docstring and was
+  called without it from every place but one. The results themselves were safe -- a stream
+  belongs to one thread, and a dict write is atomic -- but "12 broken so far" and the done
+  count are read, added to and written back, so two providers finishing together lost one of
+  the two. The lock is re-entrant, because the tidy-up at the end of a thread already holds
+  it when it keeps what it held back.
+- **Hiding a channel and writing that down are one thing** (v165). A channel hidden with no
+  record of *this* having hidden it is one it will never show again, because it cannot tell
+  it from one you hid yourself.
 - **A channel is dealt with a channel at a time:** Park all / Remove all on the row, and the
   action endpoint takes `stream_ids` as well as `stream_id` (one stream that cannot be done
   does not stop the rest). Doing it a stream at a time took the row out from under you --

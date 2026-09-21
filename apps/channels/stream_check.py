@@ -1982,7 +1982,9 @@ def run(redis_client, only=None, batch_seconds=None):
                 redis_client.delete(LIVE_RESULTS_KEY)
                 return "more"
 
-        lock = threading.Lock()
+        # Re-entrant: what is kept is kept under this lock, and the tidy-up at the end of
+        # a provider's thread already holds it when it keeps what it held back
+        lock = threading.RLock()
         # Everything the providers' threads need from the database, read here: a thread has
         # a database connection of its own, and all it should do is talk to providers
         providers = _Providers(redis_client)
@@ -2052,7 +2054,19 @@ def run(redis_client, only=None, batch_seconds=None):
         urgent = set()
 
         def count(stream, outcome):
-            """What was found kept, under the lock."""
+            """
+            What was found, kept.
+
+            Under the lock, which it says it is and mostly was not: every provider is a
+            thread of its own and they all write to the same results, the same queue of
+            urgent siblings, and the same counters in Redis. The counters are the ones
+            that suffered -- "12 broken so far" is read, added to and written back, so two
+            threads finishing together lost one of the two.
+            """
+            with lock:
+                _count(stream, outcome)
+
+        def _count(stream, outcome):
             record = _record(redis_client, results, stream, outcome, settings, round_id)
             if record["state"] in ("failing", "broken"):
                 # The same channel from its other providers goes to the front of their
@@ -2347,7 +2361,13 @@ def run(redis_client, only=None, batch_seconds=None):
                             account_held.append((stream, outcome))
                         entry["done"] += 1
                         entry["left"] -= 1
-                        _progress(redis_client, accounts=accounts, done=progress(redis_client).get("done", 0) + 1)
+                        # Read, added to and written back: two providers finishing together
+                        # lost one of the two without this
+                        with lock:
+                            _progress(
+                                redis_client, accounts=accounts,
+                                done=progress(redis_client).get("done", 0) + 1,
+                            )
 
                     if len(account_held) >= give_up_after:
                         reason = f"its first {len(account_held)} streams all failed ({account_held[-1][1]['reason']})"
@@ -2849,13 +2869,18 @@ def _hide_emptied(channel_ids):
     ]
     if not emptied:
         return
-    Channel.objects.filter(id__in=[c.id for c in emptied]).update(hidden_from_output=True)
 
     def change(hidden):
         for channel in emptied:
             hidden[str(channel.id)] = {"name": channel.name, "number": channel.channel_number, "hidden_at": _now()}
 
-    _change_key(HIDDEN_KEY, "Stream Check hidden channels", change)
+    # Both together or neither: a channel hidden with no record of this having hidden it is
+    # a channel this will never show again, because it cannot tell it from one you hid
+    from django.db import transaction
+
+    with transaction.atomic():
+        Channel.objects.filter(id__in=[c.id for c in emptied]).update(hidden_from_output=True)
+        _change_key(HIDDEN_KEY, "Stream Check hidden channels", change)
     logger.info(f"Stream Check: hid {len(emptied)} channel(s) with nothing but parked streams: "
                 + ", ".join(c.name for c in emptied))
 
