@@ -538,6 +538,56 @@ class PlaylistTests(_Setup):
             stream_check.unlisted_in(self.a.id, [self.first, self.third]), set()
         )
 
+    def test_the_page_says_so_without_a_run_ever_happening(self):
+        """
+        Nothing has to be checked to know this. It is in the playlist Dispatcharr already
+        read, so a page opened on a setup that has never run a check still shows it.
+        """
+        self._more_of(self.a, 10)
+        self._stale(self.first)
+
+        found = stream_check.issues(FakeRedis(), show="problems")
+        row = next(r for r in found["rows"] if r["channel"]["id"] == self.orf1.id)
+        self.assertEqual(row["unlisted"], 1)
+        gone = next(s for s in row["streams"] if s["id"] == self.first.id)
+        self.assertEqual(gone["state"], "broken")
+        self.assertEqual(gone["result"]["kind"], stream_check.UNLISTED)
+        self.assertGreaterEqual(gone["confidence"], 75)
+        # ...and the ones still in the playlist are not touched by it
+        other = next(s for s in row["streams"] if s["id"] == self.second.id)
+        self.assertEqual(other["state"], "unchecked")
+
+    def test_a_stream_left_alone_stays_left_alone(self):
+        self._more_of(self.a, 10)
+        self._stale(self.first)
+        stream_check.ignore(self.first.id)
+
+        found = stream_check.issues(FakeRedis(), show="all")
+        row = next((r for r in found["rows"] if r["channel"]["id"] == self.orf1.id), None)
+        if row:
+            gone = next(s for s in row["streams"] if s["id"] == self.first.id)
+            self.assertEqual(gone["state"], "ignored")
+
+    def test_and_the_playlist_has_the_last_word_over_what_a_run_found(self):
+        # A run said it played; the provider has since taken it out of the playlist. What
+        # the run counted is kept, and the verdict is the playlist's.
+        self._more_of(self.a, 10)
+        self._stale(self.first)
+        redis = FakeRedis()
+        stream_check._keep_results({str(self.first.id): {
+            "ok": True, "kind": "", "failures": 0, "history": [1], "name": "ORF 1 A",
+            "state": "ok", "checked_at": "yesterday",
+        }})
+
+        row = next(
+            r for r in stream_check.issues(redis, show="problems")["rows"]
+            if r["channel"]["id"] == self.orf1.id
+        )
+        gone = next(s for s in row["streams"] if s["id"] == self.first.id)
+        self.assertEqual(gone["state"], "broken")
+        self.assertFalse(gone["result"]["ok"])
+        self.assertEqual(gone["result"]["checked_at"], "yesterday")
+
     def test_it_is_broken_at_once_and_not_failing(self):
         # Not a stream that failed once and may pass next time
         record = {"ok": False, "kind": stream_check.UNLISTED, "failures": 1}

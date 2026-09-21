@@ -59,6 +59,32 @@ const channelRow = {
   dead: false,
 };
 
+// A channel with a stream the provider has stopped listing. Nothing here came from a run:
+// the playlist says it, so the page says it whether or not a check has ever happened.
+const unlistedRow = {
+  key: 'ch:2',
+  kind: 'channel',
+  channel: { id: 2, name: '┃AT┃ ORF 2', number: 2, group: '┃AT┃ AUSTRIA', logo_url: '' },
+  streams: [
+    {
+      id: 21, name: 'ORF 2 A', account: 'Provider A', custom: false, hash: 'h21',
+      state: 'broken',
+      result: {
+        ok: false, kind: 'unlisted', unlisted: true,
+        reason: 'The provider stopped listing this stream',
+        resolution: '', codec: '', history: [],
+      },
+      confidence: 75,
+      confidence_why: ['the provider does not list this stream any more'],
+    },
+  ],
+  broken: 1,
+  failing: 0,
+  working: 0,
+  unlisted: 1,
+  dead: true,
+};
+
 const parkedRow = {
   id: 13,
   name: 'ORF 1 C',
@@ -415,5 +441,33 @@ describe('StreamCheckTable', () => {
     await open();
     // The stream that plays has no number on it at all
     expect(screen.getAllByText(/sure it is broken/)).toHaveLength(1);
+  });
+
+  // The provider's own word, which needs no check at all: it is in the playlist
+  // Dispatcharr has already read
+  it('says which streams the provider has dropped without a run having happened', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({ rows: [channelRow, unlistedRow], last_run: {} })
+    );
+    draw();
+    await screen.findByText('┃AT┃ ORF 2');
+
+    expect(
+      screen.getByText(/1 channel has a stream the provider has stopped listing/)
+    ).toBeInTheDocument();
+    expect(screen.getByText('1 gone from the playlist')).toBeInTheDocument();
+  });
+
+  it('and shows only those when asked', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({ rows: [channelRow, unlistedRow] })
+    );
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+
+    fireEvent.click(screen.getByRole('button', { name: /Show me/ }));
+
+    expect(await screen.findByText('┃AT┃ ORF 2')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull());
   });
 });

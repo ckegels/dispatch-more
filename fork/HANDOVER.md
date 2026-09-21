@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v151** (2026-09-20). The commit messages on the branch
+Written 2026-09-19, kept current to **release v152** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -859,6 +859,15 @@ no longer play. Summary of how it works now:
   They are settled before a single connection is opened, counted `broken` at once rather
   than after `broken_after` runs (nothing is going to change next run), and worth 75 on
   their own in `confidence_of`.
+  **And the page says it without a run having happened** (v152). It is already written
+  down, so waiting for a run to reach a stream before saying what the playlist has said all
+  along was backwards: `issues()` reads it (`believed_playlists`, one query for every
+  account) every time the page loads. A setup that has never run a check still sees which
+  of its streams the providers have dropped -- a notice over the table, a red count on the
+  channel, and a view of its own in the picker. Where a run *had* reached the stream, what
+  it counted is kept and the verdict is the playlist's: the playlist is newer, and it is a
+  different kind of fact -- a run judged a stream that existed, the provider has since said
+  it does not.
   **The guard:** if more than `MOST_OF_A_PLAYLIST` (0.9) of an account's streams are marked,
   that is a refresh that failed part way and not a provider that dropped its whole playlist,
   and nothing is said about any of them. An account nobody has ever refreshed has nothing

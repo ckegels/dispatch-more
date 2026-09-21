@@ -1409,9 +1409,9 @@ def _targets(settings, only=None, due_before=None, skip_accounts=(), waiting_too
 MOST_OF_A_PLAYLIST = 0.9
 
 
-def unlisted_in(account_id, streams):
+def believed_playlists():
     """
-    Which of these streams the provider has stopped listing, as ids.
+    The M3U accounts whose "not in the playlist any more" marks can be acted on, as ids.
 
     Dispatcharr's own record of it: a refresh of an M3U account marks every stream it did
     not see this time as stale and clears the mark on the ones it did (`Stream.is_stale`,
@@ -1420,25 +1420,42 @@ def unlisted_in(account_id, streams):
     provider's own word on whether the stream still exists, and worth more than anything a
     check can learn by opening a connection.
 
-    An account nobody has ever refreshed has nothing marked, so nothing is said about it,
-    which is the right answer for it.
+    An account past MOST_OF_A_PLAYLIST is left out: that is a refresh that failed part way
+    rather than a provider that dropped everything. An account nobody has ever refreshed
+    has nothing marked at all, so it is left out too, and nothing is said about it -- which
+    is the right answer for it.
+
+    One query for every account, because the page asks this about every stream it draws.
     """
+    from django.db.models import Count, Q
+
     from .models import Stream
 
-    gone = {s.id for s in streams if getattr(s, "is_stale", False)}
-    if not gone:
+    believed = set()
+    for row in (
+        Stream.objects.filter(m3u_account__isnull=False)
+        .values("m3u_account_id")
+        .annotate(all_of_them=Count("id"), missing=Count("id", filter=Q(is_stale=True)))
+    ):
+        if not row["missing"]:
+            continue
+        if row["missing"] >= max(1, row["all_of_them"] * MOST_OF_A_PLAYLIST):
+            logger.info(
+                f"Stream Check: {row['missing']} of {row['all_of_them']} streams of account "
+                f"{row['m3u_account_id']} are not in its playlist any more -- reading that as "
+                f"a refresh that went wrong, not as a provider that dropped them, and saying "
+                f"nothing about them"
+            )
+            continue
+        believed.add(row["m3u_account_id"])
+    return believed
+
+
+def unlisted_in(account_id, streams, believed=None):
+    """Which of these streams the provider has stopped listing, as ids."""
+    if account_id not in (believed_playlists() if believed is None else believed):
         return set()
-    counts = Stream.objects.filter(m3u_account_id=account_id)
-    total = counts.count()
-    missing = counts.filter(is_stale=True).count()
-    if not total or missing >= max(1, total * MOST_OF_A_PLAYLIST):
-        logger.info(
-            f"Stream Check: {missing} of {total} streams of account {account_id} are not in "
-            f"its playlist any more -- reading that as a refresh that went wrong, not as a "
-            f"provider that dropped them, and saying nothing about them"
-        )
-        return set()
-    return gone
+    return {s.id for s in streams if getattr(s, "is_stale", False)}
 
 
 def _pick_next(left, urgent):
@@ -1679,7 +1696,7 @@ def confidence_of(record, others=()):
         picked.append("confirmed")
 
     kind = record.get("kind")
-    if kind == UNLISTED:
+    if kind == UNLISTED or record.get("unlisted"):
         picked.append("not_listed")
     if kind == PLACEHOLDER:
         picked.append("providers_card")
@@ -1907,8 +1924,9 @@ def run(redis_client, only=None, batch_seconds=None):
         # about -- which is the whole brake on a run.
         if settings.get("trust_the_playlist", True):
             settled = 0
+            believed = believed_playlists()
             for account_id, streams in list(by_account.items()):
-                gone = unlisted_in(account_id, streams)
+                gone = unlisted_in(account_id, streams, believed)
                 if not gone:
                     continue
                 for stream in streams:
@@ -2895,6 +2913,18 @@ def issues(redis_client, show="problems", keep=()):
     results = current_results(redis_client)["streams"]
     parked = load_parked()
     ignored = load_ignored()
+    # Which streams the provider has stopped listing. Read here rather than waiting for a
+    # run to reach them: it is already written down, there is nothing to check, and a
+    # channel whose streams the provider has dropped is exactly what somebody opening this
+    # page wants to see first.
+    believed = believed_playlists() if settings.get("trust_the_playlist", True) else set()
+
+    def gone_from_playlist(stream):
+        return bool(
+            not stream.is_custom
+            and stream.is_stale
+            and stream.m3u_account_id in believed
+        )
 
     def state(stream_id):
         if str(stream_id) in ignored:
@@ -2912,7 +2942,13 @@ def issues(redis_client, show="problems", keep=()):
     rows = []
     for channel_id, found in by_channel.items():
         channel = found["channel"]
-        streams = [_stream_row(link.stream, results, state(link.stream_id)) for link in found["links"]]
+        streams = [
+            _stream_row(
+                link.stream, results, state(link.stream_id), settings,
+                unlisted=gone_from_playlist(link.stream),
+            )
+            for link in found["links"]
+        ]
         real = [s for s in streams if not s["custom"]]
         # How sure we are about each, which needs the others of the same channel: they say
         # whether the channel is gone or this one copy of it is
@@ -2952,6 +2988,7 @@ def issues(redis_client, show="problems", keep=()):
             "failing": len(bad) - len(broken),
             "working": len(working),
             "needs_you": len(needs_you),
+            "unlisted": len([s for s in real if (s.get("result") or {}).get("unlisted")]),
             "suspects": len(suspects),
             # Nothing left that plays: a viewer gets the fallback or nothing
             "dead": bool(real) and not working and len(broken) == len(real),
@@ -3004,8 +3041,22 @@ def issues(redis_client, show="problems", keep=()):
     return {"rows": rows, "parked": parked_rows, "hidden_channels": hidden_rows, "ignored": ignored_rows}
 
 
-def _stream_row(stream, results, state):
+def _stream_row(stream, results, state, settings=None, unlisted=False):
     result = results.get(str(stream.id))
+    if unlisted and state != "ignored":
+        # The playlist is both newer than any check and a different kind of thing: what a
+        # run found was a judgement about a stream that existed, and the provider has
+        # since said it does not. What the run counted is kept -- the history, how many
+        # times it failed -- and the verdict is the playlist's.
+        result = {
+            "resolution": "", "codec": "", "seconds": 0.0,
+            **(result or {}),
+            "ok": False,
+            "kind": UNLISTED,
+            "reason": "The provider stopped listing this stream",
+            "unlisted": True,
+        }
+        state = state_of(result, settings or load_settings())
     return {
         "id": stream.id,
         "name": stream.name,

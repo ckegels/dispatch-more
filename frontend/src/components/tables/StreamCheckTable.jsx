@@ -397,7 +397,7 @@ const StreamCheckTable = () => {
         // Parked streams come with every answer; the channels shown depend on the filter
         setData(
           await API.getStreamCheck(
-            ['parked', 'needs_you', 'ignored'].includes(show)
+            ['parked', 'needs_you', 'ignored', 'unlisted'].includes(show)
               ? 'problems'
               : show,
             [...keepShowing]
@@ -516,6 +516,13 @@ const StreamCheckTable = () => {
   const actions = useRef({ act, ask });
   actions.current = { act, ask };
 
+  // How many channels have a stream their provider no longer lists. Not a count of what a
+  // run found: it is read from the playlist every time the page loads.
+  const unlistedCount = useMemo(
+    () => (data?.rows || []).filter((row) => row.unlisted > 0).length,
+    [data]
+  );
+
   const rows = useMemo(() => {
     const all =
       show === 'parked'
@@ -528,7 +535,9 @@ const StreamCheckTable = () => {
           }))
         : show === 'needs_you'
           ? (data?.rows || []).filter((row) => row.needs_you > 0)
-          : data?.rows || [];
+          : show === 'unlisted'
+            ? (data?.rows || []).filter((row) => row.unlisted > 0)
+            : data?.rows || [];
     const wanted = search.trim().toLowerCase();
     const found = wanted
       ? all.filter((row) =>
@@ -587,6 +596,13 @@ const StreamCheckTable = () => {
               {r.needs_you > 0 && (
                 <Badge size="xs" variant="outline" color="orange">
                   {r.needs_you} need{r.needs_you === 1 ? 's' : ''} you
+                </Badge>
+              )}
+              {/* Not something a run found: the provider's playlist says so, and it says
+                  so whether or not a check has ever been near this channel */}
+              {r.unlisted > 0 && (
+                <Badge size="xs" variant="filled" color="red">
+                  {r.unlisted} gone from the playlist
                 </Badge>
               )}
               {!r.broken && !r.failing && !r.suspects && (
@@ -856,6 +872,10 @@ const StreamCheckTable = () => {
                     { value: 'broken', label: 'Broken only' },
                     { value: 'needs_you', label: 'Needs you' },
                     {
+                      value: 'unlisted',
+                      label: `Gone from the playlist (${unlistedCount})`,
+                    },
+                    {
                       value: 'parked',
                       label: `Parked (${data?.parked?.length ?? 0})`,
                     },
@@ -961,6 +981,29 @@ const StreamCheckTable = () => {
                     }, ${rule}.`
                   : `Only runs when started here, ${rule}.`}
               </Text>
+              {/* Said whether or not a run has ever happened: the provider's playlist
+                  already says these are gone, and nothing has to be checked to read it */}
+              {unlistedCount > 0 && show !== 'unlisted' && (
+                <Group gap="xs" mt={4}>
+                  <Text size="xs" c="red.5" fw={500}>
+                    {unlistedCount} channel
+                    {unlistedCount === 1 ? ' has a stream' : 's have streams'}{' '}
+                    the provider has stopped listing. Nothing needs checking to
+                    know that.
+                  </Text>
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    color="red"
+                    onClick={() => {
+                      setShow('unlisted');
+                      setPageIndex(0);
+                    }}
+                  >
+                    Show me
+                  </Button>
+                </Group>
+              )}
               {data?.running && (
                 <Group gap="md" mt={4}>
                   {Object.values(progress.accounts || {}).map((account) => (
