@@ -78,6 +78,24 @@ def without_quality(key) -> str:
     return key
 
 
+# Every two-letter country there is (ISO 3166-1 alpha-2), so that two letters and a colon
+# are only read as a country when they are one. A playlist writes "GO: CNN", "SK: CNN" and
+# "TV: CNN" for its own reasons, and reading "GO" as a country quietly cost the right guide
+# thirty points for being in the wrong one -- the same invisible penalty as ┃USA┃ against
+# .us before v146. A box is left as it is: somebody who wrote "┃EX┃" meant a place.
+ISO_COUNTRIES = set("""
+ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg bh bi bj bl bm bn bo bq
+br bs bt bv bw by bz ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz de dj dk dm
+do dz ec ee eg eh er es et fi fj fk fm fo fr ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs
+gt gu gw gy hk hm hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km kn
+kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc md me mf mg mh mk ml mm mn mo mp mq
+mr ms mt mu mv mw mx my mz na nc ne nf ng ni nl no np nr nu nz om pa pe pf pg ph pk pl pm
+pn pr ps pt pw py qa re ro rs ru rw sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st sv
+sx sy sz tc td tf tg th tj tk tl tm tn to tr tt tv tw tz ua ug um us uy uz va vc ve vg vi
+vn vu wf ws ye yt za zm zw uk
+""".split())
+
+
 def country_of(name) -> str:
     """
     The country a channel name says it is from, as its two letters, or "".
@@ -85,13 +103,22 @@ def country_of(name) -> str:
     Playlists write it in front in a box of some kind ("┃FR┃", "[BE]", "FR |"), which is
     the best hint there is for choosing between channels of the same name: there is a TFX
     in France and one in Belgium, with different logos.
+
+    A box is taken at its word. Two letters and a colon are only taken when they are a
+    country that exists: that shape is also how a playlist marks which of its own packages
+    a channel came from ("GO:", "SK:", "VIP:"), and a package read as a country is a
+    penalty against every guide from the right one.
     """
     found = re.match(r"\s*[┃|\[(]?\s*([A-Za-z]{2,3})\s*[┃|\])]", str(name or ""))
-    if not found:
-        found = re.match(r"\s*([A-Za-z]{2})\s*[:|-]\s", str(name or ""))
+    if found:
+        code = found.group(1).lower()
+        return COUNTRY_ALIASES.get(code, code)
+    found = re.match(r"\s*([A-Za-z]{2})\s*[:|-]\s", str(name or ""))
     if not found:
         return ""
     code = found.group(1).lower()
+    if code not in ISO_COUNTRIES:
+        return ""
     return COUNTRY_ALIASES.get(code, code)
 
 

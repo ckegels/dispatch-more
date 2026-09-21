@@ -31,7 +31,7 @@ import fnmatch
 import logging
 import re
 
-from . import logo_library
+from . import known_channels, logo_library
 
 logger = logging.getLogger(__name__)
 
@@ -325,7 +325,17 @@ def quality_of(name, stats=None):
 
 
 def _strip_country_box(name):
-    return re.sub(r"^\s*[┃|\[(][^┃|\])]*[┃|\])]\s*", "", name or "").strip()
+    """
+    The name without the country a playlist writes in front of it.
+
+    Both shapes: a box of some kind, and the "US: " a playlist writes instead -- but only
+    where those two letters are a country (logo_library.country_of), since the same shape
+    is how a package is written and a package is a word of nobody's name.
+    """
+    plain = re.sub(r"^\s*[┃|\[(][^┃|\])]*[┃|\])]\s*", "", name or "").strip()
+    if plain == (name or "").strip() and logo_library.country_of(plain):
+        plain = re.sub(r"^\s*[A-Za-z]{2}\s*[:|-]\s*", "", plain).strip()
+    return plain
 
 
 def country_for(name, group_name=""):
@@ -692,6 +702,21 @@ NUMBER_WORDS = {
 # same word and matches them at a hundred per cent.
 SIDE_WORDS = {"east", "west", "eastern", "western", "atlantic", "pacific"}
 
+# What a playlist writes in front to say which of its own packages a channel came from.
+# It is not part of the channel's name and no guide has ever heard of it, so it is taken
+# off before anything is compared -- an unmatched "SLING" costs a right answer a third of
+# its score. Only in front, and only with the colon or bar a playlist writes it with:
+# "PRIME" in the middle of a name is Amazon Prime and belongs to the channel.
+PROVIDER_PREFIXES = {
+    "sling", "go", "now", "vip", "prime", "sky", "plex", "pluto", "samsung", "tubi",
+    "fubo", "philo", "peacock", "stirr", "xumo", "roku", "frndly", "directv", "dtv",
+    "hulu", "youtube", "yt", "backup", "bk", "alt", "raw", "src", "source", "test",
+}
+
+# A channel that plays the same thing round the clock has no schedule anywhere, so no
+# guide is the right guide for it: a match is wrong before it is scored.
+ROUND_THE_CLOCK = ("24/7", "24-7", "247:", "24 7")
+
 # The word that makes a channel one of a network's family rather than the network itself.
 # Nat Geo Wild is not National Geographic, Nick Jr is not Nickelodeon, Discovery Science
 # is not Discovery -- and once a short form is written out in full (ALSO_WRITTEN) the two
@@ -712,6 +737,8 @@ FAMILY_WORDS = {
 NOT_THE_CHANNEL = {
     "hd", "fhd", "uhd", "sd", "4k", "8k", "hevc", "h264", "h265", "raw", "dt", "tv",
     "1080p", "1080i", "720p", "576p", "480p", "50fps", "60fps",
+    # What a playlist marks a spare copy with. Not the channel either way.
+    "backup", "bkup",
 }
 
 
@@ -786,6 +813,33 @@ def _written_out(words):
 _STARTS_ONE = {key[0] for key in ALSO_WRITTEN}
 
 
+def _without_prefix(text):
+    """
+    The name with a playlist's own package prefix taken off the front.
+
+    Taken off one at a time, because they come in pairs: "US: SLING: CNN". The colon or
+    bar is what makes it a prefix; without one it is a word of the name.
+    """
+    for _ in range(3):
+        found = re.match(r"\s*([A-Za-z][A-Za-z0-9/\-]{0,9})\s*[:|]\s*", text)
+        if not found or found.group(1).strip().lower() not in PROVIDER_PREFIXES:
+            break
+        text = text[found.end():]
+    return text
+
+
+def round_the_clock(name):
+    """
+    Whether this is a channel that plays one thing on a loop, which has no guide anywhere.
+
+    Written in front like a package is ("24/7: The Office"), and the only thing on it is
+    the thing in its name -- so the right answer is no guide at all, and any guide offered
+    for it is wrong however well the names read.
+    """
+    plain = _strip_country_box(str(name or "")).strip().lower()
+    return plain.startswith(ROUND_THE_CLOCK)
+
+
 def guide_words(name):
     """
     A name as the words that say which channel it is.
@@ -801,12 +855,16 @@ def guide_words(name):
     import unicodedata
 
     text = _strip_country_box(str(name or ""))
+    text = _without_prefix(text)
     # Camel case is two words written as one, and guides are full of it
     text = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", text).lower()
     text = text.replace("&", " and ").replace("+", " plus ")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
-    text = re.sub(r"[^0-9a-z]+", " ", text)
+    # Lowered again after the unpacking, not only before it: "ᶠᴴᴰ" unpacks to "fHD", and
+    # the sweep below keeps only lower-case letters -- so it ate the H and the D and left
+    # a stray "f" on the name, costing the right guide a quarter of its score
+    text = re.sub(r"[^0-9a-z]+", " ", text.lower())
     # Dropped before letters and digits are parted, so "4k" is still one word here
     kept = " ".join(w for w in text.split() if w not in NOT_THE_CHANNEL)
     # Letters and digits stuck together are two words: "BBC1" is "BBC 1", and has to be,
@@ -897,27 +955,73 @@ NOT_A_CALL_SIGN = {
 CALL_SIGN_COUNTRIES = {"", "us", "ca", "mx", "pr"}
 
 
-def _identity_of(words, country=""):
+def _shift_of(words):
+    """
+    How many hours this name says it is shifted by, as a string, or "".
+
+    "ITV2 +1" is not ITV2: it is the same programmes an hour later, and a guide for one is
+    wrong for the other by exactly an hour. Written "+1" (which guide_words has turned into
+    "plus 1" by now), and sometimes "+24" or "+2".
+    """
+    for at, word in enumerate(words):
+        if word == "plus" and at + 1 < len(words) and words[at + 1].isdigit():
+            return words[at + 1]
+    return ""
+
+
+def _is_frequency(words, at):
+    """
+    Whether the number at this place is a radio frequency rather than a channel number.
+
+    "CNN 101.5 FM" is one station, not channel 101. A frequency is two numbers the dot
+    between them has parted, with FM or AM beside them.
+    """
+    if at + 1 < len(words) and words[at + 1].isdigit():
+        if any(w in ("fm", "am") for w in words[at:at + 4]):
+            return True
+    if at and words[at - 1].isdigit() and any(w in ("fm", "am") for w in words[at - 1:at + 3]):
+        return True
+    return False
+
+
+def _identity_of(words, country="", known_calls=None):
     """
     What in these words picks one channel out from the others of its name: the number it
-    carries, which side of the country it is for, and its call sign.
+    carries, which side of the country it is for, its call sign, and how far it is shifted.
 
     A call sign is the American way of naming a station -- WNET, KQED -- and two of them
     are never the same station. Only taken as one where it can be one: in a country that
     allocates them, four letters beginning with K or W, and not a word.
     """
-    number = next((w for w in words if w.isdigit()), "")
+    shift = _shift_of(words)
+    number = next(
+        (
+            w for at, w in enumerate(words)
+            if w.isdigit() and not _is_frequency(words, at)
+            # The hours of a time shift are not the channel's number
+            and not (shift and w == shift and at and words[at - 1] == "plus")
+        ),
+        "",
+    )
     side = next((w for w in words if w in SIDE_WORDS), "")
     call = ""
     if _one_country(country) in CALL_SIGN_COUNTRIES:
-        call = next(
-            (
-                w for w in words
-                if len(w) == 4 and w[0] in "kw" and w.isalpha() and w not in NOT_A_CALL_SIGN
-            ),
-            "",
-        )
-    return {"number": number, "side": side, "call": call}
+        if known_calls is None:
+            # Nobody has read the guides yet, so the shape of the word is all there is
+            call = next(
+                (
+                    w for w in words
+                    if len(w) == 4 and w[0] in "kw" and w.isalpha() and w not in NOT_A_CALL_SIGN
+                ),
+                "",
+            )
+        else:
+            # A word is a call sign when some guide in this install carries it as one, and
+            # not because it happens to be four letters beginning with W. See
+            # known_channels.call_signs_in: it is the FCC's list, narrowed to the stations
+            # anybody here could be watching, and it never goes stale.
+            call = next((w for w in words if w in known_calls), "")
+    return {"number": number, "side": side, "call": call, "shift": shift}
 
 
 def _country_of_guide(entry):
@@ -946,7 +1050,7 @@ LIKELY_SCORE = 80
 TVG_NEEDS_NAME = 55
 
 
-def judge_guide(name, country, entry, tvg_id=""):
+def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=None):
     """
     How good a match this guide is for this channel, and what kind of match it is.
 
@@ -993,14 +1097,43 @@ def judge_guide(name, country, entry, tvg_id=""):
     # Each side's identity read in its own country, since a call sign is only a call
     # sign where call signs are allocated
     their_country = _country_of_guide(entry)
-    mine = _identity_of(mine_words, country)
-    theirs_id = _identity_of(their_words, their_country)
+    mine = _identity_of(mine_words, country, known_calls)
+    theirs_id = _identity_of(their_words, their_country, known_calls)
+
     for what, said in (("number", "a different number"), ("side", "the other side of the country"),
-                       ("call", "another station's call sign")):
+                       ("call", "another station's call sign"),
+                       ("shift", "a different time shift")):
         if mine[what] and theirs_id[what] and mine[what] != theirs_id[what]:
             # Even with the id agreeing: a provider writing one id on two stations is the
             # commoner mistake by far, and it is the mistake this fork has already made
             return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
+
+    # What somebody who is not a provider says these two names are. Two names that are one
+    # channel in the reference are one channel however little they read alike, and two
+    # that are different channels are different however much they do -- which is worth
+    # more than any amount of comparing letters, and is not a table anybody here wrote.
+    #
+    # Asked after the contradictions and not before: a reference that has ITV2 and its
+    # +1 under one entry would otherwise hand the one guide to both, and a rule that can
+    # be overruled by a download is not a rule.
+    # One of them says a number, a side, a call sign or a time shift and the other says
+    # nothing at all. It may well be the same channel written shorter, and it may be its
+    # sibling: either way it is not something to be sure about.
+    half_said = any(
+        bool(mine[w]) != bool(theirs_id[w]) for w in ("number", "side", "call", "shift")
+    )
+    if reference and not half_said:
+        ours = known_channels.which_channel(name, reference)
+        theirs_known = known_channels.which_channel(theirs, reference)
+        if ours and theirs_known:
+            if ours["id"] != theirs_known["id"]:
+                return 0, GUESS, f"{ours['name']} is not {theirs_known['name']}"
+            by_country = _by_country(country, entry)
+            return (
+                max(0, min(100, 100 + min(0, by_country))),
+                CERTAIN if by_country >= 0 else LIKELY,
+                f"both names are {ours['name']}",
+            )
 
     alike = _alike(mine_words, their_words)
     # A call sign is a station's own name, allocated to it and to nothing else, so two
@@ -1044,9 +1177,6 @@ def judge_guide(name, country, entry, tvg_id=""):
     score = max(0, min(100, int(round(alike + by_country))))
 
     agrees = not elsewhere
-    # One of them says a number, a side or a call sign and the other says nothing: it may
-    # well be the same channel written shorter, but it is not something to be sure about
-    half_said = any(bool(mine[w]) != bool(theirs_id[w]) for w in ("number", "side", "call"))
     # ...and the same where one says which of the family it is and the other does not
     my_family = {w for w in mine_words if w in FAMILY_WORDS}
     their_family = {w for w in their_words if w in FAMILY_WORDS}
@@ -1459,7 +1589,8 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
             # proof: it goes first on the list either way, and says what it is worth
             country = logo_library.country_of(name or "") or ""
             score, tier, why = judge_guide(
-                name, country, {"name": exact[2], "tvg_id": exact[1]}, tvg_id
+                name, country, {"name": exact[2], "tvg_id": exact[1]}, tvg_id,
+                known_calls=known_channels.call_signs(), reference=known_channels.known(),
             )
             if score:
                 entry = _guide_entry(*exact, "tvg-id", score)
@@ -1475,6 +1606,8 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
         # library where every channel is from the same place, and it reads a ".uk" as a
         # country that is not "gb", which is the wrong answer for half of them.
         country = logo_library.country_of(name or "") or epg_matching.get_preferred_region_code() or ""
+        known_calls = known_channels.call_signs()
+        reference = known_channels.known()
         # More candidates than will be shown, because one from the right country can sit
         # below a wrongly-scored pile of them and has to be there to be lifted past it
         _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
@@ -1488,7 +1621,9 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
                 continue
             if not in_play(row, matching, country):
                 continue
-            score, tier, why = judge_guide(name, country, row, tvg_id)
+            score, tier, why = judge_guide(
+                name, country, row, tvg_id, known_calls=known_calls, reference=reference
+            )
             if score < MIN_GUIDE_SCORE:
                 continue
             entry = _guide_entry(

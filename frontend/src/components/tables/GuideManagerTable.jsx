@@ -133,6 +133,10 @@ const GuideManagerTable = () => {
   // and the window on a Lineup row obeys them too.
   const [matching, setMatching] = useState(null);
   const [sources, setSources] = useState([]);
+  // What the matching has to go on besides the two names: how many channels the reference
+  // knows, and how many call signs were found in the guides themselves
+  const [reference, setReference] = useState(null);
+  const [building, setBuilding] = useState(false);
   const tableRef = useRef(null);
 
   const look = useCallback(async (quietly, everyChannel) => {
@@ -362,14 +366,36 @@ const GuideManagerTable = () => {
     [look]
   );
 
+  const askMatching = useCallback(
+    () =>
+      API.getGuideMatching()
+        .then((answer) => {
+          setMatching(answer?.matching || null);
+          setSources(answer?.sources || []);
+          setReference(answer?.reference || null);
+        })
+        .catch(() => setMatching(null)),
+    []
+  );
+
   useEffect(() => {
-    API.getGuideMatching()
-      .then((answer) => {
-        setMatching(answer?.matching || null);
-        setSources(answer?.sources || []);
-      })
-      .catch(() => setMatching(null));
-  }, []);
+    askMatching();
+  }, [askMatching]);
+
+  const buildReference = async () => {
+    setBuilding(true);
+    setError(null);
+    try {
+      await API.buildGuideReference();
+      await askMatching();
+    } catch (e) {
+      setError(
+        e?.body?.error || 'The channel reference could not be downloaded.'
+      );
+    } finally {
+      setBuilding(false);
+    }
+  };
 
   const saveMatching = async (changed) => {
     setMatching(changed);
@@ -880,6 +906,20 @@ const GuideManagerTable = () => {
                       }
                     />
                   </Group>
+                  <Group gap="lg" wrap="wrap">
+                    <Switch
+                      size="xs"
+                      label="Only guides with something on"
+                      description={`Nothing in the next ${levers.fresh_hours || 12} hours, and it is not put forward`}
+                      checked={!!levers.must_be_fresh}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          must_be_fresh: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                  </Group>
                   <Group gap="lg" wrap="wrap" align="flex-end">
                     <NumberInput
                       size="xs"
@@ -1038,6 +1078,38 @@ const GuideManagerTable = () => {
                             })
                           }
                         />
+                      </Group>
+                      {/* What the matching knows besides the two names in front of it */}
+                      <Group gap="sm" wrap="wrap" align="center">
+                        <Text size="xs" c="dimmed">
+                          {reference?.names
+                            ? `${reference.names.toLocaleString()} channels known by every name they go by`
+                            : 'Only the two names are being compared.'}
+                          {reference?.call_signs
+                            ? ` · ${reference.call_signs} call signs found in your guides`
+                            : ''}
+                        </Text>
+                        <Button
+                          size="compact-xs"
+                          variant="default"
+                          loading={building}
+                          onClick={buildReference}
+                        >
+                          {reference?.names
+                            ? 'Update the channel reference'
+                            : 'Download the channel reference'}
+                        </Button>
+                        <Text
+                          size="xs"
+                          c="dimmed"
+                          style={{ flexBasis: '100%' }}
+                        >
+                          A public list of what channels are called, including
+                          the other names they go by, so &quot;NGC Wild&quot;
+                          and &quot;Nat Geo Wild&quot; are one channel without
+                          anybody writing that down here. Nothing is sent; one
+                          file is read.
+                        </Text>
                       </Group>
                     </>
                   )}

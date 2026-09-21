@@ -766,7 +766,11 @@ describe('ChannelManagerTable', () => {
     expect(
       await screen.findByText(/going through xmltv.at/, undefined, { timeout: 6000 })
     ).toBeInTheDocument();
-  });
+    // The reading loop waits three seconds before it asks the first time, so this test
+    // cannot finish inside vitest's five. It waited six and was given five, which passed
+    // on a quiet machine and timed out under a full suite -- a flake that was never the
+    // page's fault.
+  }, 15000);
 
   it("offers a provider's groups when the levers ask for them", async () => {
     const newRow = {

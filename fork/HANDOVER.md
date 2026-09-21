@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v155** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v156** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -546,6 +546,57 @@ search, each source with how many entries it holds. Two sources rarely call a ch
 same thing, and the way to find out which one has it is to look at them one at a time --
 which is a question about that channel and not a setting, so it is in the window and
 changes nothing that is kept.
+
+**What v156 took from reading everybody else's matcher** (epgmatcharr, EPG Janitor,
+Lineuparr, epg_suggester, iptv-manager, MXCM). Seven things, four of them bugs of ours that
+the reading found:
+
+- **A package in front is not a country** (`ISO_COUNTRIES`). `country_of` read any two
+  letters before a colon as a country, so "GO: CNN" was Gabon and every guide from the
+  right country was then docked thirty points -- the same invisible penalty as ┃USA┃
+  against .us before v146. Two letters and a colon now have to be a country that exists. A
+  box is still taken at its word: somebody who wrote "┃EX┃" meant a place.
+- **A playlist's own package comes off the name** (`PROVIDER_PREFIXES`, `_without_prefix`):
+  SLING, GO, NOW, VIP, PRIME, and a couple of dozen more, taken off one at a time because
+  they come in pairs ("US: SLING: CNN"). Only with the colon or bar a playlist writes them
+  with -- "PRIME" inside a name is Amazon's and belongs to the channel.
+- **A superscript quality tag leaves nothing behind.** "ᶠᴴᴰ" unpacks to "fHD" *after* the
+  name was lowered, and the sweep that keeps only lower-case letters ate the H and the D
+  and left a stray "f" on the name. Lowered again after the unpacking.
+- **A time shift is a contradiction** (`_shift_of`): "ITV2 +1" is the same programmes an
+  hour later, so a guide for one is wrong for the other by exactly an hour. Two different
+  shifts refuse the match like two different numbers; one shift against none is never a
+  certainty. Janitor rejects these too.
+- **A radio frequency is not a channel number** (`_is_frequency`): "CNN 101.5 FM" is one
+  station, not channel 101.
+- **A channel on a loop is offered no guide at all** (`round_the_clock`). "24/7: The
+  Office" has no schedule anywhere, so every guide is wrong however well the names read.
+- **A guide with nothing on tonight is not put forward** (`programmes_soon`,
+  `must_be_fresh`, off). A guide can hold thousands of programmes and none from this week:
+  counting them says it is full, asking what is on tonight says whether it is any use.
+  Janitor will not call a match good without programme data in the next twelve hours. Only
+  asked of guides that hold something, since one holding nothing has not been read.
+
+**And two references, so the matching stops relying on my guesses** (`known_channels.py`):
+
+- **What a channel is called elsewhere.** iptv-org's database -- which the logo library
+  already downloads -- gives every channel's name, **the other names it goes by**, its
+  network and country. Two names that resolve to one entry are one channel however little
+  they read alike; two that resolve to different entries are different however much they
+  do. That is `ALSO_WRITTEN`, written by somebody else and kept up to date by somebody
+  else. Downloaded when asked for from the Guides settings, never on a timer, and a name
+  two channels both go by is dropped rather than guessed at.
+- **The call signs your own guides carry.** A call sign is taken as proof of which station
+  a name is, so reading one where there is none is how "┃BE┃ NGC WILD" got a Slovak guide.
+  Janitor ships the FCC's whole list; this reads the call signs out of the EPG catalogue
+  instead -- "WHYY-DT" in a name, "WHYY.us" in an id -- which is the same answer narrowed
+  to the stations anybody here could be watching, needs no download and never goes stale.
+  `NOT_A_CALL_SIGN` stays as the floor for an install that has not looked yet.
+
+Both are asked **after** the contradiction rules, and a half-said number, side, call sign
+or shift stops the reference being believed: a reference that puts ITV2 and its +1 under
+one entry would otherwise hand the one guide to both, and a rule a download can overrule is
+not a rule.
 
 **Searching the guides takes every word, anywhere, in any order** (v137), not the phrase as
 typed, and orders what it finds by `_alike` against what was typed. "pbs philadelphia" found
@@ -1105,6 +1156,12 @@ no longer play. Summary of how it works now:
   Both halves had to be wrong for it to happen, and each half read as correct on its own.
   → ask before the viewer can fail, not after; and never wait on anything in a block
   longer than the time you have to answer in.
+- **A flaky test that was never the page's fault** (to v156): one Channel Manager test
+  waited six seconds for the guide-reading bar inside a test vitest gives five, and the
+  reading loop sleeps three before it asks the first time. It passed alone and timed out
+  under the full suite. → when a test waits longer than its own timeout, the wait is the
+  bug; and capture a suite's output to a file, because a run piped through `tail` loses the
+  one thing worth having.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

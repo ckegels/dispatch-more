@@ -3012,6 +3012,13 @@ export default class API {
     });
   }
 
+  static async buildGuideReference() {
+    return await request(`${host}/api/channels/channel-manager/matching/`, {
+      method: 'PUT',
+      body: { action: 'reference' },
+    });
+  }
+
   static async chooseGuideManager(action, row = {}) {
     return await request(`${host}/api/channels/guides/chosen/`, {
       method: 'POST',

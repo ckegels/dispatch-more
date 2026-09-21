@@ -298,6 +298,62 @@ class ChosenTests(_Setup):
         self.assertEqual(rows[0]["why"], "better")
 
 
+class FreshnessTests(_Setup):
+    """
+    A guide can hold thousands of programmes and none of them from this week. Counting
+    them says it is full; asking what is on tonight says whether it is any use.
+    """
+
+    def _stale_guide(self, tvg_id, name):
+        from datetime import timedelta
+
+        guide = EPGData.objects.create(tvg_id=tvg_id, name=name, epg_source=self.source)
+        was = timezone.now() - timedelta(days=200)
+        for n in range(50):
+            ProgramData.objects.create(
+                epg=guide, title=f"Last spring {n}",
+                start_time=was + timedelta(hours=n), end_time=was + timedelta(hours=n + 1),
+            )
+        return guide
+
+    def test_a_guide_full_of_last_spring_is_not_put_forward(self):
+        stale = self._stale_guide("ORF1.at", "ORF 1")
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        # It holds fifty programmes, so nothing about how full it is would stop it
+        self.assertEqual(guide_manager.programme_counts([stale.id])[stale.id], 50)
+        self.assertTrue(self._suggested())
+
+        self.assertEqual(
+            guide_manager.programmes_soon([stale.id]), set(),
+            "nothing is on it in the next twelve hours",
+        )
+        self.assertEqual(self._suggested(settings(must_be_fresh=True)), {})
+
+    def test_while_one_with_something_on_tonight_still_is(self):
+        good = self._guide("ORF1.at", "ORF 1", programmes=9)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        self.assertIn(good.id, guide_manager.programmes_soon([good.id]))
+        self.assertTrue(self._suggested(settings(must_be_fresh=True)))
+
+    def test_and_a_guide_nobody_has_read_is_not_thrown_out_for_it(self):
+        # It holds nothing because nobody has looked, which is not the same as nothing
+        # being on it
+        unread = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.source)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        found = self._suggested(settings(must_be_fresh=True))
+        self.assertEqual(found[str(channel.id)]["epg"], unread.id)
+
+
+class LoopTests(_Setup):
+    def test_a_channel_on_a_loop_is_never_offered_a_guide(self):
+        # One thing round the clock has no schedule anywhere, so every guide is wrong
+        self._guide("theoffice.us", "The Office", programmes=9)
+        loop = self._channel("24/7: The Office", 1)
+        found = self._look()
+        self.assertEqual(found[str(loop.id)].get("why"), "")
+        self.assertFalse(found[str(loop.id)].get("epg"))
+
+
 class BatchTests(_Setup):
     """The looking runs in batches that queue the next, so one Celery worker is not held."""
 

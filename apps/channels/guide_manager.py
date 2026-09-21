@@ -29,7 +29,7 @@ would hold up every M3U and EPG refresh behind it.
 
 import logging
 
-from . import channel_manager, logo_library
+from . import channel_manager, known_channels, logo_library
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,12 @@ DEFAULTS = {
     "better_by": 20,
     # A guide holding nothing is only worth swapping for one that holds something
     "only_if_it_holds_something": True,
+    # ...and one holding nothing for tonight is no better. A guide can be full of last
+    # spring and look fine everywhere but on the screen, so a guide with nothing in the
+    # next `fresh_hours` is not put forward. Off, because a guide nobody uses has not been
+    # read at all and would be thrown out for it.
+    "must_be_fresh": False,
+    "fresh_hours": 12,
 }
 
 SETTINGS_VERSION = 1
@@ -104,6 +110,7 @@ def save_settings(given):
     try:
         values["min_score"] = min(100, max(0, int(values["min_score"])))
         values["better_by"] = min(100, max(1, int(values["better_by"])))
+        values["fresh_hours"] = min(168, max(1, int(values["fresh_hours"])))
         values["channel_groups"] = [int(g) for g in values["channel_groups"] or ()]
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
@@ -249,6 +256,33 @@ def programme_counts(epg_ids):
     )
 
 
+def programmes_soon(epg_ids, hours=12):
+    """
+    Which of these guides have a programme in the next `hours`, in one query.
+
+    A guide can hold thousands of programmes and none of them from this week: a source
+    that stopped being updated in March looks exactly like a working one everywhere except
+    on the screen. Counting them says it is full; asking what is on tonight says whether it
+    is any use. Taken from the EPG Janitor plugin, which will not call a match good until
+    the guide has programme data in the next twelve hours.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.epg.models import ProgramData
+
+    if not epg_ids:
+        return set()
+    moment = timezone.now()
+    return set(
+        ProgramData.objects.filter(
+            epg_id__in=epg_ids, end_time__gt=moment,
+            start_time__lt=moment + timedelta(hours=hours),
+        ).values_list("epg_id", flat=True).distinct()
+    )
+
+
 def what_is_on(epg_ids):
     """The programme on each of these guides at this moment, in one query."""
     from django.utils import timezone
@@ -286,7 +320,8 @@ def guides_in_use(epg_ids):
 
 
 def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
-                   channel_tvg_id="", matching=None):
+                   channel_tvg_id="", matching=None, fresh=None, known_calls=None,
+                   reference=None):
     """
     The guides this channel could be, best first, with the country counting.
 
@@ -312,7 +347,9 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
             continue
         # Judged by what kind of match it is, not only how alike the letters are: see
         # channel_manager.judge_guide, and why "PBS 12" and "PBS 13" used to score 83
-        score, tier, why = channel_manager.judge_guide(name, country, row, channel_tvg_id)
+        score, tier, why = channel_manager.judge_guide(
+            name, country, row, channel_tvg_id, known_calls=known_calls, reference=reference
+        )
         if not score:
             continue
         judged.append((score, row.get("epg_source_priority") or 0, tier, why, row))
@@ -332,6 +369,9 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
             "now": playing.get(row["id"], ""),
             # Nobody uses it, so holding nothing says nothing: it has never been read
             "in_use": row["id"] in used,
+            # Whether it has anything on in the next few hours, which is a different
+            # question from how many programmes it holds altogether
+            "fresh": None if fresh is None else row["id"] in fresh,
         }
         for score, _, tier, why, row in judged[:limit]
     ]
@@ -358,6 +398,15 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
         one for one in found
         if one["score"] >= least and one.get("tier") in (channel_manager.CERTAIN, channel_manager.LIKELY)
     ]
+    if settings.get("must_be_fresh"):
+        # A guide with nothing on tonight is no use whatever it holds altogether. Only
+        # asked of guides that hold something: one holding nothing holds nothing because
+        # nobody has read it, and "nothing on tonight" is not something that can be said
+        # about a guide nobody has looked at (see holds/in_use).
+        worth = [
+            one for one in worth
+            if not (one.get("fresh") is False and one.get("programmes"))
+        ]
     if settings.get("only_if_it_holds_something", True):
         # A guide a channel is already on and that holds nothing is empty, and swapping
         # one empty guide for another helps nobody. A guide nobody uses holds nothing
@@ -398,7 +447,7 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
 
 
 def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None, say=None,
-            matching=None):
+            matching=None, fresh=None, known_calls=None, reference=None):
     """
     What to suggest for these channels, as {channel id as a string: suggestion}.
 
@@ -414,6 +463,19 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         playing = what_is_on([row["id"] for row in catalogue])
     if matching is None:
         matching = channel_manager.load_matching()
+    if fresh is None and settings.get("must_be_fresh"):
+        fresh = programmes_soon(
+            [row["id"] for row in catalogue], int(settings.get("fresh_hours") or 12)
+        )
+    # What a call sign really is here, and what somebody who is not a provider says these
+    # channels are. Both worked out once for the whole run, and both optional: with
+    # neither, the matching is exactly what it was (see known_channels).
+    if known_calls is None:
+        known_calls = known_channels.call_signs()
+        if known_calls is None and catalogue:
+            known_calls = known_channels.build_call_signs(catalogue)
+    if reference is None:
+        reference = known_channels.known()
     ignored = load_ignored()
     chosen = load_chosen()
     found = {}
@@ -425,7 +487,8 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
             say(at, channel.name)
         candidates = _score_against(
             channel.name, catalogue, sources, counts, used, playing,
-            channel_tvg_id=channel.tvg_id or "", matching=matching,
+            channel_tvg_id=channel.tvg_id or "", matching=matching, fresh=fresh,
+            known_calls=known_calls, reference=reference,
         )
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,
@@ -449,11 +512,16 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
                         epg_matching._compute_fuzzy_score(normalized, row, None)
                         + channel_manager._by_country(country, row)
                     ))))
+        # One thing on a loop has no schedule anywhere, so no guide is the right guide for
+        # it and every one offered would be wrong however well the names read
+        on_a_loop = channel_manager.round_the_clock(channel.name)
+        if on_a_loop:
+            candidates = []
         # A channel whose guide is settled is not asked about again while it is still on
         # the guide that was settled on. It is still scored and still gets a row, because
         # "every channel" means every channel -- what is not done is putting something
         # forward as a change to make.
-        if settled(channel.id, channel.epg_data_id, chosen):
+        if settled(channel.id, channel.epg_data_id, chosen) or on_a_loop:
             worth = None
         else:
             worth = _worth_suggesting(channel, candidates, settings, counts, mine)

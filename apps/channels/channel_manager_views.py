@@ -168,7 +168,22 @@ def channel_manager_matching(request):
 
     from .models import Channel
 
+    from . import known_channels
+
     if request.method == "PUT":
+        if request.data.get("action") == "reference":
+            # Fetched when somebody asks for it, not on a timer: it is one file, it
+            # changes by the week, and a matching that quietly depends on a download
+            # nobody asked for is a matching nobody can explain
+            try:
+                built = known_channels.build_known()
+            except Exception as e:
+                logger.warning(f"Could not download the channel reference: {e}")
+                return JsonResponse(
+                    {"error": f"The channel reference could not be downloaded ({e})"},
+                    status=400,
+                )
+            return JsonResponse({"reference": built})
         try:
             saved = channel_manager.save_matching(request.data.get("matching"))
         except ValueError as e:
@@ -184,9 +199,15 @@ def channel_manager_matching(request):
         .annotate(n=Count("id"))
         .values_list("epg_data__epg_source_id", "n")
     )
+    reference = known_channels.known()
     return JsonResponse({
         "matching": channel_manager.load_matching(),
         "defaults": channel_manager.MATCHING_DEFAULTS,
+        # What the matching has to go on besides the two names in front of it
+        "reference": {
+            "names": len(reference),
+            "call_signs": len(known_channels.call_signs() or ()),
+        },
         "sources": [
             {
                 "id": source.id,

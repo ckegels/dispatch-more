@@ -13,7 +13,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
-from apps.channels import channel_manager
+from apps.channels import channel_manager, known_channels, logo_library
 from apps.channels.models import (
     Channel,
     ChannelGroup,
@@ -604,6 +604,12 @@ class JudgingGuidesTests(TestCase):
             name, country, {"name": guide_name, "tvg_id": tvg_id}, mine
         )
 
+    def judge_with(self, name, guide_name, tvg_id="", country="us", mine="", **extra):
+        """The same, with what the matching has been told about these channels."""
+        return channel_manager.judge_guide(
+            name, country, {"name": guide_name, "tvg_id": tvg_id}, mine, **extra
+        )
+
     def test_east_and_west_are_not_the_same_channel(self):
         # Stock takes "east" and "west" off as extraneous, which leaves both as "pbs"
         # and matches them at a hundred per cent
@@ -816,6 +822,164 @@ class JudgingGuidesTests(TestCase):
         )
         # with none of them set, every guide is in play and the list is not even copied
         self.assertIs(channel_manager.guides_in_play(rows, {}), rows)
+
+    def test_a_package_in_front_is_not_a_country(self):
+        """
+        "GO: CNN" is a package, not Gabon. Two letters and a colon were read as a country
+        whatever the letters were, and the wrong country then cost the right guide thirty
+        points -- the same invisible penalty as ┃USA┃ against .us before v146.
+        """
+        self.assertEqual(logo_library.country_of("GO: CNN"), "")
+        self.assertEqual(logo_library.country_of("SK: CNN"), "sk")  # Slovakia exists
+        self.assertEqual(logo_library.country_of("US: CNN"), "us")
+        # A box is taken at its word, whatever is in it
+        self.assertEqual(logo_library.country_of("┃EX┃ CNN"), "ex")
+
+    def test_a_playlists_own_package_is_not_part_of_the_name(self):
+        for name in ("SLING: CNN", "GO: CNN", "PRIME: CNN", "US: SLING: CNN", "NOW | CNN"):
+            self.assertEqual(channel_manager.guide_words(name), ["cnn"], name)
+        # ...but a word of the name is left alone where there is no colon
+        self.assertEqual(channel_manager.guide_words("Sky News"), ["sky", "news"])
+
+    def test_a_superscript_quality_tag_leaves_nothing_behind(self):
+        # "ᶠᴴᴰ" unpacks to "fHD" after the name was lowered, and the sweep that keeps only
+        # lower-case letters ate the H and the D and left a stray "f" costing the score
+        self.assertEqual(channel_manager.guide_words("CNN ᶠᴴᴰ"), ["cnn"])
+        self.assertEqual(channel_manager.guide_words("ᴴᴰ CNN"), ["cnn"])
+
+    def test_an_hour_later_is_not_the_same_channel(self):
+        # The same programmes an hour later: a guide for one is wrong for the other by
+        # exactly an hour
+        score, tier, why = self.judge("ITV2 +1", "ITV2 +2", "itv2plus2.uk", country="gb")
+        self.assertEqual(score, 0)
+        self.assertIn("time shift", why)
+        # ...and one that says it against one that does not is never a certainty
+        self.assertEqual(self.judge("ITV2 +1", "ITV2", "itv2.uk", country="gb")[1],
+                         channel_manager.GUESS)
+
+    def test_a_radio_frequency_is_not_a_channel_number(self):
+        # "CNN 101.5 FM" is one station, not channel 101
+        self.assertEqual(
+            channel_manager._identity_of(channel_manager.guide_words("CNN 101.5 FM"))["number"],
+            "",
+        )
+        # ...while a channel number still is one
+        self.assertEqual(
+            channel_manager._identity_of(channel_manager.guide_words("PBS 12"))["number"],
+            "12",
+        )
+
+    def test_a_channel_on_a_loop_has_no_guide_anywhere(self):
+        self.assertTrue(channel_manager.round_the_clock("24/7: The Office"))
+        self.assertTrue(channel_manager.round_the_clock("┃US┃ 24/7 Friends"))
+        self.assertFalse(channel_manager.round_the_clock("CNN"))
+
+    def test_a_call_sign_is_one_your_own_guides_carry(self):
+        """
+        Shipping the FCC's list would be a large download that goes stale and is right
+        about stations nobody here has. A word is a call sign when a guide in this install
+        carries it as one, which is the same answer narrowed to what anybody could watch.
+        """
+        catalogue = [
+            {"name": "WHYY-DT", "tvg_id": "WHYY.us"},
+            {"name": "KQED TV", "tvg_id": "kqed.us"},
+            # Four letters beginning with W, and no station anywhere says so
+            {"name": "NGC Wild HD", "tvg_id": "NGC.Wild.HD.sk"},
+        ]
+        found = known_channels.call_signs_in(catalogue)
+        self.assertEqual(found, {"whyy", "kqed"})
+
+        # ...so "WILD" is a word, and the Slovak guide is no longer a certainty
+        score, tier, _ = self.judge_with(
+            "┃BE┃ NGC WILD", "NGC Wild HD", "NGC.Wild.HD.sk", country="be", known_calls=found
+        )
+        self.assertEqual(tier, channel_manager.GUESS)
+        # ...while a real one still anchors
+        self.assertEqual(
+            self.judge_with("┃USA┃ PBS WHYY", "WHYY-DT", "whyy.us", known_calls=found)[1],
+            channel_manager.CERTAIN,
+        )
+
+    def test_a_name_two_channels_both_go_by_says_nothing(self):
+        # Pointing it at whichever entry was read last would be worse than not knowing
+        from unittest.mock import patch
+
+        rows = [
+            {"id": "SportsOne.us", "name": "Sports", "alt_names": [], "country": "US"},
+            {"id": "SportsTwo.uk", "name": "Sports", "alt_names": [], "country": "GB"},
+            {"id": "NatGeoWild.us", "name": "Nat Geo Wild", "alt_names": ["NGC Wild"], "country": "US"},
+        ]
+
+        class _Cache:
+            def __init__(self):
+                self.held = {}
+
+            def set(self, key, value, _ttl):
+                self.held[key] = value
+
+            def get(self, key):
+                return self.held.get(key)
+
+        cache = _Cache()
+        with patch("apps.channels.logo_library._get_json", return_value=rows):
+            built = known_channels.build_known(cache)
+        self.assertEqual(built["dropped"], 1)
+        reference = known_channels.known(cache)
+        self.assertIsNone(known_channels.which_channel("Sports", reference))
+        # ...while a name that belongs to one channel still points at it, under each of
+        # the names it goes by
+        self.assertEqual(
+            known_channels.which_channel("NGC Wild", reference)["id"], "NatGeoWild.us"
+        )
+        self.assertEqual(
+            known_channels.which_channel("Nat Geo Wild", reference)["id"], "NatGeoWild.us"
+        )
+
+    def test_what_a_channel_is_called_elsewhere_settles_it(self):
+        """
+        Two names that are one channel in the reference are one channel however little
+        they read alike -- which is the table of abbreviations, written by somebody else
+        and kept up to date by somebody else.
+        """
+        def entry(name, channel_id):
+            return {
+                logo_library.match_key(name): {
+                    "id": channel_id, "name": name, "country": "us",
+                    "network": "", "closed": False,
+                }
+            }
+
+        reference = {
+            **entry("NGC Wild", "NatGeoWild.us"),
+            **entry("Nat Geo Wild", "NatGeoWild.us"),
+            **entry("National Geographic", "NatGeo.us"),
+        }
+        score, tier, why = self.judge_with(
+            "┃US┃ NGC Wild", "Nat Geo Wild", "NatGeoWild.us", reference=reference
+        )
+        self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
+        self.assertIn("both names are", why)
+
+        # ...and two that are different channels are different however much they do
+        score, tier, why = self.judge_with(
+            "┃US┃ NGC Wild", "National Geographic", "NatGeo.us", reference=reference
+        )
+        self.assertEqual((score, tier), (0, channel_manager.GUESS))
+        self.assertIn("is not", why)
+
+    def test_but_a_reference_never_overrules_what_the_names_say(self):
+        # A reference that puts a channel and its +1 under one entry would otherwise hand
+        # the one guide to both. A rule that a download can overrule is not a rule.
+        reference = {
+            logo_library.match_key(name): {
+                "id": "ITV2.uk", "name": "ITV2", "country": "gb", "network": "", "closed": False
+            }
+            for name in ("ITV2", "ITV2 +1")
+        }
+        self.assertEqual(
+            self.judge_with("ITV2 +1", "ITV2", "itv2.uk", country="gb", reference=reference)[1],
+            channel_manager.GUESS,
+        )
 
     def test_two_call_signs_are_never_the_same_station(self):
         score, _, why = self.judge("┃USA┃ PBS WNET", "PBS KQED", "kqed.us")

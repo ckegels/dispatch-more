@@ -29,6 +29,8 @@ apps/channels/guide_layout.py
 apps/channels/guide_layout_views.py
 apps/channels/tests/test_guide_layout.py
 apps/channels/guide_manager.py
+apps/channels/known_channels.py
+apps/channels/tests/test_known_channels.py
 apps/channels/guide_manager_views.py
 apps/channels/tests/test_guide_manager.py
 apps/channels/channel_manager_views.py
