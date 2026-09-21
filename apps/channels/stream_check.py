@@ -1239,7 +1239,8 @@ def _hls_segment(session, url, text, headers, deadline, should_stop, depth=0):
     return urljoin(url, uris[-1])
 
 
-def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0, frozen_confirm_seconds=0):
+def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0,
+          frozen_confirm_seconds=0, done_reading=None):
     """
     Whether url plays: {"ok", "reason", "kind", "resolution", "codec", "bytes", "seconds"}.
 
@@ -1250,6 +1251,13 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
 
     Raises Stopped if should_stop says so part way: a check cut short says nothing about
     the stream, and must not count against it.
+
+    `done_reading` is called the moment nothing more will be read from the provider, and
+    **before** the bytes are judged. Deciding what came is ffprobe and a look at the
+    picture -- seconds of work on bytes already in memory, with no connection open -- and
+    the connection this check was allowed was being held for all of it. A viewer arriving
+    in that window was refused by our own counting, and asking the check to let go could
+    not help: there was nothing left to let go of, and nothing in ffprobe ever looks.
     """
     import requests
 
@@ -1262,6 +1270,19 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
     read_until = min(deadline, started + float(picture_seconds) + 3) if picture_seconds else deadline
     session = requests.Session()
     playlist = None
+    # Said once, whichever way this ends: the caller gives the connection back the moment
+    # the provider is done with, not when the judging is
+    let_go = {"said": False}
+
+    def finished_reading():
+        if let_go["said"] or done_reading is None:
+            return
+        let_go["said"] = True
+        try:
+            done_reading()
+        except Exception as e:
+            logger.warning(f"Stream Check could not give the connection back early: {e}")
+
     try:
         response, data = _read(session, url, headers, read_until, should_stop, limit=limit)
         if response.status_code >= 400:
@@ -1290,6 +1311,10 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
         if data[:200].lstrip().lower().startswith((b"<!doctype", b"<html", b"{", b"<?xml")):
             result["reason"] = "The provider sent a page, not video"
             return result
+        # Nothing more is wanted from the provider unless the picture has to be watched
+        # longer, which is rare and asks for the connection again itself
+        if not frozen_confirm_seconds:
+            finished_reading()
         found = _ffprobe(data)
         if found is None:
             # No ffprobe here: MPEG-TS that keeps coming is the best sign left
@@ -1349,6 +1374,9 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
     except requests.exceptions.RequestException as e:
         result["reason"] = f"Could not be opened: {type(e).__name__}"
     finally:
+        # Whatever happened -- a refusal, a timeout, an error part way -- the provider is
+        # done with by here, so the connection goes back now rather than after the judging
+        finished_reading()
         session.close()
         result["seconds"] = round(time.monotonic() - started, 1)
     return result
@@ -2134,6 +2162,18 @@ def run(redis_client, only=None, batch_seconds=None):
                         or providers.in_use(key, holding=profile)
                     )
 
+                # An unlimited profile took no slot, so there is none to give back;
+                # releasing anyway would free one a viewer holds. Said once either way,
+                # because it is given back the moment the reading is over and the outer
+                # finally must not hand back a slot somebody else now holds.
+                given_back = {"done": profile.max_streams <= 0}
+
+                def give_the_connection_back():
+                    if given_back["done"]:
+                        return
+                    given_back["done"] = True
+                    release_profile_slot(profile.id, redis_client)
+
                 try:
                     url = _url_for(stream, profile)
                     if not (url and url.startswith(("http://", "https://"))):
@@ -2144,16 +2184,14 @@ def run(redis_client, only=None, batch_seconds=None):
                         picture_seconds=settings["picture_seconds"]
                         if (only is not None and settings.get("picture_check"))
                         or _picture_due(results.get(str(stream.id)), settings, round_id) else 0,
+                        done_reading=give_the_connection_back,
                     )
                 except Stopped:
                     # Looked at again once the viewer is done, and not counted
                     rest("in use", "someone started watching through it")
                     return "stopped"
                 finally:
-                    # An unlimited profile took no slot, so there is none to give back;
-                    # releasing anyway would free one a viewer holds
-                    if profile.max_streams > 0:
-                        release_profile_slot(profile.id, redis_client)
+                    give_the_connection_back()
                     provider_counts[key].check_ended()
 
             def ready():

@@ -474,6 +474,64 @@ class LettingGoTests(TestCase):
         self.assertLess(time.monotonic() - started, 1.0)
 
 
+class GivingTheConnectionBackTests(TestCase):
+    """
+    When the connection goes back. Deciding what came -- ffprobe, a look at the picture --
+    is seconds of work on bytes already in memory, with nothing open to the provider, and
+    the connection was held for all of it. A viewer arriving in that window was refused by
+    our own counting, and asking the check to let go could not help: there was nothing
+    left to let go of, and nothing in ffprobe ever looks.
+    """
+
+    def test_it_goes_back_before_what_came_is_judged(self):
+        when = []
+
+        def slow_ffprobe(_data):
+            when.append("judging")
+            return {"video": True, "audio": True, "codec": "h264", "resolution": "1920x1080"}
+
+        with mock.patch.object(stream_check, "_read", return_value=(_Answer(200), b"x" * 40000)), \
+                mock.patch.object(stream_check, "_ffprobe", side_effect=slow_ffprobe):
+            stream_check.probe(
+                "http://provider/one", done_reading=lambda: when.append("gave it back")
+            )
+        self.assertEqual(when, ["gave it back", "judging"])
+
+    def test_and_goes_back_even_when_the_provider_refused(self):
+        given = []
+        with mock.patch.object(stream_check, "_read", return_value=(_Answer(403), b"no")):
+            stream_check.probe("http://provider/one", done_reading=lambda: given.append(1))
+        self.assertEqual(given, [1])
+
+    def test_and_only_once(self):
+        given = []
+        with mock.patch.object(stream_check, "_read", return_value=(_Answer(200), b"x" * 40000)), \
+                mock.patch.object(stream_check, "_ffprobe", return_value=None):
+            stream_check.probe("http://provider/one", done_reading=lambda: given.append(1))
+        self.assertEqual(given, [1], "a slot given back twice frees one a viewer holds")
+
+    def test_and_a_check_cut_short_still_gives_it_back(self):
+        given = []
+        with mock.patch.object(stream_check, "_read", side_effect=stream_check.Stopped):
+            with self.assertRaises(stream_check.Stopped):
+                stream_check.probe(
+                    "http://provider/one", done_reading=lambda: given.append(1)
+                )
+        self.assertEqual(given, [1])
+
+
+class _Answer:
+    """Just enough of a response for probe to read its status and headers."""
+
+    def __init__(self, status):
+        self.status_code = status
+        self.headers = {"Content-Type": "video/mp2t"}
+        self.url = "http://provider/one"
+
+    def close(self):
+        pass
+
+
 class _Setup(TestCase):
     def setUp(self):
         self.a = M3UAccount.objects.create(name="Provider A", account_type="STD", server_url="http://a", is_active=True)
@@ -715,8 +773,13 @@ class ParkTests(_Setup):
 def _answers(by_name):
     """A probe that answers from a table, by the stream's URL."""
 
-    def fake(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0, frozen_confirm_seconds=0):
+    def fake(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0,
+             frozen_confirm_seconds=0, done_reading=None):
         outcome = by_name.get(url.rsplit("/", 1)[-1], True)
+        # The real one gives the connection back the moment the reading is over, before
+        # it judges what came; a stand-in that never does would hide a run that holds on
+        if done_reading:
+            done_reading()
         if isinstance(outcome, Exception):
             raise outcome
         if callable(outcome):

@@ -331,15 +331,27 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     #
                     # Costs one Redis lookup when no check is running, which is almost
                     # always. See stream_check.make_way.
+                    checks_were_running = False
                     try:
                         from apps.channels.stream_check import make_way
 
-                        make_way(proxy_server.redis_client)
+                        checks_were_running = make_way(proxy_server.redis_client)
                     except Exception as e:  # never let this cost a viewer their channel
                         logger.debug(f"[{client_id}] Could not ask the checks to let go: {e}")
 
                     # Use fixed retry interval and timeout
                     retry_timeout = 3  # 3 seconds total timeout
+                    if checks_were_running:
+                        # A check was holding connections and has just been told to let
+                        # go. Three seconds is stock's guess at how long a provider might
+                        # take to free one by itself; when we know one is on its way,
+                        # waiting for it beats sending somebody to the fallback stream.
+                        # Costs nothing when no run is going, which is nearly always.
+                        retry_timeout = 12
+                        logger.info(
+                            f"[{client_id}] A stream check is running: waiting up to "
+                            f"{retry_timeout}s for it to let go rather than giving up"
+                        )
                     retry_interval = 0.1  # 100ms between attempts
                     wait_start_time = time.time()
 

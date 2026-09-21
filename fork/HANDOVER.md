@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v160** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v161** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -994,6 +994,21 @@ no longer play. Summary of how it works now:
   count/span recorded, provider left completely alone, retried after 30 s…60 min until it
   plays, then limit = 80 % of the count per (span + block). Shown/editable/forgettable in
   settings; limits set by hand kept; `LIMITS_VERSION` drops old learned ones.
+- **The connection goes back before what came is judged** (v161, `done_reading`, and this
+  is what v150 missed). A check held its provider slot from taking it to the end of the
+  whole probe -- and most of a probe is not the reading. ffprobe runs on the bytes already
+  in memory (up to a fifteen-second timeout), then the picture is looked at, then the
+  result is written down, all with **nothing open to the provider**. A viewer arriving in
+  that window was refused by our own counting, and `make_way` could not help: there was
+  nothing left to let go of, and nothing in ffprobe ever looks at the signal. The slot goes
+  back the moment the reading is over now, whichever way it ended -- a refusal, a timeout,
+  a check cut short -- and exactly once, since a slot given back twice frees one a viewer
+  is holding.
+- **And the viewer waits for it** (v161). Stock gives up after three seconds, which is its
+  guess at how long a provider might free a connection by itself. When `make_way` says a
+  run was going, we *know* one is coming, so the wait goes to twelve: sending somebody to
+  the fallback stream while the connection they need is being handed back is the worst
+  outcome available. Costs nothing when no run is going, which is nearly always.
 - **The checks let go the moment somebody starts a channel** (v150, and it took a viewer's
   channel before it did). Two faults, and the second is the one that mattered. `make_way`
   was asked only *after* the viewer had already been refused a connection -- which is no
@@ -1240,6 +1255,12 @@ no longer play. Summary of how it works now:
   every run. → v119 taught "read what a task refuses to do before trusting it", and this
   is the same lesson about our own task; a `continue` with a log line is a button that
   does nothing.
+- **Letting go of the reading is not letting go of the connection** (to v161): v150 made
+  a check notice a viewer within a fifth of a second and shut its socket, and viewers still
+  landed on the fallback. The slot was held for the rest of the probe -- ffprobe, the
+  picture, the writing down -- with nothing open to the provider at all, so there was
+  nothing left for the signal to interrupt. → when something is being held, find where it
+  is given back, not where the work looks like it ends.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

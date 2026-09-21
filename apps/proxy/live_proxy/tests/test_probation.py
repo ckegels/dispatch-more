@@ -2177,6 +2177,29 @@ class StreamTsSkippedChannelOrderTests(SimpleTestCase):
         self.assertEqual(calls[0], "let go")
         self.assertEqual(calls, ["let go", "get slot", "stop skipped (hold=False)"])
 
+    def test_a_viewer_waits_longer_when_a_check_is_holding_the_connections(self):
+        """
+        Three seconds is stock's guess at how long a provider might free one by itself.
+        When a check has just been told to let go we know one is coming, and waiting for
+        it beats sending somebody to the fallback stream.
+        """
+        with patch("apps.channels.stream_check.make_way", return_value=True):
+            with self.assertLogs("live_proxy", level="INFO") as said:
+                self._run([self.FULL, self.OK])
+        self.assertTrue(
+            any("waiting up to 12s for it to let go" in line for line in said.output),
+            f"it kept stock's three seconds while a check held on: {said.output}",
+        )
+
+    def test_but_not_a_moment_longer_when_no_check_is_running(self):
+        with patch("apps.channels.stream_check.make_way", return_value=False):
+            with self.assertLogs("live_proxy", level="INFO") as said:
+                self._run([self.FULL, self.OK])
+        self.assertFalse(
+            any("waiting up to" in line for line in said.output),
+            "stock's wait is what a viewer gets when nothing of ours is at fault",
+        )
+
     def test_and_a_check_that_cannot_be_asked_never_costs_the_viewer_the_channel(self):
         with patch(
             "apps.channels.stream_check.make_way", side_effect=RuntimeError("no Redis")
