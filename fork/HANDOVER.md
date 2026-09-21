@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v158** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v159** (2026-09-21). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -809,6 +809,39 @@ run yet" before anything has been -- the page's own state, where before there wa
 at all until a run started. The reading bar had been drawn twice, once inside the toolbar,
 which is what a stacked layout hides.
 
+**Reading a guide no longer fails quietly** (v159). The fork's own reader had two silent
+`continue`s in it: a source being refreshed was skipped with a line in the log, and a source
+whose file had never been downloaded was skipped the same way. Both reported "Read 0
+guide(s)" and finished, so the button said it had read them and not one of them had
+anything -- which from the outside is exactly what a refresh looks like, and is precisely
+the §7 mistake of v119 made again in the fork's own code. A refreshing source is now waited
+for (`READ_AGAIN_SECONDS` 20, `READ_TRIES` 90) and a source with no file is handed to
+Dispatcharr's own task, which fetches it. Two tests had to be rewritten: they asked for
+"Read 0 guide(s)" outright, which is the bug written down as a requirement.
+
+**And what a read found is written down** (`READS_KEY`, `note_read`). A guide can be listed
+in a source's channel section with not one programme of its own in the file, which is
+common and looks exactly like a read that failed -- so "not read yet" sent somebody round
+the same loop for ever: read it, nothing changes, read it again. The page says "read, and
+the guide has none" now, or what stopped the read where something did, and one already read
+is not offered for reading again.
+
+**What is on wraps** (v159): a programme title is usually longer than the column, and clamped
+to one line the row said "Now:" and nothing else.
+
+**Two ways of saying no, told apart** (v159). The padlock and the eye were two grey icons
+that both made a row go away. They are different things -- the padlock is about the
+*channel* ("keep what it is on, stop suggesting for it"), the eye is about the *guide*
+("not that one, offer another next time") -- so they are coloured apart, worded apart, and
+each has a view of its own with its count in the label: "Kept, not suggested for (N)" and
+"Not that guide (N)". The waved-away list had no view at all before, only a number in the
+settings, which is not something you can undo one row of.
+
+**Take it** (v159): puts the guide on offer onto that one channel and settles it, in one
+press. Applying already settled what it put on, so this is that pair of things for one row
+rather than a new kind of act -- and it is what somebody working down the list does every
+time, which used to cost a tick, a trip to the toolbar and a question per row.
+
 **It says where it has got to** (v126). Reading the guide catalogue is most of a batch on a
 setup with a lot of EPG and happens before a single channel is looked at, so the run writes a
 `stage` to Redis before each heavy step, the channel it is on (`at`) every tenth channel rather
@@ -1192,6 +1225,13 @@ no longer play. Summary of how it works now:
   the collection was still not downloaded and still suggesting nothing. → state that
   explains why something is missing belongs where the missing thing is worked out, not in
   the session that happened to notice.
+- **The fork's own reader gave up quietly** (to v159): a source being refreshed, or one
+  whose file had never been downloaded, was skipped with a log line, and the run answered
+  "Read 0 guide(s)". The button said it had read them; nothing had happened. Two tests
+  asked for that answer by name, so the bug was written down as a requirement and passed
+  every run. → v119 taught "read what a task refuses to do before trusting it", and this
+  is the same lesson about our own task; a `continue` with a log line is a button that
+  does nothing.
 - **A dropdown that emptied itself** (v117): choosing a guide wrote its own label into the
   search box that asked the server, so every other candidate vanished. Never let a widget's
   search value double as the query. → a window with a card per candidate (§5.6).

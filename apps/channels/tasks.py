@@ -4572,8 +4572,15 @@ def stream_check_tick():
     return "not due"
 
 
+# A source being refreshed is rewritten while it is read, so its guides wait for it.
+# Long enough for a big refresh, and then it gives up and says so rather than waiting for
+# ever with the page reporting that it is still reading.
+READ_AGAIN_SECONDS = 20
+READ_TRIES = 90
+
+
 @shared_task
-def read_guide_programmes(by_source):
+def read_guide_programmes(by_source, tries=0):
     """
     Read the programmes of the guides someone is choosing between, one pass of each
     source's file for all of them.
@@ -4608,6 +4615,9 @@ def read_guide_programmes(by_source):
     from apps.channels import channel_manager
 
     read = 0
+    # Guides handed to somebody else or put off until later: neither read nor failed, and
+    # the page must not be told they were done
+    waiting = 0
     wanted_in_all = sum(len(ids) for ids in (by_source or {}).values())
     title_max_length = ProgramData._meta.get_field("title").max_length
     for source_id, epg_ids in (by_source or {}).items():
@@ -4615,9 +4625,30 @@ def read_guide_programmes(by_source):
             source_id = int(source_id)
         except (TypeError, ValueError):
             continue
-        # The file is rewritten by a refresh; reading it half-written would store nonsense
+        # The file is rewritten by a refresh; reading it half-written would store nonsense.
+        # Left for later rather than dropped: this used to say so in the log and give up,
+        # so the button reported that it had read the guides and nothing had happened to
+        # any of them -- which is exactly what a refresh looks like from the outside.
         if is_task_lock_held("refresh_epg_data", source_id):
-            logger.info(f"Guide programmes: source {source_id} is refreshing, leaving it be")
+            if tries < READ_TRIES:
+                logger.info(
+                    f"Guide programmes: source {source_id} is refreshing, trying again in "
+                    f"{READ_AGAIN_SECONDS}s"
+                )
+                read_guide_programmes.apply_async(
+                    args=[{str(source_id): epg_ids}],
+                    kwargs={"tries": tries + 1},
+                    countdown=READ_AGAIN_SECONDS,
+                )
+                waiting += len(epg_ids)
+            else:
+                logger.warning(
+                    f"Guide programmes: source {source_id} has been refreshing for too "
+                    f"long; its guides were not read"
+                )
+                channel_manager.note_read(
+                    {epg_id: 0 for epg_id in epg_ids}, "its source was being refreshed"
+                )
             continue
         source = EPGSource.objects.filter(id=source_id).first()
         if not source:
@@ -4628,7 +4659,18 @@ def read_guide_programmes(by_source):
         })
         path = source.extracted_file_path or source.file_path or source.get_cache_file()
         if not path or not os.path.exists(path):
-            logger.info(f"Guide programmes: no file for source {source.name}, nothing to read")
+            # Nothing downloaded yet. This used to give up quietly; Dispatcharr's own
+            # per-guide task fetches the file when it is missing, so it is handed over
+            # rather than the guides being left unread with nobody told.
+            logger.info(
+                f"Guide programmes: no file for {source.name} yet, asking Dispatcharr to "
+                f"fetch it for {len(epg_ids)} guide(s)"
+            )
+            from apps.epg.tasks import parse_programs_for_tvg_id
+
+            for epg_id in epg_ids:
+                parse_programs_for_tvg_id.delay(epg_id, force=True)
+            waiting += len(epg_ids)
             continue
 
         wanted = {}
@@ -4705,15 +4747,21 @@ def read_guide_programmes(by_source):
                     if made:
                         ProgramData.objects.bulk_create(made, batch_size=1000)
                 read += 1
+                # Written down, including the noughts: a guide listed in a source's
+                # channels with no programme of its own in it is common, and looks exactly
+                # like a read that failed
+                channel_manager.note_read({epg.id: len(made)})
                 channel_manager.say_reading({
                     "stage": f"keeping what {source.name} had", "at": epg.name or epg.tvg_id,
                     "done": read, "total": wanted_in_all,
                 })
                 logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
     channel_manager.say_reading({
-        "state": "done", "stage": "", "at": "", "done": read, "total": wanted_in_all,
+        "state": "reading" if waiting else "done",
+        "stage": f"waiting on {waiting} more" if waiting else "",
+        "at": "", "done": read, "total": wanted_in_all,
     })
-    return f"Read {read} guide(s)"
+    return f"Read {read} guide(s)" + (f", {waiting} still to come" if waiting else "")
 
 
 @shared_task

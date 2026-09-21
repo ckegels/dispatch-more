@@ -1234,6 +1234,66 @@ class GuideChoiceTests(_Setup):
         self.assertEqual(sorted(asked[str(self.local.id)]), sorted([a.id, b.id]))
         self.assertEqual(asked[str(self.big.id)], [c.id])
 
+    def test_a_source_being_refreshed_is_waited_for_not_dropped(self):
+        """
+        The file is rewritten by a refresh, so its guides cannot be read while one is
+        going. They used to be dropped with a line in the log: the button said it had
+        read them and nothing had happened to any of them, which from the outside is
+        exactly what a refresh looks like.
+        """
+        from apps.channels.tasks import read_guide_programmes
+
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        with patch("core.utils.is_task_lock_held", return_value=True), patch(
+            "apps.channels.tasks.read_guide_programmes.apply_async"
+        ) as again:
+            read_guide_programmes({str(self.local.id): [guide.id]})
+        self.assertTrue(again.called, "it should try again rather than give up")
+        self.assertEqual(again.call_args.kwargs["kwargs"], {"tries": 1})
+
+    def test_and_said_to_be_unreadable_once_it_has_waited_long_enough(self):
+        from apps.channels import tasks as channel_tasks
+
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        with patch("core.utils.is_task_lock_held", return_value=True), patch(
+            "apps.channels.tasks.read_guide_programmes.apply_async"
+        ) as again:
+            channel_tasks.read_guide_programmes(
+                {str(self.local.id): [guide.id]}, tries=channel_tasks.READ_TRIES
+            )
+        self.assertFalse(again.called)
+        # ...and written down as unread with the reason, not as a guide holding nothing
+        said = channel_manager.reads()[str(guide.id)]
+        self.assertEqual(said["found"], 0)
+        self.assertIn("refreshed", said["why"])
+
+    def test_a_source_with_no_file_yet_is_handed_over_not_given_up_on(self):
+        # Dispatcharr's own task fetches the file when it is missing; ours used to give
+        # up quietly and leave the guides unread with nobody told
+        from apps.channels.tasks import read_guide_programmes
+
+        empty = EPGSource.objects.create(
+            name="never downloaded", source_type="xmltv", file_path="/nowhere/at/all.xml"
+        )
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=empty)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
+            read_guide_programmes({str(empty.id): [guide.id]})
+        asked.assert_called_once_with(guide.id, force=True)
+
+    def test_what_a_read_found_is_written_down_including_nothing(self):
+        # A guide listed in a source's channels with no programme of its own in it is
+        # common, and looks exactly like a read that failed
+        guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.local)
+        channel_manager.note_read({guide.id: 0})
+        said = channel_manager.reads()[str(guide.id)]
+        self.assertEqual((said["found"], said["why"]), (0, ""))
+        self.assertTrue(said["at"])
+        # ...and the picker says so rather than offering it to be read again
+        (entry,) = channel_manager._what_they_carry(
+            [{"id": guide.id, "name": "ORF 1", "tvg_id": "ORF1.at"}]
+        )
+        self.assertEqual(entry["read"]["found"], 0)
+
     def test_a_guide_no_channel_uses_is_read_all_the_same(self):
         # Dispatcharr's own task does nothing for an unused guide unless it is forced,
         # and an unused guide is the only kind this is ever asked about

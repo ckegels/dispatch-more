@@ -43,6 +43,7 @@ def guide_manager_page(request):
     # Whether a channel is settled is asked now rather than taken from what a run wrote:
     # settling one and a run looking at it happen in either order
     guide_manager.mark_chosen(found, chosen)
+    guide_manager.mark_waved_away(found, ignored)
     return JsonResponse({
         "settings": guide_manager.load_settings(),
         "defaults": guide_manager.DEFAULTS,

@@ -1263,10 +1263,14 @@ def _what_they_carry(entries):
     used = set(
         Channel.objects.filter(epg_data_id__in=ids).values_list("epg_data_id", flat=True)
     )
+    # What a read of each of these came back with, so a guide somebody has already looked
+    # at and found empty is not offered as one nobody has read yet
+    was_read = reads()
     for entry in entries:
         entry["programmes"] = counts.get(entry["id"], 0)
         entry["now"] = playing.get(entry["id"], "")
         entry["in_use"] = entry["id"] in used
+        entry["read"] = was_read.get(str(entry["id"])) or None
     return entries
 
 
@@ -1320,6 +1324,43 @@ def say_reading(mapping, redis_client=None):
         redis_client.expire(READING_KEY, READING_KEPT_SECONDS)
     except Exception as e:
         logger.debug(f"Guides: could not say how the reading is going ({e})")
+
+
+# What a read of a guide found, so the page can tell "nobody has looked" from "somebody
+# looked and there was nothing there". A guide can be listed in a source's channel section
+# and have not one programme in its programme section, which is common and looks exactly
+# like a read that failed.
+READS_KEY = "guide-reads"
+
+
+def reads():
+    from core.models import CoreSettings
+
+    row = CoreSettings.objects.filter(key=READS_KEY).first()
+    return dict(row.value) if row and isinstance(row.value, dict) else {}
+
+
+def note_read(found, why=""):
+    """
+    Write down what a read of each of these guides came back with: {epg id: how many}.
+
+    `why` is what stopped it, where something did -- a source in the middle of a refresh,
+    a file that is not there. A guide that could not be read is not a guide with nothing
+    in it, and saying the second when the first is true is how somebody comes to believe
+    a working source is empty.
+    """
+    from django.utils import timezone
+
+    from core.models import CoreSettings
+
+    kept = reads()
+    at = timezone.now().isoformat(timespec="seconds")
+    for epg_id, how_many in (found or {}).items():
+        kept[str(epg_id)] = {"at": at, "found": int(how_many or 0), "why": why}
+    CoreSettings.objects.update_or_create(
+        key=READS_KEY, defaults={"name": "Guides read", "value": kept}
+    )
+    return kept
 
 
 def load_programmes(epg_ids):

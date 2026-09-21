@@ -68,8 +68,16 @@ const TIER = {
 // programmes when it goes on a channel and not before, so a guide nobody uses holds nothing
 // whatever it is really like. Calling that empty would be telling someone a good guide is
 // no good.
-const holds = (count, inUse) => {
+const holds = (count, inUse, read) => {
   if (count) return `${count} programme${count === 1 ? '' : 's'}`;
+  // Somebody has looked. A guide listed in a source's channels with no programme of its
+  // own in it is common, and "not read yet" about one sends you round the same loop for
+  // ever: read it, nothing changes, read it again.
+  if (read) {
+    return read.why
+      ? `could not be read: ${read.why}`
+      : 'read, and the guide has none';
+  }
   return inUse === false ? 'not read yet' : 'holds nothing';
 };
 
@@ -160,7 +168,7 @@ const GuideManagerTable = () => {
   useEffect(() => {
     // "Chosen" needs every channel too: a settled channel has nothing to suggest, so it
     // is not among what a run wrote down
-    look(loadedOnce.current, why === 'all' || why === 'chosen');
+    look(loadedOnce.current, ['all', 'chosen', 'waved'].includes(why));
     loadedOnce.current = true;
   }, [look, why]);
 
@@ -221,6 +229,8 @@ const GuideManagerTable = () => {
       // everything
     } else if (why === 'chosen') {
       found = found.filter((one) => one.chosen);
+    } else if (why === 'waved') {
+      found = found.filter((one) => one.waved_away);
     } else if (why) {
       found = found.filter((one) => one.why === why);
     } else {
@@ -288,7 +298,9 @@ const GuideManagerTable = () => {
     () => [
       ...new Set(
         rows
-          .filter((one) => !one.programmes && !one.in_use)
+          // One already read and found empty is not unread, and reading it again would
+          // find the same nothing
+          .filter((one) => !one.programmes && !one.in_use && !one.read)
           .map((one) => one.epg)
       ),
     ],
@@ -406,6 +418,25 @@ const GuideManagerTable = () => {
     }
   };
 
+  // Put the guide on offer onto this one channel and settle it, in one press. Applying
+  // already settles what it puts on (see guide_manager.apply), so this is that pair of
+  // things for one row rather than a new kind of act.
+  const take = useCallback(
+    async (row) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await API.applyGuideManager({ [row.channel]: row.epg });
+        await look(true, ['all', 'chosen', 'waved'].includes(why));
+      } catch (e) {
+        setError(e?.body?.error || 'Could not put that guide on.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [look, why]
+  );
+
   const saveLevers = async (changed) => {
     setLevers(changed);
     try {
@@ -419,6 +450,8 @@ const GuideManagerTable = () => {
   waveAwayRef.current = waveAway;
   const keepRef = useRef(keep);
   keepRef.current = keep;
+  const takeRef = useRef(take);
+  takeRef.current = take;
   const chooseRef = useRef(setChoosing);
   chooseRef.current = setChoosing;
 
@@ -437,7 +470,7 @@ const GuideManagerTable = () => {
               <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
                 {row.original.channel_name}
               </Text>
-              <Text size="xs" c="dimmed" lineClamp={1}>
+              <Text size="xs" c="dimmed" style={{ wordBreak: 'break-word' }}>
                 {row.original.number ? `${row.original.number} · ` : ''}
                 {row.original.group || 'No group'}
               </Text>
@@ -462,14 +495,21 @@ const GuideManagerTable = () => {
                   <Text
                     size="xs"
                     c={one.instead_of_holds ? 'dimmed' : 'orange'}
-                    lineClamp={1}
+                    style={{ wordBreak: 'break-word' }}
                   >
                     {one.instead_of_source ? `${one.instead_of_source} · ` : ''}
                     {holds(one.instead_of_holds, true)}
                     {one.instead_of_score != null &&
                       ` · ${one.instead_of_score}%`}
                   </Text>
-                  <Text size="xs" c="dimmed" lineClamp={1}>
+                  {/* What is on is the thing being read: a programme title is often
+                      longer than the column, and cut off at one line it said "Now:" and
+                      nothing else. It wraps instead. */}
+                  <Text
+                    size="xs"
+                    c="dimmed"
+                    style={{ wordBreak: 'break-word' }}
+                  >
                     {one.instead_of_now
                       ? `Now: ${one.instead_of_now}`
                       : 'Nothing on it now'}
@@ -534,10 +574,10 @@ const GuideManagerTable = () => {
                 <Text
                   size="xs"
                   c={!one.programmes && one.in_use ? 'orange' : 'dimmed'}
-                  lineClamp={1}
+                  style={{ wordBreak: 'break-word' }}
                 >
                   {one.tvg_id || 'no tvg-id'} ·{' '}
-                  {holds(one.programmes, one.in_use)}
+                  {holds(one.programmes, one.in_use, one.read)}
                   {one.now ? ` · Now: ${one.now}` : ''}
                 </Text>
               ) : (
@@ -566,11 +606,11 @@ const GuideManagerTable = () => {
                 {one.chosen ? 'Chosen' : kind.label}
               </Badge>
               {one.chosen ? (
-                <Tooltip label="Suggest for this channel again">
+                <Tooltip label="Start suggesting for this channel again">
                   <ActionIcon
                     size="xs"
-                    variant="subtle"
-                    color="gray"
+                    variant="light"
+                    color="teal"
                     aria-label={`Suggest for ${one.channel_name} again`}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -582,11 +622,35 @@ const GuideManagerTable = () => {
                 </Tooltip>
               ) : (
                 <>
-                  <Tooltip label="Keep the guide it is on and stop suggesting for it">
+                  {/* Take the guide on offer and settle the channel in one press. The
+                      two together are what somebody working down this list is doing
+                      every time, and doing them separately meant ticking a box, going
+                      up to the toolbar and answering a question about every row. */}
+                  {one.epg && (
+                    <Tooltip
+                      label={`Put ${one.name} on and stop suggesting for this channel`}
+                    >
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        color="teal"
+                        aria-label={`Take ${one.name} for ${one.channel_name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          takeRef.current(one);
+                        }}
+                      >
+                        Take it
+                      </Button>
+                    </Tooltip>
+                  )}
+                  {/* Two different things, and they looked alike: one is about the
+                      channel and one is about the guide being offered for it. */}
+                  <Tooltip label="Keep the guide it is on now, and stop suggesting for this channel">
                     <ActionIcon
                       size="xs"
-                      variant="subtle"
-                      color="gray"
+                      variant="light"
+                      color="teal"
                       aria-label={`Keep the guide on ${one.channel_name}`}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -596,12 +660,12 @@ const GuideManagerTable = () => {
                       <Lock size={12} />
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip label="Don't suggest this again">
+                  <Tooltip label="Not that guide: suggest a different one for this channel next time">
                     <ActionIcon
                       size="xs"
-                      variant="subtle"
-                      color="gray"
-                      aria-label={`Ignore ${one.channel_name}`}
+                      variant="light"
+                      color="orange"
+                      aria-label={`Not ${one.name || 'that guide'} for ${one.channel_name}`}
                       onClick={(event) => {
                         event.stopPropagation();
                         waveAwayRef.current(one);
@@ -709,7 +773,16 @@ const GuideManagerTable = () => {
                   onChange={(value) => setWhy(value || '')}
                   data={[
                     { value: 'all', label: 'Every channel' },
-                    { value: 'chosen', label: 'Chosen already' },
+                    {
+                      value: 'chosen',
+                      label: `Kept, not suggested for (${
+                        (page?.chosen || []).length
+                      })`,
+                    },
+                    {
+                      value: 'waved',
+                      label: `Not that guide (${(page?.ignored || []).length})`,
+                    },
                     { value: 'none', label: 'On no guide' },
                     { value: 'empty', label: 'Guide holds nothing' },
                     { value: 'better', label: 'A better match' },
@@ -1127,7 +1200,7 @@ const GuideManagerTable = () => {
                         leftSection={<RotateCcw size={12} />}
                         onClick={async () => {
                           await API.chooseGuideManager('clear');
-                          look(true, why === 'all' || why === 'chosen');
+                          look(true, ['all', 'chosen', 'waved'].includes(why));
                         }}
                       >
                         Suggest for them again

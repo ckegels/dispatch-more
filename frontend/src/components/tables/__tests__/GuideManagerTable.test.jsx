@@ -143,7 +143,7 @@ describe('GuideManagerTable', () => {
   it('waves a suggestion away, keeping which guide it was', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Ignore ┃AT┃ ORF 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Not .* for ┃AT┃ ORF 1$/ }));
 
     await waitFor(() =>
       expect(API.ignoreGuideManager).toHaveBeenCalledWith('ignore', {
@@ -357,7 +357,7 @@ describe('GuideManagerTable', () => {
     expect(screen.queryByText('┃AT┃ ORF 2')).toBeNull();
 
     fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
-    fireEvent.click(await screen.findByText('Chosen already'));
+    fireEvent.click(await screen.findByText(/^Kept, not suggested for/));
 
     // ...and a settled channel has nothing to suggest, so the rows come from every channel
     await waitFor(() => expect(API.getGuideManager).toHaveBeenCalledWith(true));
@@ -385,7 +385,7 @@ describe('GuideManagerTable', () => {
     Element.prototype.scrollIntoView = vi.fn();
     draw();
     fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
-    fireEvent.click(await screen.findByText('Chosen already'));
+    fireEvent.click(await screen.findByText(/^Kept, not suggested for/));
     fireEvent.click(
       await screen.findByRole('button', { name: 'Suggest for ┃NL┃ DREAMWORKS again' })
     );
@@ -468,5 +468,92 @@ describe('GuideManagerTable', () => {
         expect.objectContaining({ sources: [] })
       )
     );
+  });
+
+  // "Not read yet" about a guide that has been read sends you round the same loop for
+  // ever: read it, nothing changes, read it again.
+  it('says a guide was read and had nothing, rather than not read yet', async () => {
+    const empty = {
+      ...onNothing,
+      channel: 5,
+      channel_name: '┃AT┃ ORF 3',
+      programmes: 0,
+      in_use: false,
+      read: { at: '2026-09-21T10:00:00', found: 0, why: '' },
+    };
+    API.getGuideManager.mockResolvedValue({ ...page, suggestions: [empty] });
+    draw();
+    await screen.findByText('┃AT┃ ORF 3');
+
+    expect(
+      screen.getByText(/read, and the guide has none/)
+    ).toBeInTheDocument();
+    // ...and it is not offered to be read again
+    expect(screen.queryByRole('button', { name: /^Read \d+ guide/ })).toBeNull();
+  });
+
+  it('and says what stopped a read when something did', async () => {
+    const blocked = {
+      ...onNothing,
+      channel: 6,
+      channel_name: '┃AT┃ ORF 4',
+      programmes: 0,
+      in_use: false,
+      read: { at: '2026-09-21T10:00:00', found: 0, why: 'its source was being refreshed' },
+    };
+    API.getGuideManager.mockResolvedValue({ ...page, suggestions: [blocked] });
+    draw();
+    await screen.findByText('┃AT┃ ORF 4');
+    expect(
+      screen.getByText(/could not be read: its source was being refreshed/)
+    ).toBeInTheDocument();
+  });
+
+  // Taking a suggestion and settling the channel are what somebody working down this
+  // list does every time; doing them apart meant a tick, a trip to the toolbar and a
+  // question, for each row
+  it('takes a suggestion and settles the channel in one press', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Take ORF 1 for ┃AT┃ ORF 1' })
+    );
+
+    await waitFor(() =>
+      expect(API.applyGuideManager).toHaveBeenCalledWith({ 1: 7 })
+    );
+  });
+
+  // Two grey icons that both made the row go away. They do different things: one is
+  // about the channel, the other about the guide being offered for it.
+  it('keeps the two ways of saying no apart, and lists both', async () => {
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      chosen: [{ channel: '4', name: 'ORF 2', epg: 11, at: '2026-09-21T20:00:00' }],
+      ignored: [{ channel: '2', name: 'DreamWorks', epg: 9, at: '2026-09-21T20:00:00' }],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+
+    // Each has a view of its own, and says how many are in it
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    expect(await screen.findByText('Kept, not suggested for (1)')).toBeInTheDocument();
+    expect(screen.getByText('Not that guide (1)')).toBeInTheDocument();
+  });
+
+  it('and shows the ones waved away when asked', async () => {
+    const waved = { ...onEmpty, why: '', waved_away: true, waved_away_guide: 'DreamWorks' };
+    API.getGuideManager.mockResolvedValue({ ...page, suggestions: [onNothing, waved] });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    expect(screen.queryByText('┃NL┃ DREAMWORKS')).toBeNull();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText(/^Not that guide/));
+
+    expect(await screen.findByText('┃NL┃ DREAMWORKS')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull());
   });
 });

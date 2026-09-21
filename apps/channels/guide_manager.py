@@ -202,6 +202,22 @@ def settled(channel_id, epg_id, chosen=None):
     return (entry.get("epg") or None) == (epg_id or None)
 
 
+def mark_waved_away(rows, ignored=None):
+    """
+    Say on each row whether a suggestion for it was waved away, and which guide.
+
+    Waving one away is not the same as settling a channel, and the page had no way to
+    look at what had been waved away at all -- only a count in the settings, which is a
+    number you cannot undo one row of.
+    """
+    ignored = load_ignored() if ignored is None else ignored
+    for row in rows:
+        said = ignored.get(str(row.get("channel")))
+        row["waved_away"] = bool(said)
+        row["waved_away_guide"] = (said or {}).get("name") or ""
+    return rows
+
+
 def mark_chosen(rows, chosen=None):
     """
     Say on each row whether that channel is settled, so the page can keep them apart.
@@ -640,11 +656,15 @@ def freshen(rows):
     counts = programme_counts(ids)
     playing = what_is_on(ids)
     used = guides_in_use(ids)
+    # What a read of each guide came back with, which is the difference between "nobody
+    # has looked" and "somebody looked and there was nothing there"
+    was_read = channel_manager.reads()
     for row in rows:
         if row.get("epg"):
             row["programmes"] = counts.get(row["epg"], 0)
             row["now"] = playing.get(row["epg"], "")
             row["in_use"] = row["epg"] in used
+            row["read"] = was_read.get(str(row["epg"])) or None
         if row.get("instead_of_epg"):
             row["instead_of_holds"] = counts.get(row["instead_of_epg"], 0)
             row["instead_of_now"] = playing.get(row["instead_of_epg"], "")

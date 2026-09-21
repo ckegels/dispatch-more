@@ -99,14 +99,31 @@ class ReadGuideProgrammesTests(TestCase):
         self.assertEqual(state["done"], 2)
         self.assertEqual(state["total"], 2)
 
-    def test_a_missing_file_is_logged_and_left_rather_than_throwing(self):
-        os.remove(self.path)
-        self.assertEqual(self._read(self.one), "Read 0 guide(s)")
-        self.assertEqual(ProgramData.objects.count(), 0)
-
-    def test_a_source_being_refreshed_is_left_alone(self):
+    def test_a_missing_file_is_handed_over_rather_than_given_up_on(self):
+        """
+        This used to answer "Read 0 guide(s)" and stop, which is what these two tests
+        asked for -- and it is exactly the complaint: the button reports that it has read
+        the guides and not one of them has anything. Dispatcharr's own task fetches the
+        file when it is missing, so the guides go to it instead.
+        """
         from unittest.mock import patch
 
-        with patch("core.utils.is_task_lock_held", return_value=True):
-            self.assertEqual(self._read(self.one), "Read 0 guide(s)")
+        os.remove(self.path)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay") as asked:
+            answer = self._read(self.one)
+        asked.assert_called_once_with(self.one.id, force=True)
+        self.assertIn("still to come", answer)
+        self.assertEqual(ProgramData.objects.count(), 0)
+
+    def test_a_source_being_refreshed_is_waited_for_rather_than_left(self):
+        # The file is rewritten by a refresh, so it cannot be read now -- which is a
+        # reason to come back, not a reason to stop
+        from unittest.mock import patch
+
+        with patch("core.utils.is_task_lock_held", return_value=True), patch(
+            "apps.channels.tasks.read_guide_programmes.apply_async"
+        ) as again:
+            answer = self._read(self.one)
+        self.assertTrue(again.called)
+        self.assertIn("still to come", answer)
         self.assertEqual(ProgramData.objects.count(), 0)

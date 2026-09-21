@@ -277,6 +277,18 @@ class ChosenTests(_Setup):
         self.assertEqual(guide_manager.unchoose(), 0)
         self.assertEqual(guide_manager.load_chosen(), {})
 
+    def test_the_page_says_which_rows_were_waved_away(self):
+        # Waving a suggestion away is not settling a channel, and there was no way to
+        # look at what had been waved away -- only a count, which is a number you cannot
+        # undo one row of
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        guide_manager.ignore(channel.id, channel.name, guide.id)
+        rows = [{"channel": channel.id}]
+        guide_manager.mark_waved_away(rows)
+        self.assertTrue(rows[0]["waved_away"])
+        self.assertEqual(rows[0]["waved_away_guide"], channel.name)
+
     def test_the_page_says_which_rows_are_settled(self):
         on_it = self._guide("orfeins.old", "ORF Eins", programmes=1)
         channel = self._channel("┃AT┃ ORF 1", 1, epg=on_it)

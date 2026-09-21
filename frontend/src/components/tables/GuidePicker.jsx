@@ -56,7 +56,16 @@ const WhatItHolds = ({ guide, onLoad, loading }) => {
     <>
       <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
         {guide.tvg_id || 'no tvg-id'} ·{' '}
-        {guide.in_use ? 'no programmes' : 'programmes not read yet'}
+        {/* Somebody has looked: a guide listed in a source's channels with no programme
+            of its own in it is common, and "not read yet" about one sends you round the
+            same loop for ever */}
+        {guide.read
+          ? guide.read.why
+            ? `could not be read: ${guide.read.why}`
+            : 'read, and the guide has none'
+          : guide.in_use
+            ? 'no programmes'
+            : 'programmes not read yet'}
       </Text>
       {guide.in_use ? (
         <Text size="xs" c="dimmed">
@@ -300,7 +309,10 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
     () =>
       shown.filter(
         (guide) =>
-          !guide.programmes && guide.in_use === false && !reading[guide.id]
+          !guide.programmes &&
+          guide.in_use === false &&
+          !guide.read &&
+          !reading[guide.id]
       ),
     [shown, reading]
   );
