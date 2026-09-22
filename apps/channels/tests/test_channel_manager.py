@@ -1203,6 +1203,33 @@ class GuideChoiceTests(_Setup):
         ]
         self.assertEqual(row["channel"]["epg"]["id"], wanted.id)
 
+    def test_the_guide_from_the_channels_own_country_is_preferred(self):
+        """
+        match_key takes the country box off, so "┃AT┃ ORF 1" and a British "ORF 1" are one
+        key. A plain lookup handed the Austrian channel whichever the higher-priority
+        source carried -- for every channel at once, which is what the plan runs over.
+        """
+        # The bigger source is ranked first and carries a British entry of the same name
+        british = EPGData.objects.create(tvg_id="ORF1.uk", name="ORF 1", epg_source=self.big)
+        austrian = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.big)
+        self.assertLess(british.id, austrian.id, "the wrong one is seen first")
+
+        (row,) = [
+            r for r in channel_manager.build_plan(settings(epg="tvg_id_then_name"))["rows"]
+            if r["key"] == f"ch:{self.orf1.id}"
+        ]
+        self.assertEqual(row["channel"]["epg"]["id"], austrian.id)
+
+    def test_but_another_country_is_still_better_than_none(self):
+        # Nothing is lost: where the channel's own country has no entry, the plain lookup
+        # still answers
+        british = EPGData.objects.create(tvg_id="ORF1.uk", name="ORF 1", epg_source=self.big)
+        (row,) = [
+            r for r in channel_manager.build_plan(settings(epg="tvg_id_then_name"))["rows"]
+            if r["key"] == f"ch:{self.orf1.id}"
+        ]
+        self.assertEqual(row["channel"]["epg"]["id"], british.id)
+
     def test_a_source_switched_off_is_not_offered(self):
         EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.off)
         found = channel_manager.guide_candidates("┃AT┃ ORF 1")

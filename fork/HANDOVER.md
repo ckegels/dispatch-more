@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v170** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v171** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -394,6 +394,15 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**The plan's own guide matching prefers the channel's country** (v171, `_Guides`). It looks
+a guide up by `match_key`, which takes the country box off -- so "┃AT┃ ORF 1" and a British
+"ORF 1" are one key, and whichever the higher-priority source carried won. That is the
+`.sk` bug of v146 again, in the one place that runs over **every channel at once**: the
+Lineup, applying a guide to hundreds of channels in a press. It is indexed by country as
+well as by name now and the channel's own country is tried first. Where that country has no
+entry the plain lookup still answers, so nothing is lost -- a guide from elsewhere is still
+better than none, and the Guides tab is where a wrong one gets argued with.
+
 **Where channels live is worked out once a plan** (v170). `_NewHomes` reads every channel
 there is plus two more queries, and it was built again **for every row that combines and
 moves** -- and once more for the new channels. One lazy instance, shared. The test pins the

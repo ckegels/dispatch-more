@@ -613,6 +613,12 @@ class _Guides:
 
         self.by_tvg_id = {}
         self.by_key = {}
+        # ...and by country as well as by name. match_key takes the country box off, so
+        # "┃NL┃ DREAMWORKS" and a British "DreamWorks" are one key, and a plain lookup
+        # hands the Dutch channel the British guide -- for every channel at once, which is
+        # what this runs over. The same-country entry is preferred where there is one;
+        # where there is not, the plain lookup still answers, so nothing is lost.
+        self.by_country_key = {}
         entries = (
             EPGData.objects.exclude(epg_source__is_active=False)
             .order_by("-epg_source__priority", "id")
@@ -625,8 +631,11 @@ class _Guides:
             key = logo_library.match_key(name)
             if key:
                 self.by_key.setdefault(key, entry)
+                country = _one_country(_country_of_guide(entry))
+                if country:
+                    self.by_country_key.setdefault((country, key), entry)
 
-    def find(self, streams, name, mode):
+    def find(self, streams, name, mode, country=""):
         if mode == "keep":
             return None
         for stream in streams:
@@ -634,7 +643,12 @@ class _Guides:
             if entry:
                 return {**entry, "how": "tvg-id"}
         if mode == "tvg_id_then_name":
-            entry = self.by_key.get(logo_library.match_key(name))
+            key = logo_library.match_key(name)
+            mine = _one_country(country)
+            entry = self.by_country_key.get((mine, key)) if mine else None
+            if entry:
+                return {**entry, "how": "name"}
+            entry = self.by_key.get(key)
             if entry:
                 return {**entry, "how": "name"}
         return None
@@ -2173,7 +2187,10 @@ def build_plan(settings):
         summary = _channel_summary(channel)
         changes = []
         if not channel.epg_data_id and settings.get("epg") != "keep":
-            found = guides.find(final, _strip_country_box(channel.name), settings.get("epg"))
+            found = guides.find(
+                final, _strip_country_box(channel.name), settings.get("epg"),
+                record["country"],
+            )
             if found:
                 summary["epg"] = found
                 changes.append("epg")
@@ -2265,7 +2282,9 @@ def build_plan(settings):
         for name, country, key, ordered, group_id, why in sorted(
             planned, key=lambda p: (homes_here.names.get(p[4], "").lower(), p[0].lower())
         ):
-            epg = guides.find(ordered, _strip_country_box(name), settings.get("epg"))
+            epg = guides.find(
+                ordered, _strip_country_box(name), settings.get("epg"), country
+            )
             logo = _logo_for(name, ordered, settings.get("new_logo", "collections"), index)
             if number is not None:
                 channel_number = number
