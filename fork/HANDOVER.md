@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v169** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v170** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -394,6 +394,12 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**Where channels live is worked out once a plan** (v170). `_NewHomes` reads every channel
+there is plus two more queries, and it was built again **for every row that combines and
+moves** -- and once more for the new channels. One lazy instance, shared. The test pins the
+count at one; it needs rows that actually move, since the lookup only runs when a combine
+changes a channel's group.
+
 **A new channel never lands in the group above** (v169, `_NewHomes.number_in`). It took the
 group's highest number, added one, and walked up through taken numbers until it found a
 free one -- which on a lineup with a hole in the next group drops the new channel straight

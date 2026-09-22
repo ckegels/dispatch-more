@@ -417,6 +417,39 @@ class CombineTests(_Setup):
         self.assertEqual(row["channel"]["id"], self.orf1.id)
         self.assertEqual([c["id"] for c in row["combining"]], [self.twin.id])
 
+    def test_where_channels_live_is_worked_out_once_for_the_whole_plan(self):
+        """
+        _NewHomes reads every channel there is, plus two more queries. It was built again
+        for every row that combines, and once more for the new channels.
+        """
+        from unittest.mock import patch
+
+        # Several sets to combine, all of them away from the group the combined channel
+        # would go to -- so each row has to look up that group's name, which is where the
+        # per-row build was
+        elsewhere = ChannelGroup.objects.create(name="┃AT┃ ELSEWHERE")
+        for n in range(3):
+            twin = self._channel(f"┃AT┃ Sender {n}", 400 + n, self.news)
+            self._attach(twin, [self._stream(f"┃AT┃ Sender {n}", self.a)])
+            other = self._channel(f"┃AT┃ Sender {n}", 600 + n, self.news)
+            self._attach(other, [self._stream(f"┃AT┃ Sender {n} HD", self.b)])
+
+        # A group none of them are in, so every row has to look its name up
+        levers = settings(target_group=elsewhere.id)
+        with patch.object(
+            channel_manager, "_NewHomes", wraps=channel_manager._NewHomes
+        ) as building:
+            plan = channel_manager.build_plan(levers)
+
+        moving = [
+            r for r in plan["rows"]
+            if r["status"] == "combine" and "group" in r["changes"]
+        ]
+        self.assertGreater(
+            len(moving), 1, "several rows should combine and move, or this proves nothing"
+        )
+        self.assertEqual(building.call_count, 1)
+
     def test_nothing_is_combined_when_it_is_turned_off(self):
         plan = channel_manager.build_plan(settings(combine_duplicates=False))
         self.assertFalse(any(r["status"] == "combine" for r in plan["rows"]))

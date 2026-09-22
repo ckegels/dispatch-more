@@ -2071,10 +2071,20 @@ def build_plan(settings):
     # ── Channels that are the same channel as each other ──
     # Worked out before the rows, so the ones being folded into another do not also get a
     # row of their own saying what streams they would gain: they are not going to be here.
+    # Where channels live and what numbers are free: three queries including a pass of
+    # every channel, so it is worked out once and shared. It was being built again for
+    # every row that combines, and once more for the new channels.
+    homes_held = {}
+
+    def homes():
+        if "it" not in homes_held:
+            homes_held["it"] = _NewHomes()
+        return homes_held["it"]
+
     combining = {}
     clusters = {}
     if settings.get("combine_duplicates"):
-        into = _NewHomes()
+        into = homes()
         for set_key, records in _duplicate_sets(by_key, bool(settings.get("same_country"))).items():
             if f"combine:{set_key}" in ignored:
                 continue
@@ -2177,7 +2187,7 @@ def build_plan(settings):
             status = "combine"
             if folding["group_id"] and folding["group_id"] != channel.channel_group_id:
                 summary["group_id"] = folding["group_id"]
-                summary["group"] = _NewHomes().names.get(folding["group_id"], "")
+                summary["group"] = homes().names.get(folding["group_id"], "")
                 changes.append("group")
         else:
             status = "merge" if (added or removed or changes or reordered) else "unchanged"
@@ -2219,7 +2229,7 @@ def build_plan(settings):
 
     # ── Channels there are not, yet ──
     if settings.get("create_new"):
-        homes = _NewHomes()
+        homes_here = homes()
         target = settings.get("target_group")
         number = settings.get("number_start")
         number = float(number) if number not in (None, "") else None
@@ -2248,12 +2258,12 @@ def build_plan(settings):
             if target:
                 group_id, why = int(target), "the group chosen in the levers"
             else:
-                group_id, why = homes.group_for(best, country)
+                group_id, why = homes_here.group_for(best, country)
             planned.append((name, country, key, ordered, group_id, why))
 
         # By group, then name, so numbers follow on within each group
         for name, country, key, ordered, group_id, why in sorted(
-            planned, key=lambda p: (homes.names.get(p[4], "").lower(), p[0].lower())
+            planned, key=lambda p: (homes_here.names.get(p[4], "").lower(), p[0].lower())
         ):
             epg = guides.find(ordered, _strip_country_box(name), settings.get("epg"))
             logo = _logo_for(name, ordered, settings.get("new_logo", "collections"), index)
@@ -2261,7 +2271,7 @@ def build_plan(settings):
                 channel_number = number
                 number += 1
             else:
-                channel_number = homes.number_in(group_id)
+                channel_number = homes_here.number_in(group_id)
             streams_after = [_stream_summary(s, added=True) for s in ordered]
             if fallback:
                 streams_after.append(_stream_summary(fallback, added=True))
@@ -2272,7 +2282,7 @@ def build_plan(settings):
                     "id": None,
                     "name": name,
                     "number": channel_number,
-                    "group": homes.names.get(group_id, ""),
+                    "group": homes_here.names.get(group_id, ""),
                     "group_id": group_id,
                     "group_why": why,
                     "logo_url": logo,
