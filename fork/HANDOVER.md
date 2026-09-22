@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v166** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v167** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -394,6 +394,19 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**What a name is cut to comes from the column** (v167). Three places cut a channel's name
+at 255 -- a number picked out of the air -- where `Channel.name` holds 512, so a name
+between the two was silently halved. One of them had a test asking for exactly that, which
+is the bug written down as a requirement, passing every run. Taken from the model now, the
+way stock's own `LogoQuerySet.bulk_create` does it.
+
+**A channel gone since the page was looked at is passed over** (v167), not an error that
+takes every other row down with it: the whole apply is one transaction, so one channel
+deleted elsewhere -- by an M3U refresh, or in another tab -- used to undo the lot. And the
+streams it adds go in with one `bulk_create` rather than a query apiece, and what is
+counted as added is what was really added: streams taken off a row by hand were counted as
+though they had been.
+
 `DEFAULTS_VERSION` resets saved settings when defaults change (`CHANGED_IN` keeps the rest). A
 backup warning with a link to Settings → Backup & Restore sits above both tabs.
 

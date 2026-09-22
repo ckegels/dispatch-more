@@ -2276,7 +2276,8 @@ def _logo_id(url):
         return None
     from .models import Logo
 
-    logo, _ = Logo.objects.get_or_create(url=url, defaults={"name": url.rsplit("/", 1)[-1][:255]})
+    longest = Logo._meta.get_field("name").max_length
+    logo, _ = Logo.objects.get_or_create(url=url, defaults={"name": url.rsplit("/", 1)[-1][:longest]})
     return logo.id
 
 
@@ -2296,11 +2297,19 @@ def _in_the_order_given(final_ids, given, custom_ids):
     return [i for i in given if i not in custom_ids] + [i for i in given if i in custom_ids]
 
 
+def _longest_channel_name():
+    """As long as the column really is, not a number picked out of the air."""
+    from .models import Channel
+
+    return Channel._meta.get_field("name").max_length
+
+
 def _names_given(names):
     """The names typed on the page, by row: emptied or all spaces is no name at all."""
+    longest = _longest_channel_name()
     out = {}
     for key, name in (names if isinstance(names, dict) else {}).items():
-        name = str(name or "").strip()[:255]
+        name = str(name or "").strip()[:longest]
         if name:
             out[key] = name
     return out
@@ -2406,7 +2415,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 if chosen_group and int(chosen_group) != info.get("group_id"):
                     info = {**info, "group_id": int(chosen_group), "number": homes.number_in(int(chosen_group))}
                 channel = Channel.objects.create(
-                    name=(chosen_name or info["name"])[:255],
+                    name=(chosen_name or info["name"])[:_longest_channel_name()],
                     channel_number=info["number"],
                     channel_group_id=info.get("group_id"),
                     epg_data_id=(info.get("epg") or {}).get("id"),
@@ -2426,7 +2435,14 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 )
                 created += 1
             else:
-                channel = Channel.objects.get(id=info["id"])
+                channel = Channel.objects.filter(id=info["id"]).first()
+                if channel is None:
+                    # Gone since the page was looked at -- deleted elsewhere, or by an M3U
+                    # refresh. Passed over rather than failing every other row with it.
+                    logger.info(
+                        f"Channel Manager: channel {info['id']} is gone; its row was skipped"
+                    )
+                    continue
                 fields = []
                 if row["status"] == "combine" and info.get("group_id") != channel.channel_group_id:
                     channel.channel_group_id = info.get("group_id")
@@ -2457,12 +2473,19 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
             if removed_ids:
                 ChannelStream.objects.filter(channel=channel, stream_id__in=removed_ids).delete()
             present = set(ChannelStream.objects.filter(channel=channel).values_list("stream_id", flat=True))
+            fresh = []
             for order, stream_id in enumerate(final_ids):
                 if stream_id in present:
                     ChannelStream.objects.filter(channel=channel, stream_id=stream_id).update(order=order)
                 else:
-                    ChannelStream.objects.create(channel=channel, stream_id=stream_id, order=order)
-            streams_added += row["adds"]
+                    fresh.append(ChannelStream(channel=channel, stream_id=stream_id, order=order))
+            if fresh:
+                # In one go: an apply is hundreds of channels with half a dozen streams
+                # each, and a query apiece is the wait
+                ChannelStream.objects.bulk_create(fresh)
+            # What was really added, not what the plan meant to add: streams taken off the
+            # row by hand are not added and were being counted as though they had been
+            streams_added += len(fresh)
 
             if row["status"] == "combine":
                 # Their streams are on this channel now, so the channels themselves go.

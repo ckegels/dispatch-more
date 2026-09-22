@@ -1449,10 +1449,64 @@ class NameChoiceTests(_Setup):
         self.assertEqual(self.orf1.name, "┃AT┃ ORF 1")
 
     def test_a_long_name_is_cut_to_what_the_field_holds(self):
+        """
+        What the field holds, which is 512 -- this asked for 255, a number picked out of
+        the air, so a name between the two was cut in half and the test said that was
+        right. Taken from the model now, as stock's own bulk_create does.
+        """
+        from apps.channels.models import Channel
+
+        longest = Channel._meta.get_field("name").max_length
         key = f"ch:{self.orf1.id}"
         channel_manager.apply_plan(settings(), [key], names={key: "N" * 400})
         self.orf1.refresh_from_db()
-        self.assertEqual(len(self.orf1.name), 255)
+        self.assertEqual(len(self.orf1.name), 400, "400 fits in 512 and must not be cut")
+
+        channel_manager.apply_plan(settings(), [key], names={key: "N" * (longest + 50)})
+        self.orf1.refresh_from_db()
+        self.assertEqual(len(self.orf1.name), longest)
+
+    def test_a_channel_gone_since_the_page_was_looked_at_is_passed_over(self):
+        """
+        Not an error that takes every other row down with it: the whole apply is one
+        transaction, so one channel deleted elsewhere used to undo the lot.
+        """
+        from apps.channels.models import Channel
+
+        gone = Channel.objects.create(
+            name="┃AT┃ GOING", channel_number=77, channel_group=self.austria
+        )
+        self._attach(gone, [self.existing])
+        plan_key = f"ch:{gone.id}"
+        keys = [plan_key, f"ch:{self.orf1.id}"]
+        Channel.objects.filter(id=gone.id).delete()
+
+        answer = channel_manager.apply_plan(
+            settings(), keys, names={f"ch:{self.orf1.id}": "┃AT┃ STILL HERE"}
+        )
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ STILL HERE", "the other row still applied")
+        self.assertIsInstance(answer, dict)
+
+    def test_what_was_added_is_counted_not_what_was_meant_to_be(self):
+        # Streams taken off the row by hand are not added, and were counted as though
+        # they had been
+        from_b = self._stream("┃AT┃ ORF 1", self.b)
+        key = f"ch:{self.orf1.id}"
+        row = self._row(channel_manager.build_plan(settings()), key)
+        adding = [s["id"] for s in row["streams"] if s.get("added")]
+        self.assertEqual(adding, [from_b.id], "the plan wants to add the other provider's")
+
+        answer = channel_manager.apply_plan(settings(), [key], drops={key: adding})
+        self.assertEqual(answer["streams_added"], 0, "it was dropped, so nothing was added")
+        self.assertNotIn(
+            from_b.id,
+            ChannelStream.objects.filter(channel=self.orf1).values_list("stream_id", flat=True),
+        )
+
+        # ...and when it is not dropped, it is added and counted
+        answer = channel_manager.apply_plan(settings(), [key])
+        self.assertEqual(answer["streams_added"], 1)
 
     def test_renaming_leaves_the_fallback_where_it_is(self):
         key = f"ch:{self.orf1.id}"
