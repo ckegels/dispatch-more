@@ -1863,6 +1863,7 @@ class _NewHomes:
         self.by_stream_group = {g: c.most_common(1)[0][0] for g, c in by_stream_group.items()}
         by_country = {}
         self.highest_in = {}
+        self.lowest_in = {}
         self.taken = set()
         self.highest = 0
         for number, group_id, name in Channel.objects.values_list("channel_number", "channel_group_id", "name"):
@@ -1871,6 +1872,8 @@ class _NewHomes:
                 self.highest = max(self.highest, float(number))
                 if group_id:
                     self.highest_in[group_id] = max(self.highest_in.get(group_id, 0), float(number))
+                    there = self.lowest_in.get(group_id)
+                    self.lowest_in[group_id] = float(number) if there is None else min(there, float(number))
             country = country_for(name, self.names.get(group_id, ""))
             if country and group_id:
                 by_country.setdefault(country, Counter())[group_id] += 1
@@ -1884,11 +1887,35 @@ class _NewHomes:
             return self.by_country[country], f"where most of your {country} channels are"
         return stream["group_id"], "the stream's own group"
 
+    def _next_group_starts(self, group_id):
+        """Where the group after this one begins, so a new channel does not walk into it."""
+        after = self.highest_in.get(group_id)
+        if after is None:
+            return None
+        starts = [
+            lowest for other, lowest in self.lowest_in.items()
+            if other != group_id and lowest > after
+        ]
+        return min(starts) if starts else None
+
     def number_in(self, group_id):
-        """The next number after the group's last channel that nobody has, and keep it."""
+        """
+        The next number after the group's last channel that nobody has, and keep it.
+
+        It used to walk up through taken numbers until it found a gap, which on a lineup
+        numbered without gaps walks straight into the next group: a new Austrian channel
+        landing in the middle of the German block. Where there is no room before the group
+        above, the new channel goes after everything instead -- out of the way rather than
+        in somebody else's.
+        """
         number = float(int(self.highest_in.get(group_id, self.highest)) + 1)
+        ceiling = self._next_group_starts(group_id)
         while number in self.taken:
             number += 1
+        if ceiling is not None and number >= ceiling:
+            number = float(int(self.highest) + 1)
+            while number in self.taken:
+                number += 1
         self.taken.add(number)
         if group_id:
             self.highest_in[group_id] = max(self.highest_in.get(group_id, 0), number)

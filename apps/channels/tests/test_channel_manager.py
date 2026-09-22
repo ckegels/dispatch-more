@@ -503,6 +503,42 @@ class ReplaceTests(_Setup):
         self.assertFalse(any(s["removed"] for s in row["streams"]))
 
 
+class NewNumberTests(_Setup):
+    """Where a new channel's number comes from, and where it must not come from."""
+
+    def test_it_goes_after_its_own_group(self):
+        homes = channel_manager._NewHomes()
+        # ORF 1 is number 1 in Austria and nothing follows it
+        self.assertEqual(homes.number_in(self.austria.id), 2.0)
+
+    def test_but_never_into_the_group_above(self):
+        """
+        It used to walk up through taken numbers until it found a gap, which on a lineup
+        numbered without gaps walks straight into the next group: a new Austrian channel
+        landing in the middle of the German block.
+        """
+        # Austria ends at 2; Germany runs 3 to 6 with one channel missing at 4, which is
+        # the hole the old code dropped an Austrian channel into
+        self._channel("┃AT┃ ORF 2", 2, self.austria)
+        for number in (3, 5, 6):
+            self._channel(f"┃DE┃ Das Erste {number}", number, self.germany)
+
+        homes = channel_manager._NewHomes()
+        number = homes.number_in(self.austria.id)
+        self.assertGreater(number, 6, f"{number} is inside Germany's block (3 to 6)")
+
+        # ...and a second one does not land there either
+        self.assertGreater(homes.number_in(self.austria.id), 6)
+
+    def test_and_still_fills_a_gap_where_there_is_one(self):
+        self._channel("┃AT┃ ORF 2", 2, self.austria)
+        for number in (10, 11):
+            self._channel(f"┃DE┃ Das Erste {number}", number, self.germany)
+        homes = channel_manager._NewHomes()
+        # Room between Austria's last (2) and Germany's first (10)
+        self.assertEqual(homes.number_in(self.austria.id), 3.0)
+
+
 class NewChannelTests(_Setup):
     def setUp(self):
         super().setUp()
