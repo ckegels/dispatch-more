@@ -89,6 +89,16 @@ const draw = () =>
 
 const rowOf = (text) => screen.getAllByText(text)[0].closest('.tr');
 
+// The group names appear in the toolbar's filter as well as in a row's own picker, and
+// both dropdowns are in the page whether open or not -- so the option is taken from the
+// dropdown that belongs to the field being used.
+const pickOption = async (fieldName, text) => {
+  const field = screen.getByRole('textbox', { name: fieldName });
+  fireEvent.click(field);
+  const dropdown = document.getElementById(field.getAttribute('aria-controls'));
+  fireEvent.click(await within(dropdown).findByText(text));
+};
+
 describe('ChannelManagerTable', () => {
   beforeEach(() => {
     API.getChannelManagerOptions.mockResolvedValue({
@@ -236,8 +246,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(await screen.findByText(/Suggested: where your channels from this stream group are/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' }));
-    fireEvent.click(await screen.findByText('┃DE┃ GERMANY'));
+    await pickOption('Channel group for ┃AT┃ PULS 4', '┃DE┃ GERMANY');
     expect(await screen.findByText('new number · ┃DE┃ GERMANY')).toBeInTheDocument();
 
     // Choosing a group ticks the row, as moving a stream does
@@ -643,8 +652,7 @@ describe('ChannelManagerTable', () => {
       await screen.findByText(/is kept/)
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('textbox', { name: 'Channel group for ┃AT┃ ORF 1' }));
-    fireEvent.click(await screen.findByText('┃AT┃ NEWS'));
+    await pickOption('Channel group for ┃AT┃ ORF 1', '┃AT┃ NEWS');
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
@@ -652,6 +660,29 @@ describe('ChannelManagerTable', () => {
         { order: 'quality' }, ['combine:at:orf1'], {}, { 'combine:at:orf1': 3 }, {}, {}, {}
       )
     );
+  });
+
+  it('lists every group you have channels in, and says why one is empty', async () => {
+    // A group the levers are not looking at used to vanish from this filter altogether:
+    // the list was made from the plan, and a group that is not in the plan has no rows to
+    // make it from. A group of channels that plainly exists could not be found here.
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality', channel_groups: [1] },
+      defaults: {}, accounts: [], stream_groups: [], profiles: [],
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
+        { id: 5, name: 'Cooking', count: 6, kind: 'with_channels' },
+      ],
+      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 5, name: 'Cooking' }],
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+
+    await pickOption('Which group', 'Cooking');
+
+    expect(
+      await screen.findByText(/not one the levers are looking at/)
+    ).toBeInTheDocument();
   });
 
   it('offers only the groups you have channels in, and a way to make one', async () => {

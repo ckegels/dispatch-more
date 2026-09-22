@@ -101,6 +101,10 @@ DEFAULTS = {
     # Custom streams are made by hand and are nobody's copy of anything
     "skip_custom": True,
     "drop_sd_when_hd": False,
+    # Channel groups the Lineup leaves alone altogether: not given streams, not combined,
+    # not offered as a home for a new channel. For the groups something else looks after --
+    # a plugin's, or one arranged by hand -- where the answer to every suggestion is no.
+    "exclude_channel_groups": [],
     # ── What to change ──
     # Streams that match no channel are suggested as new ones. Only suggested: nothing is
     # made unless its row is ticked and applied
@@ -139,7 +143,10 @@ DEFAULTS_VERSION = 4
 # Version 4: channels that are the same channel are combined, and the mark providers put
 # on a stream they are recording is ignored.
 CHANGED_IN = {3: ("create_new",), 4: ("combine_duplicates", "ignore_tags")}
-SCOPE_SETTINGS = ("accounts", "stream_groups", "channel_groups", "target_group", "profiles")
+SCOPE_SETTINGS = (
+    "accounts", "stream_groups", "channel_groups", "exclude_channel_groups", "target_group",
+    "profiles",
+)
 
 QUALITY_LABELS = ["4K", "FHD", "HD", "SD"]
 # How a quality is written in a name, best first. Whole words only: "HD" inside a word is
@@ -456,6 +463,11 @@ def _existing_channels(settings, aliases):
     groups = [int(g) for g in settings.get("channel_groups") or ()]
     if groups:
         channels = channels.filter(channel_group_id__in=groups)
+    leave_alone = [int(g) for g in settings.get("exclude_channel_groups") or ()]
+    if leave_alone:
+        # Out of the plan altogether: no row, no streams added, nothing to combine, and
+        # (see _NewHomes) never a home for a new channel either
+        channels = channels.exclude(channel_group_id__in=leave_alone)
     found = {}
     for channel in channels:
         group_name = channel.channel_group.name if channel.channel_group_id else ""
@@ -1876,11 +1888,14 @@ class _NewHomes:
     after the last channel of that group that no channel has, so it lands with its group.
     """
 
-    def __init__(self):
+    def __init__(self, leave_alone=()):
         from collections import Counter
 
         from .models import Channel, ChannelGroup, ChannelStream
 
+        # The groups the levers say to leave alone are no home for a new channel: putting
+        # one there is the change somebody said not to make
+        self.leave_alone = {int(g) for g in leave_alone or ()}
         self.names = dict(ChannelGroup.objects.values_list("id", "name"))
         by_stream_group = {}
         for stream_group, channel_group in ChannelStream.objects.filter(
@@ -1908,10 +1923,15 @@ class _NewHomes:
 
     def group_for(self, stream, country):
         """(group id, why) for a new channel of this stream."""
-        if stream["group_id"] in self.by_stream_group:
-            return self.by_stream_group[stream["group_id"]], "where your channels from this stream group are"
-        if country and country in self.by_country:
-            return self.by_country[country], f"where most of your {country} channels are"
+        wanted = self.by_stream_group.get(stream["group_id"])
+        if wanted is not None and wanted not in self.leave_alone:
+            return wanted, "where your channels from this stream group are"
+        theirs = self.by_country.get(country) if country else None
+        if theirs is not None and theirs not in self.leave_alone:
+            return theirs, f"where most of your {country} channels are"
+        if stream["group_id"] in self.leave_alone:
+            # Its own group is one being left alone: it needs a home chosen on the row
+            return None, "no group: the one it came from is being left alone"
         return stream["group_id"], "the stream's own group"
 
     def _next_group_starts(self, group_id):
@@ -2105,7 +2125,7 @@ def build_plan(settings):
 
     def homes():
         if "it" not in homes_held:
-            homes_held["it"] = _NewHomes()
+            homes_held["it"] = _NewHomes(settings.get("exclude_channel_groups") or ())
         return homes_held["it"]
 
     combining = {}

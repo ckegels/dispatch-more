@@ -572,6 +572,52 @@ class NewNumberTests(_Setup):
         self.assertEqual(homes.number_in(self.austria.id), 3.0)
 
 
+class LeaveAloneTests(_Setup):
+    """
+    Groups the Lineup is told not to touch. For the ones something else looks after -- a
+    plugin's, or one arranged by hand -- where the answer to every suggestion is no.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cooking = ChannelGroup.objects.create(name="Cooking")
+        self.recipes = self._channel("┃AT┃ PULS 4", 80, self.cooking)
+        # A stream that would otherwise be added to it
+        self.its_stream = self._stream("┃AT┃ PULS 4 HD", self.a)
+
+    def _rows(self, **overrides):
+        plan = channel_manager.build_plan(settings(create_new=True, **overrides))
+        return {r["key"]: r for r in plan["rows"]}
+
+    def test_a_channel_in_one_is_not_in_the_plan_at_all(self):
+        self.assertIn(f"ch:{self.recipes.id}", self._rows())
+        self.assertNotIn(
+            f"ch:{self.recipes.id}",
+            self._rows(exclude_channel_groups=[self.cooking.id]),
+        )
+
+    def test_and_its_streams_are_suggested_as_a_new_channel_instead(self):
+        # The stream is not left out with it: it belongs to no channel now, which is what
+        # "new" means. What it must not do is quietly land in the group left alone.
+        rows = self._rows(exclude_channel_groups=[self.cooking.id])
+        new = [r for r in rows.values() if r["status"] == "new"]
+        self.assertTrue(new)
+        for row in new:
+            self.assertNotEqual(row["channel"]["group_id"], self.cooking.id)
+
+    def test_a_group_left_alone_is_never_a_new_channels_home(self):
+        # Every Austrian channel of yours is in the group being left alone, so the country
+        # would have put a new one there
+        self.orf1.channel_group = self.cooking
+        self.orf1.save(update_fields=["channel_group"])
+        homes = channel_manager._NewHomes(leave_alone=[self.cooking.id])
+        group_id, why = homes.group_for(
+            {"group_id": self.cooking.id, "name": "┃AT┃ PULS 4"}, "at"
+        )
+        self.assertNotEqual(group_id, self.cooking.id)
+        self.assertIn("left alone", why)
+
+
 class NumberFromTests(_Setup):
     """
     "Numbers from" on the levers: new channels numbered from a number you give, rather

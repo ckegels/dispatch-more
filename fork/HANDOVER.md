@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v172** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v173** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -394,6 +394,19 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**Groups can be left alone** (v173, `exclude_channel_groups`). Out of the plan altogether:
+no row, no streams added, nothing combined, and never a home for a new channel either (see
+`_NewHomes.group_for`, which says so when a stream's own group is one of them). For the
+groups something else looks after -- a plugin's, or one arranged by hand -- where the
+answer to every suggestion is no.
+
+**A group of channels could go missing from the filter** (v173). The "Which group" list was
+made from the plan's rows, so a group the levers are not looking at -- narrowed to other
+groups, or now left alone on purpose -- had no rows to be made from and vanished from the
+page: a group of channels that plainly exists, nowhere to be found, with nothing to say why.
+It lists every group you have channels in, and choosing one that is out of scope says which
+lever is keeping it out.
+
 **The plan's own guide matching prefers the channel's country** (v171, `_Guides`). It looks
 a guide up by `match_key`, which takes the country box off -- so "┃AT┃ ORF 1" and a British
 "ORF 1" are one key, and whichever the higher-priority source carried won. That is the
@@ -897,6 +910,35 @@ means what was decided is no longer what is there, and the channel is looked at 
 A settled channel still gets a row and is still scored, so "Every channel" shows what would
 have been suggested; what is not done is suggesting it. The padlock on a row settles the guide
 a channel is already on, for the ones chosen somewhere else, and the arrow unsettles it.
+
+**Which channels are asked about, and which guides may answer** (v173). Two halves of one
+question, and only the second existed. The first is now `on_sources` -- the channels whose
+guide comes from these sources, with `"none"` for the ones on no guide at all -- beside
+`channel_groups` and the new `exclude_channel_groups`. The second is the matching chips
+that were already there (`channel_manager.load_matching`, shared with the guide window on a
+Lineup row). Together they are **"take everything on the source that went stale and find it
+on the other one"**, which is a thing people do and could not say before: the channels on
+source A on the left, and only source B's guides offered on the right.
+
+Two things had to be fixed for that to work:
+
+- **What a channel is on now is scored against every guide there is**, not against the
+  narrowed catalogue. Narrowed to another source -- which is exactly this feature -- the
+  guide it has could not be found at all, `mine` fell back to 0, and the page said the
+  guide it is on scores 0%. `look_at` keeps `everything` (by id) before narrowing.
+- That lookup was a walk through the whole catalogue **per channel**: thirty-six thousand
+  rows, a hundred and fifty times a batch. It is a dict now.
+
+**`only_certain`** goes with them: a certainty rather than a likelihood (`CERTAIN` only,
+not `LIKELY`). For working through a whole source at once, where nobody is going to look at
+every row -- which is the case this feature creates.
+
+**The columns were laid out for the widths, not the reading** (v173). Three columns grew
+equally and "Why" had 150 pixels to itself -- which it shared with three buttons, so the one
+thing it says ("on no guide", "holds nothing", "a better match") was cut in half by the
+first of them, and Suggested started two thirds of the way across the page. The three middle
+columns are weighted now (1.5 / 2 / 2.4), the actions have a column of their own, and Why
+says what the two scores came to where "better" is what it rests on.
 
 **Laid out the way the other tabs are** (v148). It was a plain `Paper` with the toolbar,
 the bars and the table stacked inside it, which next to the Lineup and Stream Check read as

@@ -67,6 +67,7 @@ const SCOPE_LEVERS = [
   'accounts',
   'stream_groups',
   'channel_groups',
+  'exclude_channel_groups',
   'target_group',
   'profiles',
 ];
@@ -506,10 +507,19 @@ const ChannelManagerTable = () => {
       { value: NEW_GROUP, label: '+ A new group…' },
     ];
   }, [options, madeGroups, levers?.group_choices]);
-  // Only the groups the plan actually has something in, named for the page. A new
-  // channel counts under the group it would go into.
+  // Every group you have channels in, plus any the plan has something for (a new channel
+  // counts under the group it would go into).
+  //
+  // Not only the groups in the plan, which is what this was: a group the levers are not
+  // looking at -- narrowed to other groups, or left alone on purpose -- then vanished from
+  // the filter altogether, so a group of channels that plainly exists could not be found
+  // here and there was nothing to say why. It is listed, and choosing it says why it is
+  // empty.
   const groupsOnShow = useMemo(() => {
     const names = new Map();
+    for (const group of options?.channel_groups || []) {
+      if (group.count > 0) names.set(String(group.id), group.name);
+    }
     for (const row of plan?.rows || []) {
       const chosen = groupChoice[row.key];
       const id = chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
@@ -524,7 +534,18 @@ const ChannelManagerTable = () => {
     return [...names.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [plan, groupChoice]);
+  }, [options, plan, groupChoice]);
+
+  // A group chosen in the filter that the levers are not looking at: the reason the list
+  // is empty, said rather than left to be guessed at
+  const groupIsOutOfScope = useMemo(() => {
+    if (!group || !levers) return false;
+    const looking = (levers.channel_groups || []).map(String);
+    const leftAlone = (levers.exclude_channel_groups || []).map(String);
+    return (
+      (looking.length > 0 && !looking.includes(group)) || leftAlone.includes(group)
+    );
+  }, [group, levers]);
 
   const groupNames = useMemo(
     () =>
@@ -1364,8 +1385,12 @@ const ChannelManagerTable = () => {
                     </Stack>
                   ) : rows.length === 0 && !loading ? (
                     <Center p="xl">
-                      <Text size="sm" c="dimmed">
-                        {plan ? 'Nothing to show.' : ''}
+                      <Text size="sm" c="dimmed" ta="center" maw={560}>
+                        {!plan
+                          ? ''
+                          : groupIsOutOfScope
+                            ? 'This group is not one the levers are looking at: it is either left out of "Channel groups" or named in "Channel groups to leave alone". Change that under Levers and preview again.'
+                            : 'Nothing to show.'}
                       </Text>
                     </Center>
                   ) : (

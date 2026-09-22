@@ -800,6 +800,102 @@ class ViewTests(_Setup):
         self.assertEqual(plain.get("/api/channels/guides/").status_code, 403)
 
 
+class ScopeTests(_Setup):
+    """
+    Which channels a run asks about. The other half of which guides may answer (the
+    matching sources) -- together they are "take my channels on the source that has gone
+    stale and find them somewhere else", which could not be said before.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.other = EPGSource.objects.create(name="xmltv.nl", source_type="xmltv", priority=1)
+        # The one it is on holds programmes, so what is asked is whether the other is
+        # better -- which is the question that needs both of them scored
+        self.stale = self._guide("orf1.at", "ORF 1 Austria", programmes=3)
+        self.fresh = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=self.other)
+        moment = timezone.now()
+        for n in range(3):
+            ProgramData.objects.create(
+                epg=self.fresh, title=f"Programme {n}",
+                start_time=moment + timedelta(hours=n), end_time=moment + timedelta(hours=n + 1),
+            )
+        self.on_stale = self._channel("┃AT┃ ORF 1", 1, epg=self.stale)
+        self.on_fresh = self._channel("┃AT┃ ORF 2", 2, epg=self.fresh)
+        self.on_nothing = self._channel("┃AT┃ ATV", 3)
+
+    def _in_scope(self, **overrides):
+        return {
+            c.name for c in guide_manager.channels_in_scope(settings(**overrides))
+        }
+
+    def test_every_channel_unless_told_otherwise(self):
+        self.assertEqual(
+            self._in_scope(), {"┃AT┃ ORF 1", "┃AT┃ ORF 2", "┃AT┃ ATV"}
+        )
+
+    def test_only_the_channels_on_one_source(self):
+        self.assertEqual(self._in_scope(on_sources=[self.source.id]), {"┃AT┃ ORF 1"})
+
+    def test_the_ones_on_no_guide_are_a_choice_of_their_own(self):
+        self.assertEqual(self._in_scope(on_sources=["none"]), {"┃AT┃ ATV"})
+        self.assertEqual(
+            self._in_scope(on_sources=[self.other.id, "none"]),
+            {"┃AT┃ ORF 2", "┃AT┃ ATV"},
+        )
+
+    def test_and_a_group_can_be_left_alone(self):
+        cooking = ChannelGroup.objects.create(name="Cooking")
+        self.on_nothing.channel_group = cooking
+        self.on_nothing.save(update_fields=["channel_group"])
+        self.assertEqual(
+            self._in_scope(exclude_channel_groups=[cooking.id]),
+            {"┃AT┃ ORF 1", "┃AT┃ ORF 2"},
+        )
+
+    def test_what_it_is_on_now_is_scored_even_from_a_source_left_out_of_the_matching(self):
+        """
+        "Replace these with those" narrows the matching to the other source -- and the
+        guide the channel is on could then not be found at all, so "better" was measured
+        against nothing and the page said the guide it has scores 0%.
+        """
+        channel_manager.save_matching({"sources": [self.other.id]})
+        found = self._look(settings(better_by=1), channels=[self.on_stale])
+
+        row = found[str(self.on_stale.id)]
+        self.assertEqual(row["epg"], self.fresh.id, "it should offer the other source's")
+        self.assertGreater(
+            row.get("instead_of_score", 0), 0,
+            "the guide it is on was not scored, so better means better than nothing",
+        )
+
+
+class OnlyCertainTests(_Setup):
+    """
+    What kind of match it is says more than the number does. Working through a whole
+    source at once, nobody looks at every row, so it can be held to certainties.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._guide("orf1.at", "ORF 1", programmes=3)
+        # Close enough to score well and not the same words: a likelihood, not a certainty
+        self._guide("kanaalsport.at", "Kanaal Sport Austria", programmes=3)
+
+    def _tier(self, channel, **overrides):
+        found = self._suggested(settings(**overrides), channels=[channel])
+        return (found.get(str(channel.id)) or {}).get("tier")
+
+    def test_a_likely_match_is_suggested_unless_it_is_asked_to_be_sure(self):
+        channel = self._channel("┃AT┃ Kanal Sport Austria", 1)
+        self.assertEqual(self._tier(channel), "likely")
+        self.assertIsNone(self._tier(channel, only_certain=True))
+
+    def test_and_a_certainty_still_is(self):
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        self.assertEqual(self._tier(channel, only_certain=True), "certain")
+
+
 class OneAtATimeTests(_Setup):
     """
     Everything this remembers is one JSON row, changed by reading it, altering a key and

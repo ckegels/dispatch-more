@@ -542,6 +542,54 @@ describe('GuideManagerTable', () => {
     expect(screen.getByText('Wrong guide, try again (1)')).toBeInTheDocument();
   });
 
+  it('works through the channels on one guide source at a time', async () => {
+    // "Everything that is on the source that went stale": the channels are narrowed by
+    // what they are on now, which is the other half of narrowing which guides may answer
+    Element.prototype.scrollIntoView = vi.fn();
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      suggestions: [onNothing, onEmpty],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+
+    const field = screen.getByRole('textbox', { name: 'Now on' });
+    fireEvent.click(field);
+    // What your channels are actually on, with how many are on each
+    expect(await screen.findByText('xmltv.uk (1)')).toBeInTheDocument();
+    expect(screen.getByText('No guide (1)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('xmltv.uk (1)'));
+
+    expect(await screen.findByText('┃NL┃ DREAMWORKS')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('┃AT┃ ORF 1')).toBeNull());
+  });
+
+  it('says which channels a run asks about, as well as which guides may answer', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    API.getGuideMatching.mockResolvedValue({
+      matching: { sources: [], tvg_id_like: '', country_must_agree: false },
+      sources: [
+        { id: 3, name: 'xmltv.uk', active: true, holds: 900, channels: 12 },
+        { id: 4, name: 'xmltv.nl', active: true, holds: 400, channels: 3 },
+      ],
+      reference: { names: 0, call_signs: 0 },
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: /Settings/ }));
+
+    const field = await screen.findByRole('textbox', { name: /Only channels now on/ });
+    fireEvent.click(field);
+    fireEvent.click(await screen.findByText('xmltv.uk (12 channels)'));
+
+    await waitFor(() =>
+      expect(API.saveGuideManagerSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ on_sources: [3] })
+      )
+    );
+  });
+
   it('and shows the ones waved away when asked', async () => {
     const waved = { ...onEmpty, why: '', waved_away: true, waved_away_guide: 'DreamWorks' };
     API.getGuideManager.mockResolvedValue({ ...page, suggestions: [onNothing, waved] });

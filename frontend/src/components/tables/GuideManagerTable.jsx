@@ -26,6 +26,7 @@ import {
   Divider,
   Group,
   LoadingOverlay,
+  MultiSelect,
   NumberInput,
   Paper,
   Progress,
@@ -122,6 +123,11 @@ const GuideManagerTable = () => {
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('');
   const [why, setWhy] = useState('');
+  // Which guide source the channels are on **now**, which is how you work through one
+  // source at a time: "everything that is on the one that went stale". Not the same
+  // question as which sources may be suggested (that is Settings → matching), and the two
+  // together are "replace these with those".
+  const [onSource, setOnSource] = useState('');
   const [ticked, setTicked] = useState(new Set());
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
@@ -207,6 +213,26 @@ const GuideManagerTable = () => {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [page]);
 
+  // The guide sources your channels are actually on, with how many are on each
+  const sourcesOnShow = useMemo(() => {
+    const counted = new Map();
+    let without = 0;
+    for (const one of page?.suggestions || []) {
+      if (!one.instead_of_epg) {
+        without += 1;
+        continue;
+      }
+      const name = one.instead_of_source || 'no source';
+      counted.set(name, (counted.get(name) || 0) + 1);
+    }
+    return [
+      ...(without ? [{ value: 'none', label: `No guide (${without})` }] : []),
+      ...[...counted.entries()]
+        .map(([name, how_many]) => ({ value: name, label: `${name} (${how_many})` }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    ];
+  }, [page]);
+
   const rows = useMemo(() => {
     let found = (page?.suggestions || []).map((one) => {
       // "No guide" is a choice of its own and comes back as null, so what counts is
@@ -233,6 +259,12 @@ const GuideManagerTable = () => {
     });
     if (group)
       found = found.filter((one) => String(one.group_id ?? '') === group);
+    if (onSource)
+      found = found.filter((one) =>
+        onSource === 'none'
+          ? !one.instead_of_epg
+          : (one.instead_of_source || '') === onSource
+      );
     // Nothing chosen means the suggestions; "all" is every channel that was looked at,
     // including the ones no guide fits, which are the ones you go looking for
     if (why === 'all') {
@@ -255,7 +287,7 @@ const GuideManagerTable = () => {
       );
     }
     return found.sort((a, b) => a.channel_name.localeCompare(b.channel_name));
-  }, [page, group, why, search, chosen]);
+  }, [page, group, why, search, chosen, onSource]);
 
   const start = async () => {
     setBusy(true);
@@ -478,7 +510,10 @@ const GuideManagerTable = () => {
       {
         header: 'Channel',
         accessorKey: 'channel_name',
-        grow: true,
+        // The three middle columns share what is left over, weighted by how much there is
+        // to read in each: a channel is a name and a group, the two guides beside it are a
+        // name, a source, what they hold and what is on them now
+        grow: 1.5,
         cell: ({ row }) => (
           <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
             <WatchChannel channel={row.original} />
@@ -497,7 +532,7 @@ const GuideManagerTable = () => {
       {
         header: 'On now',
         accessorKey: 'instead_of',
-        grow: true,
+        grow: 2,
         enableSorting: false,
         cell: ({ row }) => {
           const one = row.original;
@@ -539,7 +574,7 @@ const GuideManagerTable = () => {
       {
         header: 'Suggested',
         accessorKey: 'name',
-        grow: true,
+        grow: 2.4,
         enableSorting: false,
         cell: ({ row }) => {
           const one = row.original;
@@ -606,21 +641,46 @@ const GuideManagerTable = () => {
         },
       },
       {
+        // Why this row is here, and nothing else: it shared 150 pixels with three buttons,
+        // so the one thing it has to say -- "on no guide", "holds nothing", "a better
+        // match" -- was cut in half by the first of them
         header: 'Why',
         accessorKey: 'why',
-        size: 150,
+        size: 170,
         cell: ({ row }) => {
           const one = row.original;
           const kind = WHY[one.why] || { label: one.why, color: 'gray' };
           return (
-            <Group gap={6} wrap="nowrap">
+            <Box style={{ minWidth: 0 }}>
               <Badge
                 size="sm"
                 variant="light"
                 color={one.chosen ? 'teal' : kind.color}
+                style={{ textTransform: 'none' }}
               >
                 {one.chosen ? 'Left alone' : kind.label}
               </Badge>
+              {/* What the two scores came to, where that is what "better" rests on */}
+              {one.why === 'better' && one.instead_of_score != null && (
+                <Text size="xs" c="dimmed">
+                  {one.instead_of_score}% → {one.score}%
+                </Text>
+              )}
+            </Box>
+          );
+        },
+      },
+      {
+        // The three things you do about a row, in a column of their own so they are in the
+        // same place on every line and the Why beside them can be read
+        header: 'Do',
+        accessorKey: 'actions',
+        size: 150,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const one = row.original;
+          return (
+            <Group gap={6} wrap="nowrap" justify="flex-end">
               {one.chosen ? (
                 <Tooltip label="Put this channel back on the list, so guides are suggested for it again">
                   <ActionIcon
@@ -780,6 +840,20 @@ const GuideManagerTable = () => {
                   searchable
                   clearable
                   style={{ width: 200 }}
+                />
+                {/* The channels on one source, so a whole source can be worked through
+                    or moved somewhere else. What it offers is what your channels are
+                    actually on, not every source there is. */}
+                <Select
+                  size="xs"
+                  aria-label="Now on"
+                  placeholder="On any guide"
+                  value={onSource}
+                  onChange={(value) => setOnSource(value || '')}
+                  data={sourcesOnShow}
+                  searchable
+                  clearable
+                  style={{ width: 190 }}
                 />
                 <Select
                   size="xs"
@@ -998,6 +1072,18 @@ const GuideManagerTable = () => {
                   <Group gap="lg" wrap="wrap">
                     <Switch
                       size="xs"
+                      label="Only certain matches"
+                      description="A certainty rather than a likelihood: an id that agrees, or a name that is the name. For working through a whole source at once."
+                      checked={!!levers.only_certain}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          only_certain: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Switch
+                      size="xs"
                       label="Only guides with something on"
                       description={`Nothing in the next ${levers.fresh_hours || 12} hours, and it is not put forward`}
                       checked={!!levers.must_be_fresh}
@@ -1034,7 +1120,7 @@ const GuideManagerTable = () => {
                       }
                       style={{ width: 210 }}
                     />
-                    <Select
+                    <MultiSelect
                       size="xs"
                       label="Only these groups"
                       placeholder="Every channel"
@@ -1042,25 +1128,80 @@ const GuideManagerTable = () => {
                         value: String(one.id),
                         label: `${one.name} (${one.count})`,
                       }))}
-                      value={String(levers.channel_groups?.[0] ?? '')}
+                      value={(levers.channel_groups || []).map(String)}
+                      onChange={(value) =>
+                        saveLevers({ ...levers, channel_groups: value.map(Number) })
+                      }
+                      searchable
+                      clearable
+                      style={{ width: 240 }}
+                    />
+                    <MultiSelect
+                      size="xs"
+                      label="Except these groups"
+                      description="Left alone, whatever they are on"
+                      placeholder="None"
+                      data={(page?.all_groups || []).map((one) => ({
+                        value: String(one.id),
+                        label: one.name,
+                      }))}
+                      value={(levers.exclude_channel_groups || []).map(String)}
                       onChange={(value) =>
                         saveLevers({
                           ...levers,
-                          channel_groups: value ? [Number(value)] : [],
+                          exclude_channel_groups: value.map(Number),
                         })
                       }
                       searchable
                       clearable
                       style={{ width: 240 }}
                     />
+                    {/* The other half of the matching chips below: this says which
+                        channels are asked about, they say which guides may answer. The
+                        pair of them is "take everything on the source that went stale and
+                        find it on the new one". */}
+                    <MultiSelect
+                      size="xs"
+                      label="Only channels now on"
+                      description="The guide they are on today"
+                      placeholder="Any guide"
+                      data={[
+                        { value: 'none', label: 'No guide at all' },
+                        ...(sources || []).map((one) => ({
+                          value: String(one.id),
+                          label: `${one.name} (${one.channels} channel${
+                            one.channels === 1 ? '' : 's'
+                          })`,
+                        })),
+                      ]}
+                      value={(levers.on_sources || []).map(String)}
+                      onChange={(value) =>
+                        saveLevers({
+                          ...levers,
+                          on_sources: value.map((one) =>
+                            one === 'none' ? 'none' : Number(one)
+                          ),
+                        })
+                      }
+                      searchable
+                      clearable
+                      style={{ width: 260 }}
+                    />
                   </Group>
                   {matching && (
                     <>
                       <Divider
                         my={4}
-                        label="Which guides are matched against"
+                        label="Which guides may be suggested"
                         labelPosition="left"
                       />
+                      <Text size="xs" c="dimmed">
+                        The other half of &quot;Only channels now on&quot; above: that says
+                        which channels are asked about, this says which guides may answer.
+                        Together they are &quot;take everything on one source and find it
+                        on another&quot;. These are shared with the guide window on a
+                        Lineup row, so a source left out here is left out there too.
+                      </Text>
                       <Group gap="lg" wrap="wrap" align="flex-start">
                         {/* One to click, not a list to add things to. Every source is
                             on by default, and clicking one takes it out of the matching --

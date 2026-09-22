@@ -130,6 +130,16 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           searchable
           clearable
         />
+        <MultiSelect
+          size="xs"
+          label="Channel groups to leave alone"
+          description="Left out of all of it: not given streams, not combined, and never a home for a new channel. For the groups something else looks after."
+          data={toOptions(options.all_groups)}
+          value={asStrings(value.exclude_channel_groups)}
+          onChange={(picked) => set({ exclude_channel_groups: ids(picked) })}
+          searchable
+          clearable
+        />
       </Section>
 
       <Section title="Recognising a channel">

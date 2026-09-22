@@ -61,6 +61,17 @@ RUN_KEPT_SECONDS = 24 * 3600
 DEFAULTS = {
     # Channel groups to look at; empty is every channel
     "channel_groups": [],
+    # ...and groups to leave alone, for the ones nothing here should touch
+    "exclude_channel_groups": [],
+    # Only channels whose guide comes from these EPG sources, with "none" for the ones on
+    # no guide at all. Empty is every channel.
+    #
+    # This is the other half of choosing which sources are matched against (see
+    # channel_manager.load_matching): one says which channels are being asked about, the
+    # other which guides may answer. Together they are "take my channels on the source
+    # that has gone stale and find them somewhere else", which is a thing people actually
+    # want to do and could not say before.
+    "on_sources": [],
     # Which kinds of suggestion to make. The first two are what this is for; "better" is
     # the one that can be noisy on a setup whose names do not match its guides closely,
     # so it can be turned off on its own.
@@ -69,6 +80,11 @@ DEFAULTS = {
     "suggest_better": True,
     # A suggestion has to be at least this good to be worth showing at all
     "min_score": 70,
+    # ...and, with this on, has to be a certainty rather than a likelihood. What kind of
+    # match it is says more than the number does: an id that agrees is not the same sort
+    # of thing as two names that happen to read alike. For working through a whole source
+    # at once, where nobody is going to look at every row.
+    "only_certain": False,
     # ...and to replace a guide that already works, this much better than it
     "better_by": 20,
     # A guide holding nothing is only worth swapping for one that holds something
@@ -113,6 +129,15 @@ def save_settings(given):
         values["better_by"] = min(100, max(1, int(values["better_by"])))
         values["fresh_hours"] = min(168, max(1, int(values["fresh_hours"])))
         values["channel_groups"] = [int(g) for g in values["channel_groups"] or ()]
+        values["exclude_channel_groups"] = [
+            int(g) for g in values["exclude_channel_groups"] or ()
+        ]
+        # "none" is one of the answers here -- the channels on no guide at all -- so this
+        # one is not a list of numbers
+        values["on_sources"] = [
+            "none" if str(s).lower() == "none" else int(s)
+            for s in values["on_sources"] or ()
+        ]
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     _store(SETTINGS_KEY, "Guides", {**values, "version": SETTINGS_VERSION})
@@ -274,7 +299,15 @@ def mark_chosen(rows, chosen=None):
 
 
 def channels_in_scope(settings):
-    """The channels this run looks at, in the order they are shown."""
+    """
+    The channels this run looks at, in the order they are shown.
+
+    Narrowed three ways, each of which somebody asked for out loud: the groups to look at,
+    the groups to leave alone, and the sources the channels are on now -- which is how
+    "everything that is on the guide source that went stale" is said.
+    """
+    from django.db.models import Q
+
     from .models import Channel
 
     channels = Channel.objects.select_related(
@@ -283,6 +316,16 @@ def channels_in_scope(settings):
     groups = settings.get("channel_groups") or []
     if groups:
         channels = channels.filter(channel_group_id__in=groups)
+    leave_alone = settings.get("exclude_channel_groups") or []
+    if leave_alone:
+        channels = channels.exclude(channel_group_id__in=[int(g) for g in leave_alone])
+    on_sources = [str(one) for one in settings.get("on_sources") or []]
+    if on_sources:
+        ids = [int(one) for one in on_sources if one.isdigit()]
+        wanted = Q(epg_data__epg_source_id__in=ids) if ids else Q(pk__in=[])
+        if "none" in on_sources:
+            wanted = wanted | Q(epg_data__isnull=True)
+        channels = channels.filter(wanted)
     return channels
 
 
@@ -455,9 +498,14 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     # looked at and taken by hand, but nothing that rests on how two names happen to read
     # is put forward as a change to make: that is how a completely different station came
     # to be offered at ninety-six per cent.
+    tiers = (
+        (channel_manager.CERTAIN,)
+        if settings.get("only_certain")
+        else (channel_manager.CERTAIN, channel_manager.LIKELY)
+    )
     worth = [
         one for one in found
-        if one["score"] >= least and one.get("tier") in (channel_manager.CERTAIN, channel_manager.LIKELY)
+        if one["score"] >= least and one.get("tier") in tiers
     ]
     if settings.get("must_be_fresh"):
         # A guide with nothing on tonight is no use whatever it holds altogether. Only
@@ -527,6 +575,12 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
     # The sources and the tvg-id are the same for every channel in the run, so they come
     # out of the catalogue once here rather than once per channel. The country is the
     # channel's own, so it is indexed instead and looked up per channel.
+    # Every guide there is, kept before the narrowing below: what a channel is on now has
+    # to be scored whether or not its source is one of the ones being matched against.
+    # Narrowed to another source -- which is exactly what "replace these with those" is --
+    # the guide it has could not be found at all, so "better" was measured against nothing
+    # and the page said its guide scored 0%.
+    everything = {row["id"]: row for row in catalogue}
     if channel_manager.narrows(matching):
         catalogue = channel_manager.guides_in_play(
             catalogue, {**matching, "country_must_agree": False}
@@ -574,7 +628,10 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
                 # Not among the best, so it has to be scored on its own
                 plain = channel_manager._strip_country_box(channel.name or "")
                 normalized = epg_matching.normalize_name(plain)
-                row = next((r for r in catalogue if r["id"] == channel.epg_data_id), None)
+                # By id rather than by walking the catalogue: this is once per channel
+                # against every guide there is, which on this install is thirty-six
+                # thousand rows a hundred and fifty times a batch
+                row = everything.get(channel.epg_data_id)
                 if row and normalized:
                     country = logo_library.country_of(channel.name or "") or ""
                     mine[channel.epg_data_id] = max(0, min(100, int(round(
