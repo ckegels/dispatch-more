@@ -542,6 +542,28 @@ class SourcesViewTests(TestCase):
         self.assertIn("orf 1", [one["name"].lower() for one in found])
         self.assertIn("NPO 1".lower(), [one["name"].lower() for one in found])
 
+    def test_a_logo_found_by_a_shorter_name_says_which(self):
+        """
+        Taking words off gets weaker the fewer are left: "PBS WHYY Philadelphia" comes
+        down to "Philadelphia", which is a place and could be anybody's channel.
+        """
+        index = {"entries": {
+            logo_library.match_key("PBS"): [
+                {"key": "pbs", "name": "PBS", "url": "https://e/pbs.png", "source": "x",
+                 "country": "us", "format": "PNG"}
+            ],
+        }}
+        (found,) = logo_library.suggestions_for("┃USA┃ PBS WHYY Philadelphia", index)
+        self.assertEqual(found["matched"], "PBS")
+
+        # ...and a whole-name match says nothing, because there is nothing to say
+        index["entries"][logo_library.match_key("CNN")] = [
+            {"key": "cnn", "name": "CNN", "url": "https://e/cnn.png", "source": "x",
+             "country": "us", "format": "PNG"}
+        ]
+        (found,) = logo_library.suggestions_for("┃USA┃ CNN", index)
+        self.assertNotIn("matched", found)
+
     def test_a_picon_folder_is_filed_under_the_name_without_its_country(self):
         """
         A picon folder has no names in it, only file names, written squashed with the

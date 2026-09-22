@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v165** (2026-09-21). The commit messages on the branch
+Written 2026-09-19, kept current to **release v166** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -328,6 +328,13 @@ taken off it** is tried (`shorter_names`, v140, from the end first, since a name
 who it belongs to and ends with which one): "PBS Philadelphia" finds nothing and "PBS" finds
 the network's logo, which is why a station used to be offered only the logo it already had
 from its provider. A name of one word is never made shorter, so the "Eén" case is untouched.
+
+**A logo found by a shorter name says which** (v166). Taking words off a channel's name
+gets weaker the fewer are left: "PBS WHYY Philadelphia" comes down to "PBS", which is
+right, and then to "Philadelphia", which is a place and could be anybody's channel. The
+prefixes are tried first for that reason, and what a suggestion matched on is now carried
+with it and shown, so the one kind of suggestion that can be somebody else's channel
+entirely is the one you can see coming.
 
 **A folder of picons is filed under two names** (v163). epg.guru is 57,784 images and no
 names at all -- a picon folder has only file names, written squashed with the country on

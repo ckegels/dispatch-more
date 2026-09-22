@@ -90,6 +90,14 @@ const About = ({ suggestion, byHand }) => {
       <Badge size="xs" variant="light" color={sourceColor(suggestion.source)}>
         {suggestion.source}
       </Badge>
+      {/* Found by taking words off the channel's name, which gets weaker the fewer are
+          left: worth seeing, since it is the one kind of suggestion that can be somebody
+          else's channel entirely */}
+      {suggestion.matched && (
+        <Badge size="xs" variant="outline" color="yellow">
+          matched &quot;{suggestion.matched}&quot;
+        </Badge>
+      )}
       {suggestion.country && (
         <Badge size="xs" variant="outline" color="gray">
           {suggestion.country}

@@ -744,15 +744,24 @@ def suggestions_for(name, index, limit=6):
     if not key:
         return []
     found = list(entries.get(key) or ())
+    matched = ""
     if not found:
         found = list(entries.get(without_quality(key)) or ())
     if not found:
         for shorter in shorter_names(name):
             found = list(entries.get(match_key(shorter)) or ())
             if found:
+                # Which part of the name found it. Taking words off is a guess that gets
+                # weaker the fewer are left -- "PBS WHYY Philadelphia" comes down to
+                # "Philadelphia", which is a place and could be anybody's channel -- so
+                # what it matched on is carried with the logo rather than left to be
+                # wondered about.
+                matched = shorter
                 break
     if not found:
         return []
+    if matched:
+        found = [{**entry, "matched": matched} for entry in found]
 
     country = country_of(name)
     found.sort(key=lambda entry: _rank(entry, country))

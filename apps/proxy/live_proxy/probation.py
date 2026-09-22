@@ -2577,6 +2577,9 @@ def release_abandoned_slots(redis_client, now=None) -> list:
         redis_client.expire(ABANDONED_SLOTS_KEY, ABANDONED_SLOT_GRACE * 10)
         return released
     except Exception as e:
-        logger.debug(f"Could not check for abandoned slots: {e}")
+        # Loud, unlike the best-effort reads elsewhere here: this is the only thing that
+        # gives back a slot a crash left counted, and failing quietly means an account
+        # that looks full for ever with nothing anywhere saying why
+        logger.warning(f"Probation: could not check for abandoned slots: {e}", exc_info=True)
         return []
 
