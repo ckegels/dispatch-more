@@ -32,6 +32,7 @@ import logging
 import re
 
 from . import known_channels, logo_library
+from .settings_rows import change_row
 
 logger = logging.getLogger(__name__)
 
@@ -1380,12 +1381,20 @@ def note_read(found, why=""):
     """
     from django.utils import timezone
 
-    from core.models import CoreSettings
-
     if not found:
         return reads()
-    kept = reads()
     at = timezone.now().isoformat(timespec="seconds")
+
+    def change(kept):
+        _note_one_read(kept, found, at, why)
+        return kept
+
+    # Held while it is changed: the guides of one source are written down as that source
+    # finishes, and two sources finishing together lost one of the two (see settings_rows)
+    return change_row(READS_KEY, "Guides read", change)
+
+
+def _note_one_read(kept, found, at, why):
     for epg_id, how_many in found.items():
         kept[str(epg_id)] = {"at": at, "found": int(how_many or 0), "why": why}
     # Guides gone from Dispatcharr are not kept: this is written down for ever otherwise,
@@ -1405,10 +1414,6 @@ def note_read(found, why=""):
             del kept[k]
         if gone:
             logger.info(f"Guides read: {len(gone)} record(s) of guides that are gone dropped")
-    CoreSettings.objects.update_or_create(
-        key=READS_KEY, defaults={"name": "Guides read", "value": kept}
-    )
-    return kept
 
 
 def load_programmes(epg_ids):
@@ -1526,20 +1531,26 @@ def load_matching():
 
 
 def save_matching(given):
-    from core.models import CoreSettings
+    """
+    What the matching is allowed to look at, changed.
 
-    values = load_matching()
-    values.update({k: v for k, v in (given or {}).items() if k in MATCHING_DEFAULTS})
-    try:
-        values["sources"] = [int(s) for s in values["sources"] or ()]
-    except (TypeError, ValueError):
-        raise ValueError("Those are not EPG sources")
-    values["tvg_id_like"] = str(values.get("tvg_id_like") or "").strip()
-    values["country_must_agree"] = bool(values.get("country_must_agree"))
-    CoreSettings.objects.update_or_create(
-        key=MATCHING_KEY, defaults={"name": "Guide matching", "value": values}
-    )
-    return values
+    Read and written holding the row: the Guides tab saves this on every click and the
+    guide window on a Lineup row saves the same one, and between the reading and the
+    writing one of the two lost what the other had just said (see settings_rows).
+    """
+    def change(stored):
+        values = {**MATCHING_DEFAULTS, **{k: v for k, v in stored.items() if k in MATCHING_DEFAULTS}}
+        values.update({k: v for k, v in (given or {}).items() if k in MATCHING_DEFAULTS})
+        try:
+            values["sources"] = [int(s) for s in values["sources"] or ()]
+        except (TypeError, ValueError):
+            raise ValueError("Those are not EPG sources")
+        values["tvg_id_like"] = str(values.get("tvg_id_like") or "").strip()
+        values["country_must_agree"] = bool(values.get("country_must_agree"))
+        stored.update(values)
+        return values
+
+    return change_row(MATCHING_KEY, "Guide matching", change)
 
 
 def _id_is_like(tvg_id, pattern):
@@ -1812,35 +1823,37 @@ def load_ignored():
     return dict(row.value) if row and isinstance(row.value, dict) else {}
 
 
-def _save_ignored(ignored):
-    from core.models import CoreSettings
-
-    CoreSettings.objects.update_or_create(
-        key=IGNORED_KEY, defaults={"name": "Channel Manager ignored", "value": ignored}
-    )
-
-
 def ignore(key, name="", kind="", streams=()):
     """Stop suggesting this row: a new channel or conflict whole, a channel's streams only."""
     from datetime import datetime, timezone
 
-    ignored = load_ignored()
-    before = set((ignored.get(key) or {}).get("streams") or ())
-    ignored[key] = {
-        "name": name,
-        "kind": kind,
-        "streams": sorted(before | {int(i) for i in streams or ()}),
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    _save_ignored(ignored)
-    return ignored[key]
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def change(ignored):
+        before = set((ignored.get(key) or {}).get("streams") or ())
+        ignored[key] = {
+            "name": name,
+            "kind": kind,
+            "streams": sorted(before | {int(i) for i in streams or ()}),
+            "at": at,
+        }
+        return ignored[key]
+
+    # Held while it is changed, like everything else kept in one of these rows: ignoring
+    # two rows in the same moment lost one of them (see settings_rows)
+    return change_row(IGNORED_KEY, "Channel Manager ignored", change)
 
 
 def unignore(key=None):
     """Suggest it again; without a key, every ignored suggestion."""
-    ignored = {} if key is None else {k: v for k, v in load_ignored().items() if k != key}
-    _save_ignored(ignored)
-    return len(ignored)
+    def change(ignored):
+        if key is None:
+            ignored.clear()
+        else:
+            ignored.pop(key, None)
+        return len(ignored)
+
+    return change_row(IGNORED_KEY, "Channel Manager ignored", change)
 
 
 def _followed_groups():
@@ -2287,7 +2300,14 @@ def build_plan(settings):
             )
             logo = _logo_for(name, ordered, settings.get("new_logo", "collections"), index)
             if number is not None:
+                # Numbers nobody has. "Numbers from 200" on a lineup that already uses
+                # 200 upwards handed every new channel a number an existing channel had,
+                # which a media server shows as one channel -- while number_in beside it
+                # has always stepped over what is taken.
+                while number in homes_here.taken:
+                    number += 1
                 channel_number = number
+                homes_here.taken.add(number)
                 number += 1
             else:
                 channel_number = homes_here.number_in(group_id)

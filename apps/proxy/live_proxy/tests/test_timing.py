@@ -108,6 +108,23 @@ class ChannelStartTests(TestCase):
         self.assertEqual(start["slowest"], "first keyframe")
         self.assertEqual(start["total"], "4.00")
 
+    def test_the_starts_are_read_in_one_go(self):
+        """
+        The page asks for these every few seconds while it is open, and reading two
+        hundred starts one at a time is two hundred round trips to Redis for a page
+        somebody is only looking at.
+        """
+        for n in range(5):
+            self.redis.hset(timing.START_KEY.format(start_id=f"s{n}"), "channel", f"Channel {n}")
+            self.redis.zadd(timing.STARTS_KEY, {f"s{n}": float(n)})
+
+        with patch.object(self.redis, "pipeline", wraps=self.redis.pipeline) as pipeline:
+            starts = timing.recent_starts(self.redis)
+
+        self.assertEqual([one["channel"] for one in starts], [f"Channel {n}" for n in (4, 3, 2, 1, 0)])
+        # One pipeline for all of them, rather than a round trip each
+        pipeline.assert_called_once()
+
     def test_a_viewer_joining_a_running_channel_does_not_restart_the_clock(self):
         timing.start(self.redis, self.UUID, client="TiviMate")
         first = self.redis.hgetall(self.UUID_KEY)["requested"]

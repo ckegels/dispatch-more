@@ -308,22 +308,28 @@ def logo_library_sources(request):
 
     if request.method == "DELETE":
         source_id = request.query_params.get("id")
-        sources["added"] = [s for s in sources["added"] if s.get("id") != source_id]
-        logo_library.save_sources(sources)
+
+        def removing(stored):
+            stored["added"] = [s for s in stored["added"] if s.get("id") != source_id]
+
+        logo_library.change_sources(removing)
         return JsonResponse(_sources_page())
 
     if request.method == "PATCH":
         source_id = request.data.get("id")
         enabled = bool(request.data.get("enabled"))
-        if source_id in {b["id"] for b in BUILT_IN}:
-            off = set(sources["off"])
-            (off.discard if enabled else off.add)(source_id)
-            sources["off"] = sorted(off)
-        else:
-            for source in sources["added"]:
-                if source.get("id") == source_id:
-                    source["enabled"] = enabled
-        logo_library.save_sources(sources)
+
+        def switching(stored):
+            if source_id in {b["id"] for b in BUILT_IN}:
+                off = set(stored["off"])
+                (off.discard if enabled else off.add)(source_id)
+                stored["off"] = sorted(off)
+            else:
+                for source in stored["added"]:
+                    if source.get("id") == source_id:
+                        source["enabled"] = enabled
+
+        logo_library.change_sources(switching)
         return JsonResponse(_sources_page())
 
     if request.method == "POST":
@@ -358,8 +364,9 @@ def logo_library_sources(request):
                 {"error": "That was read, but there are no logos in it"}, status=400
             )
 
-        sources["added"].append({**source, "enabled": True})
-        logo_library.save_sources(sources)
+        logo_library.change_sources(
+            lambda stored: stored["added"].append({**source, "enabled": True})
+        )
         logger.info(f"Added logo collection {name} ({kind}, {checked['count']} logos)")
         return JsonResponse({**_sources_page(), "added": checked})
 

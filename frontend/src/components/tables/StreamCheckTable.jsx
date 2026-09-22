@@ -385,12 +385,34 @@ const deadText = (row) => {
   return 'Nothing on this channel plays';
 };
 
+// Removing is asked about whether it is one stream or every stream of a channel: both
+// come through the same button, and the second used to read "undefined" comes off, because
+// what it was handed was the list rather than a stream.
+const removeText = (stream, channel) => {
+  const many = Array.isArray(stream);
+  const what = many
+    ? `All ${stream.length} streams of ${channel ? `"${channel.name}"` : 'this channel'}`
+    : `"${stream.name}"`;
+  const where = many
+    ? ''
+    : ` ${channel ? `comes off "${channel.name}"` : 'comes off every channel'}`;
+  return {
+    title: many ? 'Remove every stream of this channel?' : 'Remove this stream?',
+    message: `${what}${many ? ' come off it' : where} for good. ${
+      many ? 'The streams themselves stay' : 'The stream itself stays'
+    } in Dispatcharr, since ${
+      many ? 'they are the provider\'s' : 'it is the provider\'s'
+    }. Park ${many ? 'them' : 'it'} instead to have ${
+      many ? 'them' : 'it'
+    } checked again and put back if ${many ? 'they work' : 'it works'}.${
+      many ? ' The channel is left with its fallback only.' : ''
+    }`,
+    confirmLabel: many ? 'Remove them' : 'Remove',
+  };
+};
+
 const ACT_TEXT = {
-  remove: (stream, channel) => ({
-    title: 'Remove this stream?',
-    message: `"${stream.name}" comes off ${channel ? `"${channel.name}"` : 'every channel'} for good. The stream itself stays in Dispatcharr, since it is the provider's. Park it instead to have it checked again and put back if it works.`,
-    confirmLabel: 'Remove',
-  }),
+  remove: removeText,
   clear: () => ({
     title: 'Clear the list?',
     message:
@@ -651,6 +673,12 @@ const StreamCheckTable = () => {
   }, [data, show, search, top]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  // The list shrinks under you -- this page asks again every few seconds while a check is
+  // running, and rows drop off it as streams are parked. On page three of a list that has
+  // become one page, the table was simply empty, with "101 to 150 of 12" under it.
+  useEffect(() => {
+    if (pageIndex > pageCount - 1) setPageIndex(pageCount - 1);
+  }, [pageCount, pageIndex]);
   const paginatedRows = useMemo(
     () => rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
     [rows, pageIndex, pageSize]

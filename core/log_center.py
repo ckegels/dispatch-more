@@ -52,6 +52,12 @@ SERVICE_NAMES = {
 PAGE_RECORDS = 3000
 # A download of everything, capped so a runaway log cannot fill the server's memory
 DOWNLOAD_BYTES = 200 * 1024 * 1024
+# How many lines are read at most. "Everything" over a journal a year old is gigabytes,
+# and it was all read into one string in the web worker before anything was cut -- with
+# Follow on, every five seconds. Both numbers are far more than anybody reads; what they
+# do is stop one runaway log taking the server with it.
+PAGE_LINES = 200_000
+DOWNLOAD_LINES = 2_000_000
 
 # Every line is a record of its own, but for the lines of a Python traceback, which belong to
 # the record that reported it
@@ -138,7 +144,7 @@ def _raw_journal(units, since_minutes, limit=None):
     return done.stdout.decode("utf-8", "replace")
 
 
-def _raw_files(names, since_minutes):
+def _raw_files(names, since_minutes, limit=None):
     """The collector's files, rotated ones first, cut at the time asked for."""
     base = settings.LOG_FILE_DIR
     lines = []
@@ -160,17 +166,35 @@ def _raw_files(names, since_minutes):
                     if stamp and stamp < cutoff:
                         continue
                 lines.append(line)
-    return "\n".join(lines)
+    # The newest, where there is a cap: the oldest of a runaway log is not what anybody
+    # opened this page for
+    return "\n".join(lines[-limit:] if limit else lines)
 
 
 def _stamp(line):
-    found = re.match(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})", line)
+    """
+    When a line was written, from the start of it.
+
+    The collector writes the server's own time with nothing to say so, and reading it as
+    UTC put every line hours out on any machine that is not on UTC -- so "the last fifteen
+    minutes" of a file quietly kept the wrong quarter of an hour, or none at all.
+    """
+    found = re.match(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[.,]\d+)?(Z|[+-]\d{2}:?\d{2})?", line)
     if not found:
         return None
     try:
-        return datetime.fromisoformat(f"{found.group(1)}T{found.group(2)}").replace(tzinfo=timezone.utc)
+        when = datetime.fromisoformat(f"{found.group(1)}T{found.group(2)}")
     except ValueError:
         return None
+    offset = found.group(3)
+    if offset:
+        # It said which time it is in, so it is taken at its word
+        text = "+00:00" if offset == "Z" else (offset if ":" in offset else f"{offset[:3]}:{offset[3:]}")
+        try:
+            return when.replace(tzinfo=datetime.fromisoformat(f"2000-01-01T00:00:00{text}").tzinfo)
+        except ValueError:
+            return when.replace(tzinfo=timezone.utc)
+    return when.astimezone() if when.tzinfo is None else when
 
 
 def records(text):
@@ -223,7 +247,7 @@ def _keep(record, level, topic, text):
     return True
 
 
-def _raw(source_ids, since):
+def _raw(source_ids, since, limit=PAGE_LINES):
     available = {s["id"]: s for s in sources()}
     chosen = [available[i] for i in source_ids if i in available] or list(available.values())
     minutes = SINCE.get(since, 60)
@@ -231,15 +255,20 @@ def _raw(source_ids, since):
     files = [s["file"] for s in chosen if s["kind"] == "file"]
     parts = []
     if units:
-        parts.append(_raw_journal(units, minutes))
+        # journalctl is asked for the newest lines rather than the whole journal: without
+        # a number it hands over everything it has, which on a server that has been up for
+        # months is gigabytes into one string
+        parts.append(_raw_journal(units, minutes, limit))
     if files:
-        parts.append(_raw_files(files, minutes))
+        parts.append(_raw_files(files, minutes, limit))
     return "\n".join(parts)
 
 
 def read(source_ids=(), since="1h", level="ALL", topic="", text=""):
     """The records chosen, newest last, at most PAGE_RECORDS of them."""
-    found = [r for r in records(_raw(source_ids, since)) if _keep(r, level, topic, text)]
+    found = [
+        r for r in records(_raw(source_ids, since, PAGE_LINES)) if _keep(r, level, topic, text)
+    ]
     return {
         "records": found[-PAGE_RECORDS:],
         "total": len(found),
@@ -250,11 +279,12 @@ def read(source_ids=(), since="1h", level="ALL", topic="", text=""):
 def download(source_ids=(), since="all", level="ALL", topic="", text=""):
     """The whole log for what is chosen, as text: every record, not only the page's."""
     if level in ("", "ALL") and not topic and not text:
-        data = _raw(source_ids, since).encode("utf-8", "replace")
+        data = _raw(source_ids, since, DOWNLOAD_LINES).encode("utf-8", "replace")
     else:
         data = "\n".join(
             r["text"] if not r["time"] or r["text"].startswith(r["time"][:10]) else f"{r['time']} {r['service']}: {r['text']}"
-            for r in records(_raw(source_ids, since)) if _keep(r, level, topic, text)
+            for r in records(_raw(source_ids, since, DOWNLOAD_LINES))
+            if _keep(r, level, topic, text)
         ).encode("utf-8", "replace")
     return data[-DOWNLOAD_BYTES:]
 

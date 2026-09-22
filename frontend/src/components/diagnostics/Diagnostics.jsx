@@ -83,12 +83,15 @@ const Diagnostics = ({ active }) => {
     }
   };
 
+  // The Logs tab reads the logs themselves and shows nothing from here, so while it is
+  // open none of this is asked for: every ask is a read of every channel start, every
+  // running channel and every account, five seconds apart, for a page showing none of it
   useEffect(() => {
-    if (!active) return undefined;
+    if (!active || tab === 'logs') return undefined;
     load();
     const timer = setInterval(load, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [active, load]);
+  }, [active, load, tab]);
 
   if (error) {
     return <Alert color="red">{error}</Alert>;

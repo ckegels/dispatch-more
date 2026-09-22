@@ -202,6 +202,11 @@ const LogoLibraryTable = () => {
   }, [data, search, group, picked, custom]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  // What is on show can shrink under you -- a row applied, a filter typed, a smaller
+  // page size -- and the page you were on then holds nothing at all
+  useEffect(() => {
+    if (pageIndex > pageCount - 1) setPageIndex(pageCount - 1);
+  }, [pageCount, pageIndex]);
   const paginatedRows = useMemo(
     () => rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
     [rows, pageIndex, pageSize]

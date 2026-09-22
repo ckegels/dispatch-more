@@ -30,6 +30,7 @@ would hold up every M3U and EPG refresh behind it.
 import logging
 
 from . import channel_manager, known_channels, logo_library
+from .settings_rows import change_row
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,32 @@ def load_suggestions():
 
 
 def save_suggestions(found):
+    """Everything that is being suggested, written down as a whole."""
     _store(SUGGESTIONS_KEY, "Guide suggestions", found)
+
+
+def add_suggestions(found):
+    """
+    What a batch found, onto what is already there, holding the row while it does.
+
+    A run writes here for as long as it takes to go through a lineup, and the page it is
+    filling is where somebody sits waving suggestions away while it does. Read, changed and
+    written as three steps, one of the two changes was simply gone (see settings_rows).
+    """
+    def change(kept):
+        kept.update(found)
+        return len(kept)
+
+    return change_row(SUGGESTIONS_KEY, "Guide suggestions", change)
+
+
+def drop_suggestion(channel_id):
+    """This channel is no longer being suggested for -- settled, or waved away."""
+    def change(kept):
+        kept.pop(str(channel_id), None)
+        return len(kept)
+
+    return change_row(SUGGESTIONS_KEY, "Guide suggestions", change)
 
 
 def load_ignored():
@@ -142,22 +168,24 @@ def ignore(channel_id, name="", epg_id=None):
     """
     from django.utils import timezone
 
-    ignored = load_ignored()
-    ignored[str(channel_id)] = {
-        "name": name, "epg": epg_id, "at": timezone.now().isoformat(timespec="seconds")
-    }
-    _store(IGNORED_KEY, "Guides ignored", ignored)
-    return ignored[str(channel_id)]
+    entry = {"name": name, "epg": epg_id, "at": timezone.now().isoformat(timespec="seconds")}
+
+    def change(ignored):
+        ignored[str(channel_id)] = entry
+        return entry
+
+    return change_row(IGNORED_KEY, "Guides ignored", change)
 
 
 def unignore(channel_id=None):
-    if channel_id is None:
-        _store(IGNORED_KEY, "Guides ignored", {})
-        return 0
-    ignored = load_ignored()
-    ignored.pop(str(channel_id), None)
-    _store(IGNORED_KEY, "Guides ignored", ignored)
-    return len(ignored)
+    def change(ignored):
+        if channel_id is None:
+            ignored.clear()
+            return 0
+        ignored.pop(str(channel_id), None)
+        return len(ignored)
+
+    return change_row(IGNORED_KEY, "Guides ignored", change)
 
 
 def load_chosen():
@@ -175,23 +203,25 @@ def choose(channel_id, name="", epg_id=None):
     """
     from django.utils import timezone
 
-    chosen = load_chosen()
-    chosen[str(channel_id)] = {
-        "name": name, "epg": epg_id, "at": timezone.now().isoformat(timespec="seconds")
-    }
-    _store(CHOSEN_KEY, "Guides chosen", chosen)
-    return chosen[str(channel_id)]
+    entry = {"name": name, "epg": epg_id, "at": timezone.now().isoformat(timespec="seconds")}
+
+    def change(chosen):
+        chosen[str(channel_id)] = entry
+        return entry
+
+    return change_row(CHOSEN_KEY, "Guides chosen", change)
 
 
 def unchoose(channel_id=None):
     """Unsettle one channel, or every one of them, so they are suggested for again."""
-    if channel_id is None:
-        _store(CHOSEN_KEY, "Guides chosen", {})
-        return 0
-    chosen = load_chosen()
-    chosen.pop(str(channel_id), None)
-    _store(CHOSEN_KEY, "Guides chosen", chosen)
-    return len(chosen)
+    def change(chosen):
+        if channel_id is None:
+            chosen.clear()
+            return 0
+        chosen.pop(str(channel_id), None)
+        return len(chosen)
+
+    return change_row(CHOSEN_KEY, "Guides chosen", change)
 
 
 def settled(channel_id, epg_id, chosen=None):
@@ -799,21 +829,21 @@ def apply(choices):
     from django.utils import timezone
 
     changed = 0
-    suggestions = load_suggestions()
+    settled_channels = {}
+    done_with = []
     # Putting a guide on a channel from this page is deciding what that channel is on,
     # whether the guide came from a suggestion or was searched for by hand. So it is
     # written down as settled, and nothing is put forward for that channel again until
     # somebody asks for it to be or its guide changes underneath.
-    chosen = load_chosen()
     settled_now = timezone.now().isoformat(timespec="seconds")
     for channel in Channel.objects.filter(id__in=wanted):
         epg_id = wanted[channel.id]
         if epg_id is not None and epg_id not in guides:
             continue
         name = (guides.get(epg_id) or {}).get("name") or ""
-        chosen[str(channel.id)] = {"name": name, "epg": epg_id, "at": settled_now}
+        settled_channels[str(channel.id)] = {"name": name, "epg": epg_id, "at": settled_now}
         if channel.epg_data_id == epg_id:
-            suggestions.pop(str(channel.id), None)
+            done_with.append(str(channel.id))
             continue
         channel.epg_data_id = epg_id
         fields = ["epg_data"]
@@ -822,9 +852,17 @@ def apply(choices):
             channel.tvg_id = tvg_id
             fields.append("tvg_id")
         channel.save(update_fields=fields)
-        suggestions.pop(str(channel.id), None)
+        done_with.append(str(channel.id))
         changed += 1
-    _store(CHOSEN_KEY, "Guides chosen", chosen)
-    save_suggestions(suggestions)
+
+    def settle(chosen):
+        chosen.update(settled_channels)
+
+    def drop(kept):
+        for channel_id in done_with:
+            kept.pop(channel_id, None)
+
+    change_row(CHOSEN_KEY, "Guides chosen", settle)
+    change_row(SUGGESTIONS_KEY, "Guide suggestions", drop)
     logger.info(f"Guides: {changed} channel(s) put on another guide")
     return {"changed": changed}

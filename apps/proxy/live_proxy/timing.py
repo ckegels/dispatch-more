@@ -242,11 +242,22 @@ def update_start(redis_client, start_id, **fields):
 
 
 def recent_starts(redis_client):
-    """The last channel starts, newest first, for the Diagnostics page."""
+    """
+    The last channel starts, newest first, for the Diagnostics page.
+
+    Asked for in one go rather than one at a time: the page asks for this every few
+    seconds while it is open, and two hundred starts were two hundred round trips to
+    Redis for a page that is only being looked at.
+    """
     starts = []
     try:
-        for start_id in redis_client.zrevrange(STARTS_KEY, 0, STARTS_KEPT - 1) or ():
-            record = redis_client.hgetall(START_KEY.format(start_id=_as_str(start_id))) or {}
+        ids = [_as_str(one) for one in redis_client.zrevrange(STARTS_KEY, 0, STARTS_KEPT - 1) or ()]
+        if not ids:
+            return []
+        waiting = redis_client.pipeline()
+        for start_id in ids:
+            waiting.hgetall(START_KEY.format(start_id=start_id))
+        for record in waiting.execute():
             if record:
                 starts.append({_as_str(k): _as_str(v) for k, v in record.items()})
     except Exception as e:

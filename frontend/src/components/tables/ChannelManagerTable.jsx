@@ -664,6 +664,11 @@ const ChannelManagerTable = () => {
   ]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  // What is on show can shrink under you -- a row applied, a filter typed, a smaller
+  // page size -- and the page you were on then holds nothing at all
+  useEffect(() => {
+    if (pageIndex > pageCount - 1) setPageIndex(pageCount - 1);
+  }, [pageCount, pageIndex]);
   const paginatedRows = useMemo(
     () => rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
     [rows, pageIndex, pageSize]
@@ -861,8 +866,10 @@ const ChannelManagerTable = () => {
           const r = row.original;
           return (
             <Group gap={4} wrap="nowrap">
-              <Badge size="xs" variant="light" color={STATUS[r.status].color}>
-                {STATUS[r.status].label}
+              {/* Read the way the ignored list below reads it: a status this page has
+                  not been taught yet is one badge, not a blank page */}
+              <Badge size="xs" variant="light" color={STATUS[r.status]?.color || 'gray'}>
+                {STATUS[r.status]?.label || r.status}
               </Badge>
               {r.reordered && (
                 <Badge size="xs" variant="light" color="cyan">

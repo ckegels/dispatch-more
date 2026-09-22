@@ -572,6 +572,38 @@ class NewNumberTests(_Setup):
         self.assertEqual(homes.number_in(self.austria.id), 3.0)
 
 
+class NumberFromTests(_Setup):
+    """
+    "Numbers from" on the levers: new channels numbered from a number you give, rather
+    than after the last channel of their group.
+    """
+
+    def _numbers(self, start):
+        for name in ("PULS 4", "ATV", "ServusTV"):
+            self._stream(f"┃AT┃ {name} HD", self.a)
+        plan = channel_manager.build_plan(settings(create_new=True, number_start=start))
+        return sorted(r["channel"]["number"] for r in plan["rows"] if r["status"] == "new")
+
+    def test_the_numbers_start_where_you_said(self):
+        self.assertEqual(self._numbers(200), [200.0, 201.0, 202.0])
+
+    def test_but_never_a_number_a_channel_already_has(self):
+        """
+        It handed them out one after another without looking, so starting at a number the
+        lineup already uses gave every new channel a number an existing channel had -- and
+        two channels on one number is one channel as far as a media server is concerned.
+        The sibling that numbers a channel after its group has always stepped over these.
+        """
+        self._channel("┃DE┃ Das Erste", 200, self.germany)
+        self._channel("┃DE┃ ZDF", 201, self.germany)
+
+        numbers = self._numbers(200)
+
+        self.assertEqual(numbers, [202.0, 203.0, 204.0])
+        taken = set(Channel.objects.values_list("channel_number", flat=True))
+        self.assertEqual([n for n in numbers if n in taken - set(numbers)], [])
+
+
 class NewChannelTests(_Setup):
     def setUp(self):
         super().setUp()

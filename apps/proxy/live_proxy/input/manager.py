@@ -185,14 +185,6 @@ class StreamManager:
 
         return session
 
-    def _stable_seconds(self) -> float:
-        """How long the connection that just ended was delivering data."""
-        started = getattr(self, "connection_start_time", 0) or 0
-        if not started or not self.last_data_time:
-            return 0.0
-        # Negative when the last data came from an earlier connection: this one sent nothing
-        return max(self.last_data_time - started, 0.0)
-
     def _record_connection_failure(self):
         """Count a failed connection towards the retry budget, as Dispatcharr does."""
         now = time.time()

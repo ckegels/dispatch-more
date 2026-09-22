@@ -798,3 +798,49 @@ class ViewTests(_Setup):
             user=User.objects.create_user(username="someone", password="x", user_level=1)
         )
         self.assertEqual(plain.get("/api/channels/guides/").status_code, 403)
+
+
+class OneAtATimeTests(_Setup):
+    """
+    Everything this remembers is one JSON row, changed by reading it, altering a key and
+    writing the whole thing back. A Guides run does that from a worker for as long as a
+    lineup takes, and the page it is filling is where somebody sits clicking "not that
+    one" while it does -- so both changes have to survive, whichever lands second.
+    See apps.channels.settings_rows.
+    """
+
+    def _entry(self, name):
+        return {"name": name, "why": "none", "epg": None}
+
+    def test_what_a_run_finds_goes_onto_what_is_there(self):
+        guide_manager.save_suggestions({"1": self._entry("ORF 1")})
+        guide_manager.add_suggestions({"2": self._entry("ORF 2")})
+        self.assertEqual(set(guide_manager.load_suggestions()), {"1", "2"})
+
+    def test_and_what_somebody_waved_away_while_it_ran_stays_away(self):
+        guide_manager.save_suggestions({"1": self._entry("ORF 1"), "2": self._entry("ORF 2")})
+        # The run has what it read in hand; the click happens while it is still looking
+        guide_manager.drop_suggestion(1)
+        guide_manager.add_suggestions({"3": self._entry("ORF 3")})
+
+        left = guide_manager.load_suggestions()
+        self.assertNotIn("1", left, "the click was undone by the run writing back what it read")
+        self.assertEqual(set(left), {"2", "3"})
+
+    def test_two_channels_settled_in_the_same_moment_are_both_settled(self):
+        guide_manager.choose(1, "ORF 1", 11)
+        guide_manager.choose(2, "ORF 2", 22)
+        self.assertEqual(set(guide_manager.load_chosen()), {"1", "2"})
+        guide_manager.unchoose(1)
+        self.assertEqual(set(guide_manager.load_chosen()), {"2"})
+        guide_manager.unchoose()
+        self.assertEqual(guide_manager.load_chosen(), {})
+
+    def test_the_same_for_the_ones_waved_away(self):
+        guide_manager.ignore(1, "ORF 1", 11)
+        guide_manager.ignore(2, "ORF 2", 22)
+        self.assertEqual(set(guide_manager.load_ignored()), {"1", "2"})
+        guide_manager.unignore(1)
+        self.assertEqual(set(guide_manager.load_ignored()), {"2"})
+        guide_manager.unignore()
+        self.assertEqual(guide_manager.load_ignored(), {})

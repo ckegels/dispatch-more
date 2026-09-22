@@ -2208,6 +2208,22 @@ class StreamTsSkippedChannelOrderTests(SimpleTestCase):
 
         self.assertEqual(calls, ["get slot", "stop skipped (hold=False)"])
 
+    def test_not_even_when_it_is_asked_again_after_a_refusal(self):
+        """
+        The provider said no and the checks are asked a second time, in the retry. That one
+        was not wrapped, so anything it raised came out as a failed channel -- the very
+        thing the wrapping above it was put there to prevent.
+        """
+        with patch(
+            "apps.channels.stream_check.make_way", side_effect=RuntimeError("no Redis")
+        ):
+            calls = self._run([self.FULL, self.OK])
+
+        self.assertEqual(
+            calls,
+            ["get slot", "stop skipped (hold=True)", "get slot", "stop skipped (hold=False)"],
+        )
+
 
 @patch("apps.proxy.live_proxy.services.channel_service.ChannelService.is_channel_teardown_active", return_value=False)
 @patch.object(probation, "in_use", return_value=True)

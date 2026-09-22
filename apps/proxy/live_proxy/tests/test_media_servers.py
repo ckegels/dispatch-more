@@ -287,6 +287,44 @@ class StartWatchingTests(TestCase):
         self.assertIn("session opened=", record["server_phases"])
         self.assertNotIn("playing=", record["server_phases"])
 
+    def test_what_it_reads_is_shared_so_nothing_else_asks_again(self, _close):
+        """
+        The watcher asks the servers twice a second for half a minute; the cleanup sweep
+        asks the same question for the list a stream request must never wait for, and a
+        request that cannot tell who is asking forces one of its own. What the watcher has
+        just read answers all of them.
+        """
+        start_id = self._start()
+        media_servers.save_servers([{"id": "a1", "url": "http://plex:32400", "token": "t"}])
+
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ), patch.object(media_servers, "WATCH_SECONDS", 0.2):
+            get.return_value = fake_response(SESSION)
+            media_servers._watch(self.redis, start_id, started_at=1789580681.0)
+
+        shared = media_servers.cached_sessions(self.redis)
+        self.assertEqual([one["user"] for one in shared], ["Ckegels"])
+        # ...and the sweep coming round a moment later leaves it alone
+        asked = get.call_count
+        media_servers.refresh_sessions(self.redis)
+        self.assertEqual(get.call_count, asked)
+
+    def test_but_only_once_every_server_has_been_asked(self, _close):
+        """Half a picture is worse than none: it is what says which device is watching."""
+        media_servers.save_servers([
+            {"id": "a1", "url": "http://plex:32400", "token": "t", "name": "Plex"},
+            {"id": "a2", "url": "http://plex2:32400", "token": "t", "name": "Plex upstairs"},
+        ])
+        with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch.object(
+            media_servers.gevent, "sleep"
+        ), patch.object(media_servers, "WATCH_SECONDS", 0.2):
+            get.return_value = fake_response(SESSION)
+            media_servers._watch(self.redis, self._start(), started_at=1789580681.0)
+
+        # The first server matched, so the second was never asked and nothing was shared
+        self.assertEqual(media_servers.cached_sessions(self.redis), [])
+
     def test_a_session_that_was_already_playing_is_not_used(self, _close):
         """A session from before the request is someone else's stream, not this start."""
         start_id = self._start()
@@ -481,6 +519,16 @@ def plex_without_a_dvr(url, **_kwargs):
     if "/livetv/dvrs" in url:
         return fake_response({"MediaContainer": {"size": 0}})
     return plex(url)
+
+
+CHANNELS = {
+    "MediaContainer": {
+        "DeviceChannel": [
+            {"identifier": "6420", "name": "ORF 1"},
+            {"identifier": "6422", "name": "ATV"},
+        ]
+    }
+}
 
 
 class TunerTests(TestCase):
@@ -719,22 +767,44 @@ class TunerTests(TestCase):
             self.assertEqual(response.status_code, 400)
             self.assertIn(expected, response.json()["error"])
 
-    def test_sync_rescans_and_reloads_the_guide(self):
+    def _sync(self, get_side_effect):
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get, patch(
             "apps.proxy.live_proxy.media_servers.requests.post"
-        ) as post:
-            get.side_effect = plex_with_tuners
+        ) as post, patch("apps.proxy.live_proxy.media_servers.requests.put") as put:
+            get.side_effect = get_side_effect
             post.return_value = fake_response({})
+            put.return_value = fake_response({})
             response = self.client_api.post(
                 "/proxy/media-servers/tuners/",
                 {"server": "a1", "action": "sync", "id": "22", "dvr_id": "32"},
                 format="json",
             )
+        return response, [call.args[0] for call in post.call_args_list]
+
+    def test_sync_rescans_and_reloads_the_guide(self):
+        def with_channels(url, **kwargs):
+            if url.endswith("/channels"):
+                return fake_response(CHANNELS)
+            return plex_with_tuners(url, **kwargs)
+
+        response, called = self._sync(with_channels)
 
         self.assertEqual(response.status_code, 200)
-        called = [call.args[0] for call in post.call_args_list]
         self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/22/scan", called)
         self.assertIn("http://192.168.2.141:32400/livetv/dvrs/32/reloadGuide", called)
+
+    def test_but_a_sync_that_switched_nothing_on_does_not_say_it_worked(self):
+        """
+        A scan, the channels switched on, and the guide reloaded: all three, or the tuner
+        sits in its DVR saying "0 enabled", which is what a tuner that does not work looks
+        like. It used to answer "any of the three", so that tuner reported a good sync.
+        """
+        response, called = self._sync(plex_with_tuners)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("did not finish", response.json()["error"])
+        # ...and it did try: this is a tuner whose channels the server has not found yet
+        self.assertIn("http://192.168.2.141:32400/media/grabbers/devices/22/scan", called)
 
     def test_adding_a_tuner_makes_a_dvr_with_dispatcharrs_own_guide(self):
         from apps.channels.models import ChannelProfile
@@ -2177,16 +2247,6 @@ class WhoIsWatchingTests(TestCase):
             "server|living-room",
         )
         self.assertIsNone(media_servers.switching_device(self.redis))
-
-
-CHANNELS = {
-    "MediaContainer": {
-        "DeviceChannel": [
-            {"identifier": "6420", "name": "ORF 1"},
-            {"identifier": "6422", "name": "ATV"},
-        ]
-    }
-}
 
 
 class ChannelMapTests(TestCase):

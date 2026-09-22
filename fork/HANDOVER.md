@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v171** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v172** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1236,6 +1236,71 @@ no longer play. Summary of how it works now:
 
 ---
 
+### 5.9 The read-through of every fork file (v164–v172)
+
+Every file added since the fork was read line by line, in two rounds, and what it turned up
+was fixed. The point of writing it down is the **shape** of what was found, because it
+repeats: *a careful rule enforced in one place and quietly skipped in the sibling path that
+does the same job*. Nearly every finding is one of those.
+
+The first round (v164–v171) is in the commit messages. The second (v172) is:
+
+- **"Numbers from" handed out numbers nobody checked** (`channel_manager.build_plan`). With
+  the lever set, new channels were numbered `start, start+1, …` with no look at what is
+  taken, while `number_in` beside it has always stepped over taken numbers and refuses to
+  walk into the group above. Starting at a number the lineup already used put every new
+  channel on top of an existing one.
+- **A CoreSettings row read, changed and written back by two writers at once**
+  (`apps/channels/settings_rows.py` is the fix). The Guides run writes suggestions from a
+  worker for as long as a lineup takes, and the page it is filling is where somebody sits
+  clicking "not that one": read, change, write as three steps meant one of the two changes
+  was simply gone. Stream Check's `_change_key` had always held the row; nothing else did.
+  Now `change_row` does it for the suggestions, the chosen, the ignored (both tabs), the
+  guide reads, the matching settings and the logo collections.
+- **The frozen-picture confirmation was never wired up** (`stream_check.probe`). The
+  parameter existed, the helpers existed, the tests passed it -- and `run()` never did, so
+  on a real server a frozen picture was called frozen on one look. It is now passed when
+  `relook_pictures` is off, which is the case it was written for; with the relook on that
+  still does the confirming, and costs no connection.
+- **The round's own counters lied**: streams settled from the playlist were counted into the
+  total and never into "done" (every round of a provider that drops channels finished at
+  "800 of 1000"), and the known-good stream brought forward to tell a refusal from a limit
+  was counted against a batch it need not belong to ("-1 left").
+- **A confidence the page could not see**: the record went into Redis before the number was
+  worked out, so while a batch was running -- which is when somebody is watching this page
+  -- every failing stream it had just found showed no number at all.
+- **Two queries that grew with the install**: the end of every batch asked the database
+  about every stream ever recorded (to find the handful that have gone: now once a round),
+  and "Broken or failing" drew every ChannelStream row there is with five joins to throw
+  nearly all of it away (now only the channels that could be on the list).
+- **`make_way` unwrapped in the retry** (`live_proxy/views.py`), sixty lines under the same
+  call wrapped with "never let this cost a viewer their channel".
+- **Reading a guide's programmes emptied it first**, even when the file had nothing for it.
+  For a guide nobody uses that is the point; for one a channel is on it would have left that
+  channel blank until the next refresh, to answer a question nobody asked about it.
+- **A sync that switched nothing on said it had worked** (`media_servers.sync_tuner` answered
+  "any of the three"), which is exactly the "0 enabled" tuner that doing all three prevents.
+- **The Logs tab read the whole journal into memory** (`core/log_center`), every five seconds
+  with Follow on, and read a collector file's local timestamps as UTC.
+- **Smaller**: the guide icons cache was the only big thing in Redis still unpacked; the
+  Diagnostics page asked for two hundred channel starts one round trip at a time, and asked
+  for all of it every five seconds while the Logs tab was open; a media server was asked what
+  it was playing by the watcher and by the sweep at the same time; the page you were on was
+  not clamped when the list under it shrank (Stream Check polls while a run goes); one badge
+  read `STATUS[status].color` where the list beside it read it safely.
+
+Two findings from the read-through were **withdrawn after checking**: `suggested_lan_subnet`
+is already `@lru_cache`d (the socket is opened once per process, not once per account), and
+the `NOT IN` of a dragged group's ids in Guide Layout is a few hundred integers once per
+drag, which is not worth a different query. Dead code went: `stream_check._refused` and
+`StreamManager._stable_seconds`, both left from features that were taken out.
+
+**Still known and left alone**: select-all on a paginated table selects the page it is on
+and replaces what was ticked on the others. That is stock Dispatcharr's own behaviour
+(`LogosTable` does the same), and changing it means changing shared stock code.
+
+---
+
 ## 6. Measured on the real installation (do not re-derive)
 
 1. **Plex:** one guide per channel source, the add-channel-source API sequence (in §5.2 and
@@ -1380,6 +1445,11 @@ no longer play. Summary of how it works now:
 - **The install script kept a backup per install** in `/root`; ~100 of them helped fill a 20 GB
   disk until PostgreSQL stopped and every page 500'd. → keep the last three (the patcher keeps
   one set of originals). Check `df -h /` when something breaks oddly.
+- **The same bug, in the sibling** (the shape of nearly everything the v164--v172
+  read-through found, §5.9): a rule is thought through and enforced where it was first
+  needed, and the other path that does the same job in bulk, or on the retry, or from the
+  other tab, quietly does not have it. → when a rule is put in one place, go and look for
+  the other places that do the same job, and write the test from the one that was missed.
 - **"Check again" looked like it did nothing** (to v114): the page asked once, before the check
   had started; Stop's signal ended a check by hand; a batch still going dropped it. → keep
   looking for five minutes, Stop ends rounds only, wait your turn.

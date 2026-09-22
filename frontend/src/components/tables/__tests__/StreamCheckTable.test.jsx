@@ -169,6 +169,46 @@ describe('StreamCheckTable', () => {
     await waitFor(() => expect(API.streamCheckAction).toHaveBeenCalledWith('remove', 12, 1));
   });
 
+  it('says what it is removing when it is every stream of a channel', async () => {
+    // Both kinds come through the same button, and the many-streams one was handed the
+    // list where a stream was expected: it asked whether to remove "undefined"
+    draw();
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/undefined/)).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/All 2 streams of "┃AT┃ ORF 1" come off it for good/)
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove them' }));
+    await waitFor(() =>
+      expect(API.streamCheckAction).toHaveBeenCalledWith('remove', [11, 12], 1)
+    );
+  });
+
+  it('does not leave you on a page the list no longer has', async () => {
+    // The page asks again every few seconds while a check runs, and rows drop off it as
+    // streams are parked: on page three of what is now one page, the table was empty
+    const many = Array.from({ length: 60 }, (_, n) => ({
+      ...channelRow,
+      key: `ch:${n + 10}`,
+      channel: { ...channelRow.channel, id: n + 10, name: `Channel ${n + 10}` },
+    }));
+    API.getStreamCheck.mockResolvedValue(overview({ rows: many }));
+    draw();
+    await screen.findByText('Channel 10');
+
+    fireEvent.click(screen.getByRole('button', { name: '2' }));
+    expect(await screen.findByText('Channel 60')).toBeInTheDocument();
+
+    // ...and now the run has mended all but one of them
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [many[0]] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+
+    expect(await screen.findByText('Channel 10')).toBeInTheDocument();
+    expect(screen.getByText('1 to 1 of 1')).toBeInTheDocument();
+  });
+
   it('never offers to park or remove the fallback', async () => {
     draw();
     await open();

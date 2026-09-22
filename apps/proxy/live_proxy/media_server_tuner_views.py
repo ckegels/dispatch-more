@@ -492,8 +492,15 @@ def media_server_tuners(request):
                 status=400,
             )
         elif not media_servers.sync_tuner(server, device_id, dvr_id):
+            # A scan is started, not done, by the time the server answers, so the usual
+            # reason for getting here is that it had not found its channels yet
             return JsonResponse(
-                {"error": "The server refused to rescan this tuner"}, status=400
+                {
+                    "error": "The rescan did not finish: the server may not have found this "
+                    "tuner's channels yet, or would not switch them on. Press Sync again in "
+                    "a moment."
+                },
+                status=400,
             )
         return JsonResponse({
             "tuners": media_servers.tuners(server, hosts),

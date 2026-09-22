@@ -6,6 +6,7 @@ someone is watching, touch a channel's fallback, or lose where a parked stream w
 """
 
 import fnmatch
+import json
 import http.server
 import shutil
 import subprocess
@@ -1953,3 +1954,184 @@ class ViewTests(_Setup):
         viewer = APIClient()
         viewer.force_authenticate(user=User.objects.create_user(username="v", password="x", user_level=0))
         self.assertEqual(viewer.get("/api/channels/stream-check/").status_code, 403)
+
+
+@mock.patch.object(stream_check, "REFUSAL_PAUSE", 0.01)
+class CountingTests(_Setup):
+    """
+    What a run says it has done, and what it writes down while it is doing it. Every one of
+    these was wrong in a way nobody could see from the page: a round that finished at "800
+    of 1000", a provider that said it had one left after it had done them all, a confidence
+    that only appeared once the batch was over.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        stream_check.save_settings({"gap_seconds": 0, "broken_after": 2, "only_when_idle": False})
+
+    _run = RunTests._run
+
+    def _listed(self, account, how_many=10):
+        """Streams still in the playlist, so a stale one is not read as a failed refresh."""
+        return [self._stream(f"still there {n}", account) for n in range(how_many)]
+
+    def test_the_streams_the_playlist_settled_are_counted_as_done(self):
+        # They were counted into the round's total when it began, so leaving them out of
+        # "done" leaves every round of a provider that drops channels finishing short
+        self._listed(self.a)
+        self.first.is_stale = True
+        self.first.save(update_fields=["is_stale"])
+
+        found, _ = self._run({"*": {"ok": True}})
+
+        self.assertEqual(found["state"], "done")
+        self.assertEqual(found["done"], found["total"])
+
+    def test_how_sure_it_is_is_written_down_where_the_page_reads_it(self):
+        """
+        The record goes into Redis as it is found, and the confidence was worked out after
+        that -- so while a batch was running, which is exactly when somebody is watching
+        this page, every failing stream it had just found showed no number at all.
+        """
+        seen = {}
+        # One that plays first, so the failure after it is the stream's own and is counted
+        # there and then rather than held back while the provider is in question
+        watcher = self._stream("ORF 1 A3", self.a)
+        ChannelStream.objects.create(channel=self.orf1, stream=watcher, order=9)
+
+        def answer(should_stop):
+            # What the page would show at this moment, the failing stream having been judged
+            seen.update(self.redis.hgetall(stream_check.LIVE_RESULTS_KEY) or {})
+            return {"ok": True, "reason": "", "resolution": "", "codec": "", "bytes": 1, "seconds": 0.1}
+
+        self._run({"ORF1A2": False, "ORF1A3": answer})
+
+        record = json.loads(seen[str(self.third.id)])
+        self.assertFalse(record["ok"])
+        self.assertIn("confidence", record)
+
+    def test_a_stream_brought_forward_from_another_batch_does_not_count_twice(self):
+        """
+        A refusal is told apart from a limit by opening another stream of the provider --
+        the one known to play there, which is remembered between rounds and need not be one
+        of this batch's. Counting it as one of them took the provider past the end of its
+        own list: "3 checked, -1 left", and the page called it done while it was still going.
+        """
+        # Known to play there, but not one this batch will look at
+        stream_check.ignore(self.third.id)
+        providers = stream_check._Providers(self.redis)
+        key = stream_check._key_text(providers.provider_of(self.a.id))
+        stream_check._store(
+            stream_check.LIMITS_KEY, "Stream Check provider limits",
+            {key: {"name": "Provider A", "good_stream": self.third.id, "v": stream_check.LIMITS_VERSION}},
+        )
+
+        def refused(should_stop):
+            return {"ok": False, "reason": "The provider answered HTTP 407", "refused": True,
+                    "resolution": "", "codec": "", "bytes": 0, "seconds": 0.1}
+
+        found, _ = self._run({"ORF1A": refused})
+
+        account = found["accounts"][key]
+        self.assertEqual((account["done"], account["left"]), (1, 0))
+        self.assertEqual(found["done"], found["total"])
+
+    def test_the_records_of_streams_that_are_gone_go_when_the_round_does(self):
+        """
+        Asking the database about every stream ever recorded, to find the handful that have
+        gone, is a list of tens of thousands in one IN clause -- and it was done at the end
+        of every batch, several times an hour. Once a round is often enough.
+        """
+        kept = {
+            "999999": {"ok": False, "name": "a stream Dispatcharr no longer has", "state": "broken"},
+            str(self.first.id): {"ok": True, "name": "ORF 1 A", "state": "ok"},
+        }
+        stream_check._keep_results(kept)
+        self.assertIn("999999", stream_check.load_results()["streams"])
+
+        stream_check._finish(self.redis, {"since": "2026-01-01", "total": 1})
+
+        left = stream_check.load_results()["streams"]
+        self.assertNotIn("999999", left)
+        self.assertIn(str(self.first.id), left)
+
+
+class FrozenConfirmTests(_Setup):
+    """
+    A picture that does not move is looked at twice before it counts: later in the same run
+    (relook_pictures), or -- with that switched off -- watched longer there and then. The
+    second was written, tested, and never passed by the run, so with the relook off a single
+    still moment was enough to call a channel broken.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        stream_check.save_settings({"gap_seconds": 0, "broken_after": 2, "only_when_idle": False})
+
+    _run = RunTests._run
+
+    def _confirms(self):
+        _, probe = self._run({"*": {"ok": True}})
+        return {call.kwargs.get("frozen_confirm_seconds") for call in probe.call_args_list}
+
+    def test_a_frozen_picture_is_watched_longer_when_nothing_else_will_confirm_it(self):
+        stream_check.save_settings({
+            "picture_check": True, "picture_every_days": 0, "relook_pictures": False,
+        })
+        self.assertEqual(self._confirms(), {stream_check.load_settings()["picture_seconds"]})
+
+    def test_but_not_when_looking_again_later_in_the_run_will(self):
+        # That costs no connection and says more, so the longer watch is not spent
+        stream_check.save_settings({
+            "picture_check": True, "picture_every_days": 0, "relook_pictures": True,
+        })
+        self.assertEqual(self._confirms(), {0})
+
+    def test_and_never_when_the_picture_is_not_being_looked_at_at_all(self):
+        stream_check.save_settings({"picture_check": False, "relook_pictures": False})
+        self.assertEqual(self._confirms(), {0})
+
+
+class WhatThePageAsksForTests(_Setup):
+    """
+    "Broken or failing" draws only the channels that could be on it, rather than every
+    ChannelStream row there is with five joins on each. What must still reach the page:
+    a stream being looked at again, and a channel just acted on.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        self.quiet = Channel.objects.create(name="┃AT┃ ORF 2", channel_number=2, channel_group=self.group)
+        self.fine = self._stream("ORF 2 A", self.a)
+        self._attach(self.quiet, [self.fine, self.fallback])
+
+    def _rows(self, **kwargs):
+        return {r["channel"]["id"]: r for r in stream_check.issues(self.redis, **kwargs)["rows"]}
+
+    def test_a_channel_with_nothing_wrong_is_not_drawn_at_all(self):
+        stream_check._keep_results({
+            str(self.first.id): {"ok": False, "kind": "dead", "failures": 2, "state": "broken", "name": "ORF 1 A"},
+            str(self.fine.id): {"ok": True, "failures": 0, "state": "ok", "name": "ORF 2 A"},
+        })
+        rows = self._rows(show="problems")
+        self.assertIn(self.orf1.id, rows)
+        self.assertNotIn(self.quiet.id, rows)
+        # ...and "every channel checked" still has both
+        self.assertEqual(set(self._rows(show="all")), {self.orf1.id, self.quiet.id})
+
+    def test_a_picture_being_looked_at_again_is_still_on_the_list(self):
+        # Not counted yet, and the page says so: leaving it out would look like it passed
+        stream_check._keep_results({str(self.first.id): {
+            "ok": True, "state": "suspect", "name": "ORF 1 A",
+            "suspect": {"kind": "frozen", "reason": "The picture does not move", "round": "r"},
+        }})
+        self.assertIn(self.orf1.id, self._rows(show="problems"))
+
+    def test_and_a_channel_just_acted_on_stays_until_the_view_is_changed(self):
+        # Parking the broken stream of a channel leaves it with nothing broken; the row
+        # used to drop out then and there, taking the stream nobody had got to with it
+        stream_check._keep_results({str(self.fine.id): {"ok": True, "state": "ok", "name": "ORF 2 A"}})
+        self.assertIn(self.quiet.id, self._rows(show="problems", keep={self.quiet.id}))

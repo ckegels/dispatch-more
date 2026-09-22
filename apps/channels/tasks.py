@@ -4744,6 +4744,20 @@ def read_guide_programmes(by_source, tries=0):
         for entries in wanted.values():
             for epg in entries:
                 made = found.get(epg.id) or []
+                if not made and Channel.objects.filter(epg_data_id=epg.id).exists():
+                    # Nothing in the file for a guide a channel is actually on. Reading a
+                    # guide is how somebody chooses between them, and answering that
+                    # question by throwing away the programmes a channel is showing is not
+                    # a trade worth making: what is there stays, and the next refresh --
+                    # which reads the same file for the same reason -- has the last word.
+                    holds = ProgramData.objects.filter(epg=epg).count()
+                    logger.info(
+                        f"Guide programmes: the file had nothing for {epg.tvg_id}, which a "
+                        f"channel is on; its {holds} programme(s) were left as they were"
+                    )
+                    read += 1
+                    what_was_found[epg.id] = holds
+                    continue
                 with transaction.atomic():
                     ProgramData.objects.filter(epg=epg).delete()
                     if made:
@@ -4840,9 +4854,9 @@ def suggest_guides(settings, offset=0):
     )
 
     if found:
-        kept = guide_manager.load_suggestions()
-        kept.update(found)
-        guide_manager.save_suggestions(kept)
+        # Onto what is there, under the row's own lock: this runs for as long as a lineup
+        # takes while somebody works down the page it is filling (see settings_rows)
+        guide_manager.add_suggestions(found)
     if redis_client:
         # Set rather than added to: the batch has been saying where it got to as it went
         say({"done": offset + len(channels), "at": ""})

@@ -1087,7 +1087,8 @@ def sync_tuner(server, device_id, dvr_id=None):
     Rescan the tuner's channels, switch them on, and reload the guide of its DVR.
 
     The scan is what finds channels, enabling them is what makes them appear, and the guide
-    reload is what puts programmes against them: all three, or the tuner looks broken.
+    reload is what puts programmes against them: all three, or the tuner looks broken --
+    which is why all three have to have worked for this to say that they did.
     """
     if kind(server) == "jellyfin":
         # Jellyfin rescans its tuners while refreshing the guide, and has no channel map
@@ -1098,8 +1099,20 @@ def sync_tuner(server, device_id, dvr_id=None):
     # saying "0 enabled", which is exactly what a tuner that does not work looks like.
     channels = _scanned_channels(server, device_id)
     enabled = enable_channels(server, device_id, channels)
-    reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else False
-    return scanned or enabled or reloaded
+    # Nothing to reload where there is no DVR, which is not a step that failed
+    reloaded = _post(server, f"/livetv/dvrs/{dvr_id}/reloadGuide") if dvr_id else True
+    done = bool(scanned and channels and enabled and reloaded)
+    if not done:
+        # It used to answer "any of the three", so a sync that scanned and could then not
+        # switch a single channel on reported success -- and left behind the "0 enabled"
+        # tuner that doing all three is meant to prevent
+        logger.warning(
+            f"Sync of tuner {device_id} on {server.get('name')} did not finish: "
+            f"scan {'went' if scanned else 'was refused'}, {len(channels)} channel(s) found, "
+            f"switching them on {'went' if enabled else 'did not'}, "
+            f"guide reload {'went' if reloaded else 'did not'}"
+        )
+    return done
 
 
 # How long to wait for a scan to turn up channels, and how often to look
@@ -1403,6 +1416,28 @@ def _is_media_server(user_agent, ip=None) -> bool:
     return probation.is_media_server(user_agent, ip)
 
 
+def _share_sessions(redis_client, playing):
+    """
+    What a watcher has just read, put where everything else reads it.
+
+    A start is watched by asking the servers twice a second for half a minute, and the
+    proxy's cleanup loop asks the same servers the same question every couple of seconds
+    for the list a stream request must never wait for. Both were asking; this makes the
+    watcher's answer the shared one, so the second poll does not happen at all while a
+    channel is starting -- which is exactly when the server is busiest, and when a request
+    that needs to know who is watching (wait_for_device) would otherwise ask again itself.
+
+    Only what is playing: who was watching is noted by the sweep, which reads the clock,
+    and this is called from a loop that has already measured the moment it is in.
+    """
+    try:
+        redis_client.setex(SESSIONS_KEY, SESSIONS_TTL, json.dumps(playing))
+        # ...and the sweep that would have asked the same question can skip this turn
+        redis_client.set(SESSIONS_REFRESH_KEY, "1", ex=int(SESSIONS_REFRESH))
+    except Exception as e:
+        logger.debug(f"Could not share what the media servers are playing: {e}")
+
+
 def _watch(redis_client, start_id, started_at, channel_uuid=None):
     """Poll until the session is playing, or until it has been long enough."""
     from django.db import close_old_connections
@@ -1432,13 +1467,26 @@ def _watch(redis_client, start_id, started_at, channel_uuid=None):
         session = None
         position = None
         while time.time() < deadline:
+            polled = []
+            found = None
             for server in servers:
-                session = _session_for(
-                    server, started_at, channel_name, programme_name
+                mine = sessions(server)
+                polled.append(mine)
+                found = _session_for(
+                    server, started_at, channel_name, programme_name, mine
                 )
-                if session:
+                if found:
                     break
-            if not session:
+            # The last one seen is kept, so a session that never got as far as playing is
+            # still there to be reported when the watching is over
+            session = found or session
+            if len(polled) == len(servers):
+                # Every server was asked, so this is the whole picture and can stand as
+                # the shared one. Stopping at the server that matched leaves the others
+                # out, and half a picture is worse than none: it is what says which
+                # device is watching (see sole_device).
+                _share_sessions(redis_client, [one for mine in polled for one in mine])
+            if not found:
                 gevent.sleep(WATCH_INTERVAL)
                 continue
 
@@ -1578,7 +1626,7 @@ def programme_now(channel_uuid) -> str:
         return ""
 
 
-def _session_for(server, started_at, channel_name=None, programme_name=None):
+def _session_for(server, started_at, channel_name=None, programme_name=None, playing=None):
     """
     The live session this channel start belongs to: the one playing what we just handed
     over, or failing that one that began at the right moment.
@@ -1592,7 +1640,11 @@ def _session_for(server, started_at, channel_name=None, programme_name=None):
     session began on Plex and when it was last active on Jellyfin, which is refreshed while
     it plays. They are the fallback, not the method.
     """
-    live = [session for session in sessions(server) if session["live"]]
+    live = [
+        session
+        for session in (sessions(server) if playing is None else playing)
+        if session["live"]
+    ]
 
     # What it is playing, before when it started. A server says which channel a session is
     # on, and Dispatcharr knows which channel it just handed over, so the two can be put

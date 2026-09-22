@@ -68,8 +68,26 @@ class ReadTests(TestCase):
         units, raw = self._journal()
         with units, raw as journal:
             found = log_center.read(["journal:dispatcharr-celery"], since="15m", level="INFO")
-        journal.assert_called_once_with(["dispatcharr-celery"], 15)
+        # ...and for a sensible number of lines rather than everything it has
+        journal.assert_called_once_with(["dispatcharr-celery"], 15, log_center.PAGE_LINES)
         self.assertEqual(found["total"], len(found["records"]))
+
+    def test_the_journal_is_never_read_whole(self):
+        """
+        "Everything" over a journal months old is gigabytes, read into one string in the
+        web worker -- and with Follow on, every five seconds. The newest lines are asked
+        for instead, far more than anybody reads but not the lot.
+        """
+        units, raw = self._journal()
+        with units, raw as journal:
+            log_center.read(since="all")
+            page_lines = journal.call_args.args[2]
+            log_center.download(since="all")
+            download_lines = journal.call_args.args[2]
+
+        self.assertEqual(page_lines, log_center.PAGE_LINES)
+        self.assertEqual(download_lines, log_center.DOWNLOAD_LINES)
+        self.assertGreater(log_center.DOWNLOAD_LINES, log_center.PAGE_LINES)
 
     def test_the_page_is_cut_the_download_is_not(self):
         units, raw = self._journal()
@@ -91,6 +109,46 @@ class CollectorFileTests(TestCase):
             self.assertEqual([s["id"] for s in log_center.sources()], ["file:dispatcharr.log"])
             found = log_center.read(since="all")
         self.assertEqual([r["text"].split()[-1] for r in found["records"]], ["older", "newer"])
+
+
+    def test_a_files_time_is_read_as_the_server_writes_it(self):
+        """
+        The collector writes the server's own time with nothing to say which it is. Read
+        as UTC, "the last fifteen minutes" of a file kept the wrong quarter of an hour on
+        any machine that is not on UTC -- an hour or more of lines either missing or
+        wrongly kept.
+        """
+        import time as clock
+        from datetime import datetime, timedelta
+
+        # A machine behind UTC, which is where reading its time as UTC throws away the
+        # lines somebody is looking for rather than keeping a few too many
+        was = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        clock.tzset()
+
+        def put_it_back():
+            if was is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = was
+            clock.tzset()
+
+        self.addCleanup(put_it_back)
+
+        folder = tempfile.mkdtemp()
+        just_now = datetime.now().astimezone() - timedelta(minutes=2)
+        long_ago = datetime.now().astimezone() - timedelta(hours=6)
+        with open(os.path.join(folder, "dispatcharr.log"), "w") as handle:
+            handle.write(f"{long_ago.strftime('%Y-%m-%d %H:%M:%S')},000 INFO x older\n")
+            handle.write(f"{just_now.strftime('%Y-%m-%d %H:%M:%S')},000 INFO x newer\n")
+
+        with override_settings(LOG_FILE_DIR=folder), mock.patch.object(
+            log_center, "_systemd_units", return_value=[]
+        ):
+            found = log_center.read(since="15m")
+
+        self.assertEqual([r["text"].split()[-1] for r in found["records"]], ["newer"])
 
 
 class ViewTests(TestCase):

@@ -101,9 +101,7 @@ def guide_manager_ignore(request):
         channel, str(request.data.get("name") or ""), request.data.get("epg")
     )
     # Off the list it is on now, as well as the ones made later
-    kept = guide_manager.load_suggestions()
-    kept.pop(str(channel), None)
-    guide_manager.save_suggestions(kept)
+    guide_manager.drop_suggestion(channel)
     return JsonResponse({"ignored": entry})
 
 
@@ -127,9 +125,7 @@ def guide_manager_chosen(request):
     )
     # Off the list it is on now as well, so settling one takes it out of what is being
     # put forward rather than only out of what the next run puts forward
-    kept = guide_manager.load_suggestions()
-    kept.pop(str(channel), None)
-    guide_manager.save_suggestions(kept)
+    guide_manager.drop_suggestion(channel)
     return JsonResponse({"chosen": entry})
 
 

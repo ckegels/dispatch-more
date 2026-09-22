@@ -255,12 +255,33 @@ def load_sources():
 
 
 def save_sources(sources):
+    """The collections as a whole, written down."""
     from core.models import CoreSettings
 
     CoreSettings.objects.update_or_create(
         key=SOURCES_KEY,
         defaults={"name": "Logo library sources", "value": sources},
     )
+
+
+def change_sources(change):
+    """
+    Add, switch or remove a collection, holding the row while it is done.
+
+    The page reads the collections, changes one and writes them all back, so two changes
+    in the same moment -- switching one off while another is being added -- lost one of
+    them without a word (see settings_rows).
+    """
+    from .settings_rows import change_row
+
+    def changing(stored):
+        sources = {"added": list(stored.get("added") or []), "off": list(stored.get("off") or [])}
+        answer = change(sources)
+        stored["added"] = sources["added"]
+        stored["off"] = sources["off"]
+        return answer
+
+    return change_row(SOURCES_KEY, "Logo library sources", changing)
 
 
 def _download(url):
@@ -856,9 +877,9 @@ def _guide_icons(cache=None):
     """Every channel icon in Dispatcharr's own guides, by match key, kept briefly."""
     if cache is None:
         from django.core.cache import cache
-    cached = cache.get(GUIDE_ICONS_KEY)
+    cached = read_json(cache, GUIDE_ICONS_KEY)
     if cached:
-        return json.loads(cached)
+        return cached
 
     from apps.epg.models import EPGData
 
@@ -869,7 +890,9 @@ def _guide_icons(cache=None):
         ).values_list("name", "icon_url", "epg_source__name")
         if name
     ]
-    cache.set(GUIDE_ICONS_KEY, json.dumps(icons), GUIDE_ICONS_TTL)
+    # Packed like the logo index beside it: this is tens of thousands of names and
+    # addresses, which is the same kind of thing and compresses the same way
+    keep_json(cache, GUIDE_ICONS_KEY, icons, GUIDE_ICONS_TTL)
     return icons
 
 

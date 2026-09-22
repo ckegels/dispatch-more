@@ -903,3 +903,64 @@ class ShorterNamesTests(TestCase):
         self.assertEqual(logo_library.shorter_names("Eén"), [])
         index = {"entries": {"nickelodeonteen": [{"url": "u", "key": "nickelodeonteen", "source": "x", "name": "Nickelodeon Teen"}]}}
         self.assertEqual(logo_library.suggestions_for("Eén", index), [])
+
+
+class SourceChangesTests(TestCase):
+    """
+    The collections are one row, changed by the page: added to, switched off, removed. It
+    was read, changed and written back whole, so two changes in the same moment lost one
+    of them (see apps.channels.settings_rows).
+    """
+
+    def test_one_change_at_a_time_keeps_the_others(self):
+        logo_library.change_sources(
+            lambda stored: stored["added"].append({"id": "a1", "name": "one", "enabled": True})
+        )
+        logo_library.change_sources(
+            lambda stored: stored["added"].append({"id": "a2", "name": "two", "enabled": True})
+        )
+        self.assertEqual(
+            [s["id"] for s in logo_library.load_sources()["added"]], ["a1", "a2"]
+        )
+
+    def test_switching_a_built_in_one_off_leaves_the_added_ones_alone(self):
+        logo_library.change_sources(
+            lambda stored: stored["added"].append({"id": "a1", "name": "one", "enabled": True})
+        )
+        logo_library.change_sources(lambda stored: stored["off"].append(logo_library.TV_LOGOS))
+
+        sources = logo_library.load_sources()
+        self.assertEqual([s["id"] for s in sources["added"]], ["a1"])
+        self.assertEqual(sources["off"], [logo_library.TV_LOGOS])
+
+
+class GuideIconCacheTests(TestCase):
+    """
+    Dispatcharr's own guide icons are kept for a few minutes so a page does not read them
+    per row. There are as many of them as there are guides -- tens of thousands of names
+    and addresses -- so they are packed like the logo index beside them.
+    """
+
+    def setUp(self):
+        cache.clear()
+
+    def test_what_is_kept_is_packed(self):
+        from apps.epg.models import EPGData, EPGSource
+
+        source = EPGSource.objects.create(name="xmltv.at", source_type="xmltv")
+        for n in range(20):
+            EPGData.objects.create(
+                tvg_id=f"one{n}.at", name=f"Channel {n}",
+                icon_url=f"http://example.invalid/logos/channel-{n}.png", epg_source=source,
+            )
+        icons = logo_library._guide_icons()
+        self.assertEqual(len(icons), 20)
+
+        kept = cache.get(logo_library.GUIDE_ICONS_KEY)
+        self.assertEqual(bytes(kept[:2]), b"\x1f\x8b", "the guide icons are kept unpacked")
+        # ...and they read back as what went in, from the cache rather than the database
+        self.assertEqual(logo_library._guide_icons(), icons)
+
+    def test_and_what_an_older_install_kept_unpacked_still_reads(self):
+        cache.set(logo_library.GUIDE_ICONS_KEY, json.dumps([{"key": "orf1", "name": "ORF 1", "url": "u", "guide": ""}]))
+        self.assertEqual(logo_library._guide_icons()[0]["name"], "ORF 1")

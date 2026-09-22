@@ -99,6 +99,42 @@ class ReadGuideProgrammesTests(TestCase):
         self._read(nothing)
         self.assertEqual(ProgramData.objects.filter(epg=nothing).count(), 0)
 
+    def test_a_guide_a_channel_is_on_keeps_what_it_has_when_the_file_has_nothing(self):
+        """
+        Reading a guide is how somebody chooses between guides, and it answers by replacing
+        what the guide holds. For a guide nobody uses that is the whole point; for one a
+        channel is on, a file that says nothing about it would leave that channel with no
+        programmes at all until the next refresh -- to answer a question nobody asked about
+        it. What is there stays.
+        """
+        from apps.channels.models import Channel
+        from django.utils import timezone
+        from datetime import timedelta
+
+        gone = EPGData.objects.create(tvg_id="GONE.at", name="Gone", epg_source=self.source)
+        moment = timezone.now()
+        ProgramData.objects.create(
+            epg=gone, title="What it is showing now",
+            start_time=moment, end_time=moment + timedelta(hours=1),
+        )
+        Channel.objects.create(name="Gone TV", channel_number=9, epg_data=gone)
+
+        self._read(gone)
+
+        self.assertEqual(ProgramData.objects.filter(epg=gone).count(), 1)
+
+    def test_but_one_nobody_uses_is_emptied_as_before(self):
+        nothing = EPGData.objects.create(tvg_id="GONE.at", name="Gone", epg_source=self.source)
+        from django.utils import timezone
+        from datetime import timedelta
+
+        moment = timezone.now()
+        ProgramData.objects.create(
+            epg=nothing, title="Stale", start_time=moment, end_time=moment + timedelta(hours=1)
+        )
+        self._read(nothing)
+        self.assertEqual(ProgramData.objects.filter(epg=nothing).count(), 0)
+
     def test_it_says_where_it_has_got_to_as_it_reads(self):
         from unittest.mock import patch
 

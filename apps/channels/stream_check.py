@@ -1971,6 +1971,11 @@ def run(redis_client, only=None, batch_seconds=None):
                 else:
                     del by_account[account_id]
             if settled:
+                # Counted as done like any other stream: they were counted into the round's
+                # total when it began, so leaving them out here left every round of a
+                # provider that drops channels finishing at "800 of 1000", with the estimate
+                # of how long it had left built on the same gap.
+                _progress(redis_client, done=progress(redis_client).get("done", 0) + settled)
                 logger.info(
                     f"Stream Check: {settled} stream(s) are not in their provider's playlist "
                     f"any more; no connection was opened for them"
@@ -2094,6 +2099,10 @@ def run(redis_client, only=None, batch_seconds=None):
                 others = [results.get(str(i)) or {} for i in siblings.get(stream.id, ())]
                 sure, why = confidence_of(record, others)
                 record["confidence"] = sure
+                # Kept again: the record went into Redis before the number was worked out,
+                # so the page showed no confidence for anything the running batch found --
+                # which is exactly when somebody is watching it
+                _keep_record(redis_client, results, stream, record, settings)
                 remove_above = int(settings.get("remove_above") or 0)
                 park_above = int(settings.get("park_above") or 0)
                 if remove_above and sure >= remove_above:
@@ -2193,11 +2202,25 @@ def run(redis_client, only=None, batch_seconds=None):
                     if not (url and url.startswith(("http://", "https://"))):
                         return None
                     budget.note_open()
+                    looking = (
+                        settings["picture_seconds"]
+                        if (only is not None and settings.get("picture_check"))
+                        or _picture_due(results.get(str(stream.id)), settings, round_id)
+                        else 0
+                    )
                     return probe(
                         url, agents[account_id], settings["timeout_seconds"], should_stop,
-                        picture_seconds=settings["picture_seconds"]
-                        if (only is not None and settings.get("picture_check"))
-                        or _picture_due(results.get(str(stream.id)), settings, round_id) else 0,
+                        picture_seconds=looking,
+                        # With looking again switched off, nothing else would ever confirm a
+                        # frozen picture and one still moment would be enough to call a
+                        # channel broken. So the picture is watched a while longer there and
+                        # then, which is what this was written for and was never passed.
+                        # It holds the connection for those extra seconds, which is why it
+                        # is not done when the relook is on: that costs nothing and says
+                        # more. A viewer arriving cuts the longer look short like any other.
+                        frozen_confirm_seconds=(
+                            looking if looking and not settings.get("relook_pictures", True) else 0
+                        ),
                         done_reading=give_the_connection_back,
                     )
                 except Stopped:
@@ -2326,10 +2349,19 @@ def run(redis_client, only=None, batch_seconds=None):
                                         played.add(compare.m3u_account_id)
                                     if compare.id not in taken:
                                         # One of this provider's own, brought forward:
-                                        # it counts as done and is not looked at again
+                                        # it counts as done and is not looked at again.
+                                        # The stream known to play there is fetched
+                                        # separately and need not be one of this batch's,
+                                        # and counting one of those took the provider's
+                                        # "left" past zero and called it done early.
                                         taken.add(compare.id)
-                                        entry["done"] += 1
-                                        entry["left"] -= 1
+                                        if any(s.id == compare.id for s in streams):
+                                            entry["done"] += 1
+                                            entry["left"] -= 1
+                                            _progress(
+                                                redis_client, accounts=accounts,
+                                                done=progress(redis_client).get("done", 0) + 1,
+                                            )
                         # The provider gives other streams: this one it does not. A failure of
                         # the stream, counted like any other, so rechecks and autopark see it.
                         outcome = {
@@ -2527,12 +2559,6 @@ def _pause(seconds, interrupted):
     return True
 
 
-def _refused(results, stream, reason):
-    """A stream the provider would not give: looked at, not checked, and said why."""
-    _touch(results, stream)
-    results[str(stream.id)] = {**results[str(stream.id)], "refused": reason}
-
-
 def _placeholders(results, provider_of):
     """
     Frozen pictures that are the provider's own card rather than a channel's: the same still
@@ -2580,6 +2606,8 @@ def _touch(results, stream):
 
 def _finish(redis_client, round_):
     redis_client.delete(QUEUED_KEY)
+    # The round is over: this is where the streams that have gone are forgotten
+    _forget_streams_that_are_gone()
     done = progress(redis_client).get("done", 0)
     if (round_ or {}).get("kind") == "recheck":
         # Not a full run: when the next full one is due is left as it was
@@ -2609,14 +2637,40 @@ def _stopped(redis_client):
 
 
 def _keep_results(results):
-    # Streams gone from Dispatcharr altogether are not kept
-    from .models import Stream
-
-    existing = {str(i) for i in Stream.objects.filter(id__in=[int(i) for i in results]).values_list("id", flat=True)}
+    """What is known, written down. Called at the end of every batch."""
     _store(
         RESULTS_KEY, "Stream Check results",
-        {"streams": {k: v for k, v in results.items() if k in existing}, "last_run": load_results()["last_run"]},
+        {"streams": dict(results), "last_run": load_results()["last_run"]},
     )
+
+
+def _forget_streams_that_are_gone():
+    """
+    Drop the records of streams Dispatcharr no longer has.
+
+    Once a round rather than at the end of every batch: it asks the database about every
+    stream ever recorded, which on a real setup is a list of tens of thousands going into
+    one IN clause, several times an hour, to find the handful that have gone.
+    """
+    from .models import Stream
+
+    kept = load_results()
+    ids = [int(i) for i in kept["streams"] if str(i).isdigit()]
+    if not ids:
+        return 0
+    existing = {str(i) for i in Stream.objects.filter(id__in=ids).values_list("id", flat=True)}
+    gone = [i for i in kept["streams"] if i not in existing]
+    if not gone:
+        return 0
+    _store(
+        RESULTS_KEY, "Stream Check results",
+        {
+            "streams": {k: v for k, v in kept["streams"].items() if k in existing},
+            "last_run": kept["last_run"],
+        },
+    )
+    logger.info(f"Stream Check: forgot {len(gone)} stream(s) Dispatcharr no longer has")
+    return len(gone)
 
 
 def _keep_last_run(last_run):
@@ -2964,6 +3018,34 @@ def _close_up(channel_id):
 # ── What the page shows ──────────────────────────────────────────────────────
 
 
+def _channels_worth_showing(results, believed, keep=()):
+    """
+    The channels "problems" and "broken" could possibly list: the ones with a stream that
+    did not play, one the provider has stopped listing, or one just acted on.
+
+    A stream being looked at again counts, and so does one the playlist has dropped even
+    where no check has ever been near it -- both are shown by those views.
+    """
+    from .models import ChannelStream, Stream
+
+    wanted = {
+        int(stream_id)
+        for stream_id, record in results.items()
+        if str(stream_id).isdigit()
+        and record
+        and (record.get("suspect") or (not record.get("ok") and not record.get("skipped")))
+    }
+    if believed:
+        wanted |= set(
+            Stream.objects.filter(is_stale=True, m3u_account_id__in=believed)
+            .values_list("id", flat=True)
+        )
+    channels = set(
+        ChannelStream.objects.filter(stream_id__in=wanted).values_list("channel_id", flat=True)
+    )
+    return channels | {int(i) for i in keep if str(i).isdigit()}
+
+
 def issues(redis_client, show="problems", keep=()):
     """
     The channels with a stream that does not play, each with all its streams as last
@@ -2994,10 +3076,15 @@ def issues(redis_client, show="problems", keep=()):
             return "ignored"
         return state_of(results.get(str(stream_id)), settings) if str(stream_id) in results else "unchecked"
 
-    links = list(
-        ChannelStream.objects.select_related("stream", "stream__m3u_account", "channel", "channel__channel_group", "channel__logo")
-        .order_by("channel__channel_number", "channel_id", "order")
-    )
+    links = ChannelStream.objects.select_related(
+        "stream", "stream__m3u_account", "channel", "channel__channel_group", "channel__logo"
+    ).order_by("channel__channel_number", "channel_id", "order")
+    if show != "all":
+        # Only the channels that could be on this list. Everything else was read with five
+        # joins, drawn out of the database and thrown away again on every load of the page
+        # and every poll of a running check -- which is every ChannelStream row there is.
+        links = links.filter(channel_id__in=_channels_worth_showing(results, believed, keep))
+    links = list(links)
     by_channel = {}
     for link in links:
         by_channel.setdefault(link.channel_id, {"channel": link.channel, "links": []})["links"].append(link)

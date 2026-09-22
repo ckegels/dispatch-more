@@ -73,6 +73,10 @@ vi.mock('@mantine/core', () => {
 
 vi.mock('lucide-react', () => ({ Copy: () => <span>copy</span> }));
 
+// The Logs tab has its own tests and its own half of Mantine; here it only has to be
+// something that renders, so that switching to it can be seen
+vi.mock('../LogViewer.jsx', () => ({ default: () => <div>the logs</div> }));
+
 import API from '../../../api';
 
 const activity = {
@@ -285,6 +289,23 @@ describe('Diagnostics', () => {
     unmount();
     await vi.advanceTimersByTimeAsync(10000);
     expect(API.getDiagnostics).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops asking for all of it while the logs are being read', async () => {
+    // The Logs tab shows nothing from here, and every ask is every channel start, every
+    // running channel and every account, five seconds apart, for a page not showing any
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+    expect(API.getDiagnostics).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Logs/ }));
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(API.getDiagnostics).toHaveBeenCalledTimes(1);
+
+    // ...and it picks up again on a tab that shows it
+    openSwitches();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(API.getDiagnostics.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('says so when the overlap is not enabled anywhere', async () => {

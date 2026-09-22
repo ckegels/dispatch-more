@@ -400,9 +400,20 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                             # be told no, with no retry and no signal to let go, while
                             # the connection it needed was about to be free. Never take a
                             # viewer's channel: if a run is going, it is worth the wait.
-                            from apps.channels.stream_check import make_way
+                            #
+                            # Wrapped like the one above it, and for the same reason:
+                            # nothing about asking the checks to let go is worth a viewer
+                            # losing their channel over, and unwrapped this one turned
+                            # anything it raised into a failed start.
+                            a_check_was_holding_it = False
+                            try:
+                                from apps.channels.stream_check import make_way
 
-                            a_check_was_holding_it = make_way(proxy_server.redis_client)
+                                a_check_was_holding_it = make_way(proxy_server.redis_client)
+                            except Exception as e:
+                                logger.debug(
+                                    f"[{client_id}] Could not ask the checks to let go: {e}"
+                                )
 
                             if (
                                 error_reason
