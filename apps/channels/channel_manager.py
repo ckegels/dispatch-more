@@ -1931,9 +1931,16 @@ def _duplicate_sets(by_key, same_country=False):
             continue
         stated = {r["country"] for r in records if r["country"]}
         if len(stated) > 1:
-            # Two countries named: these are different channels, whatever their names say
+            # Two countries named: these are different channels, whatever their names say.
+            # One that names no country is left out of every one of them. It used to join
+            # each in turn, which put it in two sets at once -- and since the lowest number
+            # keeps the channel, a country-less "ORF 1" on number 1 became the keeper of
+            # both the Austrian set and the German set, so applying them merged two
+            # countries' channels into one and deleted both. Saying nothing is not saying
+            # something different, but with two countries on the table it is not enough to
+            # say which, and this fork is built on not guessing that.
             for country in stated:
-                theirs = [r for r in records if r["country"] in (country, "")]
+                theirs = [r for r in records if r["country"] == country]
                 if len(theirs) > 1:
                     sets[f"{country}:{key}"] = theirs
             continue

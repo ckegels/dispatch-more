@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v167** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v168** (2026-09-22). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -394,6 +394,18 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**A channel naming no country never bridges two that do** (v168). `_duplicate_sets` says in
+its own comment that two countries named means two different channels -- and then put a
+channel naming *none* into **both** sets, because saying nothing matches either. Since the
+lowest number keeps the channel, a country-less "ORF 1" could end up the keeper of one set
+and the victim of the other, so applying both merged Austria's ORF 1 and Germany's into one
+and deleted both. It is in neither set now: with two countries on the table, naming none is
+not enough to say which, and this fork is built on not guessing that.
+
+Only reachable where the country box is out of the key -- a regex rule or an alias -- since
+`clean_name` keeps the box on purpose ("country box and all"), which is why it was never
+seen. The test uses a rule that strips it, and fails without the fix.
+
 **What a name is cut to comes from the column** (v167). Three places cut a channel's name
 at 255 -- a number picked out of the air -- where `Channel.name` holds 512, so a name
 between the two was silently halved. One of them had a test asking for exactly that, which

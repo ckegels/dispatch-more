@@ -354,6 +354,69 @@ class CombineTests(_Setup):
         # ...and nothing is deleted by looking, nor by applying a row that is not it
         self.assertTrue(Channel.objects.filter(id=self.twin.id).exists())
 
+    def test_a_channel_naming_no_country_never_bridges_two_that_do(self):
+        """
+        "Two countries named: these are different channels" -- reachable when a rule or an
+        alias takes the country box out of the key, which is the only way two countries
+        ever share one. A channel naming none used to join both sets, and since the lowest
+        number keeps the channel it could end up the keeper of one and the victim of
+        another: Austria's ORF 1 and Germany's merged into one, and both deleted.
+        """
+        # A rule that takes the box off, so all three share a key
+        levers = settings(regex_rules=[["┃[A-Za-z]{2,3}┃", ""]])
+        german = self._channel("┃DE┃ ORF 1", 500, self.germany)
+        self._attach(german, [self._stream("┃DE┃ ORF 1", self.b, group=self.germany)])
+        # Truly country-less: its name says none and neither does its group, since
+        # country_for falls back to the group
+        nowhere = ChannelGroup.objects.create(name="FAVOURITES")
+        plain = self._channel("ORF 1", 700, nowhere)
+        self._attach(plain, [self._stream("ORF 1", self.b, group=nowhere)])
+
+        aliases = channel_manager._alias_map(levers)
+        by_key = {}
+        for record in channel_manager._existing_channels(levers, aliases).values():
+            if record["key"]:
+                by_key.setdefault(record["key"], []).append(record)
+        shared = [k for k, recs in by_key.items() if len({r["country"] for r in recs}) > 1]
+        self.assertTrue(
+            shared, "the rule should put both countries and the plain one under one key"
+        )
+        sets = channel_manager._duplicate_sets(by_key, False)
+
+        # No channel is in two sets: one that is can be the keeper of one and the victim
+        # of another, and applying both deletes the channel that just absorbed the others
+        seen = set()
+        for records in sets.values():
+            for record in records:
+                channel_id = record["channel"].id
+                self.assertNotIn(
+                    channel_id, seen,
+                    f"channel {channel_id} is in two sets of duplicates at once",
+                )
+                seen.add(channel_id)
+
+        # ...and the country-less one is in none of them, since with two countries named
+        # there is no telling which it is
+        self.assertNotIn(plain.id, seen)
+
+        plan = channel_manager.build_plan(levers)
+        channel_manager.apply_plan(levers, [r["key"] for r in plan["rows"]])
+        self.assertTrue(Channel.objects.filter(id=plain.id).exists())
+        self.assertTrue(
+            Channel.objects.filter(id=german.id).exists()
+            or Channel.objects.filter(id=self.orf1.id).exists()
+        )
+
+    def test_but_two_of_one_country_are_still_combined_beside_them(self):
+        # The guard must not stop the case it is there to allow
+        german = self._channel("┃DE┃ ORF 1", 500, self.germany)
+        self._attach(german, [self._stream("┃DE┃ ORF 1", self.b, group=self.germany)])
+
+        plan = channel_manager.build_plan(settings())
+        (row,) = [r for r in plan["rows"] if r["status"] == "combine"]
+        self.assertEqual(row["channel"]["id"], self.orf1.id)
+        self.assertEqual([c["id"] for c in row["combining"]], [self.twin.id])
+
     def test_nothing_is_combined_when_it_is_turned_off(self):
         plan = channel_manager.build_plan(settings(combine_duplicates=False))
         self.assertFalse(any(r["status"] == "combine" for r in plan["rows"]))
