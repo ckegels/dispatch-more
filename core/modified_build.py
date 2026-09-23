@@ -74,7 +74,7 @@ def request_uninstall(user=""):
 # the files being put back would leave it -- and stock Dispatcharr would then send a task it
 # does not have every five minutes, and log it as an error. Taken out while the database is
 # still at hand; beat sees the row go and drops it.
-SCHEDULES = ("stream-check-tick",)
+SCHEDULES = ("stream-check-tick", "epg-grab-tick")
 
 
 def forget_schedules():

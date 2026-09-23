@@ -463,6 +463,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.channels.tasks.stream_check_tick",
         "schedule": 300.0,  # Every 5 minutes
     },
+    # Start an EPG grab when one is due; does nothing while the grabber is off
+    "epg-grab-tick": {
+        "task": "apps.channels.tasks.epg_grab_tick",
+        "schedule": 300.0,  # Every 5 minutes
+    },
 }
 
 MEDIA_ROOT = BASE_DIR / "media"

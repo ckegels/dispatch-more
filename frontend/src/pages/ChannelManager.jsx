@@ -12,6 +12,7 @@ import {
 } from '@mantine/core';
 import { DatabaseBackup } from 'lucide-react';
 import ChannelManagerTable from '../components/tables/ChannelManagerTable';
+import EpgGrabberTable from '../components/tables/EpgGrabberTable';
 import GuideLayoutTable from '../components/tables/GuideLayoutTable';
 import GuideManagerTable from '../components/tables/GuideManagerTable';
 import LogoLibraryTable from '../components/tables/LogoLibraryTable';
@@ -30,6 +31,8 @@ const BLURB = {
     'The logo each channel has now, next to the ones the public collections would give it. Tick the ones you want and apply.',
   layout:
     'What order your channels come in and which numbers they are on. Drag one to move it, within a group or into another.',
+  grabber:
+    'The iptv-org/epg grabber that is installed on this machine, run from here: where it is, what to grab, and when. The guide it writes is read straight off disk, and the one you have is only replaced once the new one has been read back and found to hold something.',
 };
 
 // Headed the way the Logo Manager is, tabs and all, so the two read as parts of one set of
@@ -71,6 +74,7 @@ const ChannelManagerPage = () => {
               <TabsTab value="guides">Guides</TabsTab>
               <TabsTab value="logos">Logos</TabsTab>
               <TabsTab value="layout">Guide Layout</TabsTab>
+              <TabsTab value="grabber">EPG Grabber</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -114,6 +118,7 @@ const ChannelManagerPage = () => {
       {activeTab === 'guides' && <GuideManagerTable />}
       {activeTab === 'logos' && <LogoLibraryTable />}
       {activeTab === 'layout' && <GuideLayoutTable />}
+      {activeTab === 'grabber' && <EpgGrabberTable />}
     </Box>
   );
 };

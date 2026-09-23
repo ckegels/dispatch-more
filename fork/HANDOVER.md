@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v175** (2026-09-23). The commit messages on the branch
+Written 2026-09-19, kept current to **release v176** (2026-09-23). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1100,6 +1100,49 @@ is a float and its uniqueness is only checked within a group, by `clean()`, whic
 does not call -- so clashes across groups are easy to make and a media server, seeing one
 flat lineup, quietly shows one of them. Counted over every channel there is. It shows the
 room between one group and the next as well, so you can see whether a group can grow.
+
+### 5.6d Channel Manager: EPG Grabber — `apps/channels/epg_grabber.py` (+ `epg_grabber_views.py`, `EpgGrabberTable.jsx`)
+
+The sixth tab. **iptv-org/epg is not rewritten here and nothing about it is changed**: it
+is a Node program already installed on the box (`/opt/iptv-org-epg`) that scrapes listing
+sites and writes XMLTV. This points at it, runs it the way a person would, and takes the
+file it writes the rest of the way -- which is the part that was being done by hand, and
+the part a systemd timer would have had to be written for.
+
+Why it is here rather than in a timer, which is the whole of the tab:
+
+- **A good guide is never replaced by a bad one.** The grab writes to `<output>.part` and
+  the live file is only replaced -- in one `os.replace`, so nothing ever reads half a guide
+  -- once the new one has been read back and found to hold channels *and* programmes. A
+  scrape that dies at job 3,000 of 4,539 writes XML that holds almost nothing; swapping
+  that in loses a working guide.
+- **Never two at once.** A full scrape is thousands of requests over hours (their PBS list
+  is 1,513 channels × 3 days = 4,539 jobs); two together is twice the load for a worse
+  answer.
+- **Where it has got to.** The grabber counts its jobs as it goes ("[1204/4539]"), which is
+  parsed into a bar rather than a spinner.
+- **Handing it over.** An EPG source with a file and no URL is read off disk by Dispatcharr
+  (`apps/epg/tasks.fetch_xmltv`), so no web server is needed in between -- which settles
+  the open question in the user's own handover. **Make one** on a guide's row creates that
+  source; the refresh is asked for the moment the file is in place.
+- **A grabber that hangs.** What it says is read by a thread of its own, because reading
+  straight makes the wait for the next line the wait for ever: the three questions -- stop,
+  too long, too quiet -- have to be askable while *nothing* is arriving, which is exactly
+  when they matter. `os.killpg` on its own session takes the whole npm/node tree with it.
+
+Every setting is the grabber's own, spelled the same (`--channels`, `--sites`, `--days`,
+`--lang`, `--timeout`, `--delay`, `--maxConnections`, `--gzip`, `--proxy`, `--output`), and
+anything left empty is left to the grabber: a site's own number of days is usually the
+number of days that site has. The command is stored as **words, not a line of shell**, and
+run with `shell=False`, so nothing in the settings can turn into something else. Three
+dashes (`npm run grab ---`) because npm eats the first pair; that is the project's own
+README form.
+
+Off unless switched on, nothing but a `CoreSettings` row, and one beat tick
+(`epg-grab-tick`, beside `stream-check-tick`) which does nothing while it is off. **A grab
+holds one background worker for as long as it runs**, which on a binary install is one of
+the Celery worker's children -- hence the window (`window_from`/`window_to`) and the
+give-up-after.
 
 ### 5.7 Channel Manager: Stream Check — `apps/channels/stream_check.py` (+ `stream_check_views.py`, `StreamCheckTable.jsx`, `StreamCheckSettings.jsx`, `ProviderLimits.jsx`)
 

@@ -3033,6 +3033,45 @@ export default class API {
     });
   }
 
+  // ── The EPG grabber: iptv-org/epg, driven from Dispatcharr (see epg_grabber) ──
+
+  static async getEpgGrabber() {
+    // The settings, whether the grabber is where it is said to be, its channel lists,
+    // and how a grab is going
+    return await request(`${host}/api/channels/epg-grabber/`);
+  }
+
+  static async saveEpgGrabberSettings(settings) {
+    return await request(`${host}/api/channels/epg-grabber/settings/`, {
+      method: 'PUT',
+      body: { settings },
+    });
+  }
+
+  static async runEpgGrabber(job = null) {
+    // Every guide that is set up, or one of them. Never two at once: a full scrape is
+    // thousands of requests, and two together is twice the load for a worse answer.
+    return await request(`${host}/api/channels/epg-grabber/run/`, {
+      method: 'POST',
+      body: job ? { job } : {},
+    });
+  }
+
+  static async stopEpgGrabber() {
+    return await request(`${host}/api/channels/epg-grabber/run/`, {
+      method: 'POST',
+      body: { action: 'stop' },
+    });
+  }
+
+  static async makeEpgGrabberSource(name, output) {
+    // An EPG source that reads the grabbed file off disk, so nothing has to serve it
+    return await request(`${host}/api/channels/epg-grabber/source/`, {
+      method: 'POST',
+      body: { name, output },
+    });
+  }
+
   static async getStreamCheck(show = 'problems', keep = []) {
     // The channels with a stream that does not play, the parked streams, and how a run is
     // going. keep: channels to list whatever the view says, being ones just acted on.

@@ -4538,6 +4538,42 @@ def run_stream_check(only=None, looks=0, waits=0):
 
 
 @shared_task
+def run_epg_grab(only=None):
+    """
+    Grab the guides that are set up (see apps.channels.epg_grabber).
+
+    A long one: thousands of requests over hours. It holds a worker for all of it, which
+    is why it is one task rather than batches -- unlike Stream Check, nothing else is
+    waiting on the provider, and the grabber does its own pacing.
+    """
+    from core.utils import RedisClient
+
+    from .epg_grabber import run
+
+    return run(RedisClient.get_client(), only=only)
+
+
+@shared_task
+def epg_grab_tick():
+    """
+    Every few minutes: start a grab if one is due. Does nothing while it is switched off,
+    which is what it is unless somebody turns it on.
+    """
+    from core.utils import RedisClient
+
+    from .epg_grabber import due, load_settings
+
+    settings = load_settings()
+    if not settings.get("enabled"):
+        return "off"
+    redis_client = RedisClient.get_client()
+    if not due(settings, redis_client):
+        return "not due"
+    run_epg_grab.delay()
+    return "started"
+
+
+@shared_task
 def stream_check_tick():
     """
     Every few minutes: carry on a round that is waiting (for viewers to finish, or for its

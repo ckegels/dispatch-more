@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from . import (
     channel_manager_views,
+    epg_grabber_views,
     guide_layout_views,
     guide_manager_views,
     logo_library_views,
@@ -99,6 +100,11 @@ urlpatterns = [
     path('guides/settings/', guide_manager_views.guide_manager_settings, name='guide_manager_settings'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
+    # The EPG grabber (iptv-org/epg), driven from here rather than by hand
+    path('epg-grabber/', epg_grabber_views.epg_grabber_page, name='epg_grabber_page'),
+    path('epg-grabber/settings/', epg_grabber_views.epg_grabber_settings, name='epg_grabber_settings'),
+    path('epg-grabber/run/', epg_grabber_views.epg_grabber_run, name='epg_grabber_run'),
+    path('epg-grabber/source/', epg_grabber_views.epg_grabber_source, name='epg_grabber_source'),
     path('stream-check/', stream_check_views.stream_check_overview, name='stream_check_overview'),
     path('stream-check/run/', stream_check_views.stream_check_run, name='stream_check_run'),
     path('stream-check/stop/', stream_check_views.stream_check_stop, name='stream_check_stop'),
