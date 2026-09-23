@@ -128,6 +128,23 @@ class SettingsTests(_Setup):
         with self.assertRaises(ValueError):
             epg_grabber.save_settings({"jobs": [{"name": "PBS", "sites": "tvpassport.com"}]})
 
+    def test_a_guide_is_a_channel_list_or_whole_sites_never_both(self):
+        # A channel list already says which site each of its channels is on, so naming
+        # sites as well says two different things and the grabber takes one or the other
+        with self.assertRaises(ValueError) as refused:
+            epg_grabber.save_settings({"jobs": [{
+                "name": "PBS", "channels": "/tmp/pbs.xml", "sites": "tvpassport.com",
+                "output": "/tmp/pbs.xmltv",
+            }]})
+        self.assertIn("not both", str(refused.exception))
+
+    def test_a_list_from_anywhere_is_allowed_not_only_the_ones_it_found(self):
+        # One somebody made lives wherever they put it
+        saved = epg_grabber.save_settings({"jobs": [{
+            "name": "PBS", "channels": "/home/me/lists/pbs.xml", "output": "/tmp/pbs.xmltv",
+        }]})
+        self.assertEqual(saved["jobs"][0]["channels"], "/home/me/lists/pbs.xml")
+
     def test_what_is_set_becomes_what_somebody_would_have_typed(self):
         settings = self._settings(job={
             "days": 3, "lang": "en", "timeout_ms": 45000, "delay_ms": 250,
@@ -169,6 +186,75 @@ class WhatIsThereTests(_Setup):
         found = epg_grabber.channel_files(self._settings())
         self.assertEqual([one["site"] for one in found], ["tvpassport.com"])
         self.assertEqual(found[0]["channels"], 1)
+
+
+PASSPORT = """<?xml version="1.0" encoding="UTF-8"?>
+<channels>
+  <channel site="tvpassport.com" site_id="alabama-public-tv--pbs-waiq/5149" lang="en" xmltv_id="">Alabama Public TV - PBS (WAIQ) Montgomery, AL</channel>
+  <channel site="tvpassport.com" site_id="pbs-kqed/1" lang="en" xmltv_id="">PBS (KQED) San Francisco, CA</channel>
+  <channel site="tvpassport.com" site_id="pbs-kqed-radio/2" lang="en" xmltv_id="">PBS Radio (KQED) San Francisco, CA</channel>
+  <channel site="tvpassport.com" site_id="cnn/3" lang="en" xmltv_id="">CNN</channel>
+</channels>
+"""
+
+
+class MakeListTests(_Setup):
+    """
+    The grep that was being done by hand, done where the rest of it is -- and giving back
+    a document rather than a heap of lines, which is what "Text data outside of root node"
+    means when grep's output is handed to the grabber.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.big = os.path.join(self.folder, "sites", "tvpassport.com", "tvpassport.com.channels.xml")
+        open(self.big, "w").write(PASSPORT)
+        self.into = os.path.join(self.folder, "data", "pbs.channels.xml")
+
+    def test_it_says_what_would_be_kept_before_anything_is_written(self):
+        found = epg_grabber.make_list(self.big, "PBS")
+        self.assertEqual((found["kept"], found["of"]), (3, 4))
+        self.assertIn("PBS (KQED) San Francisco, CA", found["sample"])
+        self.assertFalse(found["written"])
+        self.assertFalse(os.path.exists(self.into))
+
+    def test_case_does_not_matter_and_the_site_id_counts_too(self):
+        # grep -i saw the whole line, which is the name and the ids
+        self.assertEqual(epg_grabber.make_list(self.big, "pbs")["kept"], 3)
+        self.assertEqual(epg_grabber.make_list(self.big, "kqed")["kept"], 2)
+
+    def test_what_is_left_out_is_left_out(self):
+        found = epg_grabber.make_list(self.big, "PBS", leaving_out="radio")
+        self.assertEqual(found["kept"], 2)
+
+    def test_what_is_written_is_a_document_the_grabber_can_read(self):
+        from lxml import etree
+
+        found = epg_grabber.make_list(self.big, "PBS", into=self.into, write=True)
+
+        self.assertTrue(found["written"])
+        # Read back the way the grabber reads it: a heap of <channel> lines is not XML,
+        # and that is the error the hand-made list gave
+        tree = etree.parse(self.into)
+        self.assertEqual(tree.getroot().tag, "channels")
+        self.assertEqual(len(tree.getroot()), 3)
+        # ...with everything the grabber needs kept on each of them
+        first = tree.getroot()[0]
+        self.assertEqual(first.get("site"), "tvpassport.com")
+        self.assertTrue(first.get("site_id"))
+
+    def test_and_it_is_then_one_of_the_lists_on_offer(self):
+        epg_grabber.make_list(self.big, "PBS", into=self.into, write=True)
+        self.assertIn(self.into, [one["path"] for one in epg_grabber.channel_files(self._settings())])
+
+    def test_nothing_matching_is_not_a_list(self):
+        with self.assertRaises(ValueError):
+            epg_grabber.make_list(self.big, "nothing at all", into=self.into, write=True)
+
+    def test_and_it_never_writes_over_what_it_was_made_from(self):
+        with self.assertRaises(ValueError) as refused:
+            epg_grabber.make_list(self.big, "PBS", into=self.big, write=True)
+        self.assertIn("write over", str(refused.exception))
 
 
 class RunTests(_Setup):
@@ -404,6 +490,34 @@ class ViewTests(_Setup):
         # A file and no URL: Dispatcharr reads it off disk, so no web server in between
         self.assertEqual(source.file_path, self.output)
         self.assertFalse(source.url)
+
+    def test_a_channel_list_is_made_from_the_page(self):
+        big = os.path.join(self.folder, "sites", "tvpassport.com", "tvpassport.com.channels.xml")
+        open(big, "w").write(PASSPORT)
+        into = os.path.join(self.folder, "data", "pbs.channels.xml")
+
+        shown = self.api.post(
+            "/api/channels/epg-grabber/channel-list/",
+            {"from": big, "keep": "PBS", "leave_out": "radio"}, format="json",
+        ).json()
+        self.assertEqual(shown["kept"], 2)
+        self.assertFalse(shown["written"])
+
+        made = self.api.post(
+            "/api/channels/epg-grabber/channel-list/",
+            {"from": big, "keep": "PBS", "leave_out": "radio", "into": into, "apply": True},
+            format="json",
+        ).json()
+        self.assertTrue(made["written"])
+        self.assertTrue(os.path.exists(into))
+
+    def test_and_says_why_when_it_cannot_be(self):
+        answer = self.api.post(
+            "/api/channels/epg-grabber/channel-list/",
+            {"from": "/nowhere.xml", "keep": "PBS"}, format="json",
+        )
+        self.assertEqual(answer.status_code, 400)
+        self.assertIn("not there", answer.json()["error"])
 
     def test_only_an_admin(self):
         viewer = APIClient()

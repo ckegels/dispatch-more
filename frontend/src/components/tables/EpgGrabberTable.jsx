@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Check, FolderSearch, Play, Plus, Square, Trash2 } from 'lucide-react';
 import {
   Alert,
+  Autocomplete,
   Badge,
   Box,
   Button,
@@ -41,6 +42,8 @@ const Guide = ({
 }) => {
   const last = job.last || {};
   const set = (changes) => onChange({ ...job, ...changes });
+  // What is known about the list that was chosen or typed, where it is one we found
+  const known = channelFiles.find((one) => one.path === job.channels);
   return (
     <Paper withBorder p="sm" radius="md">
       <Stack gap="xs">
@@ -102,30 +105,31 @@ const Guide = ({
         )}
 
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
-          {/* One of the two: a channel list, or the grabber's own sites */}
-          <Select
+          {/* One of the two, never both: a channel list names exact channels and the
+              site each is on; sites grabs whole sites. Typed as well as picked -- a list
+              somebody made lives wherever they put it. */}
+          <Autocomplete
             size="xs"
             label="Channel list"
-            description="A *.channels.xml the grabber has, or one you made"
-            placeholder="None: grab whole sites instead"
-            data={channelFiles.map((one) => ({
-              value: one.path,
-              label: `${one.site}/${one.path.split('/').pop()}${
-                one.channels ? ` (${one.channels.toLocaleString()})` : ''
-              }`,
-            }))}
-            value={job.channels || null}
+            description={
+              known
+                ? `${known.channels.toLocaleString()} channels in that file`
+                : 'One the grabber has, or the path to one you made'
+            }
+            placeholder="/opt/iptv-org-epg/data/pbs.channels.xml"
+            data={channelFiles.map((one) => one.path)}
+            value={job.channels}
             onChange={(value) => set({ channels: value || '' })}
-            searchable
-            clearable
+            disabled={!!job.sites}
           />
           <TextInput
             size="xs"
             label="Or these sites"
-            description="The grabber's own, comma separated"
+            description="Whole sites of the grabber's own, comma separated"
             placeholder="tvpassport.com"
             value={job.sites}
             onChange={(event) => set({ sites: event.currentTarget.value })}
+            disabled={!!job.channels}
           />
           <TextInput
             size="xs"
@@ -218,6 +222,137 @@ const Guide = ({
         </SimpleGrid>
       </Stack>
     </Paper>
+  );
+};
+
+// Making a channel list out of a bigger one: the grep that was being done by hand, done
+// where the rest of it is. What comes out is a document rather than a heap of lines,
+// which is the mistake that answers "Text data outside of root node".
+const MakeList = ({ channelFiles, folder, onMade }) => {
+  const [from, setFrom] = useState('');
+  const [keep, setKeep] = useState('');
+  const [leaveOut, setLeaveOut] = useState('');
+  const [into, setInto] = useState('');
+  const [found, setFound] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const ask = async (apply) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await API.makeEpgGrabberList({
+        from,
+        keep,
+        leave_out: leaveOut,
+        into: into || `${folder}/data/${(keep || 'list').split(',')[0].trim().toLowerCase()}.channels.xml`,
+        apply,
+      });
+      setFound(answer);
+      if (apply) onMade(answer.into);
+    } catch (e) {
+      setError(e?.body?.error || 'That list could not be made.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Stack gap="xs">
+      <Text size="sm" fw={600}>
+        Make a channel list
+      </Text>
+      <Text size="xs" c="dimmed">
+        Out of one of the grabber&apos;s own: keep the channels that say a word. What
+        comes out is a list of its own, which a guide above can then be pointed at.
+      </Text>
+      <Group gap="xs" align="flex-end" wrap="wrap">
+        <Select
+          size="xs"
+          label="Out of"
+          placeholder="One of the grabber's lists"
+          data={channelFiles.map((one) => ({
+            value: one.path,
+            label: `${one.site}/${one.path.split('/').pop()}${
+              one.channels ? ` (${one.channels.toLocaleString()})` : ''
+            }`,
+          }))}
+          value={from || null}
+          onChange={(value) => {
+            setFrom(value || '');
+            setFound(null);
+          }}
+          searchable
+          style={{ flex: 1, minWidth: 260 }}
+        />
+        <TextInput
+          size="xs"
+          label="Keep the ones saying"
+          description="Comma separated; case does not matter"
+          placeholder="PBS"
+          value={keep}
+          onChange={(event) => {
+            setKeep(event.currentTarget.value);
+            setFound(null);
+          }}
+          style={{ width: 180 }}
+        />
+        <TextInput
+          size="xs"
+          label="...but not"
+          description="Left empty keeps them all"
+          placeholder="radio"
+          value={leaveOut}
+          onChange={(event) => {
+            setLeaveOut(event.currentTarget.value);
+            setFound(null);
+          }}
+          style={{ width: 150 }}
+        />
+        <Button
+          size="xs"
+          variant="default"
+          disabled={!from || !keep.trim() || busy}
+          onClick={() => ask(false)}
+        >
+          Show me
+        </Button>
+      </Group>
+
+      {error && <Alert color="red">{error}</Alert>}
+
+      {found && (
+        <Alert color={found.written ? 'teal' : 'blue'} variant="light">
+          <Stack gap={4}>
+            <Text size="xs">
+              {found.kept.toLocaleString()} of {found.of.toLocaleString()} channels
+              {found.written ? ` written to ${found.into}` : ''}
+            </Text>
+            {found.sample.length > 0 && (
+              <Text size="xs" c="dimmed" style={{ wordBreak: 'break-word' }}>
+                {found.sample.join(' · ')}
+                {found.kept > found.sample.length ? ' …' : ''}
+              </Text>
+            )}
+            {!found.written && found.kept > 0 && (
+              <Group gap="xs" align="flex-end" mt={4}>
+                <TextInput
+                  size="xs"
+                  label="Write it to"
+                  placeholder={`${folder}/data/${(keep || 'list').split(',')[0].trim().toLowerCase()}.channels.xml`}
+                  value={into}
+                  onChange={(event) => setInto(event.currentTarget.value)}
+                  style={{ flex: 1, minWidth: 260 }}
+                />
+                <Button size="xs" loading={busy} onClick={() => ask(true)}>
+                  Make it
+                </Button>
+              </Group>
+            )}
+          </Stack>
+        </Alert>
+      )}
+    </Stack>
   );
 };
 
@@ -588,6 +723,21 @@ const EpgGrabberTable = () => {
                 </Group>
               </Stack>
             </Box>
+
+            {/* The list the guides are pointed at, made here rather than with a grep and
+                a shell that has to be reached for */}
+            {install.ok && (
+              <Box p="md" style={{ borderTop: '1px solid #3f3f46' }}>
+                <MakeList
+                  channelFiles={page?.channel_files || []}
+                  folder={draft?.folder || '/opt/iptv-org-epg'}
+                  onMade={(path) => {
+                    setNotice(`Made ${path}. Point a guide at it above.`);
+                    load(true);
+                  }}
+                />
+              </Box>
+            )}
           </Paper>
         </Stack>
       </Box>

@@ -14,6 +14,7 @@ vi.mock('../../../api', () => ({
     runEpgGrabber: vi.fn(),
     stopEpgGrabber: vi.fn(),
     makeEpgGrabberSource: vi.fn(),
+    makeEpgGrabberList: vi.fn(),
   },
 }));
 
@@ -80,6 +81,10 @@ describe('EpgGrabberTable', () => {
     API.runEpgGrabber.mockResolvedValue({ started: true });
     API.stopEpgGrabber.mockResolvedValue({ stopping: true });
     API.makeEpgGrabberSource.mockResolvedValue({ id: 4, name: 'PBS (TV Passport)', made: true });
+    API.makeEpgGrabberList.mockResolvedValue({
+      kept: 1513, of: 20114, written: false, into: '',
+      sample: ['PBS (KQED) San Francisco, CA', 'PBS12 (KBDI) Denver, CO'],
+    });
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -167,6 +172,46 @@ describe('EpgGrabberTable', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /Remove PBS/ })[0]);
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/The XMLTV file it wrote stays where it is/)).toBeInTheDocument();
+  });
+
+  it('makes a channel list out of a bigger one, showing it before writing it', async () => {
+    // The grep that was being done by hand: keep the ones saying PBS, see what that is,
+    // and only then write the list
+    draw();
+    await screen.findByDisplayValue('PBS (TV Passport)');
+
+    // From the dropdown that belongs to this field: the same path is the value of a
+    // guide's own Channel list above
+    const field = screen.getByRole('textbox', { name: 'Out of' });
+    fireEvent.click(field);
+    const dropdown = document.getElementById(field.getAttribute('aria-controls'));
+    fireEvent.click(await within(dropdown).findByText(/tvpassport-pbs.channels.xml/));
+    fireEvent.change(screen.getByLabelText('Keep the ones saying'), {
+      target: { value: 'PBS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show me' }));
+
+    expect(await screen.findByText(/1,513 of 20,114 channels/)).toBeInTheDocument();
+    expect(screen.getByText(/PBS12 \(KBDI\) Denver, CO/)).toBeInTheDocument();
+    // Nothing is written until it is asked for
+    expect(API.makeEpgGrabberList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ keep: 'PBS', apply: false })
+    );
+
+    API.makeEpgGrabberList.mockResolvedValue({
+      kept: 1513, of: 20114, written: true,
+      into: '/opt/iptv-org-epg/data/pbs.channels.xml', sample: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Make it' }));
+
+    await waitFor(() =>
+      expect(API.makeEpgGrabberList).toHaveBeenLastCalledWith(
+        expect.objectContaining({ apply: true })
+      )
+    );
+    expect(
+      await screen.findByText(/Made \/opt\/iptv-org-epg\/data\/pbs.channels.xml/)
+    ).toBeInTheDocument();
   });
 
   it('says what went wrong rather than nothing', async () => {

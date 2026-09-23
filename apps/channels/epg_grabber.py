@@ -180,6 +180,13 @@ def _clean_job(given):
         raise ValueError("Numbers only, please")
     if not job["channels"] and not job["sites"]:
         raise ValueError(f"{job['name']}: a channels file, or the sites to grab")
+    if job["channels"] and job["sites"]:
+        # The grabber takes one or the other: a channel list names exact channels and the
+        # site each of them is on, so naming sites as well says two different things
+        raise ValueError(
+            f"{job['name']}: a channels file **or** sites, not both -- a channel list "
+            f"already says which site each channel is on"
+        )
     if not job["output"]:
         raise ValueError(f"{job['name']}: where should the guide be written?")
     job["last"] = job.get("last") if isinstance(job.get("last"), dict) else {}
@@ -287,6 +294,84 @@ def _count_channels(path):
             return sum(chunk.count("<channel ") for chunk in iter(lambda: handle.read(1 << 20), ""))
     except OSError:
         return 0
+
+
+# ── Making a channel list ────────────────────────────────────────────────────
+
+
+def make_list(from_path, keeping, leaving_out="", into=None, write=False, show=12):
+    """
+    A channel list made out of a bigger one: the entries that say a word, and not the
+    ones that say another.
+
+    This is the grep that was being done by hand ("grep -i PBS
+    sites/tvpassport.com/tvpassport.com.channels.xml"), done properly. Two reasons it is
+    worth having here rather than in a shell:
+
+    - **Grep gives you fragments, not a document.** A file of bare <channel> lines is not
+      XML, and the grabber answers it with "Text data outside of root node" at the last
+      line, which says nothing about what is wrong. What comes out of here is a document.
+    - **You can see what you are about to keep.** Without `write` it says how many matched
+      and the first few of them, so a word that matches four thousand channels or four is
+      found out before the scrape rather than during it.
+
+    Matching is on everything a line of grep would have seen: what the channel is called,
+    its site id, and its xmltv id, without regard to case.
+    """
+    from lxml import etree
+
+    if not from_path or not os.path.isfile(from_path):
+        raise ValueError("That channel list is not there")
+    wanted = [one.strip().lower() for one in str(keeping or "").split(",") if one.strip()]
+    unwanted = [one.strip().lower() for one in str(leaving_out or "").split(",") if one.strip()]
+    if not wanted:
+        raise ValueError("What should be kept?")
+    try:
+        tree = etree.parse(from_path, etree.XMLParser(recover=True))
+    except Exception as e:
+        raise ValueError(f"That channel list could not be read: {e}")
+
+    kept = []
+    for element in tree.iter("channel"):
+        said = " ".join(
+            [element.text or ""] + [str(value) for value in element.attrib.values()]
+        ).lower()
+        if not any(word in said for word in wanted):
+            continue
+        if unwanted and any(word in said for word in unwanted):
+            continue
+        kept.append(element)
+
+    found = {
+        "kept": len(kept),
+        "of": sum(1 for _ in tree.iter("channel")),
+        "sample": [(one.text or "").strip() for one in kept[:show]],
+        "into": into or "",
+        "written": False,
+    }
+    if not write:
+        return found
+    if not into:
+        raise ValueError("Where should the list be written?")
+    if os.path.abspath(into) == os.path.abspath(from_path):
+        raise ValueError("That would write over the list it was made from")
+    if not kept:
+        raise ValueError("Nothing matched, so there is no list to make")
+    try:
+        os.makedirs(os.path.dirname(into) or ".", exist_ok=True)
+        # A document, not a heap of lines: this is what "Text data outside of root node"
+        # means when a grep's output is handed to the grabber
+        made = etree.Element("channels")
+        for one in kept:
+            made.append(etree.fromstring(etree.tostring(one)))
+        etree.ElementTree(made).write(
+            into, encoding="UTF-8", xml_declaration=True, pretty_print=True
+        )
+    except OSError as e:
+        raise ValueError(f"Could not write {into}: {e}")
+    logger.info(f"EPG grabber: made {into} -- {len(kept)} channel(s) of {found['of']} from {from_path}")
+    found["written"] = True
+    return found
 
 
 # ── Running it ───────────────────────────────────────────────────────────────

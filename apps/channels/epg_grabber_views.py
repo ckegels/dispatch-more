@@ -76,6 +76,29 @@ def epg_grabber_run(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdmin])
+def epg_grabber_channel_list(request):
+    """
+    A channel list made out of a bigger one: the entries that say a word.
+
+    Without "apply" it says what would be kept and shows the first few, because a word
+    that matches four thousand channels or four is worth finding out before the scrape
+    rather than during it.
+    """
+    try:
+        found = epg_grabber.make_list(
+            str(request.data.get("from") or ""),
+            str(request.data.get("keep") or ""),
+            str(request.data.get("leave_out") or ""),
+            into=str(request.data.get("into") or ""),
+            write=bool(request.data.get("apply")),
+        )
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    return JsonResponse(found)
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
 def epg_grabber_source(request):
     """
     Make an EPG source for a guide this grabs, so there is nothing to set up by hand.

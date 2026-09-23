@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v176** (2026-09-23). The commit messages on the branch
+Written 2026-09-19, kept current to **release v177** (2026-09-23). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1129,6 +1129,21 @@ Why it is here rather than in a timer, which is the whole of the tab:
   straight makes the wait for the next line the wait for ever: the three questions -- stop,
   too long, too quiet -- have to be askable while *nothing* is arriving, which is exactly
   when they matter. `os.killpg` on its own session takes the whole npm/node tree with it.
+
+**The channel list is made here too** (v177, `make_list`). Pointing a guide at a list is
+half the job; the other half was `grep -i PBS sites/tvpassport.com/tvpassport.com.channels.xml`
+and then wrapping the result in a root element by hand -- and the step people miss is the
+second one, because grep gives back a heap of `<channel>` lines, which is not a document,
+and the grabber answers that with "Text data outside of root node" at the last line. **Make
+a channel list** keeps the entries that say a word (and not the ones that say another,
+matching what grep saw: the name and both ids, case ignored), says how many that is and
+shows the first few **before** writing anything, and writes a document. It never writes
+over the list it was made from. What it writes lands in `data/`, which is one of the
+places the picker looks, so it is offered to the guides straight away.
+
+A guide takes a channel list **or** sites, never both: a list already says which site each
+of its channels is on. The channel list is typed as well as picked, since a list somebody
+made lives wherever they put it.
 
 Every setting is the grabber's own, spelled the same (`--channels`, `--sites`, `--days`,
 `--lang`, `--timeout`, `--delay`, `--maxConnections`, `--gzip`, `--proxy`, `--output`), and

@@ -3064,6 +3064,16 @@ export default class API {
     });
   }
 
+  // A channel list made out of a bigger one: without `apply` it says what would be kept
+  // and shows the first few, so a word that matches four thousand channels or four is
+  // found out before the scrape rather than during it
+  static async makeEpgGrabberList(body) {
+    return await request(`${host}/api/channels/epg-grabber/channel-list/`, {
+      method: 'POST',
+      body,
+    });
+  }
+
   static async makeEpgGrabberSource(name, output) {
     // An EPG source that reads the grabbed file off disk, so nothing has to serve it
     return await request(`${host}/api/channels/epg-grabber/source/`, {
