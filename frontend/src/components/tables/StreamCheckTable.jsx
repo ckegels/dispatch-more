@@ -296,6 +296,17 @@ const Expanded = ({ row, onAct }) => {
               All {real.length} streams at once:
             </Text>
             <Group gap={4} wrap="nowrap">
+              {/* The copies of this channel from its other providers, now rather than
+                  when their turn comes round: one copy broken is either a channel that is
+                  gone everywhere or one provider being bad, and which of those it is
+                  decides what you do about it */}
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                onClick={() => onAct('check', real, row.channel)}
+              >
+                Check all
+              </Button>
               <Button
                 size="compact-xs"
                 variant="light"
@@ -506,10 +517,17 @@ const StreamCheckTable = () => {
         await API.clearStreamCheck();
         setNotice('The list is clear. Nothing on your channels changed.');
       } else if (action === 'check') {
-        await API.runStreamCheck([stream.id]);
+        // One stream, or every stream of a channel: the second is what you want when one
+        // provider's copy is broken and you would like to know about the others now
+        const many = Array.isArray(stream);
+        await API.runStreamCheck(
+          many ? stream.map((one) => one.id) : [stream.id]
+        );
         setWatchUntil(Date.now() + 5 * 60 * 1000);
         setNotice(
-          `Checking "${stream.name}" now, once a login of its provider is free. Its result shows here when it is in.`
+          many
+            ? `Checking all ${stream.length} streams of "${channel?.name}" now, as logins of their providers come free. Their results show here as they come in.`
+            : `Checking "${stream.name}" now, once a login of its provider is free. Its result shows here when it is in.`
         );
       } else if (Array.isArray(stream)) {
         // Every stream of a channel at once

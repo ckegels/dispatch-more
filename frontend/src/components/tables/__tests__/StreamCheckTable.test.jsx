@@ -169,6 +169,21 @@ describe('StreamCheckTable', () => {
     await waitFor(() => expect(API.streamCheckAction).toHaveBeenCalledWith('remove', 12, 1));
   });
 
+  it('checks every stream of a channel at once, for the copies nobody has got to', async () => {
+    // One copy broken and the others still saying "not checked" is the question this page
+    // is for: one provider being bad, or a channel that is gone everywhere?
+    draw();
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Check all' }));
+    await waitFor(() =>
+      expect(API.runStreamCheck).toHaveBeenCalledWith([11, 12])
+    );
+    // ...and it says so, rather than looking like nothing happened
+    expect(
+      await screen.findByText(/Checking all 2 streams of "┃AT┃ ORF 1"/)
+    ).toBeInTheDocument();
+  });
+
   it('says what it is removing when it is every stream of a channel', async () => {
     // Both kinds come through the same button, and the many-streams one was handed the
     // list where a stream was expected: it asked whether to remove "undefined"

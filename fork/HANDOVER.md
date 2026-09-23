@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v174** (2026-09-23). The commit messages on the branch
+Written 2026-09-19, kept current to **release v175** (2026-09-23). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1103,6 +1103,24 @@ room between one group and the next as well, so you can see whether a group can 
 
 ### 5.7 Channel Manager: Stream Check — `apps/channels/stream_check.py` (+ `stream_check_views.py`, `StreamCheckTable.jsx`, `StreamCheckSettings.jsx`, `ProviderLimits.jsx`)
 
+**What a provider allows is believed only when it could be true** (v175). See §7: a
+refusal after two streams and three hours of backing off became "2 streams every 215 min",
+which throttled every round afterwards. Now a refusal teaches nothing unless at least
+`LEAST_TO_LEARN` (8) of our own streams went in first -- the provider counts viewers' opens
+too, and ours are all we can see -- and nothing slower than `LEAST_AN_HOUR` (6) is believed
+at all, because no provider anybody watches allows less. The window is measured from the
+first open to the **last refusal**, never to the moment we happened to ask again: the later
+end makes the waiting its own answer, and it ratcheted. A limit set by hand is untouched by
+all of this.
+
+**What is urgent outlives the batch** (v175, `URGENT_KEY`). When a stream fails, the other
+copies of its channel jump their providers' queues -- but the set lived in the batch, and a
+batch is a quarter of an hour while the provider holding the copy may be resting for longer.
+So on a run where one provider was resting, the copies were never asked about at all: twenty
+broken from one provider, and their channels' copies on the other still saying "not checked".
+It is a Redis set now, read when a batch starts and cleared when the round ends. **Check
+all** on an opened row asks about every stream of that channel there and then.
+
 The big one; its module docstring is the specification. Finds the streams on channels that
 no longer play. Summary of how it works now:
 
@@ -1516,6 +1534,17 @@ and replaces what was ticked on the others. That is stock Dispatcharr's own beha
 - **The install script kept a backup per install** in `/root`; ~100 of them helped fill a 20 GB
   disk until PostgreSQL stopped and every page 500'd. → keep the last three (the patcher keeps
   one set of originals). Check `df -h /` when something breaks oddly.
+- **A limit learned from our own waiting** (to v175): a provider refused after two of our
+  streams, the backoff took three and a half hours to find it answering again, and that
+  was written down as "TiviBridge2 allows 2 streams every 215 min" -- half an hour per
+  stream, eighteen hours for a lineup, and sticky, since the window could only ever grow.
+  Two things were wrong and both are the same mistake: **measuring the provider with our
+  own behaviour.** We count the streams *we* open and it counts everybody's, so a handful
+  of ours says nothing; and the block lifted somewhere between the last refusal and the
+  moment we next happened to ask, so taking the later end makes waiting its own
+  justification. → learn nothing under `LEAST_TO_LEARN` streams, believe nothing slower
+  than `LEAST_AN_HOUR`, measure the window to the last refusal, and bump `LIMITS_VERSION`
+  so what was learned the old way goes.
 - **The same bug, in the sibling** (the shape of nearly everything the v164--v172
   read-through found, §5.9): a rule is thought through and enforced where it was first
   needed, and the other path that does the same job in bulk, or on the retry, or from the

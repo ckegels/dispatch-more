@@ -188,14 +188,39 @@ REFUSAL_PAUSE = 3
 LIMITS_KEY = "stream-check-providers"
 # The streams opened on a provider lately, as times: what its limit is counted against
 OPENS_KEY = "stream-check:opens:{provider}"
+# The streams to look at before the rest, whoever's turn it is: the other copies of a
+# channel one of whose streams has just failed. A channel with one copy broken is either a
+# channel that is gone everywhere or one provider being bad, and which of those it is
+# decides what you do about it.
+#
+# Kept in Redis rather than in the batch. A batch is a quarter of an hour and the provider
+# that holds the sibling may be resting for longer than that, so a set that lived in the
+# batch lost every one of them the moment it ended -- which on a run where one provider
+# was resting meant the question was never asked at all.
+URGENT_KEY = "stream-check:urgent"
+URGENT_KEPT = 12 * 3600
 # After a provider's limit is hit, when to try again to learn how long it lasts: the
 # provider is not asked anything in between, not even about its logins
 RECOVERY_STEPS = (30, 60, 120, 240, 480, 900, 1800, 3600)
 # What is learned is used with room to spare, for viewers zapping meanwhile
 LIMIT_MARGIN = 0.8
+# How many streams of ours have to have gone in before a refusal can teach us anything.
+#
+# We count the streams **we** open; the provider counts everybody's. So a refusal that
+# came after a handful of ours says nothing about what it allows -- a viewer zapping
+# around can use a whole window up without us opening a single stream. Under this many,
+# the provider is simply unhappy just now: it is rested on, and nothing is written down.
+LEAST_TO_LEARN = 8
+# ...and nothing anybody could watch through allows fewer than this many streams an hour.
+# Slower than this is not a rate limit, it is something else being wrong, and writing it
+# down as one is how a round came to say "2 streams every 215 min" and want eighteen hours.
+LEAST_AN_HOUR = 6
 # Limits learned before a refused channel could be told from a provider at its limit may be
 # nothing but a dead channel: they are not used. Limits set by hand are always kept.
-LIMITS_VERSION = 2
+# Version 3: what was learned before could be nonsense -- the window was measured to
+# whenever we next happened to ask rather than to the last refusal, and any number of
+# streams, however small, could become a limit. "2 streams every 215 min" was one.
+LIMITS_VERSION = 3
 # A provider can go on counting a connection for a while after it is closed. After a check,
 # a login the provider still counts as in use is waited on this long before it is taken to
 # be someone else's.
@@ -701,27 +726,64 @@ class _Budget:
 
     def still_blocked(self):
         step = min(int(self.state.get("step", 0)) + 1, len(RECOVERY_STEPS) - 1)
-        self.state.update(step=step, next_try=time.time() + RECOVERY_STEPS[step])
+        # When it last said no, which is the only end of the block we actually know
+        self.state.update(step=step, next_try=time.time() + RECOVERY_STEPS[step], last_no=time.time())
         self._save()
 
+    def _not_a_limit(self, count, window):
+        """Why what just happened cannot be what the provider allows, or "" when it can."""
+        if count < LEAST_TO_LEARN:
+            return (
+                f"only {count} stream(s) of ours had gone in, and the provider counts "
+                f"everybody's"
+            )
+        if window <= 0:
+            return "no time passed"
+        an_hour = count * 3600.0 / window
+        if an_hour < LEAST_AN_HOUR:
+            return f"{an_hour:.1f} streams an hour is not a limit anything could be watched through"
+        return ""
+
     def recovered(self):
-        """Answering again: the limit is what was opened, the window how long that took plus
-        how long the block lasted -- used with room to spare."""
+        """
+        Answering again, and what that says about the limit -- which is often nothing.
+
+        The window is measured to the **last refusal**, not to this moment. Where the block
+        lifted is only known to be somewhere between the last time it said no and this time
+        it said yes, and taking the later end makes our own waiting into the answer: wait
+        longer, learn a longer window, wait longer still. It is measured to the near end and
+        learned again if that turns out to be too short, which costs one rest.
+
+        And what came out of it has to be something a provider could plausibly allow (see
+        LEAST_TO_LEARN, LEAST_AN_HOUR). It usually is not: the streams we opened are not
+        the streams it counted.
+        """
         now = time.time()
         if self.state.get("how") != "set by hand":
-            blocked = now - float(self.state["blocked_since"])
+            blocked_since = float(self.state["blocked_since"])
+            # Known to have been blocked still at this moment, and free by now
+            said_no_last = float(self.state.get("last_no") or blocked_since)
             count = int(self.state.get("count") or 1)
-            window = int(float(self.state.get("span") or 0) + blocked + 0.999)
-            learned = max(1, int(count * LIMIT_MARGIN))
+            window = int(float(self.state.get("span") or 0) + max(0.0, said_no_last - blocked_since) + 0.999)
             if self.state.get("limit") and count <= int(self.state["limit"]):
                 # Hit even under what was learned: the provider allows less than it seemed
-                learned = max(1, int(int(self.state["limit"]) * LIMIT_MARGIN))
-            self.state.update(
-                limit=learned, window=max(window, int(self.state.get("window") or 0)), how="learned", at=_now(),
-                v=LIMITS_VERSION,
-            )
-            logger.info(f"Stream Check: {self.name} allows about {count} streams; keeping to {learned} every {window // 60} min")
-        for field in ("blocked_since", "count", "span", "step", "next_try"):
+                count = int(self.state["limit"])
+            why_not = self._not_a_limit(count, window)
+            if why_not:
+                logger.info(
+                    f"Stream Check: {self.name} answers again after {count} stream(s) in "
+                    f"{window // 60} min; not written down as a limit -- {why_not}"
+                )
+            else:
+                learned = max(1, int(count * LIMIT_MARGIN))
+                self.state.update(
+                    limit=learned, window=window, how="learned", at=_now(), v=LIMITS_VERSION,
+                )
+                logger.info(
+                    f"Stream Check: {self.name} allows about {count} streams every "
+                    f"{window // 60} min; keeping to {learned}"
+                )
+        for field in ("blocked_since", "count", "span", "step", "next_try", "last_no"):
             self.state.pop(field, None)
         self.state["clear_since"] = now
         self._save()
@@ -1486,6 +1548,37 @@ def unlisted_in(account_id, streams, believed=None):
     return {s.id for s in streams if getattr(s, "is_stale", False)}
 
 
+def _urgent_now(redis_client):
+    """The streams waiting to be looked at first, from whatever earlier batches found."""
+    try:
+        return {
+            int(one.decode() if isinstance(one, bytes) else one)
+            for one in (redis_client.smembers(URGENT_KEY) or ())
+        }
+    except Exception as e:
+        logger.debug(f"Stream Check: could not read what is urgent: {e}")
+        return set()
+
+
+def _now_urgent(redis_client, stream_ids):
+    """These are worth looking at before the rest, in this batch or the next."""
+    wanted = [int(one) for one in stream_ids or ()]
+    if not wanted:
+        return
+    try:
+        redis_client.sadd(URGENT_KEY, *wanted)
+        redis_client.expire(URGENT_KEY, URGENT_KEPT)
+    except Exception as e:
+        logger.debug(f"Stream Check: could not keep what is urgent: {e}")
+
+
+def _no_longer_urgent(redis_client, stream_id):
+    try:
+        redis_client.srem(URGENT_KEY, int(stream_id))
+    except Exception as e:
+        logger.debug(f"Stream Check: could not take {stream_id} off the urgent list: {e}")
+
+
 def _pick_next(left, urgent):
     """
     The next stream this provider looks at: one whose channel has just failed somewhere
@@ -2055,8 +2148,9 @@ def run(redis_client, only=None, batch_seconds=None):
         # any of them starts.
         siblings = _siblings_of(by_provider)
         # Streams to look at next, whichever provider they belong to. Written under the
-        # lock like everything else shared.
-        urgent = set()
+        # lock like everything else shared, and carried between batches in Redis: the
+        # provider holding the sibling is often the one resting (see URGENT_KEY).
+        urgent = _urgent_now(redis_client)
 
         def count(stream, outcome):
             """
@@ -2080,6 +2174,7 @@ def run(redis_client, only=None, batch_seconds=None):
                 # what you do about it -- so it is worth knowing now rather than whenever
                 # the other provider's turn happens to come round.
                 urgent.update(siblings.get(stream.id, ()))
+                _now_urgent(redis_client, siblings.get(stream.id, ()))
             if record["state"] == "broken":
                 _progress(redis_client, broken=progress(redis_client).get("broken", 0) + 1)
             if record["state"] == "ok" and str(stream.id) in was_parked:
@@ -2280,7 +2375,11 @@ def run(redis_client, only=None, batch_seconds=None):
 
                 def next_stream():
                     with lock:
-                        return _pick_next(still_to_do(), urgent)
+                        wanted = _pick_next(still_to_do(), urgent)
+                        if wanted is not None:
+                            # Being looked at now, so no later batch has to bring it forward
+                            _no_longer_urgent(redis_client, wanted.id)
+                        return wanted
 
                 while True:
                     stream = next_stream()
@@ -2606,6 +2705,7 @@ def _touch(results, stream):
 
 def _finish(redis_client, round_):
     redis_client.delete(QUEUED_KEY)
+    redis_client.delete(URGENT_KEY)
     # The round is over: this is where the streams that have gone are forgotten
     _forget_streams_that_are_gone()
     done = progress(redis_client).get("done", 0)
@@ -2629,6 +2729,7 @@ def _finish(redis_client, round_):
 
 def _stopped(redis_client):
     redis_client.delete(QUEUED_KEY)
+    redis_client.delete(URGENT_KEY)
     redis_client.delete(ROUND_KEY, STOP_KEY)
     done = progress(redis_client).get("done", 0)
     _keep_last_run({"finished_at": _now(), "checked": done, "total": progress(redis_client).get("total", done), "stopped": True})

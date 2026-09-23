@@ -73,6 +73,18 @@ class FakeRedis:
         for field in fields:
             (self.data.get(key) or {}).pop(field, None)
 
+    def sadd(self, key, *values):
+        self.data.setdefault(key, set()).update(str(v) for v in values)
+
+    def smembers(self, key):
+        value = self.data.get(key)
+        return set(value) if isinstance(value, set) else set()
+
+    def srem(self, key, *values):
+        held = self.data.get(key)
+        if isinstance(held, set):
+            held.difference_update(str(v) for v in values)
+
     def zadd(self, key, mapping):
         with self.lock:
             self.data.setdefault(key, {}).update(mapping)
@@ -965,6 +977,26 @@ class RunTests(_Setup):
         self.assertIs(stream_check._pick_next(left, urgent), self.first)
         self.assertIsNone(stream_check._pick_next([], urgent))
 
+    def test_and_it_is_still_waiting_when_the_next_batch_starts(self):
+        """
+        A batch is a quarter of an hour; the provider holding the sibling may be resting
+        for longer than that. Kept only in the batch, every one of these was thrown away
+        when it ended -- so on a run where one provider was resting, the other copy was
+        never asked about at all: twenty broken from one provider, and its channels'
+        copies on the other still saying "not checked".
+        """
+        redis = FakeRedis()
+        stream_check._now_urgent(redis, [self.second.id, self.third.id])
+
+        # A batch of its own, later, with nothing in memory from the one that found them
+        self.assertEqual(
+            stream_check._urgent_now(redis), {self.second.id, self.third.id}
+        )
+
+        # Looked at, so the batch after this one has no reason to bring it forward again
+        stream_check._no_longer_urgent(redis, self.second.id)
+        self.assertEqual(stream_check._urgent_now(redis), {self.third.id})
+
     def test_which_streams_are_a_channels_other_copies(self):
         by_provider = {"a": [self.first, self.third], "b": [self.second]}
         siblings = stream_check._siblings_of(by_provider)
@@ -1271,14 +1303,22 @@ class RunTests(_Setup):
         self.assertGreaterEqual(stream_check.progress(self.redis)["resume_in"], stream_check.RETRY_WAITING)
 
     def test_once_it_answers_again_the_limit_is_kept_with_room_to_spare(self):
-        state = {"blocked_since": time.time() - 600, "count": 10, "span": 120, "step": 3,
-                 "next_try": time.time() - 1, "good_stream": self.first.id, "v": stream_check.LIMITS_VERSION}
+        blocked_since = time.time() - 600
+        state = {
+            "blocked_since": blocked_since, "count": 10, "span": 120, "step": 3,
+            # It was still being refused five minutes in, and answers now
+            "last_no": blocked_since + 300,
+            "next_try": time.time() - 1, "good_stream": self.first.id,
+            "v": stream_check.LIMITS_VERSION,
+        }
         stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
         final, probe = self._run({})
         limit = self._limit()
         self.assertNotIn("blocked_since", limit)
         self.assertEqual(limit["limit"], 8)
-        self.assertGreaterEqual(limit["window"], 720)
+        # 120 s of opening plus the 300 s it was known to still be blocked for -- not the
+        # whole ten minutes, which is only how long it was before anybody looked again
+        self.assertEqual(limit["window"], 420)
         self.assertEqual(final["ended"], "done")
 
     def test_a_resting_provider_is_not_asked_anything(self):
@@ -2135,3 +2175,100 @@ class WhatThePageAsksForTests(_Setup):
         # used to drop out then and there, taking the stream nobody had got to with it
         stream_check._keep_results({str(self.fine.id): {"ok": True, "state": "ok", "name": "ORF 2 A"}})
         self.assertIn(self.quiet.id, self._rows(show="problems", keep={self.quiet.id}))
+
+
+class WhatAProviderAllowsTests(TestCase):
+    """
+    What a refusal teaches, and what it does not.
+
+    We count the streams we open; the provider counts everybody's. So a refusal that comes
+    after a handful of ours says nothing about what it allows, and the time it took to
+    answer again is mostly how long we happened to wait before asking. Both were being
+    written down as fact, and a round came out of it saying "2 streams every 215 min" --
+    which is half an hour of waiting per stream, and eighteen hours for a lineup.
+    """
+
+    def setUp(self):
+        self.redis = FakeRedis()
+
+    def _budget(self, **state):
+        return stream_check._Budget(self.redis, "server:a", "TiviBridge2", state)
+
+    def _opened(self, budget, how_many, over_seconds):
+        """That many streams opened, the first of them `over_seconds` ago."""
+        started = time.time() - over_seconds
+        for n in range(how_many):
+            when = started + (n * over_seconds / max(1, how_many - 1) if how_many > 1 else 0)
+            self.redis.zadd(stream_check.OPENS_KEY.format(provider=budget.key), {f"{when:.6f}": when})
+
+    def test_a_refusal_after_a_couple_of_streams_teaches_nothing(self):
+        """The one that was being written down as "2 streams every 215 min"."""
+        budget = self._budget()
+        self._opened(budget, 2, 60)
+        budget.hit()
+        # Three and a half hours of asking again, each time refused
+        for _ in range(8):
+            budget.still_blocked()
+        budget.state["last_no"] = budget.state["blocked_since"] + 215 * 60
+        budget.recovered()
+
+        self.assertIsNone(budget.state.get("limit"))
+        self.assertIsNone(budget.state.get("window"))
+        # ...and it is not resting on it either: that is over
+        self.assertIsNone(budget.resting())
+
+    def test_nor_does_one_nothing_could_be_watched_through(self):
+        # Enough streams to be worth counting, over a span nobody could watch through
+        budget = self._budget()
+        self._opened(budget, 10, 4 * 3600)
+        budget.hit()
+        budget.state["last_no"] = budget.state["blocked_since"] + 3600
+        budget.recovered()
+
+        self.assertIsNone(budget.state.get("limit"))
+
+    def test_but_a_real_one_is_learned_as_before(self):
+        budget = self._budget()
+        self._opened(budget, 30, 600)
+        budget.hit()
+        budget.state["last_no"] = budget.state["blocked_since"] + 300
+        budget.recovered()
+
+        # With room to spare, over what it took plus what it was known to be blocked for
+        self.assertEqual(budget.state["limit"], 24)
+        self.assertEqual(budget.state["window"], 900)
+        self.assertEqual(budget.state["how"], "learned")
+
+    def test_the_window_is_measured_to_the_last_refusal_not_to_whenever_we_looked(self):
+        """
+        Otherwise the waiting is its own answer: wait an hour to ask, learn an hour-long
+        window, wait an hour next time. It ratchets, and nothing ever shortens it.
+        """
+        budget = self._budget()
+        self._opened(budget, 30, 600)
+        budget.hit()
+        budget.state["last_no"] = budget.state["blocked_since"] + 60
+        # Nobody asked again for another two hours, which says nothing about the provider
+        budget.state["blocked_since"] = time.time() - 2 * 3600
+        budget.state["last_no"] = budget.state["blocked_since"] + 60
+        budget.recovered()
+
+        self.assertEqual(budget.state["window"], 660)
+
+    def test_what_was_learned_the_old_way_is_not_used(self):
+        # The nonsense on a real installation goes when this lands, rather than throttling
+        # every round until somebody notices and presses Forget
+        stream_check._store(stream_check.LIMITS_KEY, "Stream Check provider limits", {
+            "server:a": {
+                "name": "TiviBridge2", "limit": 2, "window": 215 * 60, "how": "learned", "v": 2,
+            },
+        })
+        self.assertIsNone(stream_check.load_limits()["server:a"].get("limit"))
+
+    def test_a_limit_set_by_hand_is_kept_whatever_it_says(self):
+        stream_check._store(stream_check.LIMITS_KEY, "Stream Check provider limits", {
+            "server:a": {
+                "name": "TiviBridge2", "limit": 2, "window": 215 * 60, "how": "set by hand", "v": 2,
+            },
+        })
+        self.assertEqual(stream_check.load_limits()["server:a"]["limit"], 2)
