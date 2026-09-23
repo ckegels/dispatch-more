@@ -2,6 +2,7 @@
 
 import ipaddress
 import logging
+import re
 from django.conf import settings as django_settings
 from django.db import models
 from dispatcharr.log_collector import collector_running
@@ -460,12 +461,15 @@ def _log_choice(request):
     since = request.GET.get("since", "1h")
     level = request.GET.get("level", "ALL").upper()
     topic = request.GET.get("topic", "")
+    # A plugin is asked for by its key, which is what its lines are written under
+    plugin = re.sub(r"[^\w.-]", "", request.GET.get("plugin", ""))[:128]
     return {
         "source_ids": [s for s in request.GET.get("sources", "").split(",") if s],
         "since": since if since in log_center.SINCE else "1h",
         "level": level if level in log_center.LEVELS or level == "ALL" else "ALL",
         "topic": topic if topic in log_center.TOPICS else "",
         "text": request.GET.get("text", "")[:200],
+        "plugin": plugin,
     }
 
 
@@ -478,7 +482,13 @@ def log_center_sources(request):
     return Response({
         "sources": log_center.sources(),
         "journal_readable": log_center.journal_readable(),
-        "topics": list(log_center.TOPICS),
+        # The parts of Dispatcharr and the plugins installed, each with what to call it,
+        # so the page offers what this installation actually has rather than a list
+        # written down twice
+        "topics": [
+            {"value": key, "label": topic["label"]} for key, topic in log_center.TOPICS.items()
+        ],
+        "plugins": log_center.plugins(),
         "since": list(log_center.SINCE),
     })
 

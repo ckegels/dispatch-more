@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v173** (2026-09-22). The commit messages on the branch
+Written 2026-09-19, kept current to **release v174** (2026-09-23). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -310,10 +310,39 @@ because switch records sometimes carry a channel id or "None" instead of a UUID)
 
 Stock's Logs page shows the log collector's files, which only Docker writes; on Linux/LXC the
 logs are in the systemd journal per `dispatcharr*` service. This tab reads either, narrows by
-service, time, level, topic (Stream Check, proxy, overlap, M3U, EPG, media servers, VOD,
-Celery) and text, keeps a traceback with the ERROR line that reported it, follows live, and
-downloads the whole log or a diagnostics bundle (every log of 24 h + version). The web app's
-user needs the `systemd-journal` group; the patcher's installer adds it and uninstall removes it.
+service, time, level, part of Dispatcharr, plugin and text, keeps a traceback with the ERROR
+line that reported it, follows live, and downloads the whole log or a diagnostics bundle
+(every log of 24 h + what is installed). The web app's user needs the `systemd-journal`
+group; the patcher's installer adds it and uninstall removes it.
+
+**A line is read apart into what wrote it and what it said** (v174). Every line Dispatcharr
+writes carries the logger that wrote it -- the formatter is `{asctime} {levelname} {name}
+{message}` -- and none of that was being used: a record was the whole line, the page showed
+the date twice over, and narrowing to a part of Dispatcharr was a search for words that might
+appear anywhere in it ("M3U" found the guide reader saying "the M3U account's guide").
+`records()` now reads the four fields apart where Dispatcharr wrote the line, and leaves
+anything else -- uWSGI's own, nginx, a bare traceback -- as it was. Which gives:
+
+- **Parts that are their own loggers.** `TOPICS` is `{key: {label, loggers, words}}`: the
+  loggers are matched against the line's own, and the words are the fallback for the lines
+  that carry no logger at all. The list grew with the parts that had nowhere of their own --
+  the Channel Manager's four tabs, recordings, what players are given, users and logins,
+  backups, the database -- and the labels come from the server now, so adding one is one edit.
+- **One plugin's lines.** This is what could not be done before at all, and the reason is
+  `apps.plugins.loader._build_context`: **every plugin was handed the loader's own logger**,
+  so every line said `apps.plugins.loader` and never which plugin wrote it. Each plugin gets
+  `plugins.<key>` now. The loader also imports a plugin's module as
+  `_dispatcharr_plugin_<key>`, which is what a plugin doing `logging.getLogger(__name__)`
+  comes out as, so both are matched. Never by the plugin's **name**: one called "Cooking"
+  would own every line about a cooking channel.
+- The picker offers the plugins that are installed (from `PluginConfig`, one query, never the
+  plugins folder), each line shows a shortened logger with the full one on its tooltip, and
+  the bundle's `about.json` says what is installed and whether it is on -- never a plugin's
+  settings, which is where its keys are.
+
+The logger name is the only thing that changed about how a plugin's lines are written:
+`plugins.<key>` has no handlers of its own, so it uses the root's, which is where
+`apps.plugins.loader` sent them too.
 
 ### 5.5 Logos — `apps/channels/logo_library.py`, `logo_library_views.py`, `LogoLibraryTable.jsx`
 

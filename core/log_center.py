@@ -30,16 +30,93 @@ logger = logging.getLogger(__name__)
 # How far back, by name; none sets no start
 SINCE = {"15m": 15, "1h": 60, "6h": 360, "24h": 1440, "7d": 10080, "all": None}
 LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-# The parts of Dispatcharr people look for, by the loggers and words their lines carry
+# Where a plugin's lines come from. Two, because a plugin can write either way:
+#
+# - `plugins.<key>`, the logger the loader hands each plugin in its context (see
+#   apps.plugins.loader._build_context). Every plugin that logs the way the examples show
+#   logs through this one.
+# - `_dispatcharr_plugin_<key>`, which is what the loader calls a plugin's own module, so
+#   it is what `logging.getLogger(__name__)` inside a plugin comes out as.
+PLUGIN_LOGGER = "plugins"
+PLUGIN_MODULE = "_dispatcharr_plugin_"
+
+
+def _topic(label, loggers, words=()):
+    """One part of Dispatcharr: what to call it, what wrote it, what it sounds like."""
+    return {"label": label, "loggers": tuple(loggers), "words": tuple(words)}
+
+
+# The parts people look for. Each says which loggers it is -- every line carries the name
+# of the logger that wrote it, since that is what the format says ("{asctime} {levelname}
+# {name} {message}") -- and which words give it away on the lines that carry no logger at
+# all: uWSGI's own, a traceback, a celery banner.
+#
+# The loggers are what to add to when something new is written: a part nobody can pick out
+# here is a part nobody can read the logs of.
 TOPICS = {
-    "stream_check": ("Stream Check", "stream_check"),
-    "proxy": ("live_proxy", "ts_proxy", "proxy.", "stream_manager", "Channel ", "channel "),
-    "overlap": ("probation", "Overlap", "overlap", "skipped channel"),
-    "m3u": ("apps.m3u", "M3U", "m3u"),
-    "epg": ("apps.epg", "EPG", "epg"),
-    "media_servers": ("media_server", "Plex", "Jellyfin", "plex", "jellyfin"),
-    "vod": ("vod_proxy", "apps.vod", "VOD"),
-    "celery": ("celery", "Task ", "task "),
+    "proxy": _topic(
+        "Channels playing (the proxy)",
+        ("live_proxy", "apps.proxy", "ts_proxy", "vod_proxy"),
+        ("stream_manager", "Channel ", "channel "),
+    ),
+    "overlap": _topic(
+        "Channel Switch Overlap",
+        ("apps.proxy.live_proxy.probation",),
+        ("probation", "Overlap", "overlap", "skipped channel"),
+    ),
+    "media_servers": _topic(
+        "Media servers (Plex, Jellyfin)",
+        ("apps.proxy.live_proxy.media_server", "apps.proxy.live_proxy.media_servers"),
+        ("Plex", "Jellyfin", "plex", "jellyfin", "media server"),
+    ),
+    "stream_check": _topic(
+        "Stream Check",
+        ("apps.channels.stream_check",),
+        ("Stream Check", "stream_check"),
+    ),
+    # The Channel Manager's four tabs, which had nowhere of their own at all
+    "channel_manager": _topic(
+        "Channel Manager (Lineup, Guides, Logos, Layout)",
+        (
+            "apps.channels.channel_manager",
+            "apps.channels.guide_manager",
+            "apps.channels.guide_layout",
+            "apps.channels.logo_library",
+            "apps.channels.known_channels",
+            "apps.channels.epg_matching",
+        ),
+        ("Channel Manager", "Guide Layout", "Guides read", "Guides:", "Find Logos"),
+    ),
+    "recordings": _topic(
+        "Recordings (DVR)",
+        ("apps.channels.recordings", "apps.channels.dvr", "apps.timeshift"),
+        ("Recording ", "recording ", "DVR"),
+    ),
+    "m3u": _topic("Playlists (M3U)", ("apps.m3u",), ("M3U", "m3u")),
+    "epg": _topic("Guides (EPG)", ("apps.epg",), ("EPG", "epg", "XMLTV", "xmltv")),
+    "vod": _topic("VOD", ("apps.vod", "vod_proxy"), ("VOD",)),
+    "output": _topic(
+        "What players are given (M3U, EPG, HDHomeRun)",
+        ("apps.output", "apps.hdhr"),
+        ("HDHomeRun", "hdhr", "lineup.json"),
+    ),
+    "plugins": _topic(
+        "Plugins",
+        ("apps.plugins", PLUGIN_LOGGER, PLUGIN_MODULE),
+        ("plugin",),
+    ),
+    "accounts": _topic(
+        "Users and logins",
+        ("apps.accounts", "django.security", "apps.api"),
+        ("authentication", "Unauthorized", "forbidden"),
+    ),
+    "backups": _topic("Backup and restore", ("apps.backups", "core.tasks"), ("backup", "Backup")),
+    "database": _topic(
+        "Database and requests",
+        ("django.db", "django.request", "django.geventpool", "django.channels"),
+        ("OperationalError", "IntegrityError", "deadlock"),
+    ),
+    "celery": _topic("Background tasks", ("celery",), ("Task ", "task ")),
 }
 # What each dispatcharr* service is, for people rather than systemd
 SERVICE_NAMES = {
@@ -71,6 +148,16 @@ _CONTINUES = re.compile(
 # A journal line: "2026-09-19T09:21:38+0200 host unit[pid]: message"
 _JOURNAL = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:?\d{2}) \S+ ([^:\[]+)(?:\[\d+\])?: ?(.*)$")
 _LEVEL = re.compile(r"\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b")
+# A line Dispatcharr wrote itself, in the shape its formatter gives every one of them:
+# "2026-09-19 07:21:38,343 INFO apps.channels.stream_check Stream Check: batch ended".
+# Reading it apart is what lets a line be found by the part of Dispatcharr that wrote it
+# rather than by whether the words happen to appear in it -- and it is the only way to tell
+# one plugin's lines from another's.
+_WRITTEN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s+"
+    r"(TRACE|DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\s+(\S+)\s(.*)$",
+    re.DOTALL,
+)
 
 
 # ── Where the logs are ───────────────────────────────────────────────────────
@@ -105,6 +192,25 @@ def _collector_files():
     except OSError:
         return []
     return sorted(name for name in names if is_log_family_name(name) and not re.search(r"\.\d+$", name))
+
+
+def plugins():
+    """
+    The plugins installed, for the picker: [{"key", "name"}].
+
+    From the table rather than the loader, so asking costs one query and never goes near
+    the plugins folder: this is a list for a menu, not a reason to load anything.
+    """
+    try:
+        from apps.plugins.models import PluginConfig
+
+        return [
+            {"key": one.key, "name": one.name or one.key}
+            for one in PluginConfig.objects.order_by("name", "key")
+        ]
+    except Exception as e:
+        logger.debug(f"Could not list the plugins: {e}")
+        return []
 
 
 def sources():
@@ -199,8 +305,13 @@ def _stamp(line):
 
 def records(text):
     """
-    The lines as records: [{"time", "service", "level", "text"}], a traceback's lines kept
-    with the record that raised it.
+    The lines as records: [{"time", "service", "level", "logger", "text"}], a traceback's
+    lines kept with the record that raised it.
+
+    Where Dispatcharr wrote the line itself, the time, the level and the logger are read
+    off it and the text is what is left -- the message. Which means the page can show them
+    as columns rather than repeating the date twice in one line, and a search for what
+    somebody typed searches the message rather than the furniture around it.
     """
     found = []
     for line in text.splitlines():
@@ -217,33 +328,91 @@ def records(text):
             continue
         if _TRACEBACK.match(message):
             # After anything else it is an error of its own, or asking for errors would lose it
-            found.append({"time": time_, "service": service, "level": "ERROR", "text": message})
+            found.append({
+                "time": time_, "service": service, "level": "ERROR", "logger": "", "text": message,
+            })
             continue
         if same_service and _CONTINUES.match(message):
             # The rest of a traceback: its frames, the code lines, and the exception at its end
             found[-1]["text"] += "\n" + message
             continue
+        written = _WRITTEN.match(message)
+        if written:
+            when, level, logger_name, said = written.groups()
+            found.append({
+                "time": time_ or when,
+                "service": service,
+                "level": {"WARN": "WARNING"}.get(level, level),
+                "logger": logger_name,
+                "text": said,
+            })
+            continue
+        # Something else wrote it: uWSGI, nginx, a celery banner, a bare traceback line
         level = _LEVEL.search(message[:120])
         found.append({
             "time": time_ or (message[:19] if _stamp(message) else ""),
             "service": service,
             "level": {"WARN": "WARNING"}.get(level.group(1), level.group(1)) if level else "",
+            "logger": "",
             "text": message,
         })
     return found
 
 
-def _keep(record, level, topic, text):
+def _written_by(record, loggers):
+    """Whether this line came from one of these loggers, or a child of one."""
+    name = record.get("logger") or ""
+    if not name:
+        return False
+    for one in loggers:
+        if name == one or name.startswith(f"{one}."):
+            return True
+        # A prefix rather than a whole name: what the loader calls a plugin's own module
+        if one.endswith("_") and name.startswith(one):
+            return True
+    return False
+
+
+def _about(record, topic):
+    """Whether a record belongs to one of the parts of Dispatcharr (see TOPICS)."""
+    if _written_by(record, topic["loggers"]):
+        return True
+    if record.get("logger"):
+        # It said which logger wrote it and it was not one of these: the words are for the
+        # lines that say nothing, not for second-guessing the ones that do
+        return False
+    return any(word in record["text"] for word in topic["words"])
+
+
+def from_plugin(record, key):
+    """
+    Whether this line is one plugin's.
+
+    By the logger, never by the plugin's name appearing somewhere in a line: a plugin
+    called "Cooking" would otherwise own every line about a cooking channel.
+    """
+    if not key:
+        return True
+    return _written_by(record, (f"{PLUGIN_LOGGER}.{key}", f"{PLUGIN_MODULE}{key}", key))
+
+
+def _keep(record, level, topic, text, plugin=""):
     if level and level != "ALL":
         wanted = LEVELS.index(level)
         have = LEVELS.index(record["level"]) if record["level"] in LEVELS else -1
         # A record without a level (a plain line from a service) is shown only when all are
         if have < wanted:
             return False
-    if topic and topic in TOPICS and not any(word in record["text"] for word in TOPICS[topic]):
+    if topic and topic in TOPICS and not _about(record, TOPICS[topic]):
         return False
-    if text and text.lower() not in record["text"].lower():
+    if plugin and not from_plugin(record, plugin):
         return False
+    if text:
+        wanted = text.lower()
+        # The logger is searched as well as the message, so typing "stream_check" finds
+        # what it wrote rather than only the lines that say the words
+        if wanted not in record["text"].lower() and wanted not in (record.get("logger") or "").lower():
+            return False
     return True
 
 
@@ -264,10 +433,11 @@ def _raw(source_ids, since, limit=PAGE_LINES):
     return "\n".join(parts)
 
 
-def read(source_ids=(), since="1h", level="ALL", topic="", text=""):
+def read(source_ids=(), since="1h", level="ALL", topic="", text="", plugin=""):
     """The records chosen, newest last, at most PAGE_RECORDS of them."""
     found = [
-        r for r in records(_raw(source_ids, since, PAGE_LINES)) if _keep(r, level, topic, text)
+        r for r in records(_raw(source_ids, since, PAGE_LINES))
+        if _keep(r, level, topic, text, plugin)
     ]
     return {
         "records": found[-PAGE_RECORDS:],
@@ -276,17 +446,49 @@ def read(source_ids=(), since="1h", level="ALL", topic="", text=""):
     }
 
 
-def download(source_ids=(), since="all", level="ALL", topic="", text=""):
+def as_line(record):
+    """One record as a line again, with everything that was read off it put back."""
+    parts = [
+        record.get("time", ""),
+        record.get("service", ""),
+        record.get("level", ""),
+        record.get("logger", ""),
+    ]
+    said = " ".join(part for part in parts if part)
+    return f"{said}: {record['text']}" if said else record["text"]
+
+
+def download(source_ids=(), since="all", level="ALL", topic="", text="", plugin=""):
     """The whole log for what is chosen, as text: every record, not only the page's."""
-    if level in ("", "ALL") and not topic and not text:
+    if level in ("", "ALL") and not topic and not text and not plugin:
+        # Nothing was narrowed, so it goes out as it was written
         data = _raw(source_ids, since, DOWNLOAD_LINES).encode("utf-8", "replace")
     else:
         data = "\n".join(
-            r["text"] if not r["time"] or r["text"].startswith(r["time"][:10]) else f"{r['time']} {r['service']}: {r['text']}"
+            as_line(r)
             for r in records(_raw(source_ids, since, DOWNLOAD_LINES))
-            if _keep(r, level, topic, text)
+            if _keep(r, level, topic, text, plugin)
         ).encode("utf-8", "replace")
     return data[-DOWNLOAD_BYTES:]
+
+
+def _plugins_for_the_bundle():
+    """The plugins installed, with what they are and whether they are on. No settings."""
+    try:
+        from apps.plugins.models import PluginConfig
+
+        return [
+            {
+                "key": one.key,
+                "name": one.name,
+                "version": one.version,
+                "enabled": one.enabled,
+            }
+            for one in PluginConfig.objects.order_by("name", "key")
+        ]
+    except Exception as e:
+        logger.debug(f"Could not list the plugins for the bundle: {e}")
+        return []
 
 
 def bundle():
@@ -307,5 +509,8 @@ def bundle():
             "made_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "sources": [s["label"] for s in sources()],
             "journal_readable": journal_readable(),
+            # What is installed and whether it is on -- half of what anybody helping asks
+            # first. Never a plugin's settings: those are where its keys and passwords are.
+            "plugins": _plugins_for_the_bundle(),
         }, indent=1))
     return buffer.getvalue()

@@ -700,7 +700,13 @@ class PluginManager:
         settings = self._merge_settings_with_defaults(cfg.settings or {}, lp.fields or [])
         return {
             "settings": settings,
-            "logger": logger,
+            # One of its own, named after the plugin, rather than the loader's. Every
+            # plugin logged as "apps.plugins.loader" before, so a line said a plugin had
+            # written it and never which -- with a dozen installed, the one you are
+            # looking into is unfindable. Handlers and level are the root's, which is
+            # where "apps.plugins.loader" sent them too, so nothing about how a line is
+            # written changes: only the name on it. See core.log_center.
+            "logger": logging.getLogger(f"plugins.{lp.key}"),
             "actions": {a.get("id"): a for a in (lp.actions or [])},
         }
 

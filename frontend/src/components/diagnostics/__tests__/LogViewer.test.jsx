@@ -16,12 +16,22 @@ const sources = {
     { id: 'journal:dispatcharr-celery', label: 'Background tasks (Celery): refreshes, Stream Check', kind: 'journal' },
   ],
   journal_readable: true,
+  // What the parts are is the server's to say, and so is which plugins are installed
+  topics: [
+    { value: 'stream_check', label: 'Stream Check' },
+    { value: 'channel_manager', label: 'Channel Manager (Lineup, Guides, Logos, Layout)' },
+    { value: 'plugins', label: 'Plugins' },
+  ],
+  plugins: [
+    { key: 'recipes', name: 'Recipe Channels' },
+    { key: 'tuner-tools', name: 'Tuner Tools' },
+  ],
 };
 const logs = {
   total: 2,
   cut: false,
   records: [
-    { time: '2026-09-19T09:21:38+0200', service: 'start-celery.sh', level: 'INFO', text: '2026-09-19 07:21:38,343 INFO apps.channels.stream_check Stream Check: batch ended' },
+    { time: '2026-09-19T09:21:38+0200', service: 'start-celery.sh', level: 'INFO', logger: 'apps.channels.stream_check', text: 'Stream Check: batch ended' },
     {
       time: '2026-09-19T09:22:40+0200', service: 'start-uwsgi.sh', level: 'ERROR',
       text: 'Internal Server Error: /proxy/diagnostics/\nTraceback (most recent call last):\nValueError: badly formed hexadecimal UUID string',
@@ -75,6 +85,37 @@ describe('LogViewer', () => {
     expect(API.downloadLogs).toHaveBeenCalledWith('download', expect.objectContaining({ since: '1h' }), expect.stringMatching(/\.log$/));
     fireEvent.click(screen.getByRole('button', { name: /Diagnostics bundle/ }));
     expect(API.downloadLogs).toHaveBeenLastCalledWith('bundle', {}, expect.stringMatching(/\.zip$/));
+  });
+
+  it('says which part of Dispatcharr wrote each line', async () => {
+    draw();
+    await screen.findByText(/Stream Check: batch ended/);
+    // Shortened, since every line carries it, and the whole name is on the tooltip
+    const written = screen.getByText('channels.stream_check');
+    expect(written).toHaveAttribute('title', 'apps.channels.stream_check');
+  });
+
+  it('asks for one plugins lines, out of what every plugin writes', async () => {
+    draw();
+    await screen.findByText(/Stream Check: batch ended/);
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'Plugin' }));
+    fireEvent.click(await screen.findByText('Recipe Channels'));
+
+    await waitFor(() =>
+      expect(API.readLogs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ plugin: 'recipes' })
+      )
+    );
+  });
+
+  it('offers the parts the server says it has', async () => {
+    draw();
+    await screen.findByText(/Stream Check: batch ended/);
+    fireEvent.click(screen.getByRole('textbox', { name: 'Part of Dispatcharr' }));
+    expect(
+      await screen.findByText('Channel Manager (Lineup, Guides, Logos, Layout)')
+    ).toBeInTheDocument();
   });
 
   it('says so when Dispatcharr may not read the journal', async () => {

@@ -37,17 +37,10 @@ const SINCE = [
   { value: 'all', label: 'Everything' },
 ];
 
-const TOPICS = [
-  { value: '', label: 'Every part' },
-  { value: 'stream_check', label: 'Stream Check' },
-  { value: 'proxy', label: 'Channels playing (the proxy)' },
-  { value: 'overlap', label: 'Channel Switch Overlap' },
-  { value: 'm3u', label: 'Playlists (M3U)' },
-  { value: 'epg', label: 'Guides (EPG)' },
-  { value: 'media_servers', label: 'Media servers' },
-  { value: 'vod', label: 'VOD' },
-  { value: 'celery', label: 'Background tasks' },
-];
+// What the parts are is the server's to say (core.log_center.TOPICS), so a part added
+// there turns up here without being written down twice. This is only what to show before
+// it has answered.
+const EVERY_PART = { value: '', label: 'Every part' };
 
 const LEVEL_COLOR = {
   CRITICAL: 'red',
@@ -57,6 +50,15 @@ const LEVEL_COLOR = {
   DEBUG: 'gray',
 };
 const FOLLOW_MS = 5000;
+
+// The logger a line came from, as short as it can be said without losing which it is:
+// "apps.channels.stream_check" is channels.stream_check, and both of the ways a plugin
+// can write are said the one way.
+export const shortLogger = (name) =>
+  String(name || '')
+    .replace(/^_dispatcharr_plugin_/, 'plugins.')
+    .replace(/\.plugin$/, '')
+    .replace(/^apps\./, '');
 
 const Record = ({ record }) => {
   const [open, setOpen] = useState(false);
@@ -96,6 +98,12 @@ const Record = ({ record }) => {
               {record.service}:{' '}
             </Text>
           )}
+          {/* What wrote it, which is how a line is found by the part it belongs to */}
+          {record.logger && (
+            <Text span size="xs" c="blue.3" title={record.logger}>
+              {shortLogger(record.logger)}{' '}
+            </Text>
+          )}
           {first}
           {rest.length > 0 && (
             <Text
@@ -130,6 +138,9 @@ const LogViewer = () => {
   const [since, setSince] = useState('1h');
   const [level, setLevel] = useState('ALL');
   const [topic, setTopic] = useState('');
+  // One plugin's lines. Every plugin used to log under the loader's name, so a line said
+  // a plugin had written it and never which one.
+  const [plugin, setPlugin] = useState('');
   const [text, setText] = useState('');
   const [searched, setSearched] = useState('');
   const [follow, setFollow] = useState(false);
@@ -139,8 +150,8 @@ const LogViewer = () => {
   const bottom = useRef(null);
 
   const query = useMemo(
-    () => ({ sources: chosen.join(','), since, level, topic, text: searched }),
-    [chosen, since, level, topic, searched]
+    () => ({ sources: chosen.join(','), since, level, topic, text: searched, plugin }),
+    [chosen, since, level, topic, searched, plugin]
   );
 
   const load = useCallback(
@@ -182,6 +193,8 @@ const LogViewer = () => {
   const stamp = () =>
     new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   const sources = meta?.sources || [];
+  const parts = [EVERY_PART, ...(meta?.topics || [])];
+  const installed = meta?.plugins || [];
 
   return (
     <Stack gap="sm">
@@ -229,12 +242,27 @@ const LogViewer = () => {
         <Select
           size="xs"
           label="Part of Dispatcharr"
-          data={TOPICS}
+          data={parts}
           value={topic}
           onChange={(value) => setTopic(value ?? '')}
           allowDeselect={false}
-          w={210}
+          searchable
+          w={260}
         />
+        {/* One plugin's own lines. Only offered where there are plugins to offer. */}
+        {installed.length > 0 && (
+          <Select
+            size="xs"
+            label="Plugin"
+            placeholder="Any plugin"
+            data={installed.map((one) => ({ value: one.key, label: one.name }))}
+            value={plugin}
+            onChange={(value) => setPlugin(value ?? '')}
+            searchable
+            clearable
+            w={200}
+          />
+        )}
       </Group>
 
       <Group gap="xs" wrap="wrap" align="flex-end">

@@ -23,6 +23,9 @@ JOURNAL = """\
 2026-09-19T09:23:05+0200 dispatcharr start-uwsgi.sh[205973]: 2026-09-19 07:23:05,001 INFO live_proxy.server Channel d4b5 has 1 clients, state: active
 2026-09-19T09:23:06+0200 dispatcharr start-uwsgi.sh[205973]: Traceback (most recent call last):
 2026-09-19T09:23:06+0200 dispatcharr start-uwsgi.sh[205973]: RuntimeError: a stray one
+2026-09-19T09:24:00+0200 dispatcharr start-celery.sh[246822]: 2026-09-19 07:24:00,001 INFO plugins.recipes Cooked 3 channels
+2026-09-19T09:24:01+0200 dispatcharr start-celery.sh[246822]: 2026-09-19 07:24:01,001 WARNING _dispatcharr_plugin_recipes.plugin Could not read the recipe book
+2026-09-19T09:24:02+0200 dispatcharr start-celery.sh[246822]: 2026-09-19 07:24:02,001 INFO plugins.tuner-tools Nothing about recipes here
 """
 
 
@@ -45,10 +48,99 @@ class RecordTests(TestCase):
         found = log_center.records(JOURNAL)
         keep = lambda **kw: [r for r in found if log_center._keep(r, kw.get("level", "ALL"), kw.get("topic", ""), kw.get("text", ""))]
         self.assertEqual(len(keep(level="ERROR")), 2)
-        self.assertEqual(len(keep(level="WARNING")), 3)
+        # ...and the warning a plugin wrote, which the fixture gained with the plugins
+        self.assertEqual(len(keep(level="WARNING")), 4)
         self.assertEqual([r["level"] for r in keep(topic="stream_check")], ["INFO"])
         self.assertEqual(len(keep(topic="m3u")), 1)
         self.assertEqual(len(keep(text="tivibridge")), 1)
+
+
+class WhoWroteItTests(TestCase):
+    """
+    Every line Dispatcharr writes says which logger wrote it -- the format is "{asctime}
+    {levelname} {name} {message}" -- so that is what a line is found by, rather than
+    whether the words happen to appear somewhere in it.
+    """
+
+    def _find(self, words):
+        return next(r for r in log_center.records(JOURNAL) if words in r["text"])
+
+    def test_a_line_is_read_apart_into_what_wrote_it_and_what_it_said(self):
+        record = self._find("batch ended")
+        self.assertEqual(record["logger"], "apps.channels.stream_check")
+        self.assertEqual(record["level"], "INFO")
+        # The message, without the date and the level in front of it twice over
+        self.assertTrue(record["text"].startswith("Stream Check: batch ended"))
+        self.assertEqual(record["service"], "start-celery.sh")
+
+    def test_a_line_nobody_formatted_is_still_a_line(self):
+        stray = self._find("a stray one")
+        self.assertEqual(stray["logger"], "")
+        self.assertEqual(stray["level"], "ERROR")
+
+    def test_a_part_is_what_its_loggers_wrote(self):
+        # The words "M3U" are in this one, but it was the guide reader that wrote it
+        made_up = {"logger": "apps.epg.tasks", "text": "Read the M3U account's guide", "level": "INFO"}
+        self.assertTrue(log_center._keep(made_up, "ALL", "epg", ""))
+        self.assertFalse(log_center._keep(made_up, "ALL", "m3u", ""))
+
+    def test_and_the_words_are_for_the_lines_that_say_nothing(self):
+        uwsgi = {"logger": "", "text": "spawned uWSGI worker for the M3U refresh", "level": ""}
+        self.assertTrue(log_center._keep(uwsgi, "ALL", "m3u", ""))
+
+    def test_the_channel_managers_own_tabs_can_be_asked_for(self):
+        # They had nowhere of their own at all: everything they write was "everything else"
+        found = {"logger": "apps.channels.guide_manager", "text": "Guides: done", "level": "INFO"}
+        self.assertTrue(log_center._keep(found, "ALL", "channel_manager", ""))
+
+
+class PluginLogTests(TestCase):
+    """One plugin's lines, out of everything every plugin writes."""
+
+    def _kept(self, plugin):
+        return [
+            r["text"] for r in log_center.records(JOURNAL)
+            if log_center._keep(r, "ALL", "", "", plugin)
+        ]
+
+    def test_a_plugins_lines_are_its_own(self):
+        self.assertEqual(
+            self._kept("recipes"),
+            ["Cooked 3 channels", "Could not read the recipe book"],
+        )
+
+    def test_including_the_ones_it_wrote_through_its_own_module(self):
+        # A plugin doing logging.getLogger(__name__) comes out as the loader's name for it
+        by_module = next(
+            r for r in log_center.records(JOURNAL) if "recipe book" in r["text"]
+        )
+        self.assertEqual(by_module["logger"], "_dispatcharr_plugin_recipes.plugin")
+        self.assertTrue(log_center.from_plugin(by_module, "recipes"))
+
+    def test_and_never_another_plugins_line_that_mentions_it(self):
+        # By the logger, never by the name appearing in a line: a plugin called "Cooking"
+        # would otherwise own every line about a cooking channel
+        others = next(r for r in log_center.records(JOURNAL) if "Nothing about recipes" in r["text"])
+        self.assertFalse(log_center.from_plugin(others, "recipes"))
+        self.assertEqual(self._kept("tuner-tools"), ["Nothing about recipes here"])
+
+    def test_every_plugin_at_once_is_a_part_of_its_own(self):
+        both = [
+            r["text"] for r in log_center.records(JOURNAL)
+            if log_center._keep(r, "ALL", "plugins", "")
+        ]
+        self.assertEqual(
+            both,
+            ["Cooked 3 channels", "Could not read the recipe book", "Nothing about recipes here"],
+        )
+
+    def test_the_plugins_installed_are_offered(self):
+        from apps.plugins.models import PluginConfig
+
+        PluginConfig.objects.create(key="recipes", name="Recipe Channels")
+        self.assertEqual(
+            log_center.plugins(), [{"key": "recipes", "name": "Recipe Channels"}]
+        )
 
 
 @override_settings(LOG_FILE_DIR="")
@@ -166,6 +258,40 @@ class ViewTests(TestCase):
     def test_the_tab_reads_with_what_it_asks_for(self):
         data = self.api.get("/api/core/log-center/read/?level=error&since=24h").json()
         self.assertEqual(len(data["records"]), 2)
+
+    def test_the_tab_is_told_the_parts_and_the_plugins_this_install_has(self):
+        from apps.plugins.models import PluginConfig
+
+        PluginConfig.objects.create(key="recipes", name="Recipe Channels")
+        data = self.api.get("/api/core/log-center/").json()
+
+        parts = {one["value"]: one["label"] for one in data["topics"]}
+        self.assertEqual(parts["stream_check"], "Stream Check")
+        self.assertIn("channel_manager", parts)
+        self.assertEqual(data["plugins"], [{"key": "recipes", "name": "Recipe Channels"}])
+
+    def test_one_plugins_lines_can_be_asked_for(self):
+        data = self.api.get("/api/core/log-center/read/?plugin=recipes&since=24h").json()
+        self.assertEqual(
+            [r["text"] for r in data["records"]],
+            ["Cooked 3 channels", "Could not read the recipe book"],
+        )
+
+    def test_the_bundle_says_what_plugins_are_installed(self):
+        from apps.plugins.models import PluginConfig
+
+        PluginConfig.objects.create(
+            key="recipes", name="Recipe Channels", version="1.2.0", enabled=True,
+            settings={"api_key": "not for sharing"},
+        )
+        answer = self.api.get("/api/core/log-center/bundle/")
+        with zipfile.ZipFile(io.BytesIO(answer.content)) as archive:
+            about = archive.read("about.json").decode()
+
+        self.assertIn("Recipe Channels", about)
+        self.assertIn("1.2.0", about)
+        # Never their settings: that is where a plugin's keys and passwords are
+        self.assertNotIn("not for sharing", about)
 
     def test_what_cannot_be_asked_for_is_ignored(self):
         data = self.api.get("/api/core/log-center/read/?level=nonsense&since=forever&topic=nope").json()
