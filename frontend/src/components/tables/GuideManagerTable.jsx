@@ -169,6 +169,13 @@ const GuideManagerTable = () => {
     }
   }, []);
 
+  // Asking again, for the view that is on screen. Asked without it, "Every channel" was
+  // swapped for the suggestions alone -- after Apply, after waving one away, after
+  // starting a run, and every three seconds while one went on -- so the list emptied
+  // itself under whoever was working down it. Everything that asks again asks this.
+  const everyChannel = ['all', 'chosen', 'waved'].includes(why);
+  const reload = useCallback(() => look(true, everyChannel), [look, everyChannel]);
+
   // The view being changed is what loads, rather than the view being changed and then
   // something else having to be poked to make it happen. "Every channel" needs the rows
   // for channels nothing was found for, which are not kept with the suggestions.
@@ -197,23 +204,20 @@ const GuideManagerTable = () => {
       one.now_changes_at,
       one.instead_of_now_changes_at,
     ]),
-    useCallback(
-      () => look(true, ['all', 'chosen', 'waved'].includes(why)),
-      [look, why]
-    )
+    reload
   );
 
   // While a run is going the page follows it, and stops asking once it is over
   const running = page?.run?.running;
   useEffect(() => {
     if (!running) return undefined;
-    const asking = setInterval(() => look(true), 3000);
+    const asking = setInterval(reload, 3000);
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       clearInterval(asking);
       clearInterval(clock);
     };
-  }, [running, look]);
+  }, [running, reload]);
 
   // Every group you have channels in, not only the ones the last run left rows for: built
   // from the rows, a group made in the Lineup since that run -- or one whose channels had
@@ -322,7 +326,7 @@ const GuideManagerTable = () => {
         group ? { ...levers, channel_groups: [Number(group)] } : levers
       );
       if (!answer.started) setError(answer.why || 'Could not start looking.');
-      await look(true);
+      await reload();
     } catch (e) {
       setError(e?.body?.error || 'Could not start looking.');
     } finally {
@@ -333,7 +337,7 @@ const GuideManagerTable = () => {
   const halt = async () => {
     try {
       await API.runGuideManager('stop');
-      await look(true);
+      await reload();
     } catch {
       setError('Could not stop the run.');
     }
@@ -353,7 +357,7 @@ const GuideManagerTable = () => {
       setTicked(new Set());
       setChosen({});
       tableRef.current?.setSelectedTableIds?.([]);
-      await look(true);
+      await reload();
     } catch (e) {
       setError(e?.body?.error || 'Could not put those guides on.');
     } finally {
@@ -424,12 +428,12 @@ const GuideManagerTable = () => {
           name: row.channel_name,
           epg: row.epg,
         });
-        await look(true);
+        await reload();
       } catch {
         setError('Could not wave that one away.');
       }
     },
-    [look]
+    [reload]
   );
 
   // Settled: this channel's guide has been decided, so nothing is put forward for it
@@ -443,14 +447,14 @@ const GuideManagerTable = () => {
           name: row.instead_of,
           epg: row.instead_of_epg ?? null,
         });
-        await look(true, true);
+        await reload();
       } catch {
         setError(
           settled ? 'Could not keep that one.' : 'Could not unkeep that one.'
         );
       }
     },
-    [look]
+    [reload]
   );
 
   const askMatching = useCallback(
@@ -502,14 +506,14 @@ const GuideManagerTable = () => {
       setError(null);
       try {
         await API.applyGuideManager({ [row.channel]: row.epg });
-        await look(true, ['all', 'chosen', 'waved'].includes(why));
+        await reload();
       } catch (e) {
         setError(e?.body?.error || 'Could not put that guide on.');
       } finally {
         setBusy(false);
       }
     },
-    [look, why]
+    [reload]
   );
 
   const saveLevers = async (changed) => {
@@ -1405,7 +1409,7 @@ const GuideManagerTable = () => {
                         leftSection={<RotateCcw size={12} />}
                         onClick={async () => {
                           await API.chooseGuideManager('clear');
-                          look(true, ['all', 'chosen', 'waved'].includes(why));
+                          reload();
                         }}
                       >
                         Suggest for them again
@@ -1424,7 +1428,7 @@ const GuideManagerTable = () => {
                         leftSection={<RotateCcw size={12} />}
                         onClick={async () => {
                           await API.ignoreGuideManager('clear');
-                          look(true);
+                          reload();
                         }}
                       >
                         Suggest them again

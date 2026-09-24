@@ -511,6 +511,23 @@ describe('GuideManagerTable', () => {
     expect(API.saveGuideManagerSettings).not.toHaveBeenCalled();
   });
 
+  it('keeps to every channel after Apply, rather than dropping back to the suggestions', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText('Every channel'));
+    await waitFor(() => expect(API.getGuideManager).toHaveBeenCalledWith(true));
+
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('input[type=checkbox]'));
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(API.applyGuideManager).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(API.getGuideManager).toHaveBeenLastCalledWith(true)
+    );
+  });
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');
