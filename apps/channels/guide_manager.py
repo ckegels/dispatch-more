@@ -102,6 +102,13 @@ DEFAULTS = {
     # right, which is the quickest and surest way there is, and the one the plugins that
     # did this well start with.
     "match_by": "name",
+    # Whether putting a guide on a channel also gives the channel the guide's tvg-id. Off,
+    # as in stock and in the plugins that do this: Dispatcharr's own matching sets the
+    # guide and nothing else, EPG Janitor the same, and epgmatcharr asks first
+    # ("backfill tvg-id", off). The channel's tvg-id is what the Lineup's "Trust tvg-id"
+    # matches streams by, so a guide taken by mistake used to change which streams the
+    # channel would be given as well.
+    "copy_tvg_id": False,
 }
 
 SETTINGS_VERSION = 1
@@ -136,6 +143,7 @@ def save_settings(given):
         values["better_by"] = min(100, max(1, int(values["better_by"])))
         values["fresh_hours"] = min(168, max(1, int(values["fresh_hours"])))
         values["match_by"] = "tvg_id" if values.get("match_by") == "tvg_id" else "name"
+        values["copy_tvg_id"] = bool(values.get("copy_tvg_id"))
         values["channel_groups"] = [int(g) for g in values["channel_groups"] or ()]
         values["exclude_channel_groups"] = [
             int(g) for g in values["exclude_channel_groups"] or ()
@@ -983,6 +991,7 @@ def apply(choices):
     }
     from django.utils import timezone
 
+    copy_tvg_id = bool(load_settings().get("copy_tvg_id"))
     changed = 0
     settled_channels = {}
     done_with = []
@@ -1003,7 +1012,7 @@ def apply(choices):
         channel.epg_data_id = epg_id
         fields = ["epg_data"]
         tvg_id = (guides.get(epg_id) or {}).get("tvg_id")
-        if tvg_id:
+        if tvg_id and copy_tvg_id:
             channel.tvg_id = tvg_id
             fields.append("tvg_id")
         channel.save(update_fields=fields)

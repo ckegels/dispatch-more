@@ -1146,6 +1146,21 @@ const GuideManagerTable = () => {
                         })
                       }
                     />
+                    {/* Off, as stock and the plugins that do this: putting a guide on
+                        sets the guide. The channel's tvg-id is what the Lineup's "Trust
+                        tvg-id" matches streams by. */}
+                    <Switch
+                      size="xs"
+                      label="Also give the channel the guide's tvg-id"
+                      description="Changes what the Lineup's Trust tvg-id matches streams by"
+                      checked={!!levers.copy_tvg_id}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          copy_tvg_id: event.currentTarget.checked,
+                        })
+                      }
+                    />
                   </Group>
                   <Group gap="lg" wrap="wrap" align="flex-end">
                     <NumberInput

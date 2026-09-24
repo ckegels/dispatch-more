@@ -502,13 +502,28 @@ class BatchTests(_Setup):
 
 
 class ApplyTests(_Setup):
-    def test_the_guide_chosen_goes_on_the_channel_with_its_tvg_id(self):
+    def test_the_guide_chosen_goes_on_the_channel_and_nothing_else_changes(self):
+        """
+        The guide, and not the channel's tvg-id: stock's own matching sets the guide alone,
+        and so do the plugins that do this. The tvg-id is what the Lineup's "Trust tvg-id"
+        matches streams by, so a guide taken by mistake changed the channel's streams too.
+        """
         guide = self._guide("ORF1.at", "ORF 1", programmes=3)
         channel = self._channel("┃AT┃ ORF 1", 1)
+        Channel.objects.filter(id=channel.id).update(tvg_id="orf1.provider")
         with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
             self.assertEqual(guide_manager.apply({channel.id: guide.id}), {"changed": 1})
         channel.refresh_from_db()
         self.assertEqual(channel.epg_data_id, guide.id)
+        self.assertEqual(channel.tvg_id, "orf1.provider")
+
+    def test_and_with_its_tvg_id_when_that_is_asked_for(self):
+        guide_manager.save_settings({"copy_tvg_id": True})
+        guide = self._guide("ORF1.at", "ORF 1", programmes=3)
+        channel = self._channel("┃AT┃ ORF 1", 1)
+        with patch("apps.epg.tasks.parse_programs_for_tvg_id.delay"):
+            guide_manager.apply({channel.id: guide.id})
+        channel.refresh_from_db()
         self.assertEqual(channel.tvg_id, "ORF1.at")
 
     def test_applying_reads_the_new_guides_programmes(self):
