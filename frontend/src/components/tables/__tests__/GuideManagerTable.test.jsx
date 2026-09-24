@@ -455,6 +455,26 @@ describe('GuideManagerTable', () => {
     });
   });
 
+  it('offers every group with channels, not only the ones the last run left rows for', async () => {
+    // Made in the Lineup after the last run: it has channels and no rows yet
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20 },
+        { id: 2, name: '┃NL┃ HOLLAND', count: 4 },
+        { id: 3, name: 'PBS Locals', count: 12 },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which group' }));
+    fireEvent.click(await screen.findByText('PBS Locals'));
+    // ...and says why there is nothing in it, and where its channels are
+    expect(
+      await screen.findByText(/Nothing to change in PBS Locals from the last run/)
+    ).toBeInTheDocument();
+  });
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

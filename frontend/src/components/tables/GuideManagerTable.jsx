@@ -214,8 +214,15 @@ const GuideManagerTable = () => {
     };
   }, [running, look]);
 
+  // Every group you have channels in, not only the ones the last run left rows for: built
+  // from the rows, a group made in the Lineup since that run -- or one whose channels had
+  // nothing worth suggesting -- was simply not there to choose. The Lineup's own group
+  // filter had the same fault and was put right the same way.
   const groups = useMemo(() => {
     const names = new Map();
+    for (const one of page?.channel_groups || []) {
+      names.set(String(one.id), one.name || String(one.id));
+    }
     for (const one of page?.suggestions || []) {
       if (one.group_id == null) continue;
       if (!names.has(String(one.group_id))) {
@@ -1417,7 +1424,11 @@ const GuideManagerTable = () => {
                       <Text size="sm" c="dimmed" ta="center" maw={620}>
                         {why === 'chosen'
                           ? 'Nothing is chosen yet. Putting a guide on a channel from here chooses it, and nothing is suggested for it afterwards; the padlock on a row chooses the guide it is already on.'
-                          : page?.suggestions?.length
+                          : group && !why
+                            ? `Nothing to change in ${
+                                groups.find((one) => one.value === group)?.label || 'this group'
+                              } from the last run. A group made since then has not been looked at yet: "Look for guides" goes through it, and "Every channel" under What to change lists its channels now.`
+                            : page?.suggestions?.length
                             ? 'Nothing matches what is being looked at.'
                             : 'Nothing to change. Press "Look for guides" to go through every channel: the ones on no guide, the ones whose guide holds no programmes, and the ones something matches better.'}
                       </Text>
