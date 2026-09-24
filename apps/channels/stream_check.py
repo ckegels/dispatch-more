@@ -2916,10 +2916,14 @@ def _update_parked(change):
     return answer
 
 
-def park(stream_id, reason="", auto=False):
+def park(stream_id, reason="", auto=False, only_channel=None):
     """
     Take a stream off every channel it is on, remembering where it was, so it can be put
     back. The streams after it close up, as they would had it been removed by hand.
+
+    With `only_channel`, off that one channel and no other: parking a whole channel is
+    about that channel, and a stream the Lineup gave to two channels of one name would
+    otherwise have gone from the other one as well.
     """
     from django.db import transaction
 
@@ -2931,11 +2935,14 @@ def park(stream_id, reason="", auto=False):
 
     def change(parked):
         with transaction.atomic():
-            links = list(ChannelStream.objects.filter(stream_id=stream_id).values("channel_id", "order"))
+            taken = ChannelStream.objects.filter(stream_id=stream_id)
+            if only_channel is not None:
+                taken = taken.filter(channel_id=only_channel)
+            links = list(taken.values("channel_id", "order"))
             was = (parked.get(str(stream_id)) or {}).get("channels") or []
             places = {p["channel"]: p["order"] for p in was}
             places.update({link["channel_id"]: link["order"] for link in links})
-            ChannelStream.objects.filter(stream_id=stream_id).delete()
+            taken.delete()
             for link in links:
                 _close_up(link["channel_id"])
             _hide_emptied([link["channel_id"] for link in links])
@@ -2950,6 +2957,47 @@ def park(stream_id, reason="", auto=False):
             return len(links)
 
     return _update_parked(change)
+
+
+def park_channels(channel_ids, reason="parked with its channel"):
+    """
+    Every provider stream on these channels parked off them -- the one that plays and its
+    backups alike -- remembered with where it was. A channel left with only its fallback
+    is hidden from TVs and media servers (hide_emptied_channels), and is back when a
+    stream of it is put back from Parked. The fallback stays: it is not the channel's own.
+
+    Returns {"channels": how many had anything parked, "streams": how many were}.
+    """
+    from .models import ChannelStream
+
+    channels = streams = 0
+    for channel_id in channel_ids:
+        mine = list(
+            ChannelStream.objects.filter(channel_id=channel_id, stream__is_custom=False)
+            .values_list("stream_id", flat=True)
+        )
+        for stream_id in mine:
+            park(stream_id, reason, only_channel=channel_id)
+        if mine:
+            channels += 1
+            streams += len(mine)
+    return {"channels": channels, "streams": streams}
+
+
+def remove_channels(channel_ids):
+    """
+    Delete these channels, the way Dispatcharr's own bulk delete does: the channel and its
+    place in every profile go, the streams it had stay -- they are the provider's, and the
+    fallback is every channel's. Somebody watching one is not cut off: stock leaves that to
+    be stopped separately, and so does this.
+    """
+    from .models import Channel
+
+    wanted = Channel.objects.filter(id__in=channel_ids)
+    names = list(wanted.values_list("name", flat=True))
+    wanted.delete()
+    logger.info(f"Stream Check: {len(names)} channel(s) deleted: {', '.join(names)[:500]}")
+    return {"channels": len(names)}
 
 
 def restore(stream_id):

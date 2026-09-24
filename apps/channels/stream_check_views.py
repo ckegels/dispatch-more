@@ -168,3 +168,26 @@ def stream_check_action(request):
         return JsonResponse({"error": f"Could not {action} those streams"}, status=400)
     logger.info(f"Stream Check: {action} {len(done)} stream(s) ({changed} channels)")
     return JsonResponse({"done": action, "channels": changed, "streams": done})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def stream_check_channels(request):
+    """
+    Whole channels at once: {"action": "park" | "remove", "channel_ids": [...]}.
+
+    Park takes every provider stream off them -- the backups too -- and keeps them in
+    Parked with where they were. Remove deletes the channels. The page asks first.
+    """
+    action = request.data.get("action")
+    try:
+        channel_ids = [int(one) for one in request.data.get("channel_ids") or []]
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Channels are given by id"}, status=400)
+    if not channel_ids:
+        return JsonResponse({"error": "No channels were given"}, status=400)
+    if action == "park":
+        return JsonResponse({"done": "park", **stream_check.park_channels(channel_ids)})
+    if action == "remove":
+        return JsonResponse({"done": "remove", **stream_check.remove_channels(channel_ids)})
+    return JsonResponse({"error": f"Unknown action: {action}"}, status=400)

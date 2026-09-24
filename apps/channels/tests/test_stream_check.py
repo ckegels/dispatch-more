@@ -867,6 +867,61 @@ def _answers(by_name):
 @mock.patch.object(stream_check, "REFUSAL_PAUSE", 0.01)
 @mock.patch.object(stream_check, "PROVIDER_ASK_EVERY", 0.01)
 @mock.patch.object(stream_check, "PROVIDER_LINGER", 0.2)
+class WholeChannelTests(_Setup):
+    """
+    Park or remove whole channels from the Stream Check page: the stream that plays and
+    its backups alike, not only the broken ones.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.api = APIClient()
+        self.api.force_authenticate(user=User.objects.create_user(username="admin", password="x", user_level=10))
+        # One of its streams is on another channel too, as the Lineup does with two
+        # channels of one name
+        self.other = Channel.objects.create(name="┃AT┃ ORF 1 copy", channel_number=2, channel_group=self.group)
+        self._attach(self.other, [self.second, self.fallback])
+
+    def _post(self, action, *channels):
+        return self.api.post(
+            "/api/channels/stream-check/channels/",
+            {"action": action, "channel_ids": [c.id for c in channels]}, format="json",
+        )
+
+    def test_park_takes_every_stream_off_the_channel_backups_too_and_hides_it(self):
+        answer = self._post("park", self.orf1).json()
+        self.assertEqual((answer["channels"], answer["streams"]), (1, 3))
+        self.assertEqual(self._order(self.orf1), ["could not dispatch"])
+        self.orf1.refresh_from_db()
+        self.assertTrue(self.orf1.hidden_from_output)
+        # ...and only off that channel: the other one keeps the stream they share
+        self.assertEqual(self._order(self.other), ["ORF 1 B", "could not dispatch"])
+
+    def test_and_a_stream_put_back_goes_back_on_that_channel_only_where_it_was(self):
+        self._post("park", self.orf1)
+        stream_check.restore(self.second.id)
+        self.assertEqual(self._order(self.orf1), ["ORF 1 B", "could not dispatch"])
+        self.assertEqual(self._order(self.other), ["ORF 1 B", "could not dispatch"])
+        self.orf1.refresh_from_db()
+        self.assertFalse(self.orf1.hidden_from_output)
+
+    def test_remove_deletes_the_channel_and_leaves_the_streams(self):
+        answer = self._post("remove", self.orf1).json()
+        self.assertEqual(answer["channels"], 1)
+        self.assertFalse(Channel.objects.filter(id=self.orf1.id).exists())
+        # The streams are the provider's, and the fallback is every channel's
+        self.assertTrue(Stream.objects.filter(id=self.first.id).exists())
+        self.assertEqual(self._order(self.other), ["ORF 1 B", "could not dispatch"])
+
+    def test_several_at_once(self):
+        self.assertEqual(self._post("remove", self.orf1, self.other).json()["channels"], 2)
+
+    def test_nothing_given_or_an_unknown_action_is_refused(self):
+        self.assertEqual(self._post("remove").status_code, 400)
+        self.assertEqual(self._post("explode", self.orf1).status_code, 400)
+        self.assertTrue(Channel.objects.filter(id=self.orf1.id).exists())
+
+
 class RunTests(_Setup):
     def setUp(self):
         super().setUp()

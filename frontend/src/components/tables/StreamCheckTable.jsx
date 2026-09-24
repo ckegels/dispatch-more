@@ -441,6 +441,27 @@ const ACT_TEXT = {
       'Every broken and failing stream on the channels you ticked comes off them, and is remembered with where it was. They are checked on every run and put back where they were if they work again. Streams that play are left alone.',
     confirmLabel: 'Park them',
   }),
+  // The whole channel, not only what is broken on it: the stream that plays and every
+  // backup. Parking keeps them to put back; removing deletes the channel.
+  'park-channels': (_stream, _channel, howMany) => ({
+    title: `Park ${howMany} channel${howMany === 1 ? '' : 's'}?`,
+    message:
+      'Every stream on the channels you ticked comes off them, the backups too, and is kept in Parked with where it was. A channel left with only its fallback is hidden from your TVs and media servers, and comes back when you put a stream of it back from Parked. Streams on other channels are left alone.',
+    confirmLabel: 'Yes, park',
+    cancelLabel: 'No',
+  }),
+  'remove-channels': (_stream, _channel, howMany) => ({
+    title: `Remove ${howMany} channel${howMany === 1 ? '' : 's'}?`,
+    message: `This deletes the channel${howMany === 1 ? '' : 's'} and all ${
+      howMany === 1 ? 'its' : 'their'
+    } backups: ${
+      howMany === 1 ? 'it is' : 'they are'
+    } gone from Dispatcharr, with every stream on ${
+      howMany === 1 ? 'it' : 'them'
+    }, and from every profile. It cannot be undone here. The streams themselves stay in Dispatcharr, since they are the provider's, and your fallback stream stays on every other channel.`,
+    confirmLabel: 'Yes, remove',
+    cancelLabel: 'No',
+  }),
   'remove-ticked': (_stream, _channel, howMany) => ({
     title: `Remove the broken streams from ${howMany} channel${howMany === 1 ? '' : 's'}?`,
     message:
@@ -601,6 +622,29 @@ const StreamCheckTable = () => {
       }[action] || 'Done.'
     );
     await load(true);
+  };
+
+  // Whole channels ticked, parked or deleted. Asked about first, as the rest are.
+  const actOnChannels = async (action) => {
+    const ids = rows
+      .filter((row) => ticked.has(row.id) && row.kind === 'channel')
+      .map((row) => row.channel.id);
+    if (!ids.length) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const done = await API.streamCheckChannels(action, ids);
+      setTicked(new Set());
+      tableRef.current?.setSelectedTableIds?.([]);
+      setNotice(
+        action === 'park'
+          ? `${done.streams} stream${done.streams === 1 ? '' : 's'} of ${done.channels} channel${done.channels === 1 ? '' : 's'} parked, backups too. Put them back from Parked.`
+          : `${done.channels} channel${done.channels === 1 ? '' : 's'} removed.`
+      );
+      await load(true);
+    } catch (e) {
+      setError(e?.body?.error || 'That did not work.');
+    }
   };
 
   // Removing and forgetting cannot be undone here, so they are asked about first
@@ -1137,7 +1181,8 @@ const StreamCheckTable = () => {
               >
                 <Text size="xs" c="dimmed">
                   {ticked.size} channel{ticked.size === 1 ? '' : 's'} ticked ·
-                  what is done goes to every broken and failing stream on them
+                  Park / Remove them: their broken and failing streams · Park /
+                  Remove channel: the whole channel, backups too
                 </Text>
                 <Group gap={6} ml="auto" wrap="wrap">
                   <Button
@@ -1159,6 +1204,26 @@ const StreamCheckTable = () => {
                     }
                   >
                     Remove them
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="filled"
+                    color="yellow"
+                    onClick={() =>
+                      setAsking({ action: 'park-channels', stream: {} })
+                    }
+                  >
+                    Park channel{ticked.size === 1 ? '' : 's'}
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="filled"
+                    color="red"
+                    onClick={() =>
+                      setAsking({ action: 'remove-channels', stream: {} })
+                    }
+                  >
+                    Remove channel{ticked.size === 1 ? '' : 's'}
                   </Button>
                 </Group>
               </Box>
@@ -1464,11 +1529,14 @@ const StreamCheckTable = () => {
           const { action, stream, channel } = asking;
           setAsking(null);
           if (action.endsWith('-ticked')) actOnTicked(action.split('-')[0]);
+          else if (action.endsWith('-channels'))
+            actOnChannels(action.split('-')[0]);
           else act(action, stream, channel);
         }}
         title={asked?.title}
         message={asked?.message}
         confirmLabel={asked?.confirmLabel}
+        cancelLabel={asked?.cancelLabel}
       />
     </>
   );

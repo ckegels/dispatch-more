@@ -3147,6 +3147,15 @@ export default class API {
     });
   }
 
+  static async streamCheckChannels(action, channelIds) {
+    // Whole channels: "park" takes every stream off them, backups too, into Parked;
+    // "remove" deletes the channels. The page asks first.
+    return await request(`${host}/api/channels/stream-check/channels/`, {
+      method: 'POST',
+      body: { action, channel_ids: channelIds },
+    });
+  }
+
   static async getLogoLibrary(show = 'suggested', search = '') {
     // Every channel, with the logo it has and the ones the public collections would give it
     const query = new URLSearchParams({ show });

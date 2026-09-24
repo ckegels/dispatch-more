@@ -21,6 +21,7 @@ vi.mock('../../../api', () => ({
     stopStreamCheck: vi.fn(),
     saveStreamCheckSettings: vi.fn(),
     streamCheckAction: vi.fn(),
+    streamCheckChannels: vi.fn(),
     clearStreamCheck: vi.fn(),
     setStreamCheckLimit: vi.fn(),
   },
@@ -611,5 +612,53 @@ describe('StreamCheckTable', () => {
     expect(action).toBe('remove');
     // only the broken ones: what plays is left alone
     expect(ids).toEqual([12]);
+  });
+
+  // The whole channel, not only what is broken on it -- the stream that plays and every
+  // backup -- asked about first, with a yes and a no
+  it('removes whole channels ticked, after saying it deletes them and their backups', async () => {
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [channelRow, unlistedRow] }));
+    API.streamCheckChannels.mockResolvedValue({ done: 'remove', channels: 1 });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove channel' }));
+
+    const inDialog = within(await screen.findByRole('dialog'));
+    expect(
+      inDialog.getByText(/This deletes the channel and all its backups/)
+    ).toBeInTheDocument();
+    // No leaves it alone
+    fireEvent.click(inDialog.getByRole('button', { name: 'No' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(API.streamCheckChannels).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove channel' }));
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Yes, remove' })
+    );
+    await waitFor(() => expect(API.streamCheckChannels).toHaveBeenCalled());
+    const [action, ids] = API.streamCheckChannels.mock.calls[0];
+    expect(action).toBe('remove');
+    expect(ids).toEqual([channelRow.channel.id]);
+    expect(await screen.findByText('1 channel removed.')).toBeInTheDocument();
+  });
+
+  it('parks whole channels ticked, backups too', async () => {
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [channelRow, unlistedRow] }));
+    API.streamCheckChannels.mockResolvedValue({ done: 'park', channels: 1, streams: 3 });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Park channel' }));
+    const inDialog = within(await screen.findByRole('dialog'));
+    expect(inDialog.getByText(/the backups too/)).toBeInTheDocument();
+    fireEvent.click(inDialog.getByRole('button', { name: 'Yes, park' }));
+    await waitFor(() =>
+      expect(API.streamCheckChannels).toHaveBeenCalledWith('park', [channelRow.channel.id])
+    );
+    expect(
+      await screen.findByText(/3 streams of 1 channel parked, backups too/)
+    ).toBeInTheDocument();
   });
 });
