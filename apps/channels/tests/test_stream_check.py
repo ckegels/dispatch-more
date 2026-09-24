@@ -1376,6 +1376,27 @@ class RunTests(_Setup):
         self.assertEqual(limit["window"], 420)
         self.assertEqual(final["ended"], "done")
 
+    def test_a_provider_still_at_its_limit_after_the_longest_waits_is_left_for_the_round(self):
+        """It was asked again every hour, all night, and the round never moved."""
+        last = len(stream_check.RECOVERY_STEPS) - 1
+        state = {
+            "blocked_since": time.time() - 4 * 3600, "count": 140, "span": 2100, "step": last,
+            "at_cap": stream_check.GIVE_UP_AT_CAP - 1, "next_try": time.time() - 1,
+            "good_stream": self.first.id, "v": stream_check.LIMITS_VERSION,
+        }
+        stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
+        final, probe = self._run({"ORF1A": self._refusal})
+        # Asked once, and left: its other streams are not tried in this round
+        self.assertEqual(
+            [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list if "ProviderA" in c.args[0]],
+            ["ORF1A"],
+        )
+        # ...and the round goes on without it, to its end, rather than waiting on it
+        self.assertEqual(final["ended"], "done")
+        left_out = stream_check.load_results()["last_run"]["unavailable"]
+        self.assertEqual([one["name"] for one in left_out], ["Provider A"])
+        self.assertIn("still at its limit", left_out[0]["reason"])
+
     def test_a_resting_provider_is_not_asked_anything(self):
         self._as_xc(self.a)
         state = {"blocked_since": time.time(), "count": 34, "span": 120, "step": 0, "next_try": time.time() + 300,
@@ -2444,3 +2465,76 @@ class WhatAProviderAllowsTests(TestCase):
             },
         })
         self.assertEqual(stream_check.load_limits()["server:a"]["limit"], 2)
+
+
+class ProviderLimitTests(WhatAProviderAllowsTests):
+    """
+    TiviBridge on a real installation: learned "8 streams every 2 min", kept to it, and was
+    refused after 140 streams anyway -- a second, longer limit it did not know about. Then
+    it asked again every hour, all night.
+    """
+
+    def test_a_refusal_after_far_more_than_the_short_limit_is_learned_as_a_second_one(self):
+        budget = self._budget(limit=8, window=120, how="learned", v=stream_check.LIMITS_VERSION)
+        self._opened(budget, 140, 35 * 60)
+        budget.hit()
+        budget.state["last_no"] = budget.state["blocked_since"] + 25 * 60
+        budget.recovered()
+        # The short one kept, the long one beside it
+        self.assertEqual((budget.state["limit"], budget.state["window"]), (8, 120))
+        self.assertEqual(budget.state["long_limit"], 112)
+        self.assertEqual(budget.state["long_window"], 3600)
+        self.assertIn("and 112 every 60 min", budget.describe())
+
+    def test_and_the_checks_keep_under_both(self):
+        budget = self._budget(limit=8, window=120, long_limit=20, long_window=3600)
+        # Nothing in the last two minutes -- the short limit is happy -- but twenty in the hour
+        now = time.time()
+        for n in range(20):
+            when = now - 3000 + n * 100
+            self.redis.zadd(stream_check.OPENS_KEY.format(provider=budget.key), {f"{when:.6f}": when})
+        self.assertEqual(budget._wait_for(8, 120), 0.0)
+        self.assertGreater(budget.wait(), 0)
+
+    def test_the_waits_stop_growing_at_a_quarter_of_an_hour(self):
+        budget = self._budget()
+        self._opened(budget, 30, 600)
+        budget.hit()
+        for _ in range(20):
+            budget.still_blocked()
+        self.assertLessEqual(budget.resting(), 900)
+
+    def test_and_after_enough_refusals_there_it_is_left_for_the_round(self):
+        budget = self._budget()
+        self._opened(budget, 30, 600)
+        budget.hit()
+        for _ in range(len(stream_check.RECOVERY_STEPS) - 1):
+            budget.still_blocked()
+        self.assertFalse(budget.given_up())
+        for _ in range(stream_check.GIVE_UP_AT_CAP):
+            budget.still_blocked()
+        self.assertTrue(budget.given_up())
+        # ...and a provider that answers again starts afresh
+        budget.recovered()
+        self.assertFalse(budget.given_up())
+
+    def test_a_provider_that_says_how_long_to_wait_is_taken_at_its_word(self):
+        budget = self._budget()
+        self._opened(budget, 30, 600)
+        budget.hit(retry_after=600)
+        self.assertGreater(budget.resting(), 590)
+        budget.still_blocked(retry_after=90)
+        self.assertLessEqual(budget.resting(), 90)
+        # ...within reason
+        budget.still_blocked(retry_after=10 ** 9)
+        self.assertLessEqual(budget.resting(), stream_check.LONGEST_RETRY_AFTER)
+
+    def test_retry_after_is_read_as_seconds_or_as_a_date(self):
+        from email.utils import format_datetime
+        from datetime import datetime, timedelta, timezone as tz
+
+        self.assertEqual(stream_check._retry_after("120"), 120)
+        later = format_datetime(datetime.now(tz.utc) + timedelta(minutes=5), usegmt=True)
+        self.assertTrue(250 < stream_check._retry_after(later) <= 300)
+        self.assertIsNone(stream_check._retry_after("soon"))
+        self.assertIsNone(stream_check._retry_after(None))

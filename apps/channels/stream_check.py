@@ -201,7 +201,22 @@ URGENT_KEY = "stream-check:urgent"
 URGENT_KEPT = 12 * 3600
 # After a provider's limit is hit, when to try again to learn how long it lasts: the
 # provider is not asked anything in between, not even about its logins
-RECOVERY_STEPS = (30, 60, 120, 240, 480, 900, 1800, 3600)
+#
+# Capped at a quarter of an hour. It went on to half an hour and then every hour, for ever:
+# a provider whose block lasts a day, or that starts it again whenever it is asked, was
+# asked once an hour all night and the round never moved. At the cap, after
+# GIVE_UP_AT_CAP more refusals it is left for the rest of the round, as a provider that is
+# down is (account_failures); the next round tries it again.
+RECOVERY_STEPS = (30, 60, 120, 240, 480, 900)
+GIVE_UP_AT_CAP = 4
+# A provider that says how long to wait (Retry-After) is taken at its word -- but not past
+# this, since a header can say anything
+LONGEST_RETRY_AFTER = 6 * 3600
+# A refusal after this many times the short limit learned is not that limit: the checks
+# were keeping to it. It is a second, longer one -- per hour or per day -- which a
+# provider can have beside the first ("8 streams every 2 min" and then refused after 140).
+# Learned as a second limit, and the checks keep under both.
+LONG_LIMIT_FACTOR = 2
 # What is learned is used with room to spare, for viewers zapping meanwhile
 LIMIT_MARGIN = 0.8
 # How many streams of ours have to have gone in before a refusal can teach us anything.
@@ -721,8 +736,13 @@ class _Budget:
         return max(0.0, float(self.state.get("next_try", 0)) - time.time())
 
     def wait(self):
-        """Seconds until one more stream may be opened without going over the limit."""
-        limit, window = self.state.get("limit"), self.state.get("window")
+        """Seconds until one more stream may be opened without going over either limit."""
+        return max(
+            self._wait_for(self.state.get("limit"), self.state.get("window")),
+            self._wait_for(self.state.get("long_limit"), self.state.get("long_window")),
+        )
+
+    def _wait_for(self, limit, window):
         if not limit or not window:
             return 0.0
         now = time.time()
@@ -731,7 +751,14 @@ class _Budget:
         first = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), now - window, "+inf", start=0, num=1, withscores=True)
         return max(1.0, (first[0][1] + window - now) if first else window)
 
-    def hit(self):
+    @staticmethod
+    def _after(retry_after, step):
+        """How long until the next try: what the provider said, or the next step."""
+        if retry_after:
+            return min(float(retry_after), LONGEST_RETRY_AFTER)
+        return RECOVERY_STEPS[step]
+
+    def hit(self, retry_after=None):
         """The limit was reached: count what it took, and start finding out how long it lasts."""
         now = time.time()
         since = float(self.state.get("clear_since") or now - 3600)
@@ -739,16 +766,27 @@ class _Budget:
         first = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), since, "+inf", start=0, num=1, withscores=True)
         self.state.update(
             blocked_since=now, count=int(count), span=(now - first[0][1]) if first else 0.0,
-            step=0, next_try=now + RECOVERY_STEPS[0], v=LIMITS_VERSION,
+            step=0, at_cap=0, next_try=now + self._after(retry_after, 0), v=LIMITS_VERSION,
         )
         self._save()
-        logger.info(f"Stream Check: {self.name} refused after {count} streams; finding out how long for")
+        told = f" (it said to wait {int(retry_after)} s)" if retry_after else ""
+        logger.info(f"Stream Check: {self.name} refused after {count} streams; finding out how long for{told}")
 
-    def still_blocked(self):
-        step = min(int(self.state.get("step", 0)) + 1, len(RECOVERY_STEPS) - 1)
+    def still_blocked(self, retry_after=None):
+        last = len(RECOVERY_STEPS) - 1
+        was = int(self.state.get("step", 0))
+        step = min(was + 1, last)
+        at_cap = int(self.state.get("at_cap", 0)) + (1 if was == last else 0)
         # When it last said no, which is the only end of the block we actually know
-        self.state.update(step=step, next_try=time.time() + RECOVERY_STEPS[step], last_no=time.time())
+        self.state.update(
+            step=step, at_cap=at_cap, next_try=time.time() + self._after(retry_after, step),
+            last_no=time.time(),
+        )
         self._save()
+
+    def given_up(self):
+        """Refused at the longest wait often enough: left for the rest of the round."""
+        return int(self.state.get("at_cap", 0)) >= GIVE_UP_AT_CAP
 
     def _not_a_limit(self, count, window):
         """Why what just happened cannot be what the provider allows, or "" when it can."""
@@ -785,9 +823,15 @@ class _Budget:
             said_no_last = float(self.state.get("last_no") or blocked_since)
             count = int(self.state.get("count") or 1)
             window = int(float(self.state.get("span") or 0) + max(0.0, said_no_last - blocked_since) + 0.999)
-            if self.state.get("limit") and count <= int(self.state["limit"]):
+            short = int(self.state.get("limit") or 0)
+            # Refused after far more than the short limit, which the checks were keeping
+            # to: a second, longer limit, learned beside the first rather than over it
+            long_one = bool(short) and count > LONG_LIMIT_FACTOR * short
+            prefix = "long_" if long_one else ""
+            known = int(self.state.get(f"{prefix}limit") or 0)
+            if known and count <= known:
                 # Hit even under what was learned: the provider allows less than it seemed
-                count = int(self.state["limit"])
+                count = known
             why_not = self._not_a_limit(count, window)
             if why_not:
                 logger.info(
@@ -796,14 +840,15 @@ class _Budget:
                 )
             else:
                 learned = max(1, int(count * LIMIT_MARGIN))
-                self.state.update(
-                    limit=learned, window=window, how="learned", at=_now(), v=LIMITS_VERSION,
-                )
+                self.state.update({
+                    f"{prefix}limit": learned, f"{prefix}window": window,
+                    "how": "learned", "at": _now(), "v": LIMITS_VERSION,
+                })
                 logger.info(
                     f"Stream Check: {self.name} allows about {count} streams every "
-                    f"{window // 60} min; keeping to {learned}"
+                    f"{window // 60} min{' as well' if long_one else ''}; keeping to {learned}"
                 )
-        for field in ("blocked_since", "count", "span", "step", "next_try", "last_no"):
+        for field in ("blocked_since", "count", "span", "step", "at_cap", "next_try", "last_no"):
             self.state.pop(field, None)
         self.state["clear_since"] = now
         self._save()
@@ -812,7 +857,13 @@ class _Budget:
         if self.state.get("blocked_since"):
             return f"hit its limit after {self.state.get('count')} streams; finding out how long it lasts"
         if self.state.get("limit"):
-            return f"allows {self.state['limit']} streams every {max(1, int(self.state['window']) // 60)} min ({self.state.get('how')})"
+            said = f"allows {self.state['limit']} streams every {max(1, int(self.state['window']) // 60)} min"
+            if self.state.get("long_limit"):
+                said += (
+                    f" and {self.state['long_limit']} every "
+                    f"{max(1, int(self.state['long_window']) // 60)} min"
+                )
+            return f"{said} ({self.state.get('how')})"
         return ""
 
 
@@ -1321,6 +1372,25 @@ def _hls_segment(session, url, text, headers, deadline, should_stop, depth=0):
     return urljoin(url, uris[-1])
 
 
+def _retry_after(value):
+    """A Retry-After header as seconds from now: a number, or a date; None when it is neither."""
+    if not value:
+        return None
+    value = str(value).strip()
+    if value.isdigit():
+        return int(value) or None
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        seconds = (when - datetime.now(timezone.utc)).total_seconds()
+        return int(seconds) if seconds > 0 else None
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
 def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0,
           frozen_confirm_seconds=0, done_reading=None):
     """
@@ -1371,6 +1441,9 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
             said = _said(data)
             result["reason"] = f"The provider answered HTTP {response.status_code}" + (f": {said}" if said else "")
             result["refused"] = response.status_code in REFUSED_STATUS
+            # How long it wants to be left alone, when it says: the one thing a provider
+            # can tell us about its limit rather than us guessing
+            result["retry_after"] = _retry_after(response.headers.get("Retry-After"))
             result["transient"] = response.status_code in TRANSIENT_STATUS
             return result
         kind = (response.headers.get("Content-Type") or "").lower()
@@ -2401,7 +2474,20 @@ def run(redis_client, only=None, batch_seconds=None):
                     if found in ("busy", "stopped") or found is None:
                         return
                     if not found["ok"]:
-                        budget.still_blocked()
+                        budget.still_blocked(found.get("retry_after"))
+                        if budget.given_up():
+                            # Refused at the longest wait, again and again: left for the
+                            # rest of the round, as a provider that is down is
+                            for account_id in {s.m3u_account_id for s in streams}:
+                                _unavailable(
+                                    redis_client, round_, account_id,
+                                    account_of.get(account_id).name if account_of.get(account_id) else budget.name,
+                                    f"still at its limit after {GIVE_UP_AT_CAP} tries a quarter of an hour apart",
+                                    lock,
+                                )
+                                given_up.add(account_id)
+                            set_status(entry, "given up", "still at its limit; tried again next round")
+                            return
                         rest("resting", budget.describe(), budget.resting())
                         return
                     budget.recovered()
@@ -2479,7 +2565,7 @@ def run(redis_client, only=None, batch_seconds=None):
                                 return
                             if other is not None and other.get("refused"):
                                 # Both refused: the provider will not give any. Its limit.
-                                budget.hit()
+                                budget.hit(outcome.get("retry_after") or other.get("retry_after"))
                                 rest("resting", f"{budget.describe()} ({outcome['reason']})", budget.resting())
                                 return
                             if other is not None:
