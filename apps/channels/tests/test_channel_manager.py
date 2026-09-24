@@ -961,6 +961,18 @@ class JudgingGuidesTests(TestCase):
         # ...and a spelling is still the same word
         self.assertEqual(channel_manager._alike(["dreamworks"], ["dreamwork"]), 100)
 
+    def test_a_short_word_with_a_letter_more_is_another_word(self):
+        """
+        "┃CA EN┃ AMI TV" was given the guide of WAMI-DT, a Miami call sign, at a hundred
+        per cent: "ami" and "wami" are 86 % alike, which was near enough for a spelling.
+        """
+        for mine, theirs in (("ami", "wami"), ("abc", "wabc"), ("cnn", "cnnx"), ("fox", "foxs")):
+            self.assertEqual(channel_manager._alike([mine], [theirs]), 0, (mine, theirs))
+        score, _, _ = self.judge("┃CA EN┃ AMI TV", "WAMI-DT", "467056", country="ca")
+        self.assertEqual(score, 0)
+        # A long word's spelling still is one
+        self.assertEqual(channel_manager._alike(["bravo", "discovery"], ["bravos", "discovry"]), 100)
+
     def test_letters_and_digits_stuck_together_are_two_words(self):
         self.assertEqual(channel_manager.guide_words("BBC1"), ["bbc", "1"])
         score, tier, _ = self.judge("┃UK┃ BBC ONE", "BBC1", "bbc1.uk", country="gb")

@@ -1005,6 +1005,12 @@ def _names_in(words):
 # How alike two words have to be to count as the same word: enough for a spelling or a
 # plural, not enough for a different name
 SAME_WORD = 85
+# ...and only between words this long. One letter more on a short word is a different
+# word, not a spelling of it, and short words are mostly the ones that say which channel
+# a name is: "AMI" against "WAMI" is 86 % alike, and "┃CA EN┃ AMI TV" was given the
+# Miami call sign WAMI-DT's guide at a hundred per cent -- "ABC" and "WABC", "CNN" and
+# "CNNX" the same. Below this they have to be the same word.
+SAME_WORD_FROM = 5
 
 
 def _alike(mine, theirs):
@@ -1033,7 +1039,12 @@ def _alike(mine, theirs):
         for index, other in enumerate(theirs):
             if index in taken:
                 continue
-            how = fuzz.ratio(word, other)
+            if word == other:
+                how = 100
+            elif min(len(word), len(other)) < SAME_WORD_FROM:
+                continue
+            else:
+                how = fuzz.ratio(word, other)
             if how > best:
                 best, at = how, index
         if at is not None and best >= SAME_WORD:
