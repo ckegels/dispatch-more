@@ -37,6 +37,8 @@ const Guide = ({
   onRemove,
   onGrab,
   onMakeSource,
+  readyMade = [],
+  onAddReadyMade,
   running,
   busy,
 }) => {
@@ -165,6 +167,54 @@ const Guide = ({
             </Button>
           </Group>
         </SimpleGrid>
+
+        {/* Some sites are somebody's finished XMLTV, which the grabber downloads and
+            reads back through a parser that keeps a title, a description and little
+            else. Pointed at directly, the file keeps its episode numbers, ratings and
+            the rest -- so where a guide's channels come from one, it says so. */}
+        {readyMade.length > 0 && (
+          <Alert color="blue" variant="light" title="Part of this is a finished guide already">
+            <Stack gap={6}>
+              <Text size="xs">
+                {readyMade.length === 1 ? 'This file is' : 'These files are'} what the
+                grabber reads for these channels, and it keeps the titles, descriptions and
+                little more: season and episode, new or repeat and ratings, where the file
+                has them, are left out. Added as an
+                EPG source of its own, Dispatcharr reads all of it and refreshes it itself.
+                Its channels are named the way the file names them, so match them to yours
+                on the Guides tab.
+              </Text>
+              {readyMade.map((one) => {
+                const already = epgSources.find((source) => source.url === one.url);
+                return (
+                  <Group key={one.url} gap="xs" wrap="wrap" justify="space-between">
+                    <Text size="xs" style={{ wordBreak: 'break-all' }}>
+                      <Text span size="xs" fw={500}>
+                        {one.site}
+                      </Text>{' '}
+                      · {one.channels} channel{one.channels === 1 ? '' : 's'} · {one.url}
+                    </Text>
+                    {already ? (
+                      <Badge size="xs" variant="light" color="teal">
+                        Already a source: {already.name}
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        disabled={busy}
+                        aria-label={`Add ${one.url} as an EPG source`}
+                        onClick={() => onAddReadyMade(one)}
+                      >
+                        Add as an EPG source
+                      </Button>
+                    )}
+                  </Group>
+                );
+              })}
+            </Stack>
+          </Alert>
+        )}
 
         {/* The grabber's own options. Left empty is left to the grabber, which is the
             right answer for most of them: a site's own number of days is usually the
@@ -457,6 +507,23 @@ const EpgGrabberTable = () => {
     }
   };
 
+  // A finished guide made a source of its own, named after where it is on its site
+  const addReadyMade = async (one) => {
+    setError(null);
+    try {
+      const path = one.url.split('/').slice(3).join('/');
+      const made = await API.addEpgGrabberReadyMade(one.url, `${one.site} ${path}`);
+      setNotice(
+        made.made
+          ? `Made the EPG source "${made.name}". Dispatcharr is fetching it now.`
+          : `"${made.name}" already reads that file.`
+      );
+      await load(true);
+    } catch (e) {
+      setError(e?.body?.error || 'That EPG source could not be made.');
+    }
+  };
+
   if (loading && !page) {
     return <LoadingOverlay visible />;
   }
@@ -690,6 +757,8 @@ const EpgGrabberTable = () => {
                     onRemove={setRemoving}
                     onGrab={grab}
                     onMakeSource={makeSource}
+                    readyMade={page?.ready_made?.[job.id] || []}
+                    onAddReadyMade={addReadyMade}
                   />
                 ))}
                 <Group>

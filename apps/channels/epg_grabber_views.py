@@ -34,6 +34,11 @@ def epg_grabber_page(request):
         "channel_files": epg_grabber.channel_files(settings),
         "running": epg_grabber.is_running(redis_client),
         "progress": epg_grabber.progress(redis_client),
+        # The finished XMLTV files behind each guide's channels, where there are any:
+        # pointed at directly they keep what the grabber's parser for them throws away
+        "ready_made": {
+            job["id"]: epg_grabber.ready_made(job, settings) for job in settings["jobs"]
+        },
         # Which of Dispatcharr's EPG sources a guide can be handed to
         "epg_sources": [
             {"id": one.id, "name": one.name, "file_path": one.file_path or "", "url": one.url or ""}
@@ -122,3 +127,19 @@ def epg_grabber_source(request):
         source.save(update_fields=["file_path"])
     logger.info(f"EPG grabber: {'made' if made else 'pointed'} EPG source {name} at {output}")
     return JsonResponse({"id": source.id, "name": source.name, "made": made})
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def epg_grabber_ready_made(request):
+    """
+    Make an EPG source of a file the grabber would only have read back: fetched from its
+    URL and refreshed on its own, the way Dispatcharr's own EPG page would make it.
+    """
+    try:
+        made = epg_grabber.add_ready_made(
+            str(request.data.get("url") or ""), str(request.data.get("name") or "")
+        )
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    return JsonResponse(made)

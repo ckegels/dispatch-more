@@ -374,6 +374,127 @@ def make_list(from_path, keeping, leaving_out="", into=None, write=False, show=1
     return found
 
 
+# ── Guides that are a file already ───────────────────────────────────────────
+
+
+# Sites the grabber "scrapes" by downloading somebody's finished XMLTV and reading it back,
+# and where that file is for one of their channels (by its site_id). Grabbing one of these
+# is a step backwards: the site's parser keeps what it asks for -- for i.mjh.nz a title, a
+# description, categories and an icon -- and everything else the file had is gone. The
+# PBS file there holds S03E01, the season and episode, previously-shown and the rating for
+# WTTW; the guide the grabber makes out of it holds none of them. Pointed at directly,
+# Dispatcharr reads all of it, and refreshes it on its own.
+#
+# The paths are the ones each site's own config (sites/<site>/<site>.config.js) builds.
+def _before_hash(site_id):
+    return str(site_id or "").split("#")[0]
+
+
+READY_MADE = {
+    # PBS/all, Plex/us, PlutoTV/us, Roku/all, MeTV/epg... -- the gzipped one sits beside
+    # the plain one the config reads, and is a tenth of the size
+    "i.mjh.nz": lambda site_id: f"https://i.mjh.nz/{_before_hash(site_id)}.xml.gz",
+    # US_LOCALS1, US1, UK1...
+    "epgshare01.online": lambda site_id: (
+        f"https://epgshare01.online/epgshare01/epg_ripper_{_before_hash(site_id)}.xml.gz"
+    ),
+    "nzxmltv.com": lambda site_id: f"https://nzxmltv.com/{_before_hash(site_id)}.xml",
+    "epg.iptvx.one": lambda site_id: "https://iptvx.one/epg/epg_noarch.xml.gz",
+    "epg.112114.xyz": lambda site_id: "https://epg.112114.xyz/pp.xml",
+    "epg.tmacaraibes.com": lambda site_id: "https://epg.tmacaraibes.com/Epg/xmltv.xml",
+    "app.tvufop.com.br": lambda site_id: "https://app.tvufop.com.br/epg/epg_tvufop_web.xml",
+}
+
+
+def ready_made(job, settings=None):
+    """
+    The finished XMLTV files behind a guide's channels, where there are any:
+    [{"site", "url", "channels"}], one per file.
+
+    From the channels the guide names -- its channel list, or every list of the sites it
+    names -- so the page can say, of this guide, "this part of it is a file already".
+    """
+    settings = settings or load_settings()
+    folder = settings.get("folder") or ""
+    paths = []
+    if job.get("channels"):
+        path = job["channels"]
+        paths.append(path if os.path.isabs(path) else os.path.join(folder, path))
+    else:
+        for site in str(job.get("sites") or "").split(","):
+            site = site.strip()
+            where = os.path.join(folder, "sites", site)
+            if site in READY_MADE and os.path.isdir(where):
+                paths += [
+                    os.path.join(where, name) for name in sorted(os.listdir(where))
+                    if name.endswith(".channels.xml")
+                ]
+    counted = {}
+    for path in paths:
+        for site, url, many in _files_behind(path):
+            key = (site, url)
+            counted[key] = counted.get(key, 0) + many
+    return [
+        {"site": site, "url": url, "channels": many}
+        for (site, url), many in sorted(counted.items())
+    ]
+
+
+_BEHIND = {}
+
+
+def _files_behind(path):
+    """
+    ((site, url, how many channels), ...) for one channel list. Kept while the file is
+    unchanged: the page asks every few seconds during a grab, and TV Passport's list alone
+    is sixteen thousand channels.
+    """
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return ()
+    held = _BEHIND.get(path)
+    if held and held[0] == stamp:
+        return held[1]
+    from lxml import etree
+
+    counted = {}
+    try:
+        for _, element in etree.iterparse(path, events=("end",), tag="channel", recover=True):
+            site = element.get("site") or ""
+            if site in READY_MADE:
+                url = READY_MADE[site](element.get("site_id"))
+                counted[(site, url)] = counted.get((site, url), 0) + 1
+            element.clear()
+    except Exception as e:
+        logger.debug(f"EPG grabber: could not look through {path}: {e}")
+    found = tuple((site, url, many) for (site, url), many in counted.items())
+    _BEHIND[path] = (stamp, found)
+    return found
+
+
+def add_ready_made(url, name):
+    """
+    Make an ordinary XMLTV EPG source of a finished file, the way Dispatcharr's own EPG
+    page would: fetched from its URL and refreshed on its own schedule. Its own signals
+    fetch it the moment it is made.
+    """
+    from apps.epg.models import EPGSource
+
+    url = str(url or "").strip()
+    if not url.startswith(("https://", "http://")) or any(c.isspace() for c in url):
+        raise ValueError("That is not a web address")
+    source = EPGSource.objects.filter(url=url).first()
+    if source:
+        return {"id": source.id, "name": source.name, "made": False}
+    name = (name or "").strip() or url.rsplit("/", 1)[-1]
+    if EPGSource.objects.filter(name=name).exists():
+        name = f"{name} ({url.split('/')[2]})"
+    source = EPGSource.objects.create(name=name, source_type="xmltv", url=url, is_active=True)
+    logger.info(f"EPG grabber: made EPG source {name} for {url}")
+    return {"id": source.id, "name": source.name, "made": True}
+
+
 # ── Running it ───────────────────────────────────────────────────────────────
 
 

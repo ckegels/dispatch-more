@@ -106,6 +106,7 @@ urlpatterns = [
     path('epg-grabber/run/', epg_grabber_views.epg_grabber_run, name='epg_grabber_run'),
     path('epg-grabber/channel-list/', epg_grabber_views.epg_grabber_channel_list, name='epg_grabber_channel_list'),
     path('epg-grabber/source/', epg_grabber_views.epg_grabber_source, name='epg_grabber_source'),
+    path('epg-grabber/ready-made/', epg_grabber_views.epg_grabber_ready_made, name='epg_grabber_ready_made'),
     path('stream-check/', stream_check_views.stream_check_overview, name='stream_check_overview'),
     path('stream-check/run/', stream_check_views.stream_check_run, name='stream_check_run'),
     path('stream-check/stop/', stream_check_views.stream_check_stop, name='stream_check_stop'),

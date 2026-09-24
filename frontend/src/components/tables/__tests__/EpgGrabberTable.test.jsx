@@ -15,6 +15,7 @@ vi.mock('../../../api', () => ({
     stopEpgGrabber: vi.fn(),
     makeEpgGrabberSource: vi.fn(),
     makeEpgGrabberList: vi.fn(),
+    addEpgGrabberReadyMade: vi.fn(),
   },
 }));
 
@@ -220,5 +221,72 @@ describe('EpgGrabberTable', () => {
     await screen.findByDisplayValue('PBS (TV Passport)');
     fireEvent.click(screen.getByRole('button', { name: /Grab now/ }));
     expect(await screen.findByText('A grab is already running')).toBeInTheDocument();
+  });
+
+  describe('a guide whose channels are a finished file already', () => {
+    const pbs = 'https://i.mjh.nz/PBS/all.xml.gz';
+    const locals = 'https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz';
+    const withFiles = (sources = page.epg_sources) => ({
+      ...page,
+      epg_sources: sources,
+      ready_made: {
+        pbs: [
+          { site: 'i.mjh.nz', url: pbs, channels: 146 },
+          { site: 'epgshare01.online', url: locals, channels: 12 },
+        ],
+      },
+    });
+
+    it('says so, and makes one an EPG source of its own', async () => {
+      API.getEpgGrabber.mockResolvedValue(withFiles());
+      API.addEpgGrabberReadyMade.mockResolvedValue({
+        id: 9, name: 'i.mjh.nz PBS/all.xml.gz', made: true,
+      });
+      draw();
+      expect(
+        await screen.findByText('Part of this is a finished guide already')
+      ).toBeInTheDocument();
+      expect(screen.getByText(/season and episode/)).toBeInTheDocument();
+
+      fireEvent.click(
+        screen.getByRole('button', { name: `Add ${pbs} as an EPG source` })
+      );
+      await waitFor(() =>
+        expect(API.addEpgGrabberReadyMade).toHaveBeenCalledWith(
+          pbs,
+          'i.mjh.nz PBS/all.xml.gz'
+        )
+      );
+      expect(
+        await screen.findByText(/Made the EPG source "i.mjh.nz PBS\/all.xml.gz"/)
+      ).toBeInTheDocument();
+    });
+
+    it('and says which source already reads one, rather than offering it twice', async () => {
+      API.getEpgGrabber.mockResolvedValue(
+        withFiles([
+          ...page.epg_sources,
+          { id: 9, name: 'PBS from i.mjh.nz', file_path: '', url: pbs },
+        ])
+      );
+      draw();
+      expect(
+        await screen.findByText('Already a source: PBS from i.mjh.nz')
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: `Add ${pbs} as an EPG source` })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: `Add ${locals} as an EPG source` })
+      ).toBeInTheDocument();
+    });
+
+    it('and says nothing about a guide that is scraped', async () => {
+      draw();
+      await screen.findByDisplayValue('PBS (TV Passport)');
+      expect(
+        screen.queryByText('Part of this is a finished guide already')
+      ).not.toBeInTheDocument();
+    });
   });
 });

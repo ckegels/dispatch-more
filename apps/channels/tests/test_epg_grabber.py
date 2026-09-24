@@ -525,3 +525,101 @@ class ViewTests(_Setup):
             user=User.objects.create_user(username="v", password="x", user_level=0)
         )
         self.assertEqual(viewer.get("/api/channels/epg-grabber/").status_code, 403)
+
+
+MJH = """<?xml version="1.0" encoding="UTF-8"?>
+<channels>
+  <channel site="i.mjh.nz" site_id="PBS/all#WTTW" lang="en" xmltv_id="WTTW111.us@HD">WTTWDT</channel>
+  <channel site="i.mjh.nz" site_id="PBS/all#WGBH" lang="en" xmltv_id="">WGBH</channel>
+  <channel site="i.mjh.nz" site_id="MeTV/epg#metv" lang="en" xmltv_id="">MeTV</channel>
+  <channel site="tvpassport.com" site_id="pbs-wttw-chicago-il/1832" lang="en" xmltv_id="">PBS (WTTW) Chicago, IL</channel>
+  <channel site="epgshare01.online" site_id="US_LOCALS1#WTTW-DT.us_locals1" lang="en" xmltv_id="">WTTW</channel>
+</channels>
+"""
+
+
+class ReadyMadeTests(_Setup):
+    """
+    Some sites are somebody's finished XMLTV, which the grabber downloads and reads back
+    through a parser that keeps a title and a description. i.mjh.nz's PBS file holds the
+    season and episode, previously-shown and the rating; what the grabber makes of it
+    holds none of them -- so the tab says where the file is instead.
+    """
+
+    def _list(self, text, name="mine.channels.xml"):
+        path = os.path.join(self.folder, "data", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write(text)
+        return path
+
+    def test_the_files_behind_a_channel_list_are_named_one_each(self):
+        settings = self._settings(job={"channels": self._list(MJH)})
+        found = epg_grabber.ready_made(settings["jobs"][0], settings)
+        self.assertEqual(
+            found,
+            [
+                {"site": "epgshare01.online",
+                 "url": "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz",
+                 "channels": 1},
+                {"site": "i.mjh.nz", "url": "https://i.mjh.nz/MeTV/epg.xml.gz", "channels": 1},
+                {"site": "i.mjh.nz", "url": "https://i.mjh.nz/PBS/all.xml.gz", "channels": 2},
+            ],
+        )
+
+    def test_a_list_of_sites_that_scrape_has_none(self):
+        # TV Passport is scraped page by page: there is no file to point at instead
+        settings = self._settings()
+        self.assertEqual(epg_grabber.ready_made(settings["jobs"][0], settings), [])
+
+    def test_a_guide_naming_the_site_is_looked_for_in_the_sites_own_lists(self):
+        where = os.path.join(self.folder, "sites", "i.mjh.nz")
+        os.makedirs(where, exist_ok=True)
+        open(os.path.join(where, "i.mjh.nz_pbs.channels.xml"), "w").write(MJH)
+        settings = self._settings(job={"channels": "", "sites": "i.mjh.nz,tvpassport.com"})
+        urls = [one["url"] for one in epg_grabber.ready_made(settings["jobs"][0], settings)]
+        self.assertIn("https://i.mjh.nz/PBS/all.xml.gz", urls)
+
+    def test_a_list_written_again_is_looked_at_again(self):
+        path = self._list(MJH)
+        settings = self._settings(job={"channels": path})
+        self.assertEqual(len(epg_grabber.ready_made(settings["jobs"][0], settings)), 3)
+        open(path, "w").write(PASSPORT)
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        self.assertEqual(epg_grabber.ready_made(settings["jobs"][0], settings), [])
+
+    def test_the_tab_is_told_and_can_make_it_a_source(self):
+        api = APIClient()
+        api.force_authenticate(
+            user=User.objects.create_user(username="admin", password="x", user_level=10)
+        )
+        self._settings(job={"channels": self._list(MJH)})
+        with mock.patch("shutil.which", return_value="/usr/bin/npm"):
+            data = api.get("/api/channels/epg-grabber/").json()
+        self.assertIn(
+            "https://i.mjh.nz/PBS/all.xml.gz",
+            [one["url"] for one in data["ready_made"]["pbs"]],
+        )
+
+        url = "https://i.mjh.nz/PBS/all.xml.gz"
+        with mock.patch("apps.epg.signals.refresh_epg_data.delay") as fetching:
+            made = api.post(
+                "/api/channels/epg-grabber/ready-made/",
+                {"url": url, "name": "i.mjh.nz PBS/all.xml.gz"}, format="json",
+            ).json()
+        self.assertTrue(made["made"])
+        source = EPGSource.objects.get(id=made["id"])
+        # An ordinary URL source, the way the EPG page makes one, fetched straight away
+        self.assertEqual((source.source_type, source.url, source.is_active), ("xmltv", url, True))
+        self.assertFalse(source.file_path)
+        fetching.assert_called_once_with(source.id)
+
+        # Asked again, it is the same source rather than a second one fetching the same file
+        again = api.post(
+            "/api/channels/epg-grabber/ready-made/", {"url": url}, format="json"
+        ).json()
+        self.assertEqual((again["id"], again["made"]), (source.id, False))
+        self.assertEqual(EPGSource.objects.filter(url=url).count(), 1)
+
+    def test_only_a_web_address_is_made_a_source(self):
+        with self.assertRaises(ValueError):
+            epg_grabber.add_ready_made("file:///etc/passwd", "no")

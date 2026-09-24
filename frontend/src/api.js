@@ -3082,6 +3082,15 @@ export default class API {
     });
   }
 
+  static async addEpgGrabberReadyMade(url, name) {
+    // A finished XMLTV file the grabber would only have read back, made an EPG source of
+    // its own: fetched from its URL, the way the EPG page would make it
+    return await request(`${host}/api/channels/epg-grabber/ready-made/`, {
+      method: 'POST',
+      body: { url, name },
+    });
+  }
+
   static async getStreamCheck(show = 'problems', keep = []) {
     // The channels with a stream that does not play, the parked streams, and how a run is
     // going. keep: channels to list whatever the view says, being ones just acted on.
