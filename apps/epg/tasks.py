@@ -2081,6 +2081,18 @@ def _delete_orphaned_epg_programs(epg_source):
         .exclude(id__in=currently_mapped)
         .values_list('id', flat=True)
     )
+    # Guides read from the Guides page are being chosen between, and have no channel yet
+    # because that is what is being decided. Deleting their programmes here undid the
+    # read at the next refresh. Nothing is kept for anyone who has not read one there.
+    try:
+        from apps.channels.channel_manager import kept_after_reading
+
+        being_chosen = kept_after_reading()
+    except Exception as e:
+        logger.debug(f"Could not ask which guides are being chosen between: {e}")
+        being_chosen = set()
+    if being_chosen:
+        unmapped_epg_ids = [i for i in unmapped_epg_ids if i not in being_chosen]
     if not unmapped_epg_ids:
         return 0
     orphaned_count = ProgramData.objects.filter(epg_id__in=unmapped_epg_ids).delete()[0]

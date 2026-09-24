@@ -1496,6 +1496,43 @@ def reads():
     return still
 
 
+# How long a guide read from the Guides page keeps its programmes. Dispatcharr keeps
+# programmes only for guides a channel uses, and every refresh of a source deletes the rest
+# (apps.epg.tasks._delete_orphaned_epg_programs) -- which is every guide being suggested,
+# since a suggestion is a guide no channel is on yet. So a read lasted until the next
+# refresh, and the page went back to "nothing on" for every suggestion it had just read.
+# Long enough to decide in, short enough that a guide nobody took does not linger: what a
+# read holds is days of programmes, and after this the next refresh clears it as usual.
+READ_KEPT_DAYS = 3
+
+
+def kept_after_reading():
+    """
+    The guides read from here in the last READ_KEPT_DAYS that found programmes: the ones
+    Dispatcharr's clean-up is asked to leave alone. Empty -- and so exactly stock -- for
+    anybody who has never read a guide from the Guides page.
+    """
+    from datetime import datetime, timedelta
+
+    from django.utils import timezone
+
+    from core.models import CoreSettings
+
+    row = CoreSettings.objects.filter(key=READS_KEY).first()
+    kept = row.value if row and isinstance(row.value, dict) else {}
+    since = timezone.now() - timedelta(days=READ_KEPT_DAYS)
+    found = set()
+    for key, what in kept.items():
+        if not key.isdigit() or not isinstance(what, dict) or not what.get("found"):
+            continue
+        try:
+            if datetime.fromisoformat(what.get("at") or "") >= since:
+                found.add(int(key))
+        except (TypeError, ValueError):
+            continue
+    return found
+
+
 def note_read(found, why=""):
     """
     Write down what a read of each of these guides came back with: {epg id: how many}.

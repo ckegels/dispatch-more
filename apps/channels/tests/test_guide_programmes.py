@@ -179,3 +179,61 @@ class ReadGuideProgrammesTests(TestCase):
         self.assertTrue(again.called)
         self.assertIn("still to come", answer)
         self.assertEqual(ProgramData.objects.count(), 0)
+
+
+class KeptAfterReadingTests(TestCase):
+    """
+    Dispatcharr deletes the programmes of every guide no channel uses each time a source
+    refreshes -- every guide being suggested. A read from the Guides page lasted until the
+    next refresh, and the page went back to "nothing on" for what it had just read.
+    """
+
+    def setUp(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        self.source = EPGSource.objects.create(name="xmltvfr.fr", source_type="xmltv")
+        self.read = EPGData.objects.create(tvg_id="TF1.fr", name="TF1", epg_source=self.source)
+        self.not_read = EPGData.objects.create(tvg_id="M6.fr", name="M6", epg_source=self.source)
+        moment = timezone.now()
+        for guide in (self.read, self.not_read):
+            ProgramData.objects.create(
+                epg=guide, title="Le journal",
+                start_time=moment - timedelta(minutes=10), end_time=moment + timedelta(minutes=20),
+            )
+
+    def _refresh_cleans_up(self):
+        from apps.epg.tasks import _delete_orphaned_epg_programs
+
+        _delete_orphaned_epg_programs(self.source)
+        return set(ProgramData.objects.values_list("epg__name", flat=True))
+
+    def test_a_guide_read_from_the_page_keeps_its_programmes_through_a_refresh(self):
+        from apps.channels import channel_manager
+
+        channel_manager.note_read({self.read.id: 1})
+        self.assertEqual(self._refresh_cleans_up(), {"TF1"})
+
+    def test_nothing_is_kept_for_anybody_who_has_not_read_one(self):
+        # Exactly stock
+        self.assertEqual(self._refresh_cleans_up(), set())
+
+    def test_a_read_that_found_nothing_keeps_nothing(self):
+        from apps.channels import channel_manager
+
+        channel_manager.note_read({self.read.id: 0})
+        self.assertEqual(self._refresh_cleans_up(), set())
+
+    def test_and_a_read_days_old_is_cleared_as_usual(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        from django.utils import timezone
+
+        from apps.channels import channel_manager
+
+        long_ago = timezone.now() - timedelta(days=channel_manager.READ_KEPT_DAYS, hours=1)
+        with patch("django.utils.timezone.now", return_value=long_ago):
+            channel_manager.note_read({self.read.id: 1})
+        self.assertEqual(self._refresh_cleans_up(), set())
