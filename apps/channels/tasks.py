@@ -4583,16 +4583,29 @@ def stream_check_tick():
     from core.utils import RedisClient
 
     from .stream_check import (
-        QUEUED_KEY, RUN_KEY, current_round, due, in_window, load_settings, rechecks_due, start_round,
+        QUEUED_KEY, ROUND_KEY, RUN_KEY, current_round, due, full_round_due, in_window,
+        load_settings, never_checked, rechecks_due, start_round, tried_new,
     )
 
     redis_client = RedisClient.get_client()
-    if current_round(redis_client) is not None:
+    going = current_round(redis_client)
+    if going is not None:
         if redis_client.exists(RUN_KEY):
             return "a batch is running"
         if redis_client.exists(QUEUED_KEY):
             # The next batch is already queued; a second would be a second chain
             return "the next batch is queued"
+        # A recheck of a few failing streams held the round for as long as it waited --
+        # which, while something is always playing, is for ever -- so the full round
+        # never began and nothing new was looked at. The full round takes over: it looks
+        # at those streams too. Only between batches, never in the middle of one.
+        settings = load_settings()
+        if (
+            going.get("kind") == "recheck" and settings.get("enabled")
+            and in_window(settings) and full_round_due(settings)
+        ):
+            redis_client.delete(ROUND_KEY)
+            start_round(redis_client)
         return run_stream_check(None)
     settings = load_settings()
     if not settings.get("enabled"):
@@ -4600,10 +4613,14 @@ def stream_check_tick():
     if due(settings, redis_client):
         start_round(redis_client)
         return run_stream_check(None)
-    # Between full rounds, the failing streams due to be looked at again
-    recheck = rechecks_due(settings)
-    if recheck and in_window(settings):
-        start_round(redis_client, only=recheck)
+    # Between full rounds, the failing streams due to be looked at again -- and the streams
+    # nobody has looked at yet, so new channels are not left until the next full round
+    recheck = set(rechecks_due(settings))
+    new = never_checked(settings, redis_client) if in_window(settings) else []
+    if (recheck or new) and in_window(settings):
+        if new:
+            tried_new(redis_client, settings)
+        start_round(redis_client, only=sorted(recheck | set(new)))
         return run_stream_check(None)
     return "not due"
 

@@ -2817,6 +2817,45 @@ def rechecks_due(settings, now=None):
     return sorted(int(i) for i, record in failing.items() if record.get("checked_at", "") < cutoff)
 
 
+# When streams nobody has looked at yet were last put in a round of their own. A stream on
+# a provider that is down stays unlooked-at, and without this every tick -- every few
+# minutes -- would begin another round for it and open another connection to that provider.
+NEW_TRIED_KEY = "stream-check:new-tried"
+
+
+def never_checked(settings, redis_client=None):
+    """
+    The streams on your channels that no check has ever looked at: new channels, new
+    streams on old ones. They used to wait for the next full round -- up to a day, and
+    longer while a recheck that could not start held the round -- so three hundred
+    channels added in the evening were not looked at by morning. They go into the rechecks
+    between full rounds instead, at most once every recheck_hours.
+    """
+    from .models import ChannelStream
+
+    if redis_client is not None and redis_client.exists(NEW_TRIED_KEY):
+        return []
+    links = ChannelStream.objects.filter(
+        stream__is_custom=False, stream__m3u_account__isnull=False,
+        stream__m3u_account__is_active=True,
+    )
+    groups = [int(g) for g in settings.get("channel_groups") or ()]
+    if groups:
+        links = links.filter(channel__channel_group_id__in=groups)
+    looked_at = load_results()["streams"]
+    ignored = {int(i) for i in load_ignored()}
+    return sorted(
+        i for i in set(links.values_list("stream_id", flat=True))
+        if str(i) not in looked_at and i not in ignored
+    )
+
+
+def tried_new(redis_client, settings):
+    """Streams never looked at were put in a round: not again for recheck_hours."""
+    hours = float(settings.get("recheck_hours") or 3)
+    redis_client.set(NEW_TRIED_KEY, "1", ex=int(hours * 3600))
+
+
 def after_playlist_refresh(account_id):
     """
     A provider's playlist was refreshed: its failing streams are to be looked at again, when
@@ -2886,6 +2925,15 @@ def due(settings, redis_client, now=None):
         return False
     if not in_window(settings, now):
         return False
+    return full_round_due(settings)
+
+
+def full_round_due(settings):
+    """
+    Whether every_hours have gone by since the last full round finished -- whatever else
+    is going on. due() also says no while any round exists, which is right for starting
+    one and wrong for asking whether a recheck is standing in the way of one.
+    """
     last = load_results()["last_run"].get("finished_at") or ""
     if not last:
         return True

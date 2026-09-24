@@ -1572,6 +1572,73 @@ class TickTests(_Setup):
             self.assertEqual(stream_check_tick(), "done")
 
 
+class NewStreamsTests(_Setup):
+    """
+    Three hundred channels added in the evening were not looked at: new streams waited for
+    the next full round, and a recheck of a few failing streams that could not start --
+    something was always playing -- held the round, so the full one never began.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        patcher = mock.patch("core.utils.RedisClient.get_client", return_value=self.redis)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        stream_check.save_settings({"enabled": True, "gap_seconds": 0})
+
+    def _full_round_just_finished(self):
+        stream_check._keep_last_run({"finished_at": stream_check._now(), "checked": 3, "total": 3})
+
+    def test_streams_nobody_has_looked_at_are_known(self):
+        found = stream_check.never_checked(stream_check.load_settings())
+        self.assertEqual(found, sorted([self.first.id, self.second.id, self.third.id]))
+
+    def test_they_are_looked_at_between_full_rounds_not_a_day_later(self):
+        from apps.channels.tasks import stream_check_tick
+
+        self._full_round_just_finished()
+        with mock.patch("apps.channels.tasks.run_stream_check") as running:
+            stream_check_tick()
+        round_ = stream_check.current_round(self.redis)
+        self.assertEqual(round_["kind"], "recheck")
+        self.assertEqual(sorted(round_["only"]), sorted([self.first.id, self.second.id, self.third.id]))
+        running.assert_called_once()
+
+    def test_but_not_again_every_few_minutes_when_they_cannot_be_looked_at(self):
+        from apps.channels.tasks import stream_check_tick
+
+        self._full_round_just_finished()
+        with mock.patch("apps.channels.tasks.run_stream_check"):
+            stream_check_tick()
+        # The round ended without looking at them -- a provider down, say
+        self.redis.delete(stream_check.ROUND_KEY)
+        with mock.patch("apps.channels.tasks.run_stream_check") as running:
+            self.assertEqual(stream_check_tick(), "not due")
+        running.assert_not_called()
+
+    def test_a_full_round_that_is_due_takes_over_a_waiting_recheck(self):
+        from apps.channels.tasks import stream_check_tick
+
+        # A recheck of one failing stream, waiting; and no full round for over a day
+        stream_check.start_round(self.redis, only=[self.second.id])
+        with mock.patch("apps.channels.tasks.run_stream_check") as running:
+            stream_check_tick()
+        round_ = stream_check.current_round(self.redis)
+        self.assertNotEqual(round_.get("kind"), "recheck")
+        self.assertEqual(round_["total"], 3)
+        running.assert_called_once()
+
+    def test_a_recheck_is_not_taken_over_when_no_full_round_is_due(self):
+        from apps.channels.tasks import stream_check_tick
+
+        self._full_round_just_finished()
+        stream_check.start_round(self.redis, only=[self.second.id])
+        with mock.patch("apps.channels.tasks.run_stream_check"):
+            stream_check_tick()
+        self.assertEqual(stream_check.current_round(self.redis)["kind"], "recheck")
+
+
 class ChainTests(_Setup):
     """Batches follow one another: never two chains, and a waiting round is tried again soon."""
 
@@ -1709,7 +1776,13 @@ class RecheckTests(_Setup):
     def test_the_tick_rechecks_only_the_failing_ones_and_leaves_the_full_run_as_it_was(self):
         from apps.channels.tasks import stream_check_tick
 
-        self._results(**{str(self.first.id): self._failed(4)})
+        # The others looked at lately and fine: a stream never looked at is rechecked too
+        # (NewStreamsTests), and this is about the failing ones
+        fine = {"ok": True, "checked_at": stream_check._now(), "failures": 0}
+        self._results(**{
+            str(self.first.id): self._failed(4),
+            str(self.second.id): dict(fine), str(self.third.id): dict(fine),
+        })
         last_run = stream_check.load_results()["last_run"]
         with mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
             self.assertEqual(stream_check_tick(), "done")
