@@ -277,6 +277,27 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
     };
   }, []);
 
+  // The question the list is showing now. A read follows its guides for minutes, asking
+  // again every few seconds, and asked what the window showed when the read began: a
+  // source picked -- or a search typed -- after pressing Read was overwritten every three
+  // seconds by the list from before, which is every source. It asks this instead, and an
+  // answer to a question that has changed since it was sent is not shown.
+  const question = useMemo(() => {
+    const wanted = search.trim();
+    return {
+      name: channel?.name || '',
+      tvg_id: channel?.epg?.tvg_id || '',
+      q: wanted,
+      current: held?.id ?? '',
+      source,
+      limit: wanted ? howMany : '',
+    };
+  }, [channel?.name, channel?.epg?.tvg_id, search, held?.id, source, howMany]);
+  const asking = useRef(question);
+  useEffect(() => {
+    asking.current = question;
+  }, [question]);
+
   // Reading a guide's programmes is a task on the server, so the answer is not the point
   // it comes back at: the list is asked again until they show up, and given up on after a
   // while rather than left turning for ever. What is still empty then is empty.
@@ -314,18 +335,13 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
         }
         let back = null;
         try {
-          // The same question the list is showing: the same source, and as many as
-          // are shown, or the list jumps back to the first page while it reads
-          const result = await API.getChannelManagerGuides({
-            name: channel?.name || '',
-            tvg_id: channel?.epg?.tvg_id || '',
-            q: search.trim(),
-            current: held?.id ?? '',
-            source,
-            limit: search.trim() ? howMany : '',
-          });
-          back = result?.guides || [];
-          setGuides(back);
+          const asked = asking.current;
+          const result = await API.getChannelManagerGuides(asked);
+          if (asked === asking.current && onScreen.current) {
+            back = result?.guides || [];
+            setGuides(back);
+            setTotal(result?.total || 0);
+          }
         } catch {
           // The next try asks again
         }
@@ -345,7 +361,7 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       }));
       setReadState({});
     },
-    [channel?.name, channel?.epg?.tvg_id, search, held?.id, source, howMany]
+    []
   );
 
   // The server puts what the channel has at the top of every answer, said the same way

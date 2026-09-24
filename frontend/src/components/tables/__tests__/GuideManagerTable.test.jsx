@@ -399,6 +399,62 @@ describe('GuideManagerTable', () => {
     );
   });
 
+  describe('a source picked while guides are being read', () => {
+    beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+    afterEach(() => vi.useRealTimers());
+
+    it('stays picked: the read does not put every source back', async () => {
+      API.getGuideMatching.mockResolvedValue({
+        matching: null,
+        sources: [
+          { id: 1, name: 'xmltv.at', active: true, holds: 10 },
+          { id: 2, name: 'xmltv.de', active: true, holds: 20 },
+        ],
+      });
+      const unread = {
+        id: 40, name: 'ORF 1 Unread', tvg_id: 'orf1.unread', source: 'xmltv.at',
+        how: 'name', programmes: 0, in_use: false,
+      };
+      const german = {
+        id: 30, name: 'ORF 1 DE', tvg_id: 'orf1.de', source: 'xmltv.de', how: 'name',
+        programmes: 5, in_use: true,
+      };
+      API.getChannelManagerGuides.mockImplementation(async ({ source }) => ({
+        guides: source === '2' ? [german] : [unread, german],
+      }));
+      // Still reading, for as long as the test looks
+      API.getChannelManagerReading.mockResolvedValue({
+        reading: { reading: true, stage: 'going through xmltv.at' },
+      });
+      draw();
+      await screen.findByText('┃AT┃ ORF 1');
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      );
+      fireEvent.click(
+        await screen.findByRole('button', {
+          name: 'Read the programmes of every guide shown',
+        })
+      );
+      await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalled());
+
+      // Picked while the read goes on
+      fireEvent.click(screen.getByRole('textbox', { name: 'From one source' }));
+      fireEvent.click(await screen.findByText('xmltv.de (20)'));
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Guide ORF 1 Unread')).not.toBeInTheDocument()
+      );
+
+      // The read asks again every three seconds; what it gets back is of xmltv.de
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(screen.getByLabelText('Guide ORF 1 DE')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Guide ORF 1 Unread')).not.toBeInTheDocument();
+      expect(API.getChannelManagerGuides).toHaveBeenLastCalledWith(
+        expect.objectContaining({ source: '2' })
+      );
+    });
+  });
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

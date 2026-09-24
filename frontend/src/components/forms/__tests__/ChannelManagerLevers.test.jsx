@@ -73,6 +73,14 @@ describe('ChannelManagerLevers', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('says a new provider group gives no new channels until it is picked', () => {
+    draw({ create_new: true, stream_groups: [] });
+    expect(
+      screen.getByText(/new channels then only come from the groups your channels already use/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/one a provider just added/)).toBeInTheDocument();
+  });
+
   it('warns before streams are removed', () => {
     draw({ replace_streams: true });
     expect(screen.getByText(/Removed streams are shown struck through/)).toBeInTheDocument();

@@ -112,7 +112,12 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
         <MultiSelect
           size="xs"
           label="Stream groups"
-          description="Which of the providers' groups to take streams from. None is every one."
+          description={
+            'Which of the providers\' groups to take streams from. None is every one ' +
+            'for your channels; new channels then only come from the groups your ' +
+            'channels already use (see "From which streams"). A group picked here ' +
+            'gives new channels too.'
+          }
           data={toOptions(options.stream_groups, true)}
           value={asStrings(value.stream_groups)}
           onChange={(picked) => set({ stream_groups: ids(picked) })}
@@ -292,6 +297,13 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
               <Select
                 size="xs"
                 label="From which streams"
+                description={
+                  value.stream_groups?.length
+                    ? 'The stream groups picked above.'
+                    : 'With no stream groups picked above. A group no channel uses ' +
+                      'yet -- one a provider just added -- gives no new channels ' +
+                      'until it is picked, or this says every stream.'
+                }
                 allowDeselect={false}
                 value={value.new_from || 'followed'}
                 onChange={(from) => from && set({ new_from: from })}
