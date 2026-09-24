@@ -111,12 +111,26 @@ def country_of(name) -> str:
     country that exists: that shape is also how a playlist marks which of its own packages
     a channel came from ("GO:", "SK:", "VIP:"), and a package read as a country is a
     penalty against every guide from the right one.
+
+    A box can carry the language as well: "┃CA EN┃", "[US-EN]", "|CA FR|". Read as no
+    country at all, a Canadian Food Network was "FOOD NETWORK" from nowhere, the
+    Portuguese guide of that name was as good an answer as the Canadian one, and it got
+    it at a certain hundred per cent. The first part is the country -- when it is one
+    that exists, since two words in a box are just as often "VIP SD".
     """
     found = re.match(r"\s*[┃|\[(]?\s*([A-Za-z]{2,3})\s*[┃|\])]", str(name or ""))
     if found:
         code = found.group(1).lower()
         return COUNTRY_ALIASES.get(code, code)
-    found = re.match(r"\s*([A-Za-z]{2})\s*[:|-]\s", str(name or ""))
+    found = re.match(
+        r"\s*[┃|\[(]\s*([A-Za-z]{2})[\s\-_/]+[A-Za-z]{2,3}\s*[┃|\])]", str(name or "")
+    )
+    if found and found.group(1).lower() in ISO_COUNTRIES:
+        code = found.group(1).lower()
+        return COUNTRY_ALIASES.get(code, code)
+    # The bar some playlists write after the country ("NL ▎ NPO 1") is a separator like
+    # the colon and the pipe
+    found = re.match(r"\s*([A-Za-z]{2})\s*[:|\-▎]\s", str(name or ""))
     if not found:
         return ""
     code = found.group(1).lower()

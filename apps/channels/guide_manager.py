@@ -95,6 +95,13 @@ DEFAULTS = {
     # read at all and would be thrown out for it.
     "must_be_fresh": False,
     "fresh_hours": 12,
+    # How a guide is found for a channel. "name": judged on the name, with a tvg-id that
+    # agrees counting for a lot (channel_manager.judge_guide). "tvg_id": the guide whose
+    # tvg-id is the channel's -- or, for a channel with none, one of its streams' -- and
+    # nothing else: no name read, no score guessed at. For a lineup whose tvg-ids are
+    # right, which is the quickest and surest way there is, and the one the plugins that
+    # did this well start with.
+    "match_by": "name",
 }
 
 SETTINGS_VERSION = 1
@@ -128,6 +135,7 @@ def save_settings(given):
         values["min_score"] = min(100, max(0, int(values["min_score"])))
         values["better_by"] = min(100, max(1, int(values["better_by"])))
         values["fresh_hours"] = min(168, max(1, int(values["fresh_hours"])))
+        values["match_by"] = "tvg_id" if values.get("match_by") == "tvg_id" else "name"
         values["channel_groups"] = [int(g) for g in values["channel_groups"] or ()]
         values["exclude_channel_groups"] = [
             int(g) for g in values["exclude_channel_groups"] or ()
@@ -549,6 +557,77 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     return None
 
 
+def _stream_tvg_ids(channel_ids):
+    """{channel id: [its streams' tvg-ids, in the order it plays them]}, in one query."""
+    from .models import ChannelStream
+
+    found = {}
+    for channel_id, tvg_id in (
+        ChannelStream.objects.filter(channel_id__in=channel_ids, stream__is_custom=False)
+        .exclude(stream__tvg_id__isnull=True).exclude(stream__tvg_id="")
+        .order_by("channel_id", "order")
+        .values_list("channel_id", "stream__tvg_id")
+    ):
+        found.setdefault(channel_id, []).append(tvg_id)
+    return found
+
+
+def _tvg_ids_of(channel, streams_say):
+    """
+    The tvg-ids a channel goes by: its own, and where it has none, its streams' -- the
+    first stream's first, since that is the one it plays. A channel made from a playlist
+    often carries none of its own while every stream on it does.
+    """
+    own = (channel.tvg_id or "").strip().lower()
+    if own:
+        return [own]
+    seen = []
+    for one in (streams_say or {}).get(channel.id, ()):
+        one = (one or "").strip().lower()
+        if one and one not in seen:
+            seen.append(one)
+    return seen
+
+
+def _by_tvg_id(channel, ids, by_tvg, sources, counts, used, playing, fresh, matching):
+    """
+    The guides whose tvg-id is one this channel goes by, surest first: the channel's own
+    id before a stream's, then one that holds programmes, then the source Dispatcharr
+    ranks higher. Every one of them is certain -- that is what "tvg-id only" asks for.
+    """
+    country = logo_library.country_of(channel.name or "") or ""
+    found = []
+    for rank, tvg_id in enumerate(ids):
+        for row in by_tvg.get(tvg_id, ()):
+            # "Refuse another country's guide" is still refused: a tvg-id is the
+            # provider's word, and that lever says whose word wins
+            if matching.get("country_must_agree") and not channel_manager.in_play(
+                row, {"country_must_agree": True}, country
+            ):
+                continue
+            found.append((rank, row))
+    own = bool((channel.tvg_id or "").strip())
+    found.sort(key=lambda one: (
+        one[0], not counts.get(one[1]["id"], 0), -(one[1].get("epg_source_priority") or 0),
+    ))
+    return [
+        {
+            "epg": row["id"],
+            "name": row["name"],
+            "tvg_id": row.get("original_tvg_id") or row.get("tvg_id") or "",
+            "source": sources.get(row["epg_source_id"], ""),
+            "score": 100,
+            "tier": channel_manager.CERTAIN,
+            "match_why": "its tvg-id" if own else "its stream's tvg-id",
+            "programmes": counts.get(row["id"], 0),
+            "now": playing.get(row["id"], ""),
+            "in_use": row["id"] in used,
+            "fresh": None if fresh is None else row["id"] in fresh,
+        }
+        for _, row in found
+    ]
+
+
 def look_at(channels, settings, catalogue, sources, counts, used=None, playing=None, say=None,
             matching=None, fresh=None, known_calls=None, reference=None):
     """
@@ -595,6 +674,13 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         reference = known_channels.known()
     ignored = load_ignored()
     chosen = load_chosen()
+    by_tvg = streams_say = None
+    if settings.get("match_by") == "tvg_id":
+        by_tvg = {}
+        for row in catalogue:
+            if row.get("tvg_id"):
+                by_tvg.setdefault(row["tvg_id"], []).append(row)
+        streams_say = _stream_tvg_ids([channel.id for channel in channels])
     found = {}
     for at, channel in enumerate(channels):
         # Said as it goes rather than once the batch is over: a batch is a hundred and
@@ -602,11 +688,17 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         # batches looks like a page that has stopped
         if say and at % 10 == 0:
             say(at, channel.name)
-        candidates = _score_against(
-            channel.name, catalogue, sources, counts, used, playing,
-            channel_tvg_id=channel.tvg_id or "", matching=matching, fresh=fresh,
-            known_calls=known_calls, reference=reference, countries=countries,
-        )
+        if by_tvg is not None:
+            ids = _tvg_ids_of(channel, streams_say)
+            candidates = _by_tvg_id(
+                channel, ids, by_tvg, sources, counts, used, playing, fresh, matching
+            )
+        else:
+            candidates = _score_against(
+                channel.name, catalogue, sources, counts, used, playing,
+                channel_tvg_id=channel.tvg_id or "", matching=matching, fresh=fresh,
+                known_calls=known_calls, reference=reference, countries=countries,
+            )
         # A suggestion waved away was waved away for that guide, not for the channel:
         # the guide comes off this channel's list and the next best is offered instead,
         # so a better source added later is still found
@@ -614,7 +706,12 @@ def look_at(channels, settings, catalogue, sources, counts, used=None, playing=N
         if waved and waved.get("epg"):
             candidates = [one for one in candidates if one["epg"] != waved["epg"]]
         mine = {}
-        if channel.epg_data_id:
+        if channel.epg_data_id and by_tvg is not None:
+            # By the same measure: the guide it is on is right when its tvg-id is the
+            # channel's, and otherwise any guide whose tvg-id is the channel's is better
+            row = everything.get(channel.epg_data_id)
+            mine[channel.epg_data_id] = 100 if row and row.get("tvg_id") in ids else 0
+        elif channel.epg_data_id:
             already = next((one for one in candidates if one["epg"] == channel.epg_data_id), None)
             if already:
                 mine[channel.epg_data_id] = already["score"]

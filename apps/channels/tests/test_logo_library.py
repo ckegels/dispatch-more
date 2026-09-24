@@ -105,6 +105,21 @@ class MatchingTests(TestCase):
         self.assertEqual(logo_library.country_of("UK: BBC One"), "gb")
         self.assertEqual(logo_library.country_of("TFX"), "")
 
+    def test_a_box_with_the_language_in_it_still_says_the_country(self):
+        # Read as no country, "┃CA EN┃ FOOD NETWORK" took the Portuguese guide at 100 %
+        self.assertEqual(logo_library.country_of("┃CA EN┃ FOOD NETWORK"), "ca")
+        self.assertEqual(logo_library.country_of("┃CA FR┃ TVA"), "ca")
+        self.assertEqual(logo_library.country_of("[US-EN] CNN"), "us")
+        self.assertEqual(logo_library.country_of("|UK EN| BBC One"), "gb")
+        # ...but two words in a box are not always a country and a language
+        self.assertEqual(logo_library.country_of("[VIP SD] CNN"), "")
+        self.assertEqual(logo_library.country_of("┃XX EN┃ CNN"), "")
+
+    def test_the_bar_some_playlists_write_is_a_separator(self):
+        self.assertEqual(logo_library.country_of("NL ▎ NPO 1"), "nl")
+        self.assertEqual(logo_library.country_of("US ▎ CBS"), "us")
+        self.assertEqual(logo_library.country_of("GO ▎ CNN"), "")
+
 
 class SuggestionTests(TestCase):
     def setUp(self):

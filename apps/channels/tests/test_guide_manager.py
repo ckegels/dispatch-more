@@ -162,6 +162,26 @@ class SuggestionTests(_Setup):
         self.assertEqual(found[str(channel.id)]["epg"], right.id)
         self.assertEqual(found[str(channel.id)]["why"], "better")
 
+    def test_a_box_with_the_language_in_it_still_keeps_another_country_s_guide_off(self):
+        """
+        "┃CA EN┃ FOOD NETWORK" was offered the provider's own "┃PT┃ FOOD NETWORK" as
+        Certain 100 %: the country and language in one box read as no country at all, and
+        a channel from nowhere matches every country's guide of that name.
+        """
+        canada = ChannelGroup.objects.create(name="Canada")
+        portuguese = self._guide("foodnetwork.pt", "┃PT┃ FOOD NETWORK")
+        canadian = self._guide("foodnetwork.ca", "┃CA EN┃ FOOD NETWORK")
+        channel = self._channel("┃CA EN┃ FOOD NETWORK", 1, group=canada)
+        found = self._look()[str(channel.id)]
+        self.assertEqual(found["epg"], canadian.id)
+        self.assertEqual(found["tier"], "certain")
+
+        # ...and with only the Portuguese one there, nothing is put forward
+        EPGData.objects.filter(id=canadian.id).delete()
+        self.assertEqual(self._suggested(), {})
+        self.assertNotEqual(self._look()[str(channel.id)].get("tier"), "certain")
+        self.assertTrue(portuguese.id)
+
     def test_a_guide_that_works_is_left_alone_when_the_difference_is_a_nose(self):
         on_it = self._guide("ORF1.at", "ORF 1", programmes=4)
         self._guide("ORF1b.at", "ORF 1 Austria", programmes=4)
@@ -1030,3 +1050,87 @@ class OneAtATimeTests(_Setup):
         self.assertEqual(set(guide_manager.load_ignored()), {"2"})
         guide_manager.unignore()
         self.assertEqual(guide_manager.load_ignored(), {})
+
+
+class TvgIdOnlyTests(_Setup):
+    """
+    "tvg-id only": the guide whose tvg-id is the channel's, and nothing else. No name is
+    read and no score guessed at -- for a lineup whose tvg-ids are right, which is the
+    surest way there is, and the one the plugins that did this well start with.
+    """
+
+    def _only(self, **levers):
+        return self._suggested(settings(match_by="tvg_id", **levers))
+
+    def test_the_guide_with_the_channel_s_tvg_id_whatever_either_is_called(self):
+        guide = self._guide("wttw.us", "PBS (WTTW) Chicago, IL", programmes=3)
+        channel = self._channel("Chicago Public Television", 1, epg=None)
+        Channel.objects.filter(id=channel.id).update(tvg_id="WTTW.us")
+        (found,) = self._only().values()
+        self.assertEqual((found["epg"], found["why"], found["tier"]), (guide.id, "none", "certain"))
+        self.assertEqual(found["match_why"], "its tvg-id")
+
+    def test_and_never_one_that_only_has_the_name(self):
+        self._guide("somethingelse.us", "Chicago Public Television", programmes=3)
+        channel = self._channel("Chicago Public Television", 1)
+        Channel.objects.filter(id=channel.id).update(tvg_id="WTTW.us")
+        self.assertEqual(self._only(), {})
+
+    def test_a_channel_with_no_tvg_id_goes_by_its_streams(self):
+        from apps.channels.models import ChannelStream, Stream
+
+        guide = self._guide("wttw.us", "PBS (WTTW)", programmes=3)
+        channel = self._channel("Chicago Public Television", 1)
+        fallback = Stream.objects.create(name="could not dispatch", url="http://x/f", is_custom=True, tvg_id="nope")
+        from apps.m3u.models import M3UAccount
+
+        provider = M3UAccount.objects.create(name="P", account_type="XC", server_url="http://p", is_active=True)
+        first = Stream.objects.create(name="WTTW HD", url="http://x/1", tvg_id="WTTW.us", m3u_account=provider)
+        ChannelStream.objects.create(channel=channel, stream=first, order=0)
+        ChannelStream.objects.create(channel=channel, stream=fallback, order=1)
+        (found,) = self._only().values()
+        self.assertEqual(found["epg"], guide.id)
+        self.assertEqual(found["match_why"], "its stream's tvg-id")
+
+    def test_a_channel_with_no_tvg_id_anywhere_is_offered_nothing(self):
+        self._guide("wttw.us", "Chicago Public Television", programmes=3)
+        self._channel("Chicago Public Television", 1)
+        self.assertEqual(self._only(), {})
+
+    def test_the_guide_it_is_on_is_left_when_its_tvg_id_is_the_channel_s(self):
+        on_it = self._guide("wttw.us", "WTTW", programmes=3)
+        other = EPGSource.objects.create(name="another", source_type="xmltv", priority=99)
+        EPGData.objects.create(tvg_id="wttw.us", name="WTTW from another source", epg_source=other)
+        channel = self._channel("Chicago Public Television", 1, epg=on_it)
+        Channel.objects.filter(id=channel.id).update(tvg_id="wttw.us")
+        self.assertEqual(self._only(), {})
+
+    def test_and_changed_when_it_is_not(self):
+        wrong = self._guide("wbbm.us", "CBS Chicago", programmes=3)
+        right = self._guide("wttw.us", "WTTW", programmes=3)
+        channel = self._channel("PBS Chicago", 1, epg=wrong)
+        Channel.objects.filter(id=channel.id).update(tvg_id="WTTW.us")
+        (found,) = self._only().values()
+        self.assertEqual((found["epg"], found["why"]), (right.id, "better"))
+
+    def test_one_holding_programmes_comes_before_one_that_does_not(self):
+        empty_source = EPGSource.objects.create(name="first", source_type="xmltv", priority=99)
+        EPGData.objects.create(tvg_id="wttw.us", name="WTTW", epg_source=empty_source)
+        full = self._guide("wttw.us", "WTTW", programmes=4)
+        channel = self._channel("PBS Chicago", 1)
+        Channel.objects.filter(id=channel.id).update(tvg_id="WTTW.us")
+        (found,) = self._only().values()
+        self.assertEqual(found["epg"], full.id)
+
+    def test_another_country_s_guide_is_still_refused_when_that_is_asked(self):
+        self._guide("cnn.us", "CNN", programmes=3)
+        channel = self._channel("┃UK┃ CNN", 1)
+        Channel.objects.filter(id=channel.id).update(tvg_id="cnn.us")
+        self.assertEqual(len(self._only()), 1)
+        channel_manager.save_matching({"country_must_agree": True})
+        self.assertEqual(self._only(), {})
+
+    def test_it_is_kept_as_a_setting(self):
+        self.assertEqual(guide_manager.DEFAULTS["match_by"], "name")
+        self.assertEqual(guide_manager.save_settings({"match_by": "tvg_id"})["match_by"], "tvg_id")
+        self.assertEqual(guide_manager.save_settings({"match_by": "nonsense"})["match_by"], "name")

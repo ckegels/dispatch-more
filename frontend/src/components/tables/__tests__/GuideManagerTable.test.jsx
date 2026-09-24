@@ -475,6 +475,42 @@ describe('GuideManagerTable', () => {
     ).toBeInTheDocument();
   });
 
+  it('matches by tvg-id alone when asked, and says so in the settings it keeps', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByText('tvg-id only'));
+    await waitFor(() =>
+      expect(API.saveGuideManagerSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ match_by: 'tvg_id' })
+      )
+    );
+  });
+
+  it('looks only at the group chosen in the toolbar: pick a group, press the button', async () => {
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20 },
+        { id: 3, name: 'PBS Locals', count: 12 },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('textbox', { name: 'Which group' }));
+    fireEvent.click(await screen.findByText('PBS Locals'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Look for guides in PBS Locals/ })
+    );
+    await waitFor(() =>
+      expect(API.runGuideManager).toHaveBeenCalledWith(
+        'start',
+        expect.objectContaining({ channel_groups: [3] })
+      )
+    );
+    // ...and the settings it keeps are not changed by it
+    expect(API.saveGuideManagerSettings).not.toHaveBeenCalled();
+  });
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

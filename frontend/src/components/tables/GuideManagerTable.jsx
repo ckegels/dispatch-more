@@ -30,6 +30,7 @@ import {
   NumberInput,
   Paper,
   Progress,
+  SegmentedControl,
   Select,
   Stack,
   Switch,
@@ -314,7 +315,12 @@ const GuideManagerTable = () => {
     setBusy(true);
     setError(null);
     try {
-      const answer = await API.runGuideManager('start', levers);
+      // The group chosen in the toolbar is the one looked at: pick a group, press the
+      // button. The saved settings are left as they are -- this is one run's scope.
+      const answer = await API.runGuideManager(
+        'start',
+        group ? { ...levers, channel_groups: [Number(group)] } : levers
+      );
       if (!answer.started) setError(answer.why || 'Could not start looking.');
       await look(true);
     } catch (e) {
@@ -935,15 +941,36 @@ const GuideManagerTable = () => {
                     Stop
                   </Button>
                 ) : (
-                  <Button
-                    size="xs"
-                    variant="default"
-                    leftSection={<Play size={16} />}
-                    onClick={start}
-                    disabled={busy}
-                  >
-                    Look for guides
-                  </Button>
+                  <>
+                    {/* How a guide is found: by what the names say, or by the tvg-id
+                        alone -- for a lineup whose tvg-ids are right, no guessing */}
+                    <SegmentedControl
+                      size="xs"
+                      aria-label="Match by"
+                      value={levers?.match_by || 'name'}
+                      onChange={(value) =>
+                        levers && saveLevers({ ...levers, match_by: value })
+                      }
+                      data={[
+                        { label: 'By name', value: 'name' },
+                        { label: 'tvg-id only', value: 'tvg_id' },
+                      ]}
+                    />
+                    <Button
+                      size="xs"
+                      variant="default"
+                      leftSection={<Play size={16} />}
+                      onClick={start}
+                      disabled={busy}
+                    >
+                      {group
+                        ? `Look for guides in ${
+                            groups.find((one) => one.value === group)?.label ||
+                            'this group'
+                          }`
+                        : 'Look for guides'}
+                    </Button>
+                  </>
                 )}
                 <Button
                   size="xs"
