@@ -1376,10 +1376,42 @@ READS_KEPT = 500
 
 
 def reads():
+    """
+    What the reads of each guide found, leaving out any its source has changed since.
+
+    A read says what the file held when it was read. Once the source is refreshed --
+    a new grab from the EPG Grabber, a provider's new day -- that says nothing about the
+    file now, and keeping it kept "read, and the guide has none" on a guide the new file
+    fills, with the Read button passing it over for ever as already read. Leaving one out
+    too many only offers a read again.
+    """
+    from datetime import datetime
+
     from core.models import CoreSettings
 
     row = CoreSettings.objects.filter(key=READS_KEY).first()
-    return dict(row.value) if row and isinstance(row.value, dict) else {}
+    kept = dict(row.value) if row and isinstance(row.value, dict) else {}
+    if not kept:
+        return kept
+    from apps.epg.models import EPGData
+
+    changed = dict(
+        EPGData.objects.filter(id__in=[int(k) for k in kept if k.isdigit()])
+        .values_list("id", "epg_source__updated_at")
+    )
+    still = {}
+    for key, found in kept.items():
+        at = found.get("at") if isinstance(found, dict) else None
+        since = changed.get(int(key)) if key.isdigit() else None
+        try:
+            # To the second, which is all the record keeps: a read in the same second
+            # as the refresh is of the new file far more often than not
+            if at and since and datetime.fromisoformat(at) < since.replace(microsecond=0):
+                continue
+        except (TypeError, ValueError):
+            continue
+        still[key] = found
+    return still
 
 
 def note_read(found, why=""):

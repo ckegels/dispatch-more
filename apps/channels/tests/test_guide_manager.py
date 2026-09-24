@@ -683,6 +683,35 @@ class ViewTests(_Setup):
         (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
         self.assertEqual(row["programmes"], 3)
 
+    def test_a_read_that_found_nothing_is_forgotten_once_its_source_changes(self):
+        """
+        Read before the EPG Grabber's first good grab, WTTW said "read, and the guide has
+        none" -- and went on saying it after the grab filled the file, with the Read
+        button passing it over as already read, so nothing could put it right.
+        """
+        guide = self._guide("pbs-wttw-chicago-il/1832", "PBS (WTTW) Chicago, IL")
+        self._channel("PBS WTTW Chicago", 1)
+        guide_manager.save_suggestions(self._look())
+        EPGSource.objects.filter(id=self.source.id).update(
+            updated_at=timezone.now() - timedelta(hours=1)
+        )
+        channel_manager.note_read({guide.id: 0})
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        self.assertEqual(row["read"]["found"], 0)
+
+        # The grab lands and the source is refreshed: what the read found is of the old file
+        EPGSource.objects.filter(id=self.source.id).update(
+            updated_at=timezone.now() + timedelta(minutes=1)
+        )
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        self.assertIsNone(row["read"])
+
+        # ...and a read of the new file is kept as it should be, even in the same second
+        EPGSource.objects.filter(id=self.source.id).update(updated_at=timezone.now())
+        channel_manager.note_read({guide.id: 0})
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        self.assertEqual(row["read"]["found"], 0)
+
     def test_and_so_is_what_the_channel_is_on_now(self):
         held = self._guide("orf1.old", "ORF 1 Old", programmes=2)
         self._guide("ORF1.at", "ORF 1", programmes=9)
