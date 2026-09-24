@@ -385,17 +385,11 @@ def programmes_soon(epg_ids=None, hours=12):
 
 def what_is_on(epg_ids=None):
     """The programme on each of these guides at this moment, in one query."""
-    from django.utils import timezone
-
-    from apps.epg.models import ProgramData
-
     if epg_ids is not None and not epg_ids:
         return {}
-    moment = timezone.now()
-    rows = ProgramData.objects.filter(start_time__lte=moment, end_time__gt=moment)
-    if epg_ids is not None and len(epg_ids) <= TOO_MANY_TO_NAME:
-        rows = rows.filter(epg_id__in=epg_ids)
-    return dict(rows.values_list("epg_id", "title"))
+    wanted = epg_ids if epg_ids is not None and len(epg_ids) <= TOO_MANY_TO_NAME else None
+    # The same pick as the window beside the page makes, when a guide holds two at once
+    return {epg_id: title for epg_id, (title, _) in channel_manager.airing(wanted).items()}
 
 
 def guides_in_use(epg_ids=None):
@@ -764,7 +758,10 @@ def freshen(rows):
     if not ids:
         return rows
     counts = programme_counts(ids)
-    playing = what_is_on(ids)
+    # With when that changes, so the page can ask again then rather than go on showing
+    # a programme that finished while somebody was working down the list
+    playing = channel_manager.on_now(ids)
+    nothing = {"now": "", "changes_at": ""}
     used = guides_in_use(ids)
     # What a read of each guide came back with, which is the difference between "nobody
     # has looked" and "somebody looked and there was nothing there"
@@ -772,12 +769,16 @@ def freshen(rows):
     for row in rows:
         if row.get("epg"):
             row["programmes"] = counts.get(row["epg"], 0)
-            row["now"] = playing.get(row["epg"], "")
+            row["now"] = playing.get(row["epg"], nothing)["now"]
+            row["now_changes_at"] = playing.get(row["epg"], nothing)["changes_at"]
             row["in_use"] = row["epg"] in used
             row["read"] = was_read.get(str(row["epg"])) or None
         if row.get("instead_of_epg"):
             row["instead_of_holds"] = counts.get(row["instead_of_epg"], 0)
-            row["instead_of_now"] = playing.get(row["instead_of_epg"], "")
+            row["instead_of_now"] = playing.get(row["instead_of_epg"], nothing)["now"]
+            row["instead_of_now_changes_at"] = (
+                playing.get(row["instead_of_epg"], nothing)["changes_at"]
+            )
     return rows
 
 

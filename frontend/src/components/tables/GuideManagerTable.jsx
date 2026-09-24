@@ -44,6 +44,7 @@ import { buildLiveStreamUrl } from '../../utils/components/FloatingVideoUtils.js
 import ConfirmationDialog from '../ConfirmationDialog';
 import { CustomTable, useTable } from './CustomTable';
 import { GuideWindow } from './GuidePicker';
+import useAskAgainWhenNowChanges from '../../hooks/useAskAgainWhenNowChanges';
 
 // The Lineup's third of a set: laid out the same way, a panel with a toolbar over a table.
 // A row here is one channel whose guide is worth changing, next to what it is on now.
@@ -187,6 +188,19 @@ const GuideManagerTable = () => {
     look(loadedOnce.current, ['all', 'chosen', 'waved'].includes(why));
     loadedOnce.current = true;
   }, [look, why]);
+
+  // What is on each guide moves on while the page is open; it is asked again as it does,
+  // the view as it is, so a finished programme is not left on the row
+  useAskAgainWhenNowChanges(
+    (page?.suggestions || []).flatMap((one) => [
+      one.now_changes_at,
+      one.instead_of_now_changes_at,
+    ]),
+    useCallback(
+      () => look(true, ['all', 'chosen', 'waved'].includes(why)),
+      [look, why]
+    )
+  );
 
   // While a run is going the page follows it, and stops asking once it is over
   const running = page?.run?.running;

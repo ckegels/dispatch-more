@@ -18,6 +18,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import API from '../../api';
+import useAskAgainWhenNowChanges from '../../hooks/useAskAgainWhenNowChanges';
 
 // Which guide a channel is on, and the choosing of another. Shared by the Lineup, where
 // it sits on the row a channel would come out as, and by the Guides tab, where it changes
@@ -194,15 +195,26 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
     };
   }, []);
 
+  // Bumped when what is on one of the guides changes, to ask again without the spinner:
+  // the list is the same list, only what is on it has moved on
+  const [nowChanged, setNowChanged] = useState(0);
+  const askedFor = useRef(0);
+  useAskAgainWhenNowChanges(
+    guides.map((one) => one.changes_at),
+    useCallback(() => setNowChanged((n) => n + 1), [])
+  );
+
   // The typed search is the only thing that drives the question. It is deliberately not
   // touched by choosing one: the first try let a choice write itself into the search box,
   // which asked again for that one name and emptied the list of everything else.
   useEffect(() => {
     let dropped = false;
     const wanted = search.trim();
+    const quietly = askedFor.current !== nowChanged;
+    askedFor.current = nowChanged;
     const timer = setTimeout(
       async () => {
-        setLoading(true);
+        if (!quietly) setLoading(true);
         try {
           const result = await API.getChannelManagerGuides({
             name: channel?.name || '',
@@ -218,13 +230,13 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
           if (!dropped) setLoading(false);
         }
       },
-      wanted ? 300 : 0
+      wanted && !quietly ? 300 : 0
     );
     return () => {
       dropped = true;
       clearTimeout(timer);
     };
-  }, [search, source, channel?.name, channel?.epg?.tvg_id, held?.id]);
+  }, [search, source, channel?.name, channel?.epg?.tvg_id, held?.id, nowChanged]);
 
   // What sources there are, so one can be tried on its own; how much each holds is said,
   // because "try this source" is not a question anybody can answer from a name alone

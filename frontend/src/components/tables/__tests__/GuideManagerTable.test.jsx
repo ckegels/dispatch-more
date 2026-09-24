@@ -254,6 +254,63 @@ describe('GuideManagerTable', () => {
     await waitFor(() => expect(API.applyGuideManager).toHaveBeenCalledWith({ 1: 21 }));
   });
 
+  describe('when what is on changes while the page is open', () => {
+    beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+    afterEach(() => vi.useRealTimers());
+
+    it('asks again then, and shows what is on now', async () => {
+      const ends = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      API.getGuideManager.mockResolvedValue({
+        ...page,
+        suggestions: [{ ...onNothing, now_changes_at: ends }, onEmpty],
+      });
+      draw();
+      expect(
+        await screen.findByText('ORF1.at · 312 programmes · Now: Zeit im Bild')
+      ).toBeInTheDocument();
+      const asked = API.getGuideManager.mock.calls.length;
+
+      // Nothing is asked before it changes: once per change, not every few seconds
+      await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+      expect(API.getGuideManager.mock.calls.length).toBe(asked);
+
+      API.getGuideManager.mockResolvedValue({
+        ...page,
+        suggestions: [{ ...onNothing, now: 'Wetter' }, onEmpty],
+      });
+      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+      expect(
+        await screen.findByText('ORF1.at · 312 programmes · Now: Wetter')
+      ).toBeInTheDocument();
+      // Quietly, and for the same view
+      expect(API.getGuideManager).toHaveBeenLastCalledWith(false);
+    });
+
+    it('and so does the window, without emptying the list while it asks', async () => {
+      const ends = new Date(Date.now() + 60 * 1000).toISOString();
+      const card = {
+        id: 21, name: 'ORF 1 Austria', tvg_id: 'ORF1b.at', source: 'xmltv.at',
+        how: 'name', score: 88, programmes: 90, in_use: true,
+      };
+      API.getChannelManagerGuides.mockResolvedValue({
+        guides: [{ ...card, now: 'Wetter', changes_at: ends }],
+      });
+      draw();
+      await screen.findByText('┃AT┃ ORF 1');
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      );
+      expect(await screen.findByText('Now: Wetter')).toBeInTheDocument();
+
+      API.getChannelManagerGuides.mockResolvedValue({
+        guides: [{ ...card, now: 'Zeit im Bild 2' }],
+      });
+      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+      expect(await screen.findByText('Now: Zeit im Bild 2')).toBeInTheDocument();
+      expect(screen.getByLabelText('Guide ORF 1 Austria')).toBeInTheDocument();
+    });
+  });
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

@@ -712,6 +712,67 @@ class ViewTests(_Setup):
         (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
         self.assertEqual(row["read"]["found"], 0)
 
+    def _on(self, guide, title, started, ends):
+        moment = timezone.now()
+        return ProgramData.objects.create(
+            epg=guide, title=title,
+            start_time=moment + timedelta(minutes=started), end_time=moment + timedelta(minutes=ends),
+        )
+
+    def test_the_page_and_the_window_say_the_same_programme_is_on(self):
+        """
+        A guide holding two programmes that both cover this moment showed one on the page
+        and the other in the window beside it: each asked on its own, and which of the two
+        came back last was up to the database. The one that started last is on air.
+        """
+        guide = self._guide("pbs-wttw-chicago-il/1832", "PBS (WTTW) Chicago, IL")
+        # Made in this order so that the one on air is not simply the last row written
+        self._on(guide, "Finding Your Roots", -10, 50)
+        self._on(guide, "Amanpour and Company", -70, 20)
+        self._channel("PBS WTTW Chicago", 1)
+        guide_manager.save_suggestions(self._look())
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        window = self.client_api.get(
+            "/api/channels/channel-manager/guides/", {"name": "PBS WTTW Chicago"}
+        ).json()["guides"]
+        (card,) = [one for one in window if one["id"] == guide.id]
+        self.assertEqual(row["now"], "Finding Your Roots")
+        self.assertEqual(card["now"], "Finding Your Roots")
+
+    def test_the_page_is_told_when_what_is_on_changes(self):
+        guide = self._guide("pbs-wttw-chicago-il/1832", "PBS (WTTW) Chicago, IL")
+        on_now = self._on(guide, "Amanpour and Company", -30, 30)
+        self._on(guide, "Finding Your Roots", 30, 90)
+        # One with nothing on until later: its change is when that starts
+        later = self._guide("pbs-wttw-chicago-il-hd/8584", "PBS (WTTW) Chicago, IL HD")
+        starts = self._on(later, "PBS NewsHour", 15, 75)
+        self._channel("PBS WTTW Chicago", 1, epg=later)
+        guide_manager.save_suggestions(self._look())
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        from datetime import datetime
+
+        self.assertEqual(row["epg"], guide.id)
+        self.assertEqual(datetime.fromisoformat(row["now_changes_at"]), on_now.end_time)
+        self.assertEqual(row["instead_of_now"], "")
+        self.assertEqual(
+            datetime.fromisoformat(row["instead_of_now_changes_at"]), starts.start_time
+        )
+        # ...and so is the window, which is asked on its own
+        window = self.client_api.get(
+            "/api/channels/channel-manager/guides/", {"name": "PBS WTTW Chicago"}
+        ).json()["guides"]
+        (card,) = [one for one in window if one["id"] == guide.id]
+        self.assertEqual(datetime.fromisoformat(card["changes_at"]), on_now.end_time)
+
+    def test_a_guide_with_nothing_on_and_nothing_to_come_never_changes(self):
+        guide = self._guide("pbs-wttw-chicago-il/1832", "PBS (WTTW) Chicago, IL")
+        self._on(guide, "Long gone", -120, -60)
+        self._channel("PBS WTTW Chicago", 1)
+        guide_manager.save_suggestions(self._look())
+        (row,) = self.client_api.get("/api/channels/guides/").json()["suggestions"]
+        self.assertEqual(row["now"], "")
+        self.assertEqual(row["now_changes_at"], "")
+
     def test_and_so_is_what_the_channel_is_on_now(self):
         held = self._guide("orf1.old", "ORF 1 Old", programmes=2)
         self._guide("ORF1.at", "ORF 1", programmes=9)

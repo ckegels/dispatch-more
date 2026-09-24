@@ -566,18 +566,80 @@ def _channel_summary(channel):
     }
 
 
+def airing(epg_ids=None):
+    """
+    {epg id: (title, when it ends)} for what is on each of these guides at this moment;
+    every guide there is when epg_ids is None.
+
+    One guide can hold two programmes that both cover this moment -- a file that overlaps
+    itself, or one read twice. Which of the two a plain query hands back last is up to the
+    database, and the Guides page and the window beside it each asked on their own, so the
+    same guide showed one title on the page and another in the window. The one that
+    started last is taken, the same way everywhere, which is also the one on air.
+    """
+    from django.utils import timezone
+
+    from apps.epg.models import ProgramData
+
+    rows = ProgramData.objects.filter(start_time__lte=timezone.now(), end_time__gt=timezone.now())
+    if epg_ids is not None:
+        rows = rows.filter(epg_id__in=epg_ids)
+    found = {}
+    for epg_id, title, ends in rows.order_by("epg_id", "start_time", "id").values_list(
+        "epg_id", "title", "end_time"
+    ):
+        found[epg_id] = (title, ends)
+    return found
+
+
+def on_now(epg_ids):
+    """
+    {epg id: {"now": title or "", "changes_at": ISO time or ""}} for these guides.
+
+    `changes_at` is the moment what is on next changes: the end of the programme on now,
+    or the start of the next one on a guide with nothing on. The page asks again then
+    rather than going on showing a programme that finished while somebody was working
+    down the list -- and rather than asking every few seconds in case one has.
+    """
+    from django.db.models import Min
+    from django.utils import timezone
+
+    from apps.epg.models import ProgramData
+
+    ids = set(epg_ids or ())
+    if not ids:
+        return {}
+    playing = airing(ids)
+    upcoming = dict(
+        ProgramData.objects.filter(epg_id__in=ids, start_time__gt=timezone.now())
+        .values("epg_id")
+        .annotate(first=Min("start_time"))
+        .values_list("epg_id", "first")
+    )
+    found = {}
+    for epg_id in ids:
+        title, ends = playing.get(epg_id, ("", None))
+        after = upcoming.get(epg_id)
+        # A next programme that starts before this one ends takes over from it then
+        changes = min(one for one in (ends, after) if one) if (ends or after) else None
+        found[epg_id] = {
+            "now": title or "",
+            "changes_at": changes.isoformat() if changes else "",
+        }
+    return found
+
+
 def _fill_what_is_on(rows):
     """
     What is on each guide the plan names, on both sides of every row.
 
     The page shows the guide a channel is on beside the one it would come out with, and
     a name is not enough to tell whether it is the right one: the programme on it at this
-    moment is. Worked out for the whole plan at once -- two queries on the index
+    moment is. Worked out for the whole plan at once -- a few queries on the index
     ProgramData already has -- rather than per row, which on a thousand channels would be
     a thousand of them.
     """
     from django.db.models import Count
-    from django.utils import timezone
 
     from apps.epg.models import ProgramData
 
@@ -595,14 +657,10 @@ def _fill_what_is_on(rows):
         .annotate(held=Count("id"))
         .values_list("epg_id", "held")
     )
-    moment = timezone.now()
-    playing = dict(
-        ProgramData.objects.filter(epg_id__in=ids, start_time__lte=moment, end_time__gt=moment)
-        .values_list("epg_id", "title")
-    )
+    playing = on_now(ids)
     for guide in guides:
         guide["programmes"] = counts.get(guide["id"], 0)
-        guide["now"] = playing.get(guide["id"], "")
+        guide.update(playing.get(guide["id"], {"now": "", "changes_at": ""}))
     return rows
 
 
@@ -1276,10 +1334,9 @@ def _what_they_carry(entries):
     read and found empty. `in_use` is what tells them apart, and load_programmes is how
     one is read without having to assign it first.
 
-    Three queries for the whole list, all on indexes that are already there.
+    Four queries for the whole list, all on indexes that are already there.
     """
     from django.db.models import Count
-    from django.utils import timezone
 
     from apps.epg.models import ProgramData
 
@@ -1294,11 +1351,7 @@ def _what_they_carry(entries):
         .annotate(held=Count("id"))
         .values_list("epg_id", "held")
     )
-    moment = timezone.now()
-    playing = dict(
-        ProgramData.objects.filter(epg_id__in=ids, start_time__lte=moment, end_time__gt=moment)
-        .values_list("epg_id", "title")
-    )
+    playing = on_now(ids)
     used = set(
         Channel.objects.filter(epg_data_id__in=ids).values_list("epg_data_id", flat=True)
     )
@@ -1307,7 +1360,7 @@ def _what_they_carry(entries):
     was_read = reads()
     for entry in entries:
         entry["programmes"] = counts.get(entry["id"], 0)
-        entry["now"] = playing.get(entry["id"], "")
+        entry.update(playing.get(entry["id"], {"now": "", "changes_at": ""}))
         entry["in_use"] = entry["id"] in used
         entry["read"] = was_read.get(str(entry["id"])) or None
     return entries
