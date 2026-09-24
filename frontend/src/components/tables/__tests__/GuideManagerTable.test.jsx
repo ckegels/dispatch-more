@@ -311,6 +311,45 @@ describe('GuideManagerTable', () => {
     });
   });
 
+  it('searches every guide there is, a page at a time, and says how many', async () => {
+    const station = (n) => ({
+      id: 100 + n, name: `PBS Station ${n}`, tvg_id: `pbs${n}.us`, source: 'PBS',
+      how: 'search', programmes: 0, in_use: false,
+    });
+    const page = (upTo) => ({
+      guides: Array.from({ length: upTo }, (_, n) => station(n)),
+      total: 140,
+    });
+    API.getChannelManagerGuides.mockImplementation(async ({ q, limit }) =>
+      q ? page(Math.min(limit, 140)) : { guides: [] }
+    );
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' }));
+    fireEvent.change(await screen.findByLabelText('Search every guide'), {
+      target: { value: 'pbs' },
+    });
+
+    expect(
+      await screen.findByText('140 guides match · the first 100 shown', undefined, {
+        timeout: 5000,
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Guide PBS Station 99')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Guide PBS Station 100')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 40 more of 140' }));
+    expect(
+      await screen.findByLabelText('Guide PBS Station 139', undefined, { timeout: 5000 })
+    ).toBeInTheDocument();
+    expect(API.getChannelManagerGuides).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: 'pbs', limit: 200 })
+    );
+    expect(screen.getByText('140 guides match')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /more of 140/ })).not.toBeInTheDocument();
+    // A hundred and forty cards are slow to draw with the whole suite running beside it
+  }, 15000);
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

@@ -171,12 +171,19 @@ const GuideCard = ({ guide, picked, onPick, onLoad, loading }) => (
   </Box>
 );
 
+// As many as the server sends a search at a time (channel_manager.SEARCH_PAGE)
+const SEARCH_PAGE = 100;
+
 const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   // The guide the row would come out with: the one chosen by hand, or the plan's
   const held = chosen === undefined ? channel?.epg : chosen;
   const [guides, setGuides] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // A search shows everything that matches, a page at a time: how many are asked for,
+  // and how many there are. Thousands of cards at once would lock the browser up.
+  const [howMany, setHowMany] = useState(SEARCH_PAGE);
+  const [total, setTotal] = useState(0);
   // One source to try on its own, rather than all of them at once. Two sources rarely
   // call a channel the same thing, and the way to find out which one has it is to look at
   // them one at a time -- which is a question about this channel, not a setting, so it is
@@ -198,7 +205,7 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   // Bumped when what is on one of the guides changes, to ask again without the spinner:
   // the list is the same list, only what is on it has moved on
   const [nowChanged, setNowChanged] = useState(0);
-  const askedFor = useRef(0);
+  const askedFor = useRef({});
   useAskAgainWhenNowChanges(
     guides.map((one) => one.changes_at),
     useCallback(() => setNowChanged((n) => n + 1), [])
@@ -210,8 +217,12 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   useEffect(() => {
     let dropped = false;
     const wanted = search.trim();
-    const quietly = askedFor.current !== nowChanged;
-    askedFor.current = nowChanged;
+    // The same question asked again -- more of it, or what is on having moved on -- is
+    // asked without the spinner and without emptying the list while it waits
+    const same =
+      askedFor.current.search === wanted && askedFor.current.source === source;
+    const quietly = same && askedFor.current.at !== undefined;
+    askedFor.current = { search: wanted, source, at: nowChanged };
     const timer = setTimeout(
       async () => {
         if (!quietly) setLoading(true);
@@ -222,8 +233,12 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
             q: wanted,
             current: held?.id ?? '',
             source,
+            limit: wanted ? howMany : '',
           });
-          if (!dropped) setGuides(result?.guides || []);
+          if (!dropped) {
+            setGuides(result?.guides || []);
+            setTotal(result?.total || 0);
+          }
         } catch {
           if (!dropped) setGuides([]);
         } finally {
@@ -236,7 +251,15 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       dropped = true;
       clearTimeout(timer);
     };
-  }, [search, source, channel?.name, channel?.epg?.tvg_id, held?.id, nowChanged]);
+  }, [
+    search,
+    source,
+    channel?.name,
+    channel?.epg?.tvg_id,
+    held?.id,
+    nowChanged,
+    howMany,
+  ]);
 
   // What sources there are, so one can be tried on its own; how much each holds is said,
   // because "try this source" is not a question anybody can answer from a name alone
@@ -291,11 +314,15 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
         }
         let back = null;
         try {
+          // The same question the list is showing: the same source, and as many as
+          // are shown, or the list jumps back to the first page while it reads
           const result = await API.getChannelManagerGuides({
             name: channel?.name || '',
             tvg_id: channel?.epg?.tvg_id || '',
             q: search.trim(),
             current: held?.id ?? '',
+            source,
+            limit: search.trim() ? howMany : '',
           });
           back = result?.guides || [];
           setGuides(back);
@@ -318,7 +345,7 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
       }));
       setReadState({});
     },
-    [channel?.name, channel?.epg?.tvg_id, search, held?.id]
+    [channel?.name, channel?.epg?.tvg_id, search, held?.id, source, howMany]
   );
 
   // The server puts what the channel has at the top of every answer, said the same way
@@ -329,6 +356,9 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
   }, [guides, held]);
 
   const pickedId = held?.id ?? null;
+  // How many of the search's matches are on the list: the guide the channel has is put
+  // first whatever was searched for, and is not one of them
+  const searchShown = guides.filter((guide) => guide.how === 'search').length;
 
   // The ones on the list nobody has read: reading them together costs one pass of the
   // file, the same as reading any one of them on its own
@@ -359,7 +389,10 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
             placeholder="A name or a tvg-id"
             aria-label="Search every guide"
             value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
+            onChange={(event) => {
+              setSearch(event.currentTarget.value);
+              setHowMany(SEARCH_PAGE);
+            }}
             rightSection={loading ? <Loader size={12} /> : undefined}
             style={{ flex: 1, minWidth: 200 }}
           />
@@ -369,7 +402,10 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
             placeholder="Every source"
             aria-label="From one source"
             value={source}
-            onChange={(value) => setSource(value || '')}
+            onChange={(value) => {
+              setSource(value || '');
+              setHowMany(SEARCH_PAGE);
+            }}
             data={(sources || [])
               .filter((one) => one.active)
               .map((one) => ({
@@ -404,6 +440,13 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
             of {readState.total || 0}
           </Text>
         )}
+        {search.trim() && total > 0 && (
+          <Text size="xs" c="dimmed">
+            {total} guide{total === 1 ? '' : 's'} match
+            {total === 1 ? 'es' : ''}
+            {searchShown < total ? ` · the first ${searchShown} shown` : ''}
+          </Text>
+        )}
         <Stack gap={6} style={{ maxHeight: '50vh', overflowY: 'auto' }}>
           {shown.length === 0 && !loading && (
             <Text size="xs" c="dimmed">
@@ -422,6 +465,16 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
               loading={!!reading[guide.id]}
             />
           ))}
+          {search.trim() && searchShown < total && (
+            <Button
+              size="xs"
+              variant="subtle"
+              loading={loading}
+              onClick={() => setHowMany((n) => n + SEARCH_PAGE)}
+            >
+              Show {Math.min(SEARCH_PAGE, total - searchShown)} more of {total}
+            </Button>
+          )}
           <GuideCard guide={null} picked={pickedId == null} onPick={onChoose} />
         </Stack>
       </Stack>

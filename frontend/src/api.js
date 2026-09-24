@@ -2895,11 +2895,14 @@ export default class API {
     q = '',
     current = '',
     source = '',
+    limit = '',
   } = {}) {
     // current: the guide the channel has, which comes back on the list whatever the
     // search finds, so what it is now is always there to go back to
     // source: one EPG source to try on its own, rather than all of them at once
+    // limit: with q, how many of the matches to send; the answer says how many there are
     const query = new URLSearchParams({ name, tvg_id, q, current, source });
+    if (limit) query.set('limit', limit);
     return await request(
       `${host}/api/channels/channel-manager/guides/?${query}`
     );

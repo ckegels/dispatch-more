@@ -137,10 +137,20 @@ def channel_manager_guides(request):
     one row at a time, when it is opened, because matching this well over every channel
     at once would keep the whole page waiting.
     """
+    wanted = request.GET.get("q", "").strip()
+    if wanted:
+        # A search shows everything that matches, a page at a time, and says how many
+        # there are; the shortlist below is the matcher's best few and nothing else
+        return JsonResponse(channel_manager.search_guides(
+            wanted,
+            request.GET.get("limit", channel_manager.SEARCH_PAGE),
+            request.GET.get("current", ""),
+            request.GET.get("source", ""),
+        ))
     return JsonResponse({"guides": channel_manager.guide_candidates(
         request.GET.get("name", ""),
         request.GET.get("tvg_id", ""),
-        request.GET.get("q", ""),
+        "",
         request.GET.get("limit", 12),
         request.GET.get("current", ""),
         request.GET.get("source", ""),

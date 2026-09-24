@@ -1747,6 +1747,96 @@ def guides_to_scan(matching, country=""):
         yield row
 
 
+# How many guides a search shows before "Show more" is asked for, and the most one answer
+# holds. A search is not a shortlist: it shows everything that matches, a page at a time,
+# because a word like "pbs" matches hundreds and thousands of cards at once would lock up
+# the browser before any of them could be read.
+SEARCH_PAGE = 100
+SEARCH_MOST = 5000
+
+
+def search_guides(search, limit=SEARCH_PAGE, current=None, source=None):
+    """
+    Every guide whose name or tvg-id carries every word typed, nearest first:
+    {"guides": the first `limit` of them, "total": how many there are}.
+
+    This used to be the picker's shortlist with a search box on it, and cut at twelve --
+    so a search that Dispatcharr's own guide list answered with a hundred entries showed
+    a dozen here, and the one somebody was looking for was often not among them. It now
+    finds all of them; the window asks for more of the same answer as it is scrolled.
+    """
+    active, matching = _guides_in_reach(source)
+    try:
+        limit = max(1, min(int(limit or SEARCH_PAGE), SEARCH_MOST))
+    except (TypeError, ValueError):
+        limit = SEARCH_PAGE
+    found, seen = _kept_first(active, current)
+    return _search(active, matching, (search or "").strip(), found, seen, limit)
+
+
+def _guides_in_reach(source=None):
+    """The guides matched against, and on what terms, narrowed to one source if asked."""
+    from apps.epg.models import EPGData
+
+    active = EPGData.objects.exclude(epg_source__is_active=False)
+    matching = load_matching()
+    if source not in (None, "", 0, "0", "all"):
+        try:
+            matching = {**matching, "sources": [int(source)]}
+        except (TypeError, ValueError):
+            pass
+    if matching["sources"]:
+        active = active.filter(epg_source_id__in=matching["sources"])
+    return active, matching
+
+
+def _kept_first(active, current):
+    """The guide the channel has, first on the list whatever else is found."""
+    found, seen = [], set()
+    if current in (None, "", 0, "0"):
+        return found, seen
+    try:
+        held = (
+            active.filter(id=int(current))
+            .values_list("id", "tvg_id", "name", "epg_source__name")
+            .first()
+        )
+    except (TypeError, ValueError):
+        held = None
+    if held:
+        found.append(_guide_entry(*held, "kept"))
+        seen.add(held[0])
+    return found, seen
+
+
+def _search(active, matching, wanted, found, seen, limit):
+    from django.db.models import Q
+
+    if not wanted:
+        return {"guides": _what_they_carry(found), "total": 0}
+    # Every word, anywhere, in any order -- not the phrase as typed. Somebody looking for
+    # the Philadelphia PBS station types "pbs philadelphia", and the guide calls it "PBS
+    # WHYY Philadelphia": the words are all there and the phrase is not.
+    rows = active.exclude(id__in=seen)
+    for word in wanted.split():
+        rows = rows.filter(Q(name__icontains=word) | Q(tvg_id__icontains=word))
+    rows = [
+        row for row in rows.order_by("-epg_source__priority", "name")
+        .values_list("id", "tvg_id", "name", "epg_source__name")
+        if _id_is_like(row[1], matching["tvg_id_like"])
+    ]
+    # Nearest to what was typed first, so the words being in a shorter name counts. Every
+    # match is put in order, not the first few: the nearest can sort anywhere by name.
+    typed = guide_words(wanted)
+    rows.sort(key=lambda row: _alike(typed, guide_words(row[2])), reverse=True)
+    return {
+        "guides": _what_they_carry(
+            found + [_guide_entry(*row, "search") for row in rows[:limit]]
+        ),
+        "total": len(rows),
+    }
+
+
 def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None):
     """
     The guide entries one channel could be, best first, for the picker on its row.
@@ -1769,67 +1859,26 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
     With `search`, it is a plain search instead: every guide whose name or tvg-id carries
     what was typed, so a channel the matcher cannot see is still there to be chosen.
     """
-    from django.db.models import Q
-
-    from apps.epg.models import EPGData, EPGSource
+    from apps.epg.models import EPGSource
 
     from . import epg_matching
 
-    active = EPGData.objects.exclude(epg_source__is_active=False)
-    # What is being matched against: the settings, narrowed further to one source when
-    # the window is being used to try them one at a time
-    matching = load_matching()
-    if source not in (None, "", 0, "0", "all"):
-        try:
-            matching = {**matching, "sources": [int(source)]}
-        except (TypeError, ValueError):
-            pass
-    if matching["sources"]:
-        active = active.filter(epg_source_id__in=matching["sources"])
+    active, matching = _guides_in_reach(source)
     try:
         limit = max(1, min(int(limit or 12), 50))
     except (TypeError, ValueError):
         limit = 12
 
+    found, seen = _kept_first(active, current)
+
+    wanted = (search or "").strip()
+    if wanted:
+        return _search(active, matching, wanted, found, seen, limit)["guides"]
+
     # Read once for the whole window: it used to be read again for the exact-tvg-id
     # shortcut, so opening one row unpacked three and a half megabytes twice
     known_calls = known_channels.call_signs()
     reference = known_channels.known()
-
-    found = []
-    seen = set()
-    if current not in (None, "", 0, "0"):
-        try:
-            held = (
-                active.filter(id=int(current))
-                .values_list("id", "tvg_id", "name", "epg_source__name")
-                .first()
-            )
-        except (TypeError, ValueError):
-            held = None
-        if held:
-            found.append(_guide_entry(*held, "kept"))
-            seen.add(held[0])
-
-    wanted = (search or "").strip()
-    if wanted:
-        # Every word, anywhere, in any order -- not the phrase as typed. Somebody looking
-        # for the Philadelphia PBS station types "pbs philadelphia", and the guide calls
-        # it "PBS WHYY Philadelphia": the words are all there and the phrase is not.
-        rows = active.exclude(id__in=seen)
-        for word in wanted.split():
-            rows = rows.filter(Q(name__icontains=word) | Q(tvg_id__icontains=word))
-        rows = [
-            row for row in rows.order_by("-epg_source__priority", "name")
-            .values_list("id", "tvg_id", "name", "epg_source__name")[: limit * 8]
-            if _id_is_like(row[1], matching["tvg_id_like"])
-        ][: limit * 4]
-        # Nearest to what was typed first, so the words being in a shorter name counts
-        typed = guide_words(wanted)
-        rows.sort(key=lambda row: _alike(typed, guide_words(row[2])), reverse=True)
-        return _what_they_carry(
-            found + [_guide_entry(*row, "search") for row in rows[:limit]]
-        )
 
     # An exact tvg-id is not a guess: whatever the names look like, it goes first
     if (tvg_id or "").strip():

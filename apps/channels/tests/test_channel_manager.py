@@ -1859,6 +1859,45 @@ class ViewTests(_Setup):
             200,
         )
 
+    def test_a_search_finds_every_guide_that_matches_not_a_dozen(self):
+        """
+        The window's search was the matcher's shortlist with a box on it, cut at twelve:
+        "pbs" found a dozen where Dispatcharr's own guide list found hundreds, and the one
+        being looked for was often not among them.
+        """
+        source = EPGSource.objects.create(name="PBS", source_type="xmltv", priority=9)
+        for n in range(140):
+            EPGData.objects.create(tvg_id=f"pbs{n}.us", name=f"PBS Station {n}", epg_source=source)
+        EPGData.objects.create(tvg_id="cbs.us", name="CBS Chicago", epg_source=source)
+        url = "/api/channels/channel-manager/guides/"
+
+        first = self.client_api.get(url, {"name": "┃USA┃ PBS", "q": "pbs"}).json()
+        self.assertEqual(first["total"], 140)
+        # A page at a time: thousands of cards at once would lock the browser up
+        self.assertEqual(len(first["guides"]), 100)
+
+        everything = self.client_api.get(
+            url, {"name": "┃USA┃ PBS", "q": "pbs", "limit": 200}
+        ).json()
+        self.assertEqual(len(everything["guides"]), 140)
+        self.assertEqual(
+            {one["name"] for one in everything["guides"]},
+            {f"PBS Station {n}" for n in range(140)},
+        )
+
+        # The guide the channel has stays first, and is not counted as one of the matches
+        held = EPGData.objects.get(name="CBS Chicago")
+        kept = self.client_api.get(
+            url, {"name": "┃USA┃ PBS", "q": "pbs", "limit": 5, "current": held.id}
+        ).json()
+        self.assertEqual(kept["guides"][0]["id"], held.id)
+        self.assertEqual((len(kept["guides"]), kept["total"]), (6, 140))
+
+        # Nonsense for a limit is the first page, not a 500
+        self.assertEqual(
+            len(self.client_api.get(url, {"q": "pbs", "limit": "lots"}).json()["guides"]), 100
+        )
+
     def test_reading_one_guide_s_programmes_through_the_page(self):
         source = EPGSource.objects.create(name="Austria", source_type="xmltv", priority=9)
         guide = EPGData.objects.create(tvg_id="ORF1.at", name="ORF 1", epg_source=source)
