@@ -350,6 +350,55 @@ describe('GuideManagerTable', () => {
     // A hundred and forty cards are slow to draw with the whole suite running beside it
   }, 15000);
 
+  it('shows only the source it is narrowed to, and a search keeps to it', async () => {
+    API.getGuideMatching.mockResolvedValue({
+      matching: null,
+      sources: [
+        { id: 1, name: 'xmltv.at', active: true, holds: 10 },
+        { id: 2, name: 'xmltv.de', active: true, holds: 20 },
+      ],
+    });
+    const german = {
+      id: 30, name: 'ORF 1 DE', tvg_id: 'orf1.de', source: 'xmltv.de', how: 'search',
+      programmes: 5, in_use: true,
+    };
+    const suggested = {
+      id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'xmltv.at', how: 'kept',
+      programmes: 312, in_use: true,
+    };
+    // As the server answers: the guide the row has comes back only from its own source
+    API.getChannelManagerGuides.mockImplementation(async ({ source }) => ({
+      guides: source === '2' ? [german] : [suggested, german],
+    }));
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' }));
+    expect(await screen.findByLabelText('Guide ORF 1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('textbox', { name: 'From one source' }));
+    fireEvent.click(await screen.findByText('xmltv.de (20)'));
+    await waitFor(() =>
+      expect(API.getChannelManagerGuides).toHaveBeenLastCalledWith(
+        expect.objectContaining({ source: '2' })
+      )
+    );
+    expect(await screen.findByLabelText('Guide ORF 1 DE')).toBeInTheDocument();
+    // The row's own guide is from xmltv.at, and is not put back on a list of xmltv.de
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Guide ORF 1')).not.toBeInTheDocument()
+    );
+
+    // ...and a search keeps to it
+    fireEvent.change(screen.getByLabelText('Search every guide'), {
+      target: { value: 'orf' },
+    });
+    await waitFor(() =>
+      expect(API.getChannelManagerGuides).toHaveBeenLastCalledWith(
+        expect.objectContaining({ q: 'orf', source: '2' })
+      )
+    );
+  });
+
   it('can choose no guide at all for a channel', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

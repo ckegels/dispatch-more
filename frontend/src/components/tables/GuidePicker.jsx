@@ -350,10 +350,15 @@ const GuideWindow = ({ channel, chosen, onChoose, onClose }) => {
 
   // The server puts what the channel has at the top of every answer, said the same way
   // as the rest; only a choice it has not been asked about yet is added here
+  // -- except while one source is being tried on its own. The server leaves the guide
+  // the channel has off the list when it is from another source, and putting it back
+  // here put a card from another source at the top of a list that says it is one.
   const shown = useMemo(() => {
-    if (!held || guides.some((guide) => guide.id === held.id)) return guides;
+    if (!held || source || guides.some((guide) => guide.id === held.id)) {
+      return guides;
+    }
     return [held, ...guides];
-  }, [guides, held]);
+  }, [guides, held, source]);
 
   const pickedId = held?.id ?? null;
   // How many of the search's matches are on the list: the guide the channel has is put
