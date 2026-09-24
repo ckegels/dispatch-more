@@ -412,6 +412,26 @@ def parked_ids():
     return {int(i) for i in load_parked()}
 
 
+def parked_in(groups):
+    """
+    The parked streams a round looks at: every one, or with groups chosen, the ones parked
+    from a channel in them. Every parked stream went into every round, so a check narrowed
+    to two groups still went through everything parked from all the others.
+    """
+    if not groups:
+        return parked_ids()
+    from .models import Channel
+
+    mine = set(
+        Channel.objects.filter(channel_group_id__in=[int(g) for g in groups])
+        .values_list("id", flat=True)
+    )
+    return {
+        int(stream_id) for stream_id, entry in load_parked().items()
+        if any(place.get("channel") in mine for place in (entry or {}).get("channels") or ())
+    }
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
@@ -1463,7 +1483,7 @@ def _targets(settings, only=None, due_before=None, skip_accounts=(), waiting_too
     groups = [int(g) for g in settings.get("channel_groups") or ()]
     if groups:
         links = links.filter(channel__channel_group_id__in=groups)
-    wanted = set(links.values_list("stream_id", flat=True)) | parked_ids()
+    wanted = set(links.values_list("stream_id", flat=True)) | parked_in(groups)
     wanted -= {int(i) for i in load_ignored()}
     if only is not None:
         wanted &= {int(i) for i in only}
@@ -1937,6 +1957,29 @@ def start_round(redis_client, force=False, only=None):
         samples=[[time.time(), 0]],
     )
     logger.info(f"Stream Check: a round of {total} streams begins")
+    return total
+
+
+def rescope(redis_client):
+    """
+    A round going is counted again after the groups it looks at changed. Its total was
+    counted when it began and never again: each batch asks what is left with the settings
+    as they are now, but the page went on saying "0 of 3477" for a check narrowed to two
+    groups until the round was over.
+    """
+    round_ = current_round(redis_client)
+    if round_ is None:
+        return None
+    settings = load_settings()
+    left = sum(len(streams) for streams in _targets(
+        settings, only=round_.get("only"), due_before=round_["since"],
+        skip_accounts=round_.get("unavailable") or {},
+    ).values())
+    total = int(progress(redis_client).get("done") or 0) + left
+    round_["total"] = total
+    redis_client.set(ROUND_KEY, json.dumps(round_), ex=ROUND_TTL)
+    _progress(redis_client, total=total)
+    logger.info(f"Stream Check: the groups changed; the round has {left} stream(s) left")
     return total
 
 

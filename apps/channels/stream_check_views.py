@@ -82,10 +82,14 @@ def stream_check_stop(request):
 @api_view(["PUT"])
 @permission_classes([IsAdmin])
 def stream_check_settings(request):
+    before = stream_check.load_settings().get("channel_groups") or []
     try:
         saved = stream_check.save_settings(request.data.get("settings") or {})
     except ValueError as e:
         return JsonResponse({"error": str(e)}, status=400)
+    if sorted(map(int, before)) != sorted(map(int, saved.get("channel_groups") or [])):
+        # A round going is counted again for the groups it now looks at
+        stream_check.rescope(RedisClient.get_client())
     return JsonResponse({"settings": saved})
 
 

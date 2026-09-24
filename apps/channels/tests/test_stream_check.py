@@ -1639,6 +1639,50 @@ class NewStreamsTests(_Setup):
         self.assertEqual(stream_check.current_round(self.redis)["kind"], "recheck")
 
 
+class GroupScopeTests(_Setup):
+    """
+    A check narrowed to two groups said "0 of 3477": every parked stream went into every
+    round whatever the groups, and a round going was never counted again after they changed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        self.germany = ChannelGroup.objects.create(name="┃DE┃ GERMANY")
+        self.ard = Channel.objects.create(name="┃DE┃ ARD", channel_number=50, channel_group=self.germany)
+        self.ard_stream = self._stream("ARD A", self.a)
+        self._attach(self.ard, [self.ard_stream, self.fallback])
+
+    def _looked_at(self):
+        found = stream_check._targets(stream_check.load_settings())
+        return sorted(s.name for streams in found.values() for s in streams)
+
+    def test_a_stream_parked_from_another_group_is_not_in_the_round(self):
+        stream_check.park(self.ard_stream.id)
+        stream_check.save_settings({"channel_groups": [self.group.id]})
+        self.assertNotIn("ARD A", self._looked_at())
+        # ...while one parked from the group chosen still is, to see if it plays again
+        stream_check.park(self.second.id)
+        self.assertIn("ORF 1 B", self._looked_at())
+
+    def test_with_no_groups_chosen_every_parked_stream_is(self):
+        stream_check.park(self.ard_stream.id)
+        self.assertIn("ARD A", self._looked_at())
+
+    def test_a_round_going_is_counted_again_when_its_groups_change(self):
+        api = APIClient()
+        api.force_authenticate(user=User.objects.create_user(username="admin", password="x", user_level=10))
+        stream_check.start_round(self.redis, force=True)
+        self.assertEqual(stream_check.progress(self.redis)["total"], 4)
+        with mock.patch("apps.channels.stream_check_views.RedisClient.get_client", return_value=self.redis):
+            api.put(
+                "/api/channels/stream-check/settings/",
+                {"settings": {"channel_groups": [self.germany.id]}}, format="json",
+            )
+        self.assertEqual(stream_check.progress(self.redis)["total"], 1)
+        self.assertEqual(stream_check.current_round(self.redis)["total"], 1)
+
+
 class ChainTests(_Setup):
     """Batches follow one another: never two chains, and a waiting round is tried again soon."""
 
