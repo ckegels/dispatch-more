@@ -86,12 +86,11 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
   const [rulesText, setRulesText] = useState(rulesToText(value.regex_rules));
   const [aliasText, setAliasText] = useState(aliasesToText(value.aliases));
 
-  const profileValue =
-    value.profiles === 'all'
-      ? 'all'
-      : value.profiles === 'none'
-        ? 'none'
-        : 'some';
+  const profileValue = ['all', 'none', 'like_its_group'].includes(
+    value.profiles
+  )
+    ? value.profiles
+    : 'some';
 
   return (
     <SimpleGrid
@@ -396,11 +395,32 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
                   })
                 }
                 data={[
+                  {
+                    value: 'like_its_group',
+                    label: 'The ones its group is in',
+                  },
                   { value: 'all', label: 'Every profile, as Dispatcharr does' },
                   { value: 'none', label: 'No profile' },
                   { value: 'some', label: 'The ones I pick' },
                 ]}
               />
+              {/* A new channel goes where the rest of its group is watched, and not into
+                  every profile -- which put the sports channels in the kids' profile */}
+              {profileValue === 'like_its_group' && (
+                <NumberInput
+                  size="xs"
+                  label="Where its group has more than"
+                  description="Channels of the group it is made in, switched on in that profile."
+                  min={0}
+                  value={value.profiles_group_more_than ?? 10}
+                  onChange={(number) =>
+                    set({
+                      profiles_group_more_than:
+                        number === '' ? 10 : Math.max(0, Number(number) || 0),
+                    })
+                  }
+                />
+              )}
               {profileValue === 'some' && (
                 <MultiSelect
                   size="xs"

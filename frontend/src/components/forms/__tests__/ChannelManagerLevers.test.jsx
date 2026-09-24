@@ -55,6 +55,24 @@ describe('ChannelManagerLevers', () => {
     expect(screen.queryByText('Into group')).not.toBeInTheDocument();
   });
 
+  it('puts a new channel where its group is, with how many said', () => {
+    const onChange = draw({ create_new: true, profiles: 'like_its_group' });
+    expect(screen.getByDisplayValue('The ones its group is in')).toBeInTheDocument();
+    const more = screen.getByLabelText('Where its group has more than');
+    expect(more).toHaveValue('10');
+    fireEvent.change(more, { target: { value: '4' } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ profiles_group_more_than: 4 })
+    );
+  });
+
+  it('and asks for no number for the other choices', () => {
+    draw({ create_new: true, profiles: 'all' });
+    expect(
+      screen.queryByLabelText('Where its group has more than')
+    ).not.toBeInTheDocument();
+  });
+
   it('warns before streams are removed', () => {
     draw({ replace_streams: true });
     expect(screen.getByText(/Removed streams are shown struck through/)).toBeInTheDocument();

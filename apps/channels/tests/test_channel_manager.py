@@ -709,7 +709,7 @@ class NewChannelTests(_Setup):
     def test_a_channel_no_channel_has_is_made_with_every_copy(self):
         self._stream("┃AT┃ PULS 4 HD", self.a, tvg_id="PULS4.at")
         self._stream("┃AT┃ PULS 4 FHD", self.b)
-        levers = settings(create_new=True, order="quality", epg="tvg_id_then_name")
+        levers = settings(create_new=True, order="quality", epg="tvg_id_then_name", profiles="all")
         plan = channel_manager.build_plan(levers)
 
         (row,) = [r for r in plan["rows"] if r["status"] == "new"]
@@ -725,7 +725,7 @@ class NewChannelTests(_Setup):
         self.assertEqual(made.epg_data.tvg_id, "PULS4.at")
         # Ending in the fallback the other channels end in
         self.assertEqual(self._order(made), ["┃AT┃ PULS 4 FHD", "┃AT┃ PULS 4 HD", "could not dispatch"])
-        # Into every profile, as Dispatcharr does unless told otherwise
+        # Into every profile when asked, as Dispatcharr's own Channels page does with "All"
         self.assertTrue(ChannelProfileMembership.objects.filter(channel=made, channel_profile=self.profile).exists())
 
     def test_the_guide_is_found_by_name_when_no_stream_carries_a_tvg_id(self):
@@ -753,6 +753,114 @@ class NewChannelTests(_Setup):
         channel_manager.apply_plan(settings(create_new=True, profiles="none"), [row["key"]])
         made = Channel.objects.get(name="┃AT┃ PULS 4")
         self.assertFalse(ChannelProfileMembership.objects.filter(channel=made).exists())
+
+
+class ProfileTests(_Setup):
+    """
+    Which channel profiles a channel the Lineup makes joins. Every profile, which is what
+    Dispatcharr's Channels page does with "All" selected, put each new channel into every
+    profile -- a kids' profile got the sports channels. By default a new channel joins the
+    profiles its group is already in: more than ten of the group's channels there.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Made before the channels, so they do not join every profile on their way in
+        self.living_room = ChannelProfile.objects.create(name="Living room")
+        self.kids = ChannelProfile.objects.create(name="Kids")
+        self.bedroom = ChannelProfile.objects.create(name="Bedroom")
+        ChannelProfileMembership.objects.filter(channel=self.orf1).delete()
+        self.group = [self._channel(f"┃AT┃ Channel {n}", 100 + n, self.austria) for n in range(12)]
+        for channel in self.group:
+            ChannelProfileMembership.objects.create(
+                channel=channel, channel_profile=self.living_room, enabled=True
+            )
+        # Eleven there but switched off: a profile the group is hidden in is not one it is in
+        for channel in self.group[:11]:
+            ChannelProfileMembership.objects.create(
+                channel=channel, channel_profile=self.bedroom, enabled=False
+            )
+        # Ten: not more than ten
+        for channel in self.group[:10]:
+            ChannelProfileMembership.objects.create(
+                channel=channel, channel_profile=self.kids, enabled=True
+            )
+
+    def _make(self, **levers):
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        levers = settings(create_new=True, **levers)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "new"]
+        channel_manager.apply_plan(levers, [row["key"]])
+        made = Channel.objects.get(name="┃AT┃ PULS 4")
+        return set(
+            ChannelProfileMembership.objects.filter(channel=made, enabled=True)
+            .values_list("channel_profile__name", flat=True)
+        )
+
+    def test_by_default_it_joins_the_profiles_its_group_is_in(self):
+        self.assertEqual(channel_manager.DEFAULTS["profiles"], "like_its_group")
+        self.assertEqual(self._make(), {"Living room"})
+
+    def test_how_many_is_a_setting(self):
+        self.assertEqual(self._make(profiles_group_more_than=9), {"Living room", "Kids"})
+
+    def test_a_group_in_no_profile_puts_it_in_none(self):
+        empty = ChannelGroup.objects.create(name="┃AT┃ EMPTY")
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        levers = settings(create_new=True)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "new"]
+        channel_manager.apply_plan(levers, [row["key"]], groups={row["key"]: empty.id})
+        made = Channel.objects.get(name="┃AT┃ PULS 4")
+        self.assertFalse(ChannelProfileMembership.objects.filter(channel=made).exists())
+
+    def test_and_the_group_it_is_moved_to_on_the_page_is_the_one_that_counts(self):
+        germany = [self._channel(f"┃DE┃ Kanal {n}", 500 + n, self.germany) for n in range(11)]
+        for channel in germany:
+            ChannelProfileMembership.objects.create(
+                channel=channel, channel_profile=self.kids, enabled=True
+            )
+        self._stream("┃AT┃ PULS 4 HD", self.a)
+        levers = settings(create_new=True)
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "new"]
+        channel_manager.apply_plan(levers, [row["key"]], groups={row["key"]: self.germany.id})
+        made = Channel.objects.get(name="┃AT┃ PULS 4")
+        self.assertEqual(
+            set(ChannelProfileMembership.objects.filter(channel=made).values_list(
+                "channel_profile__name", flat=True)),
+            {"Kids"},
+        )
+
+    def test_every_profile_and_a_list_still_work_as_they_did(self):
+        self.assertEqual(self._make(profiles="all"), {"Living room", "Kids", "Bedroom"})
+
+    def test_a_list_picked_by_hand(self):
+        self.assertEqual(self._make(profiles=[self.bedroom.id]), {"Bedroom"})
+
+    def test_saved_settings_on_the_old_default_take_the_new_one(self):
+        from core.models import CoreSettings
+
+        CoreSettings.objects.update_or_create(
+            key=channel_manager.SETTINGS_KEY,
+            defaults={"name": "Channel Manager", "value": {
+                **channel_manager.DEFAULTS, "profiles": "all", "min_streams_new": 3, "version": 4,
+            }},
+        )
+        loaded = channel_manager.load_settings()
+        self.assertEqual(loaded["profiles"], "like_its_group")
+        # ...and the rest of what was saved is kept
+        self.assertEqual(loaded["min_streams_new"], 3)
+
+    def test_but_a_choice_somebody_made_is_kept(self):
+        from core.models import CoreSettings
+
+        for chosen in ("none", [self.kids.id]):
+            CoreSettings.objects.update_or_create(
+                key=channel_manager.SETTINGS_KEY,
+                defaults={"name": "Channel Manager", "value": {
+                    **channel_manager.DEFAULTS, "profiles": chosen, "version": 4,
+                }},
+            )
+            self.assertEqual(channel_manager.load_settings()["profiles"], chosen)
 
 
 class PageChoiceTests(_Setup):

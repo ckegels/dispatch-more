@@ -57,8 +57,15 @@ DEFAULTS = {
     # nothing in them, which are the ones somebody made by hand. A provider's groups are
     # not offered unless asked for: there are hundreds of them and no channel is in any.
     "group_choices": ["with_channels", "empty"],
-    # "all" joins every profile, as Dispatcharr does; "none", or a list of profile ids
-    "profiles": "all",
+    # Which channel profiles a new channel joins. "like_its_group": the profiles that
+    # already hold more than `profiles_group_more_than` channels of the group it is made
+    # in -- the profiles that group is watched in, and not the rest. "all" joins every
+    # profile, as Dispatcharr's own Channels page does with "All" selected, which put
+    # every new channel into every profile: a kids' profile got the sports channels.
+    # "none", or a list of profile ids. The default is the user's choice, not
+    # DispatcharrUtils', which has no profiles at all.
+    "profiles": "like_its_group",
+    "profiles_group_more_than": 10,
     # ── Recognition ──
     # "exact": the whole name, country box and punctuation and all, with only the quality,
     # the words to ignore and the rules taken off, and case ignored. What DispatcharrUtils
@@ -137,12 +144,16 @@ DEFAULTS = {
 # first defaults matched far more loosely than DispatcharrUtils, and a page opened once
 # saved them all, so they would have outlived the fix. What was chosen to look at is
 # kept; how matching is done goes back to the defaults.
-DEFAULTS_VERSION = 4
+DEFAULTS_VERSION = 5
 # What changed in each version, and so what a set saved before it takes from the defaults;
 # the rest of what was saved is kept. Version 3: new channels are suggested by default.
 # Version 4: channels that are the same channel are combined, and the mark providers put
 # on a stream they are recording is ignored.
 CHANGED_IN = {3: ("create_new",), 4: ("combine_duplicates", "ignore_tags")}
+# Settings whose old default gives way to the new one, and only that: somebody who chose
+# something else chose it. Version 5: a new channel joins the profiles its group is in,
+# not every profile -- but "none" or a list that was picked by hand stays.
+OLD_DEFAULTS = {5: {"profiles": "all"}}
 SCOPE_SETTINGS = (
     "accounts", "stream_groups", "channel_groups", "exclude_channel_groups", "target_group",
     "profiles",
@@ -174,12 +185,19 @@ def load_settings():
             version = stored.value.get("version")
             if version == DEFAULTS_VERSION:
                 kept = set(DEFAULTS)
-            elif version in (2,):
+            elif isinstance(version, int) and 2 <= version < DEFAULTS_VERSION:
                 changed = {k for v, keys in CHANGED_IN.items() if v > version for k in keys}
                 kept = set(DEFAULTS) - changed
             else:
                 kept = set(SCOPE_SETTINGS)
-            values.update({k: v for k, v in stored.value.items() if k in kept})
+            given_way = {
+                k for v, old in OLD_DEFAULTS.items()
+                if not isinstance(version, int) or v > version
+                for k, was in old.items() if stored.value.get(k) == was
+            }
+            values.update({
+                k: v for k, v in stored.value.items() if k in kept and k not in given_way
+            })
     except Exception as e:
         logger.debug(f"Could not read the channel manager settings: {e}")
     return values
@@ -1952,6 +1970,61 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
     return _what_they_carry(found[:limit])
 
 
+class _ProfilesToJoin:
+    """
+    Which channel profiles a new channel joins, by the group it is made in.
+
+    With "like_its_group", a profile is joined when more than `profiles_group_more_than`
+    of the group's channels are in it and switched on there: the profiles the group is
+    watched in. Counted once per group, before anything is made, so the channels one Apply
+    makes do not count towards each other -- the answer is what the group looked like
+    when somebody pressed the button.
+    """
+
+    def __init__(self, settings):
+        from .models import ChannelProfile
+
+        self.how = settings.get("profiles")
+        try:
+            self.more_than = max(0, int(settings.get("profiles_group_more_than", 10)))
+        except (TypeError, ValueError):
+            self.more_than = 10
+        if self.how == "all":
+            self.fixed = list(ChannelProfile.objects.all())
+        elif isinstance(self.how, list):
+            self.fixed = list(ChannelProfile.objects.filter(id__in=self.how))
+        elif self.how == "like_its_group":
+            self.fixed = None
+        else:
+            self.fixed = []
+        self.by_group = {}
+
+    def get(self, group_id):
+        if self.fixed is not None:
+            return self.fixed
+        if group_id not in self.by_group:
+            self.by_group[group_id] = self._where_the_group_is(group_id)
+        return self.by_group[group_id]
+
+    def _where_the_group_is(self, group_id):
+        from django.db.models import Count
+
+        from .models import ChannelProfile, ChannelProfileMembership
+
+        if group_id is None:
+            return []
+        held = (
+            ChannelProfileMembership.objects.filter(
+                channel__channel_group_id=group_id, enabled=True
+            )
+            .values("channel_profile_id")
+            .annotate(held=Count("id"))
+            .filter(held__gt=self.more_than)
+            .values_list("channel_profile_id", flat=True)
+        )
+        return list(ChannelProfile.objects.filter(id__in=list(held)))
+
+
 def _logo_for(name, streams, mode, index):
     if mode in ("keep", "none"):
         return ""
@@ -2600,7 +2673,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     """
     from django.db import transaction
 
-    from .models import Channel, ChannelProfile, ChannelProfileMembership, ChannelStream
+    from .models import Channel, ChannelProfileMembership, ChannelStream
 
     wanted = set(keys or ())
     orders = orders if isinstance(orders, dict) else {}
@@ -2622,6 +2695,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
         ))
     ]
     created = updated = streams_added = combined = 0
+    profiles_for = _ProfilesToJoin(settings)
 
     with transaction.atomic():
         for row in rows:
@@ -2659,13 +2733,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                     logo_id=_logo_id(info.get("logo_url")),
                     tvg_id=(info.get("epg") or {}).get("tvg_id") or None,
                 )
-                profiles = settings.get("profiles")
-                if profiles == "all":
-                    chosen = ChannelProfile.objects.all()
-                elif isinstance(profiles, list):
-                    chosen = ChannelProfile.objects.filter(id__in=profiles)
-                else:
-                    chosen = ChannelProfile.objects.none()
+                chosen = profiles_for.get(channel.channel_group_id)
                 ChannelProfileMembership.objects.bulk_create(
                     [ChannelProfileMembership(channel_profile=p, channel=channel, enabled=True) for p in chosen],
                     ignore_conflicts=True,
