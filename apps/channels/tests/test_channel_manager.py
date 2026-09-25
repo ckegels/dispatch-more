@@ -327,12 +327,122 @@ class HandOrderTests(_Setup):
         channel_manager.apply_plan(settings(), [key], {key: [self.fallback.id, fhd.id, self.existing.id]})
         self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1 FHD", "┃AT┃ ORF 1", "could not dispatch"])
 
+    def test_the_order_the_page_sends_leaves_the_fallback_out(self):
+        """
+        The page can only move what can be moved, so the order it sends has no fallback in
+        it -- and it was compared with the channel's streams fallback and all, found to be
+        "other streams", and dropped. A hand order never reached a channel that ends in a
+        fallback, which is every channel.
+        """
+        fhd = self._stream("┃AT┃ ORF 1 FHD", self.b)
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], {key: [fhd.id, self.existing.id]})
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1 FHD", "┃AT┃ ORF 1", "could not dispatch"])
+
     def test_an_order_of_other_streams_than_there_are_now_is_ignored(self):
         """The streams changed since the page was looked at: the plan's own order stands."""
         fhd = self._stream("┃AT┃ ORF 1 FHD", self.b)
         key = f"ch:{self.orf1.id}"
         channel_manager.apply_plan(settings(), [key], {key: [fhd.id, self.fallback.id]})
         self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "┃AT┃ ORF 1 FHD", "could not dispatch"])
+
+
+class HandAddTests(_Setup):
+    """
+    A stream found and put on a channel by hand, for the provider the matching did not
+    find it on -- a third login writing the name its own way, say.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.c = M3UAccount.objects.create(name="Provider C", account_type="XC", server_url="http://c", is_active=True)
+        self.key = f"ch:{self.orf1.id}"
+
+    def test_a_stream_put_on_by_hand_goes_before_the_fallback(self):
+        theirs = self._stream("AT: ORF EINS HD", self.c)
+        self.assertEqual(self._row(channel_manager.build_plan(settings()), self.key)["status"], "unchanged")
+
+        result = channel_manager.apply_plan(settings(), [self.key], adds={self.key: [theirs.id]})
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(result["streams_added"], 1)
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "AT: ORF EINS HD", "could not dispatch"])
+
+    def test_an_order_given_with_it_places_it(self):
+        theirs = self._stream("AT: ORF EINS HD", self.c)
+        order = [theirs.id, self.existing.id, self.fallback.id]
+        channel_manager.apply_plan(settings(), [self.key], {self.key: order}, adds={self.key: [theirs.id]})
+        self.assertEqual(self._order(self.orf1), ["AT: ORF EINS HD", "┃AT┃ ORF 1", "could not dispatch"])
+
+    def test_a_fallback_or_a_parked_stream_is_never_put_on(self):
+        from apps.channels import stream_check
+
+        other_fallback = Stream.objects.create(name="another fallback", url="http://local/2", is_custom=True)
+        parked = self._stream("AT: ORF EINS", self.c)
+        with patch.object(stream_check, "parked_ids", return_value={parked.id}):
+            result = channel_manager.apply_plan(
+                settings(), [self.key], adds={self.key: [other_fallback.id, parked.id]}
+            )
+        self.assertEqual(result["streams_added"], 0)
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "could not dispatch"])
+
+    def test_nothing_is_put_on_a_row_that_was_not_ticked(self):
+        theirs = self._stream("AT: ORF EINS HD", self.c)
+        channel_manager.apply_plan(settings(), ["new:nothing"], adds={self.key: [theirs.id]})
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "could not dispatch"])
+
+
+class StreamSearchTests(_Setup):
+    """Finding the stream to put on by hand: every word, anywhere, in any order."""
+
+    def setUp(self):
+        super().setUp()
+        self.c = M3UAccount.objects.create(name="Provider C", account_type="XC", server_url="http://c", is_active=True)
+
+    def names(self, *args, **kwargs):
+        return [s["name"] for s in channel_manager.search_streams(*args, **kwargs)]
+
+    def test_every_word_anywhere_in_any_order(self):
+        self._stream("AT: ORF 1 HD", self.c)
+        self._stream("┃AT┃ ORF 2", self.b)
+        self.assertEqual(self.names("hd orf 1"), ["AT: ORF 1 HD"])
+        self.assertEqual(self.names(""), [])
+
+    def test_only_the_providers_asked_for(self):
+        self._stream("AT: ORF 1 HD", self.c)
+        self._stream("┃AT┃ ORF 1 HD", self.b)
+        self.assertEqual(self.names("orf 1", accounts=[self.c.id]), ["AT: ORF 1 HD"])
+
+    def test_no_fallback_no_parked_stream_and_not_what_the_channel_has(self):
+        from apps.channels import stream_check
+
+        parked = self._stream("AT: ORF 1 FHD", self.c)
+        kept = self._stream("AT: ORF 1 HD", self.c)
+        Stream.objects.create(name="ORF 1 could not play", url="http://local/3", is_custom=True)
+        with patch.object(stream_check, "parked_ids", return_value={parked.id}):
+            found = self.names("orf 1", leave_out=[self.existing.id])
+        self.assertEqual(found, [kept.name])
+
+    def test_the_channel_it_is_for_comes_first(self):
+        self._stream("AT: ORF 1 SPORT", self.c)
+        self._stream("┃AT┃ ORF 1 FHD", self.c)
+        self.assertEqual(self.names("orf 1", name="┃AT┃ ORF 1", leave_out=[self.existing.id])[0], "┃AT┃ ORF 1 FHD")
+
+    def test_it_says_where_else_a_stream_is_and_counts_its_provider(self):
+        found = channel_manager.search_streams("orf 1")
+        mine = next(s for s in found if s["id"] == self.existing.id)
+        self.assertEqual([c["name"] for c in mine["channels"]], ["┃AT┃ ORF 1"])
+        self.assertEqual(mine["account_id"], self.a.id)
+        self.assertIsNone(mine["check"])
+
+    def test_through_the_page(self):
+        self._stream("AT: ORF 1 HD", self.c)
+        client = APIClient()
+        client.force_authenticate(user=User.objects.create_user(username="admin", password="x", user_level=10))
+        answer = client.get(
+            "/api/channels/channel-manager/streams/",
+            {"q": "orf 1", "accounts": f"{self.c.id}", "limit": "nonsense"},
+        ).json()
+        self.assertEqual([s["name"] for s in answer["streams"]], ["AT: ORF 1 HD"])
 
 
 class CombineTests(_Setup):

@@ -124,7 +124,7 @@ def channel_manager_apply(request):
     settings = channel_manager.settings_from(request.data.get("settings"))
     return JsonResponse(channel_manager.apply_plan(
         settings, keys, request.data.get("orders"), request.data.get("groups"), request.data.get("drops"),
-        request.data.get("names"), request.data.get("epgs"),
+        request.data.get("names"), request.data.get("epgs"), request.data.get("adds"),
     ))
 
 
@@ -154,6 +154,26 @@ def channel_manager_guides(request):
         request.GET.get("limit", 12),
         request.GET.get("current", ""),
         request.GET.get("source", ""),
+    )})
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def channel_manager_streams(request):
+    """
+    Streams to put on a channel by hand: every word of `q` in the name, from the accounts
+    in `accounts` (comma separated; none is every one switched on), leaving out the ones in
+    `leave_out`, with `name` -- the channel's -- bringing that channel's streams to the top.
+    """
+    def numbers(value):
+        return [int(n) for n in str(value or "").split(",") if n.strip().isdigit()]
+
+    return JsonResponse({"streams": channel_manager.search_streams(
+        request.GET.get("q", ""),
+        numbers(request.GET.get("accounts")),
+        numbers(request.GET.get("leave_out")),
+        request.GET.get("name", ""),
+        request.GET.get("limit", channel_manager.STREAMS_FOUND),
     )})
 
 

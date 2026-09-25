@@ -13,6 +13,7 @@ import {
   ChevronsUpDown,
   EyeOff,
   Play,
+  Plus,
   RotateCcw,
   SlidersHorizontal,
   Undo2,
@@ -28,6 +29,7 @@ import {
   Group,
   LoadingOverlay,
   NativeSelect,
+  NumberInput,
   Pagination,
   Paper,
   Select,
@@ -44,6 +46,7 @@ import ChannelManagerLevers from '../forms/ChannelManagerLevers';
 import { CustomTable, useTable } from './CustomTable';
 import { Logo, Watch } from './StreamParts';
 import { GuidePicker } from './GuidePicker';
+import StreamFinder from './StreamFinder';
 
 // Laid out like Find Logos and the Logo Manager tabs: the same panel, toolbar, table and
 // pagination. Each row is one channel as it would come out, and opens to show every stream
@@ -187,9 +190,41 @@ const StreamLine = ({ stream, move, onDrop }) => (
 // The streams that can be moved: not one taken off, and not the fallback, which stays last
 const movable = (stream) => !stream.removed && !stream.custom;
 
+// A provider is a login: every M3U account is one, two logins at the same provider
+// included, since each carries streams of its own. The fallback is nobody's -- counted, it
+// made every channel one provider richer than it is. By id where the plan says it, since
+// two accounts can share a name.
+const providerOf = (stream) => stream.account_id ?? stream.account;
+const providersOf = (streams) =>
+  new Set(
+    (streams || [])
+      .filter((s) => !s.custom && !s.removed && !s.dropped)
+      .map(providerOf)
+  );
+
 // The whole card chooses the guide, but it carries a button of its own for reading the
 // programmes, and a button inside a button is not a thing a browser will render. So the
 // card says what it is rather than being a <button>.
+// How many of the providers a channel comes out with, and which it has nothing from --
+// which is where to go looking when it is short
+const ProviderLine = ({ streams, providers }) => {
+  const have = providersOf(streams);
+  const count = providers.filter((p) => have.has(p.id)).length;
+  const lacking = providers.filter((p) => !have.has(p.id));
+  return (
+    <Text
+      size="xs"
+      c={lacking.length ? 'orange' : 'dimmed'}
+      style={{ wordBreak: 'break-word' }}
+    >
+      {count} of {providers.length} providers
+      {lacking.length
+        ? ` · missing ${lacking.map((p) => p.name).join(', ')}`
+        : ''}
+    </Text>
+  );
+};
+
 // Which guide a channel is on, said the same way before and after so the two lines can
 // be read against each other
 const GuideLine = ({ guide, how }) => (
@@ -230,6 +265,7 @@ const Expanded = ({
   onName,
   chosenGuide,
   onGuide,
+  onFind,
 }) => {
   const moving = row.streams.filter(movable);
   // Making a group from the row, rather than leaving the page to go and make one
@@ -251,7 +287,11 @@ const Expanded = ({
             searchable
             allowDeselect={false}
             data={groups}
-            value={naming ? NEW_GROUP : String(chosenGroup ?? row.channel.group_id ?? '')}
+            value={
+              naming
+                ? NEW_GROUP
+                : String(chosenGroup ?? row.channel.group_id ?? '')
+            }
             onChange={(group) => {
               if (!group) return;
               if (group === NEW_GROUP) return setNaming(true);
@@ -286,7 +326,9 @@ const Expanded = ({
                     setNewGroup('');
                   } catch (e) {
                     setGroupError(
-                      e?.body?.error || e?.message || 'That group could not be made.'
+                      e?.body?.error ||
+                        e?.message ||
+                        'That group could not be made.'
                     );
                   } finally {
                     setMaking(false);
@@ -335,9 +377,7 @@ const Expanded = ({
               Before · {row.before.streams.length} stream
               {row.before.streams.length === 1 ? '' : 's'}
             </Text>
-            {row.before.channel && (
-              <GuideLine guide={row.before.channel.epg} />
-            )}
+            {row.before.channel && <GuideLine guide={row.before.channel.epg} />}
             {row.before.streams.length === 0 ? (
               <Text size="xs" c="dimmed">
                 {row.status === 'new' ? 'No channel yet' : 'No streams'}
@@ -361,16 +401,12 @@ const Expanded = ({
                 onChange={(event) => onName(row.key, event.currentTarget.value)}
                 style={{ maxWidth: 300 }}
               />
-              <GuidePicker
-                row={row}
-                chosen={chosenGuide}
-                onChoose={onGuide}
-              />
+              <GuidePicker row={row} chosen={chosenGuide} onChoose={onGuide} />
               {row.status !== 'new' &&
                 (chosenName !== undefined || chosenGuide !== undefined) && (
                   <Text size="xs" c="orange">
-                    The channel you have is renamed or re-guided when this row is
-                    applied.
+                    The channel you have is renamed or re-guided when this row
+                    is applied.
                   </Text>
                 )}
             </Stack>
@@ -397,6 +433,18 @@ const Expanded = ({
                 />
               );
             })}
+            {onFind && row.channel && (
+              <Group mt={4}>
+                <Button
+                  size="compact-xs"
+                  variant="default"
+                  leftSection={<Plus size={12} />}
+                  onClick={() => onFind(row.key)}
+                >
+                  Put a stream on…
+                </Button>
+              </Group>
+            )}
           </Stack>
         </SimpleGrid>
       )}
@@ -436,6 +484,14 @@ const ChannelManagerTable = () => {
   // for no guide} -- null is a choice, so what was chosen is "the key is there", not its value
   const [nameChoice, setNameChoice] = useState({});
   const [guideChoice, setGuideChoice] = useState({});
+  // Streams found and put on a row by hand: {key: [streams, as the search gave them]}
+  const [adds, setAdds] = useState({});
+  // The row whose streams are being searched for, or null
+  const [finding, setFinding] = useState(null);
+  // Channels with fewer providers than this ('' is any number), and channels missing
+  // this one provider ('' is none in particular)
+  const [fewerThan, setFewerThan] = useState('');
+  const [missing, setMissing] = useState('');
   const [clearing, setClearing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -456,6 +512,7 @@ const ChannelManagerTable = () => {
       setDrops({});
       setNameChoice({});
       setGuideChoice({});
+      setAdds({});
       tableRef.current?.setSelectedTableIds?.([]);
       // Kept, so the page opens the way it was left
       API.saveChannelManagerSettings(withLevers).catch(() => {});
@@ -497,7 +554,8 @@ const ChannelManagerTable = () => {
       // used, and it has nothing in it yet by definition
       ...madeGroups.map((g) => ({ ...g, kind: 'empty' })),
       ...(options?.channel_groups || []).filter(
-        (g) => wanted.has(g.kind) && !madeGroups.some((made) => made.id === g.id)
+        (g) =>
+          wanted.has(g.kind) && !madeGroups.some((made) => made.id === g.id)
       ),
     ];
     return [
@@ -522,7 +580,8 @@ const ChannelManagerTable = () => {
     }
     for (const row of plan?.rows || []) {
       const chosen = groupChoice[row.key];
-      const id = chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
+      const id =
+        chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
       if (id == null) continue;
       if (!names.has(String(id))) {
         names.set(
@@ -543,14 +602,18 @@ const ChannelManagerTable = () => {
     const looking = (levers.channel_groups || []).map(String);
     const leftAlone = (levers.exclude_channel_groups || []).map(String);
     return (
-      (looking.length > 0 && !looking.includes(group)) || leftAlone.includes(group)
+      (looking.length > 0 && !looking.includes(group)) ||
+      leftAlone.includes(group)
     );
   }, [group, levers]);
 
   const groupNames = useMemo(
     () =>
       Object.fromEntries(
-        [...(options?.all_groups || []), ...madeGroups].map((g) => [g.id, g.name])
+        [...(options?.all_groups || []), ...madeGroups].map((g) => [
+          g.id,
+          g.name,
+        ])
       ),
     [options, madeGroups]
   );
@@ -575,7 +638,10 @@ const ChannelManagerTable = () => {
       }
       const made = await API.addChannelGroup({ name });
       if (made?.id) {
-        setMadeGroups((all) => [...all, { id: made.id, name: made.name || name }]);
+        setMadeGroups((all) => [
+          ...all,
+          { id: made.id, name: made.name || name },
+        ]);
         return made;
       }
       // Nothing came back and no reason with it: ask what groups there are now, in case
@@ -594,8 +660,33 @@ const ChannelManagerTable = () => {
     [options, madeGroups]
   );
 
+  // The providers a channel could have: the ones the levers look at, or every one switched
+  // on. How many there are is what "fewer than" is measured against.
+  const providers = useMemo(() => {
+    const picked = (levers?.accounts || []).map(Number);
+    return (options?.accounts || [])
+      .filter((a) => (picked.length ? picked.includes(a.id) : a.active))
+      .map((a) => ({ id: a.id, name: a.name }));
+  }, [options, levers?.accounts]);
+
   const rows = useMemo(() => {
-    const all = (plan?.rows || []).map((given) => {
+    const all = (plan?.rows || []).map((planned) => {
+      // Streams put on by hand go after the row's own and before the fallback, as they
+      // will be when applied
+      const extra = (adds[planned.key] || []).filter(
+        (s) => !planned.streams.some((own) => own.id === s.id)
+      );
+      const given = extra.length
+        ? {
+            ...planned,
+            handAdded: extra.length,
+            streams: [
+              ...planned.streams.filter((s) => !s.custom),
+              ...extra.map((s) => ({ ...s, added: true, byHand: true })),
+              ...planned.streams.filter((s) => s.custom),
+            ],
+          }
+        : planned;
       const out = drops[given.key];
       const raw = out?.length
         ? {
@@ -650,19 +741,35 @@ const ChannelManagerTable = () => {
             row.status === 'combine' ||
             row.status === 'conflict' ||
             row.reordered ||
-            row.byHand
+            row.byHand ||
+            row.handAdded
           : row.status === show
     );
     const inGroup = group
       ? byStatus.filter((row) => {
           const chosen = groupChoice[row.key];
-          const its = chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
+          const its =
+            chosen ?? row.channel?.group_id ?? row.before?.channel?.group_id;
           return String(its ?? '') === group;
         })
       : byStatus;
+    // Counted as the channel would come out. A row something was put on by hand stays in
+    // view though it is not short any more, or it would vanish the moment it was fixed.
+    const fewer = Number(fewerThan) || 0;
+    const byProviders =
+      fewer || missing
+        ? inGroup.filter((row) => {
+            if (!row.channel || row.status === 'conflict') return false;
+            if (row.handAdded) return true;
+            const have = providersOf(row.streams);
+            if (fewer && have.size >= fewer) return false;
+            if (missing && have.has(Number(missing))) return false;
+            return true;
+          })
+        : inGroup;
     const wanted = search.trim().toLowerCase();
-    if (!wanted) return inGroup;
-    return inGroup.filter((row) =>
+    if (!wanted) return byProviders;
+    return byProviders.filter((row) =>
       [
         row.channel?.name,
         row.before?.channel?.name,
@@ -682,6 +789,9 @@ const ChannelManagerTable = () => {
     nameChoice,
     guideChoice,
     group,
+    adds,
+    fewerThan,
+    missing,
   ]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -707,7 +817,8 @@ const ChannelManagerTable = () => {
               row.status === 'combine' ||
               row.reordered ||
               row.dropped ||
-              row.byHand)
+              row.byHand ||
+              row.handAdded)
         )
         .map((row) => row.key),
     [rows, ticked]
@@ -741,6 +852,11 @@ const ChannelManagerTable = () => {
           .filter((key) => guideChoice[key] !== undefined)
           .map((key) => [key, guideChoice[key]?.id ?? null])
       );
+      const put = Object.fromEntries(
+        tickedKeys
+          .filter((key) => adds[key]?.length)
+          .map((key) => [key, adds[key].map((s) => s.id)])
+      );
       await API.applyChannelManager(
         levers,
         tickedKeys,
@@ -748,7 +864,8 @@ const ChannelManagerTable = () => {
         groups,
         dropped,
         named,
-        guided
+        guided,
+        put
       );
       await preview(levers);
     } catch (e) {
@@ -764,8 +881,11 @@ const ChannelManagerTable = () => {
     (key, id, by) => {
       const row = (plan?.rows || []).find((r) => r.key === key);
       if (!row) return;
-      const current =
-        orders[key] || row.streams.filter(movable).map((s) => s.id);
+      const own = row.streams.filter(movable).map((s) => s.id);
+      const current = orders[key] || [
+        ...own,
+        ...(adds[key] || []).map((s) => s.id).filter((id) => !own.includes(id)),
+      ];
       const from = current.indexOf(id);
       const to = from + by;
       if (from === -1 || to < 0 || to >= current.length) return;
@@ -778,7 +898,7 @@ const ChannelManagerTable = () => {
         return now;
       });
     },
-    [plan, orders]
+    [plan, orders, adds]
   );
 
   const tick = useCallback((key) => {
@@ -789,9 +909,47 @@ const ChannelManagerTable = () => {
     });
   }, []);
 
-  // A stream out of a row, or back in; the row is ticked, as a change to apply
+  // A stream put on by hand, and taken off again. An order set by hand keeps up with it:
+  // the order the page sends has to be of the streams the row really has.
+  const addStream = useCallback(
+    (key, stream) => {
+      setAdds((all) => {
+        const now = all[key] || [];
+        return now.some((s) => s.id === stream.id)
+          ? all
+          : { ...all, [key]: [...now, stream] };
+      });
+      setOrders((all) =>
+        all[key] && !all[key].includes(stream.id)
+          ? { ...all, [key]: [...all[key], stream.id] }
+          : all
+      );
+      tick(key);
+    },
+    [tick]
+  );
+
+  const unaddStream = useCallback((key, id) => {
+    setAdds((all) => {
+      const left = (all[key] || []).filter((s) => s.id !== id);
+      const next = { ...all };
+      if (left.length) next[key] = left;
+      else delete next[key];
+      return next;
+    });
+    setOrders((all) =>
+      all[key] ? { ...all, [key]: all[key].filter((one) => one !== id) } : all
+    );
+  }, []);
+
+  // A stream out of a row, or back in; the row is ticked, as a change to apply. One put
+  // on by hand is simply taken off again: it was never the row's to keep.
   const dropStream = useCallback(
     (key, id) => {
+      if ((adds[key] || []).some((s) => s.id === id)) {
+        unaddStream(key, id);
+        return;
+      }
       setDrops((all) => {
         const now = new Set(all[key] || []);
         if (now.has(id)) now.delete(id);
@@ -800,7 +958,7 @@ const ChannelManagerTable = () => {
       });
       tick(key);
     },
-    [tick]
+    [tick, adds, unaddStream]
   );
 
   // A name typed, or a guide chosen, on a row; the row is ticked, as a change to apply.
@@ -865,6 +1023,8 @@ const ChannelManagerTable = () => {
 
   const ignoreRowRef = useRef(ignoreRow);
   ignoreRowRef.current = ignoreRow;
+  const findRef = useRef(setFinding);
+  findRef.current = setFinding;
 
   const chooseGroup = useCallback((key, group) => {
     setGroupChoice((all) => ({ ...all, [key]: group }));
@@ -889,7 +1049,11 @@ const ChannelManagerTable = () => {
             <Group gap={4} wrap="nowrap">
               {/* Read the way the ignored list below reads it: a status this page has
                   not been taught yet is one badge, not a blank page */}
-              <Badge size="xs" variant="light" color={STATUS[r.status]?.color || 'gray'}>
+              <Badge
+                size="xs"
+                variant="light"
+                color={STATUS[r.status]?.color || 'gray'}
+              >
                 {STATUS[r.status]?.label || r.status}
               </Badge>
               {r.reordered && (
@@ -911,6 +1075,29 @@ const ChannelManagerTable = () => {
                 <Text size="xs" c="red">
                   ✕{r.dropped}
                 </Text>
+              )}
+              {r.handAdded > 0 && (
+                <Tooltip label="Put on by hand">
+                  <Badge size="xs" variant="light" color="teal">
+                    +{r.handAdded} by hand
+                  </Badge>
+                </Tooltip>
+              )}
+              {r.channel && r.status !== 'conflict' && (
+                <Tooltip label="Put a stream on">
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color="gray"
+                    aria-label={`Put a stream on ${r.channel.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      findRef.current(r.key);
+                    }}
+                  >
+                    <Plus size={12} />
+                  </ActionIcon>
+                </Tooltip>
               )}
               {r.status !== 'unchanged' && (
                 <Tooltip label="Don't suggest this again">
@@ -940,8 +1127,7 @@ const ChannelManagerTable = () => {
         cell: ({ row }) => {
           const r = row.original;
           const channel = r.before.channel;
-          const providers = new Set(r.before.streams.map((s) => s.account))
-            .size;
+          const providers = providersOf(r.before.streams).size;
           return (
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Logo url={channel?.logo_url} name={channel?.name} />
@@ -999,12 +1185,22 @@ const ChannelManagerTable = () => {
                   </Text>
                 </Group>
                 {(row.original.combining || []).length > 0 && (
-                  <Text size="xs" c="orange" style={{ wordBreak: 'break-word' }}>
+                  <Text
+                    size="xs"
+                    c="orange"
+                    style={{ wordBreak: 'break-word' }}
+                  >
                     {row.original.combining
                       .map((one) => `${one.name} (${one.number})`)
                       .join(', ')}{' '}
                     {row.original.combining.length === 1 ? 'is' : 'are'} deleted
                   </Text>
+                )}
+                {providers.length > 1 && (
+                  <ProviderLine
+                    streams={row.original.streams}
+                    providers={providers}
+                  />
                 )}
                 <GuideLine
                   guide={epg}
@@ -1058,7 +1254,7 @@ const ChannelManagerTable = () => {
         },
       },
     ],
-    []
+    [providers]
   );
 
   const renderHeaderCell = (header) => (
@@ -1093,6 +1289,7 @@ const ChannelManagerTable = () => {
         onName={chooseName}
         chosenGuide={guideChoice[row.original.key]}
         onGuide={chooseGuide}
+        onFind={setFinding}
       />
     ),
     headerCellRenderFns: {
@@ -1190,6 +1387,41 @@ const ChannelManagerTable = () => {
                   data={groupsOnShow}
                   size="xs"
                   style={{ width: 200 }}
+                />
+                {/* Channels short of a provider, to find their streams for them. Setting
+                    either looks through every channel, not only what would change: a
+                    channel short of one is usually one nothing is suggested for. */}
+                <NumberInput
+                  aria-label="Fewer providers than"
+                  placeholder={`Fewer than ${providers.length || '…'} providers`}
+                  value={fewerThan}
+                  min={1}
+                  allowDecimal={false}
+                  onChange={(value) => {
+                    setFewerThan(value === '' ? '' : Number(value));
+                    if (value !== '' && show === 'changes') setShow('all');
+                    setPageIndex(0);
+                  }}
+                  size="xs"
+                  style={{ width: 170 }}
+                />
+                <Select
+                  aria-label="Missing provider"
+                  placeholder="Missing a provider"
+                  value={missing}
+                  onChange={(value) => {
+                    setMissing(value || '');
+                    if (value && show === 'changes') setShow('all');
+                    setPageIndex(0);
+                  }}
+                  clearable
+                  searchable
+                  data={providers.map((p) => ({
+                    value: String(p.id),
+                    label: `Missing ${p.name}`,
+                  }))}
+                  size="xs"
+                  style={{ width: 190 }}
                 />
               </Group>
 
@@ -1300,7 +1532,7 @@ const ChannelManagerTable = () => {
                   </Button>
                 </Group>
                 <ChannelManagerLevers
-                  key={leverReset}
+                  resetKey={leverReset}
                   options={options}
                   value={levers}
                   onChange={setLevers}
@@ -1461,6 +1693,13 @@ const ChannelManagerTable = () => {
         title={`Apply ${tickedKeys.length} channel${tickedKeys.length === 1 ? '' : 's'}?`}
         message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. Streams you took out are not added, or come off the channel. A Combine row keeps one channel and deletes the others named on it, which cannot be undone except from a backup. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
         confirmLabel="Apply"
+      />
+      <StreamFinder
+        row={finding ? rows.find((r) => r.key === finding) || null : null}
+        providers={providers}
+        onAdd={(stream) => addStream(finding, stream)}
+        onRemove={(id) => unaddStream(finding, id)}
+        onClose={() => setFinding(null)}
       />
     </>
   );

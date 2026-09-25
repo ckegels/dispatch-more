@@ -423,6 +423,27 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**Channels short of a provider, and streams put on by hand** (v194). A provider is a
+**login** (an M3U account), two logins at one provider included -- the user's word: each
+carries streams of its own. The toolbar filters by "Fewer than N providers" and "Missing
+<provider>", counted as the row would come out; setting either switches "What would change"
+to "Everything", since a short channel usually has nothing suggested. The After column
+says "2 of 3 providers · missing C". The fallback is **not** a provider: the row used to
+count it (its account is `custom`), so every channel read one provider richer.
+**Put a stream on** (the + on a row, or the button under its streams) opens `StreamFinder`:
+`search_streams` over `channel-manager/streams/`, every word anywhere in the name, only
+the missing providers at first, no custom or parked streams, the channel's own match key
+ranked first, each saying which channels it is on already and what Stream Check found.
+A stream put on goes before the fallback (`apply_plan(adds=...)`), and taking it off with
+the row's X takes it out of the hand order too.
+**A hand order was never applied** until v194: the page sends the movable streams only,
+and `_in_the_order_given` compared that with the row's streams fallback and all, so on
+every channel (all end in a fallback) it was "other streams" and dropped. The backend test
+had always passed the fallback in the order, which the page never does. It compares
+without the fallback now.
+**The levers open a section at a time** (v194), as Stream Check's settings do: the
+section is `forms/SettingsSection.jsx`, shared. New channels got a section of their own.
+
 **Groups can be left alone** (v173, `exclude_channel_groups`). Out of the plan altogether:
 no row, no streams added, nothing combined, and never a home for a new channel either (see
 `_NewHomes.group_for`, which says so when a stream's own group is one of them). For the

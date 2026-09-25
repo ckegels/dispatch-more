@@ -1,31 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  Box,
   Group,
   MultiSelect,
   NumberInput,
   Select,
-  SimpleGrid,
   Stack,
   Switch,
   Text,
   Textarea,
   TextInput,
 } from '@mantine/core';
+import Section from './SettingsSection';
 
 // The levers, in the order a run is thought through: what to look at, how a channel is
 // recognised, how its streams are ordered, what may be changed, and where its guide and
-// logo come from. Every one says what it does, because most are only touched once.
-
-const Section = ({ title, children }) => (
-  <Stack gap={8}>
-    <Text size="xs" fw={700} tt="uppercase" c="dimmed">
-      {title}
-    </Text>
-    {children}
-  </Stack>
-);
+// logo come from. Every one says what it does, because most are only touched once --
+// which is also why they open a section at a time, the way Stream Check's settings do.
 
 const toOptions = (items, withCount) =>
   (items || []).map((item) => ({
@@ -80,11 +71,20 @@ const textToAliases = (text) =>
       })
   );
 
-const ChannelManagerLevers = ({ options, value, onChange }) => {
+// resetKey changes when the levers are put back to their defaults: the two text boxes
+// are then shown as reset, and the sections stay as open as they were
+const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
   const set = (changes) => onChange({ ...value, ...changes });
   // Kept as typed until it is valid, so a half-typed line is not thrown away
   const [rulesText, setRulesText] = useState(rulesToText(value.regex_rules));
   const [aliasText, setAliasText] = useState(aliasesToText(value.aliases));
+  const lastReset = useRef(resetKey);
+  useEffect(() => {
+    if (lastReset.current === resetKey) return;
+    lastReset.current = resetKey;
+    setRulesText(rulesToText(value.regex_rules));
+    setAliasText(aliasesToText(value.aliases));
+  }, [resetKey, value.regex_rules, value.aliases]);
 
   const profileValue = ['all', 'none', 'like_its_group'].includes(
     value.profiles
@@ -93,12 +93,12 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
     : 'some';
 
   return (
-    <SimpleGrid
-      cols={{ base: 1, md: 2, lg: 3 }}
-      spacing="lg"
-      verticalSpacing="lg"
-    >
-      <Section title="What to look at">
+    <Stack gap="xs">
+      <Section
+        title="What to look at"
+        about="which providers, stream groups and channel groups"
+        openAtFirst
+      >
         <MultiSelect
           size="xs"
           label="Providers"
@@ -113,7 +113,7 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           size="xs"
           label="Stream groups"
           description={
-            'Which of the providers\' groups to take streams from. None is every one ' +
+            "Which of the providers' groups to take streams from. None is every one " +
             'for your channels; new channels then only come from the groups your ' +
             'channels already use (see "From which streams"). A group picked here ' +
             'gives new channels too.'
@@ -146,7 +146,10 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
         />
       </Section>
 
-      <Section title="Recognising a channel">
+      <Section
+        title="Recognising a channel"
+        about="how a stream is known to be one of your channels"
+      >
         <Select
           size="xs"
           label="Match names"
@@ -238,7 +241,10 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
         />
       </Section>
 
-      <Section title="Ordering streams">
+      <Section
+        title="A channel's streams"
+        about="the order they are tried in, and which are left out or taken off"
+      >
         <Select
           size="xs"
           label="Put first"
@@ -277,182 +283,6 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           checked={!!value.skip_stale}
           onChange={(e) => set({ skip_stale: e.currentTarget.checked })}
         />
-        <Text size="xs" c="dimmed">
-          A custom stream on a channel — a fallback such as a &ldquo;could not
-          play&rdquo; screen — always stays last, after everything added.
-        </Text>
-      </Section>
-
-      <Section title="What may change">
-        <Switch
-          size="xs"
-          label="Suggest new channels"
-          description="For streams no channel has. Only suggested: nothing is made unless its row is ticked and applied."
-          checked={!!value.create_new}
-          onChange={(e) => set({ create_new: e.currentTarget.checked })}
-        />
-        {value.create_new && (
-          <Box pl="md">
-            <Stack gap={8}>
-              <Select
-                size="xs"
-                label="From which streams"
-                description={
-                  value.stream_groups?.length
-                    ? 'The stream groups picked above.'
-                    : 'With no stream groups picked above. A group no channel uses ' +
-                      'yet -- one a provider just added -- gives no new channels ' +
-                      'until it is picked, or this says every stream.'
-                }
-                allowDeselect={false}
-                value={value.new_from || 'followed'}
-                onChange={(from) => from && set({ new_from: from })}
-                data={[
-                  {
-                    value: 'followed',
-                    label: 'The stream groups your channels come from',
-                  },
-                  {
-                    value: 'all',
-                    label: 'Every stream (can be tens of thousands)',
-                  },
-                ]}
-              />
-              <Select
-                size="xs"
-                label="Logo"
-                allowDeselect={false}
-                value={value.new_logo || 'collections'}
-                onChange={(logo) => logo && set({ new_logo: logo })}
-                data={[
-                  {
-                    value: 'collections',
-                    label: 'From the logo collections, else the stream',
-                  },
-                  { value: 'stream', label: "The stream's own" },
-                  { value: 'none', label: 'None' },
-                ]}
-              />
-              <Switch
-                size="xs"
-                label="End each in your fallback stream"
-                description="The custom stream most of your channels end in, such as Could Not Dispatch."
-                checked={value.new_fallback !== false}
-                onChange={(e) => set({ new_fallback: e.currentTarget.checked })}
-              />
-              <MultiSelect
-                size="xs"
-                label="Groups to choose between"
-                description="Which groups the picker on a row offers. Every group there is runs to hundreds, nearly all of them a provider's own names that no channel of yours is in, so by default it offers the ones you have channels in and the ones with nothing in them — the ones you made yourself. A group you make here is always offered."
-                value={value.group_choices || ['with_channels', 'empty']}
-                onChange={(kinds) =>
-                  set({ group_choices: kinds.length ? kinds : ['with_channels'] })
-                }
-                data={[
-                  { value: 'with_channels', label: 'Groups you have channels in' },
-                  { value: 'empty', label: 'Empty groups (ones you made)' },
-                  {
-                    value: 'active_m3u',
-                    label: "A provider's groups, from a playlist switched on",
-                  },
-                  {
-                    value: 'inactive_m3u',
-                    label: "A provider's groups, from a playlist switched off",
-                  },
-                ]}
-                clearable={false}
-              />
-              <Select
-                size="xs"
-                label="Into group"
-                description="Empty suggests one per channel: where your channels from the same stream group are. It can be changed on each row."
-                clearable
-                searchable
-                value={value.target_group ? String(value.target_group) : null}
-                onChange={(group) =>
-                  set({ target_group: group ? Number(group) : null })
-                }
-                data={toOptions(options.all_groups)}
-              />
-              <Group grow gap="xs">
-                <NumberInput
-                  size="xs"
-                  label="Numbers from"
-                  description="Empty is after the last channel of its group."
-                  min={1}
-                  value={value.number_start ?? ''}
-                  onChange={(number) =>
-                    set({ number_start: number === '' ? null : Number(number) })
-                  }
-                />
-                <NumberInput
-                  size="xs"
-                  label="At least"
-                  description="Streams needed to make one."
-                  min={1}
-                  value={value.min_streams_new ?? 1}
-                  onChange={(number) =>
-                    set({ min_streams_new: Number(number) || 1 })
-                  }
-                />
-              </Group>
-              <Select
-                size="xs"
-                label="Channel profiles"
-                allowDeselect={false}
-                value={profileValue}
-                onChange={(choice) =>
-                  set({
-                    profiles: choice === 'some' ? [] : choice,
-                  })
-                }
-                data={[
-                  {
-                    value: 'like_its_group',
-                    label: 'The ones its group is in',
-                  },
-                  { value: 'all', label: 'Every profile, as Dispatcharr does' },
-                  { value: 'none', label: 'No profile' },
-                  { value: 'some', label: 'The ones I pick' },
-                ]}
-              />
-              {/* A new channel goes where the rest of its group is watched, and not into
-                  every profile -- which put the sports channels in the kids' profile */}
-              {profileValue === 'like_its_group' && (
-                <NumberInput
-                  size="xs"
-                  label="Where its group has more than"
-                  description="Channels of the group it is made in, switched on in that profile."
-                  min={0}
-                  value={value.profiles_group_more_than ?? 10}
-                  onChange={(number) =>
-                    set({
-                      profiles_group_more_than:
-                        number === '' ? 10 : Math.max(0, Number(number) || 0),
-                    })
-                  }
-                />
-              )}
-              {profileValue === 'some' && (
-                <MultiSelect
-                  size="xs"
-                  aria-label="Profiles to join"
-                  data={toOptions(options.profiles)}
-                  value={asStrings(value.profiles)}
-                  onChange={(picked) => set({ profiles: ids(picked) })}
-                />
-              )}
-              <Switch
-                size="xs"
-                label="Keep the country in the name"
-                checked={!!value.keep_country_prefix}
-                onChange={(e) =>
-                  set({ keep_country_prefix: e.currentTarget.checked })
-                }
-              />
-            </Stack>
-          </Box>
-        )}
         <Switch
           size="xs"
           color="orange"
@@ -469,9 +299,192 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
             </Text>
           </Alert>
         )}
+        <Text size="xs" c="dimmed">
+          A custom stream on a channel — a fallback such as a &ldquo;could not
+          play&rdquo; screen — always stays last, after everything added.
+        </Text>
       </Section>
 
-      <Section title="Guide and logo">
+      <Section
+        title="New channels"
+        about="whether streams no channel has become channels, and where they go"
+      >
+        <Switch
+          size="xs"
+          label="Suggest new channels"
+          description="For streams no channel has. Only suggested: nothing is made unless its row is ticked and applied."
+          checked={!!value.create_new}
+          onChange={(e) => set({ create_new: e.currentTarget.checked })}
+        />
+        {value.create_new && (
+          <>
+            <Select
+              size="xs"
+              label="From which streams"
+              description={
+                value.stream_groups?.length
+                  ? 'The stream groups picked above.'
+                  : 'With no stream groups picked above. A group no channel uses ' +
+                    'yet -- one a provider just added -- gives no new channels ' +
+                    'until it is picked, or this says every stream.'
+              }
+              allowDeselect={false}
+              value={value.new_from || 'followed'}
+              onChange={(from) => from && set({ new_from: from })}
+              data={[
+                {
+                  value: 'followed',
+                  label: 'The stream groups your channels come from',
+                },
+                {
+                  value: 'all',
+                  label: 'Every stream (can be tens of thousands)',
+                },
+              ]}
+            />
+            <Select
+              size="xs"
+              label="Logo"
+              allowDeselect={false}
+              value={value.new_logo || 'collections'}
+              onChange={(logo) => logo && set({ new_logo: logo })}
+              data={[
+                {
+                  value: 'collections',
+                  label: 'From the logo collections, else the stream',
+                },
+                { value: 'stream', label: "The stream's own" },
+                { value: 'none', label: 'None' },
+              ]}
+            />
+            <Switch
+              size="xs"
+              label="End each in your fallback stream"
+              description="The custom stream most of your channels end in, such as Could Not Dispatch."
+              checked={value.new_fallback !== false}
+              onChange={(e) => set({ new_fallback: e.currentTarget.checked })}
+            />
+            <MultiSelect
+              size="xs"
+              label="Groups to choose between"
+              description="Which groups the picker on a row offers. Every group there is runs to hundreds, nearly all of them a provider's own names that no channel of yours is in, so by default it offers the ones you have channels in and the ones with nothing in them — the ones you made yourself. A group you make here is always offered."
+              value={value.group_choices || ['with_channels', 'empty']}
+              onChange={(kinds) =>
+                set({ group_choices: kinds.length ? kinds : ['with_channels'] })
+              }
+              data={[
+                {
+                  value: 'with_channels',
+                  label: 'Groups you have channels in',
+                },
+                { value: 'empty', label: 'Empty groups (ones you made)' },
+                {
+                  value: 'active_m3u',
+                  label: "A provider's groups, from a playlist switched on",
+                },
+                {
+                  value: 'inactive_m3u',
+                  label: "A provider's groups, from a playlist switched off",
+                },
+              ]}
+              clearable={false}
+            />
+            <Select
+              size="xs"
+              label="Into group"
+              description="Empty suggests one per channel: where your channels from the same stream group are. It can be changed on each row."
+              clearable
+              searchable
+              value={value.target_group ? String(value.target_group) : null}
+              onChange={(group) =>
+                set({ target_group: group ? Number(group) : null })
+              }
+              data={toOptions(options.all_groups)}
+            />
+            <Group grow gap="xs">
+              <NumberInput
+                size="xs"
+                label="Numbers from"
+                description="Empty is after the last channel of its group."
+                min={1}
+                value={value.number_start ?? ''}
+                onChange={(number) =>
+                  set({ number_start: number === '' ? null : Number(number) })
+                }
+              />
+              <NumberInput
+                size="xs"
+                label="At least"
+                description="Streams needed to make one."
+                min={1}
+                value={value.min_streams_new ?? 1}
+                onChange={(number) =>
+                  set({ min_streams_new: Number(number) || 1 })
+                }
+              />
+            </Group>
+            <Select
+              size="xs"
+              label="Channel profiles"
+              allowDeselect={false}
+              value={profileValue}
+              onChange={(choice) =>
+                set({
+                  profiles: choice === 'some' ? [] : choice,
+                })
+              }
+              data={[
+                {
+                  value: 'like_its_group',
+                  label: 'The ones its group is in',
+                },
+                { value: 'all', label: 'Every profile, as Dispatcharr does' },
+                { value: 'none', label: 'No profile' },
+                { value: 'some', label: 'The ones I pick' },
+              ]}
+            />
+            {/* A new channel goes where the rest of its group is watched, and not into
+                  every profile -- which put the sports channels in the kids' profile */}
+            {profileValue === 'like_its_group' && (
+              <NumberInput
+                size="xs"
+                label="Where its group has more than"
+                description="Channels of the group it is made in, switched on in that profile."
+                min={0}
+                value={value.profiles_group_more_than ?? 10}
+                onChange={(number) =>
+                  set({
+                    profiles_group_more_than:
+                      number === '' ? 10 : Math.max(0, Number(number) || 0),
+                  })
+                }
+              />
+            )}
+            {profileValue === 'some' && (
+              <MultiSelect
+                size="xs"
+                aria-label="Profiles to join"
+                data={toOptions(options.profiles)}
+                value={asStrings(value.profiles)}
+                onChange={(picked) => set({ profiles: ids(picked) })}
+              />
+            )}
+            <Switch
+              size="xs"
+              label="Keep the country in the name"
+              checked={!!value.keep_country_prefix}
+              onChange={(e) =>
+                set({ keep_country_prefix: e.currentTarget.checked })
+              }
+            />
+          </>
+        )}
+      </Section>
+
+      <Section
+        title="Guide and logo"
+        about="where a channel's guide and logo come from"
+      >
         <Select
           size="xs"
           label="Guide"
@@ -502,7 +515,7 @@ const ChannelManagerLevers = ({ options, value, onChange }) => {
           ]}
         />
       </Section>
-    </SimpleGrid>
+    </Stack>
   );
 };
 

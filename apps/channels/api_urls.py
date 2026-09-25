@@ -83,6 +83,7 @@ urlpatterns = [
     path('channel-manager/preview/', channel_manager_views.channel_manager_preview, name='channel_manager_preview'),
     path('channel-manager/apply/', channel_manager_views.channel_manager_apply, name='channel_manager_apply'),
     path('channel-manager/guides/', channel_manager_views.channel_manager_guides, name='channel_manager_guides'),
+    path('channel-manager/streams/', channel_manager_views.channel_manager_streams, name='channel_manager_streams'),
     path('channel-manager/matching/', channel_manager_views.channel_manager_matching, name='channel_manager_matching'),
     path('channel-manager/guides/reading/', channel_manager_views.channel_manager_reading, name='channel_manager_reading'),
     path('channel-manager/guides/load/', channel_manager_views.channel_manager_load_guide, name='channel_manager_load_guide'),

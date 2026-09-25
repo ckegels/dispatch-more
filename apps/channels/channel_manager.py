@@ -437,6 +437,103 @@ def _attached_rows(stream_ids, settings):
     ]
 
 
+STREAMS_FOUND = 50
+STREAMS_LOOKED_AT = 2000
+
+
+def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOUND):
+    """
+    Streams to put on a channel by hand, for the one the matching could not find: every
+    word typed, anywhere in the name, in any order -- "orf 1 hd at" finds "┃AT┃ ORF1 HD" as
+    well as "AT: ORF 1 HD" -- from the providers asked for, or every one switched on.
+
+    A parked stream is not offered: it is off its channels until it plays again, and
+    putting it on one by hand would only have Stream Check take it off again. Nor is a
+    custom stream: it is somebody's fallback, not a provider's channel. The ones already
+    on the channel are left out (leave_out), and the name of the channel it is for (name)
+    brings a stream that is plainly that channel to the top.
+
+    Each says where else it is already, and what Stream Check last found, because
+    "is this the one, and does it play" is the whole question when choosing.
+    """
+    from django.db.models import Q
+
+    from apps.m3u.models import M3UAccount
+
+    from .models import ChannelGroup, ChannelStream, Stream
+    from . import stream_check
+
+    words = [w for w in str(search or "").lower().split() if w]
+    if not words:
+        return []
+    streams = Stream.objects.filter(is_custom=False)
+    wanted = [int(a) for a in accounts or ()]
+    if wanted:
+        streams = streams.filter(m3u_account_id__in=wanted)
+    else:
+        streams = streams.filter(m3u_account__is_active=True)
+    query = Q()
+    for word in words:
+        query &= Q(name__icontains=word)
+    streams = streams.filter(query)
+    skip = {int(i) for i in leave_out or ()} | stream_check.parked_ids()
+    if skip:
+        streams = streams.exclude(id__in=skip)
+
+    settings = load_settings()
+    aliases = _alias_map(settings)
+    account_names = dict(M3UAccount.objects.values_list("id", "name"))
+    group_names = dict(ChannelGroup.objects.values_list("id", "name"))
+    found = [
+        {**_row(s, settings, aliases, account_names, group_names, {}, in_scope=True), "stale": s["is_stale"]}
+        # Enough to rank, not every stream there is: a single common word is tens of
+        # thousands on a real setup
+        for s in streams.values(*STREAM_FIELDS, "is_stale")[:STREAMS_LOOKED_AT]
+    ]
+    wanted_key = channel_key(name, settings, aliases) if name else ""
+    found.sort(key=lambda s: (
+        # The channel it is for first, then what still plays, then the best picture
+        s["key"] != wanted_key if wanted_key else False,
+        s["stale"],
+        s["quality_rank"],
+        len(s["name"]),
+        s["name"].lower(),
+    ))
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = STREAMS_FOUND
+    found = found[:limit]
+
+    ids = [s["id"] for s in found]
+    elsewhere = {}
+    for link in (
+        ChannelStream.objects.filter(stream_id__in=ids)
+        .order_by("channel__channel_number")
+        .values("stream_id", "channel_id", "channel__name", "channel__channel_number")
+    ):
+        elsewhere.setdefault(link["stream_id"], []).append({
+            "id": link["channel_id"],
+            "name": link["channel__name"],
+            "number": link["channel__channel_number"],
+        })
+    results = stream_check.load_results()["streams"]
+    check_settings = stream_check.load_settings()
+    out = []
+    for s in found:
+        record = results.get(str(s["id"]))
+        out.append({
+            **_stream_summary(s),
+            "stale": s["stale"],
+            "channels": elsewhere.get(s["id"], []),
+            "check": {
+                "state": stream_check.state_of(record, check_settings),
+                "at": record.get("checked_at"),
+            } if record else None,
+        })
+    return out
+
+
 def _row(s, settings, aliases, account_names, group_names, priority, in_scope):
     """One stream as the plan works with it: what it is, where from, and how good."""
     label, rank, probed = quality_of(s["name"], s["stream_stats"])
@@ -548,6 +645,9 @@ def _stream_summary(stream, added=False, removed=False):
         "in_scope": stream.get("in_scope", True),
         "id": stream["id"],
         "name": stream["name"],
+        # By id as well as by name: how many providers a channel has is counted on the
+        # page, and two accounts can be given the same name
+        "account_id": stream.get("account_id"),
         "account": stream["account"],
         "group": stream["group"],
         "quality": stream["quality"],
@@ -2650,9 +2750,13 @@ def _in_the_order_given(final_ids, given, custom_ids):
         given = [int(i) for i in given or ()]
     except (TypeError, ValueError):
         return final_ids
-    if sorted(given) != sorted(final_ids):
+    # Compared without the fallback: the page can only move what can be moved, so the order
+    # it sends has none -- and compared with it, every hand order on a channel that ends in
+    # a fallback (every channel) was taken for "other streams" and dropped
+    real = [i for i in final_ids if i not in custom_ids]
+    if sorted(i for i in given if i not in custom_ids) != sorted(real):
         return final_ids
-    return [i for i in given if i not in custom_ids] + [i for i in given if i in custom_ids]
+    return [i for i in given if i not in custom_ids] + [i for i in final_ids if i in custom_ids]
 
 
 def _longest_channel_name():
@@ -2701,7 +2805,36 @@ def _guides_given(epgs):
     return out, {}
 
 
-def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None, epgs=None):
+def _adds_given(adds):
+    """
+    The streams put on a row by hand, by row: only ones that are there, that are a
+    provider's and not somebody's fallback, and that are not parked -- a stream parked
+    since the page was looked at would only be taken off again by Stream Check.
+    """
+    from .models import Stream
+    from .stream_check import parked_ids
+
+    given = {}
+    for key, ids in (adds if isinstance(adds, dict) else {}).items():
+        try:
+            given[key] = [int(i) for i in ids or ()]
+        except (TypeError, ValueError):
+            continue
+    wanted = {i for ids in given.values() for i in ids}
+    if not wanted:
+        return {}
+    usable = set(
+        Stream.objects.filter(id__in=wanted, is_custom=False).values_list("id", flat=True)
+    ) - parked_ids()
+    out = {}
+    for key, ids in given.items():
+        kept = list(dict.fromkeys(i for i in ids if i in usable))
+        if kept:
+            out[key] = kept
+    return out
+
+
+def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None, epgs=None, adds=None):
     """
     Carry out the chosen rows of the plan, worked out again now rather than trusted from the
     page: if the streams have changed since it was looked at, what is applied is what is
@@ -2718,6 +2851,10 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     and the guide as they were set by hand on the row. They name a channel being made, or
     rename and re-guide one that is already there -- the only two things this changes about
     a channel you have beyond its streams, and only ever on a row that was ticked.
+
+    adds is {row key: [stream ids]}: streams found and put on the row by hand, for the
+    provider the matching did not find it on. They go after the row's own streams and
+    before the fallback, which stays last; an order given on the page places them.
     """
     from django.db import transaction
 
@@ -2729,6 +2866,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     drops = {k: {int(i) for i in v} for k, v in (drops if isinstance(drops, dict) else {}).items()}
     names = _names_given(names)
     epgs, guides_known = _guides_given(epgs)
+    adds = _adds_given(adds)
     plan = build_plan(settings)
     homes = _NewHomes() if groups else None
     if homes:
@@ -2739,7 +2877,10 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
         if r["key"] in wanted
         and (r["status"] in ("new", "merge", "combine") or (
             r["status"] == "unchanged"
-            and (r["key"] in orders or r["key"] in drops or r["key"] in names or r["key"] in epgs)
+            and (
+                r["key"] in orders or r["key"] in drops or r["key"] in names
+                or r["key"] in epgs or r["key"] in adds
+            )
         ))
     ]
     created = updated = streams_added = combined = 0
@@ -2751,8 +2892,15 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 s["id"] for s in row["streams"] if s["id"] in drops.get(row["key"], ()) and not s.get("custom")
             }
             final_ids = [s["id"] for s in row["streams"] if not s["removed"] and s["id"] not in dropped]
+            custom_ids = {s["id"] for s in row["streams"] if s.get("custom")}
+            by_hand = [i for i in adds.get(row["key"], ()) if i not in final_ids]
+            if by_hand:
+                # Before the fallback: one put after it would never be played
+                final_ids = (
+                    [i for i in final_ids if i not in custom_ids] + by_hand
+                    + [i for i in final_ids if i in custom_ids]
+                )
             if row["key"] in orders:
-                custom_ids = {s["id"] for s in row["streams"] if s.get("custom")}
                 final_ids = _in_the_order_given(final_ids, orders[row["key"]], custom_ids)
             if not final_ids:
                 # Never leaves a channel with nothing to play

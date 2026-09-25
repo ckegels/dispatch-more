@@ -2875,16 +2875,37 @@ export default class API {
     groups = {},
     drops = {},
     names = {},
-    epgs = {}
+    epgs = {},
+    adds = {}
   ) {
     // groups: {row key: channel group id} for new channels put in another group;
     // drops: {row key: [stream ids]} taken out of a row on the page;
     // names and epgs: {row key: name} and {row key: guide id, or null for no guide},
-    // set by hand on the row
+    // set by hand on the row; adds: {row key: [stream ids]} found and put on by hand
     return await request(`${host}/api/channels/channel-manager/apply/`, {
       method: 'POST',
-      body: { settings, keys, orders, groups, drops, names, epgs },
+      body: { settings, keys, orders, groups, drops, names, epgs, adds },
     });
+  }
+
+  // Streams to put on a channel by hand: every word of q, anywhere in the name, from the
+  // accounts given (none is every one switched on). name is the channel's, which brings
+  // that channel's streams to the top; leave_out the ones it has already.
+  static async searchChannelManagerStreams({
+    q = '',
+    accounts = [],
+    leave_out = [],
+    name = '',
+  } = {}) {
+    const query = new URLSearchParams({
+      q,
+      accounts: accounts.join(','),
+      leave_out: leave_out.join(','),
+      name,
+    });
+    return await request(
+      `${host}/api/channels/channel-manager/streams/?${query}`
+    );
   }
 
   // The guides one channel could be: the best matches for its name, or with `q` a plain
