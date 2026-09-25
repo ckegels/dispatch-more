@@ -444,6 +444,28 @@ without the fallback now.
 **The levers open a section at a time** (v194), as Stream Check's settings do: the
 section is `forms/SettingsSection.jsx`, shared. New channels got a section of their own.
 
+**A provider that writes the country its own way, and US locals by call sign** (v195).
+Measured on the user's server with their third login, Digitalizard.com (2,079 streams,
+1,412 channels): **not one** stream matched a channel by name, exact or loose -- it writes
+"AT| ATV FHD" where the others write "┃AT┃ ATV HD", and its 205 channels all came through
+tvg-id. Three levers, all off (DispatcharrUtils compares names as written):
+- `country_any_way`: in the match key only, a leading country in any shape ("AT|", "AT:",
+  "[AT]", "┃AUT┃", "┃USA┃") is written "┃AT┃" (`_country_one_way`). Only 2-3 letters that
+  are a real country after `_one_country`, so a package ("PPV|", "GO:") or a longer box
+  ("┃CA EN┃") is left alone. Names stay as written.
+- `match_call_signs`: when a stream's name matches nothing, a call sign written as one --
+  in brackets, between bars or slashes, or with -TV/-DT -- finds the station
+  (`call_signs_of`). The user's locals are "ABC 10 | ALBANY | WTEN", the provider's
+  "US| ABC 10 (WTEN) ALBANY". Two guards, both from the real data: a subchannel is its own
+  station ("wlox-2": WLOX is ABC, WLOX-DT2 CBS), and both names must say the same network
+  (`network_of`) -- "START TV HD (KCBS)" is what KCBS sends on a subchannel, and CBS 2 went
+  onto it.
+- The loose key keeps East/West: `match_key` took everything in brackets off, "[WEST]"
+  with it, and a West stream went on both feeds.
+Loose without "Same country only" is wrong on real names (IT Sky Documentaries onto the UK
+one, DE ATV onto BE ATV). Measured gain, channels given a Digitalizard stream they lacked:
+country 59; + call signs 418; loose + same country + country 127; all four 481.
+
 **Groups can be left alone** (v173, `exclude_channel_groups`). Out of the plan altogether:
 no row, no streams added, nothing combined, and never a home for a new channel either (see
 `_NewHomes.group_for`, which says so when a stream's own group is one of them). For the

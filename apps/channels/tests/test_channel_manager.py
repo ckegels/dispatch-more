@@ -54,6 +54,51 @@ class RecognitionTests(TestCase):
         self.assertTrue(self.same("┃AT┃ ORF 1", "┃AT┃ ORF-1", name_matching="loose"))
         self.assertTrue(self.same("┃BE┃ Eén", "┃BE┃ Een", name_matching="loose"))
 
+    def test_the_country_however_it_is_written_is_there_to_be_asked_for(self):
+        """
+        The user's third login writes "AT| ATV FHD" where the others write "┃AT┃ ATV HD",
+        and matched nothing by name. Off, the name counts as written (DispatcharrUtils).
+        """
+        self.assertFalse(self.same("AT| ATV FHD", "┃AT┃ ATV HD"))
+        for name in ("AT| ATV FHD", "AT | ATV", "AT: ATV", "[AT] ATV", "┃AUT┃ ATV", "at|ATV", "AT - ATV"):
+            self.assertTrue(self.same(name, "┃AT┃ ATV HD", country_any_way=True), name)
+        self.assertTrue(self.same("US| AMC PLUS HD", "┃USA┃ AMC PLUS", country_any_way=True))
+        self.assertTrue(self.same("FR| 20 MINUTES TV FHD", "┃FR┃ 20 MINUTES TV", country_any_way=True))
+
+    def test_a_country_written_any_way_is_still_that_country(self):
+        self.assertFalse(self.same("AT| ORF 1", "┃DE┃ ORF 1", country_any_way=True))
+        self.assertFalse(self.same("US| AMC", "┃UK┃ AMC", country_any_way=True))
+
+    def test_a_package_or_a_longer_box_is_not_a_country(self):
+        """The shape is also how a playlist marks its own packages, and "┃CA EN┃" is not "┃CA FR┃"."""
+        self.assertFalse(self.same("GO: CNN", "┃GO┃ CNN", country_any_way=True))
+        self.assertFalse(self.same("PPV| CNN", "CNN", country_any_way=True))
+        self.assertFalse(self.same("┃CA EN┃ FOOD NETWORK", "┃CA FR┃ FOOD NETWORK", country_any_way=True))
+        # A channel whose name only starts like a country code keeps its name
+        self.assertEqual(channel_manager._country_one_way("CNN: Live"), "CNN: Live")
+
+    def test_with_loose_matching_as_well(self):
+        self.assertTrue(self.same("AT| ORF1 FHD", "┃AT┃ ORF 1", country_any_way=True, name_matching="loose"))
+
+    def test_loose_matching_keeps_east_and_west_apart(self):
+        """In brackets they were taken off as decoration, and a West stream went on both feeds."""
+        loose = {"name_matching": "loose", "country_any_way": True}
+        self.assertFalse(self.same("US| POP [WEST]", "POP HD [EAST]", **loose))
+        self.assertTrue(self.same("US| POP [WEST]", "POP HD [WEST]", **loose))
+
+    def test_a_call_sign_is_only_one_written_as_one(self):
+        calls = channel_manager.call_signs_of
+        self.assertEqual(calls("ABC 10 | ALBANY | WTEN"), {"wten"})
+        self.assertEqual(calls("US| ABC 02 (KATU) PORTLAND", "us"), {"katu"})
+        self.assertEqual(calls("PBS 56 | CHICAGO | WYIN/WTTW"), {"wyin", "wttw"})
+        self.assertEqual(calls("CBS 7 | BEND | KBNZ-LD"), {"kbnz"})
+        # A subchannel is a station of its own: WLOX is ABC, WLOX-DT2 is CBS
+        self.assertEqual(calls("CBS 13 | GULFPORT | WLOX-DT2"), {"wlox-2"})
+        # Four letters in a name, or from a country that gives no call signs, are a word
+        self.assertEqual(calls("WILD EARTH"), set())
+        self.assertEqual(calls("NAT GEO | WILD"), set())
+        self.assertEqual(calls("DE| WELT (WELT)", "de"), set())
+
     def test_quality_is_a_whole_word_not_part_of_one(self):
         """"HD" in the middle of a word is the word: SHD Sport is not SH plus a quality."""
         self.assertFalse(self.same("SHD Sport", "S Sport"))
@@ -138,6 +183,37 @@ class _Setup(TestCase):
 
 
 class MergeTests(_Setup):
+    def test_a_provider_writing_the_country_its_own_way_is_merged_when_asked(self):
+        """The stream goes on the channel you have; its name, and the channel's, stay as written."""
+        theirs = self._stream("AT| ORF 1 FHD", self.b, group=ChannelGroup.objects.create(name="EU | AUSTRIA"))
+        key = f"ch:{self.orf1.id}"
+        self.assertEqual(self._row(channel_manager.build_plan(settings()), key)["status"], "unchanged")
+
+        row = self._row(channel_manager.build_plan(settings(country_any_way=True)), key)
+        self.assertEqual(row["status"], "merge")
+        self.assertIn("AT| ORF 1 FHD", [s["name"] for s in row["streams"]])
+        channel_manager.apply_plan(settings(country_any_way=True), [key])
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", theirs.name, "could not dispatch"])
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ ORF 1")
+
+    def test_a_local_station_is_found_by_its_call_sign_when_asked(self):
+        usa = ChannelGroup.objects.create(name="┃USA┃ ABC NETWORK")
+        wten = self._channel("ABC 10 | ALBANY | WTEN", 10, usa)
+        start = self._channel("START TV HD (KCBS)", 11, usa)
+        cbs2 = self._channel("CBS 2 | LOS ANGELES | KCBS", 12, usa)
+        theirs = self._stream("US| ABC 10 (WTEN) ALBANY", self.b, group=usa)
+        kcbs = self._stream("US| CBS 02 (KCBS) LOS ANGELES HD", self.b, group=usa)
+
+        plan = channel_manager.build_plan(settings())
+        self.assertEqual(self._row(plan, f"ch:{wten.id}")["status"], "unchanged")
+
+        plan = channel_manager.build_plan(settings(match_call_signs=True))
+        self.assertIn(theirs.id, [s["id"] for s in self._row(plan, f"ch:{wten.id}")["streams"]])
+        # KCBS's own channel, not what KCBS sends on a subchannel under another name
+        self.assertIn(kcbs.id, [s["id"] for s in self._row(plan, f"ch:{cbs2.id}")["streams"]])
+        self.assertNotIn(kcbs.id, [s["id"] for s in self._row(plan, f"ch:{start.id}")["streams"]])
+
     def test_every_copy_of_a_channel_is_found_across_providers(self):
         self._stream("┃AT┃ ORF 1 FHD", self.b)
         self._stream("┃AT┃ ORF 1 HD", self.a)

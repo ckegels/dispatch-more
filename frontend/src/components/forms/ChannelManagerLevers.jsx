@@ -206,6 +206,20 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
           checked={!!value.same_country}
           onChange={(e) => set({ same_country: e.currentTarget.checked })}
         />
+        <Switch
+          size="xs"
+          label="The country however it is written"
+          description="┃AT┃, AT|, AT:, [AT] and ┃AUT┃ are one country, and ┃USA┃ is US| — for a provider that writes the country its own way and so matches nothing by name. Only where the letters are a country, so a package such as GO: or VIP| is left alone. Names stay as they are written. Off in DispatcharrUtils, which compares the name as written."
+          checked={!!value.country_any_way}
+          onChange={(e) => set({ country_any_way: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          label="US and Canadian stations by call sign"
+          description="When a name matches nothing: ABC 10 | ALBANY | WTEN and US| ABC 10 (WTEN) ALBANY are one station. Only a call sign written as one — in brackets, between bars, or as KQED-DT — and only where both say the same network; a subchannel (WLOX-DT2) is a station of its own. Off in DispatcharrUtils, which only compares names."
+          checked={!!value.match_call_signs}
+          onChange={(e) => set({ match_call_signs: e.currentTarget.checked })}
+        />
         <TextInput
           size="xs"
           label="Words to ignore"

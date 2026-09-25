@@ -55,6 +55,15 @@ describe('ChannelManagerLevers', () => {
     expect(screen.queryByDisplayValue(/\^AT: => ┃AT┃/)).not.toBeInTheDocument();
   });
 
+  it('reads the country however it is written, and stations by call sign, when asked', () => {
+    const onChange = draw();
+    open('Recognising a channel');
+    fireEvent.click(screen.getByRole('switch', { name: /The country however it is written/ }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ country_any_way: true }));
+    fireEvent.click(screen.getByRole('switch', { name: /stations by call sign/ }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ match_call_signs: true }));
+  });
+
   it('shows rules and other names as lines of text', () => {
     draw();
     open('Recognising a channel');
