@@ -36,6 +36,7 @@ import {
   Select,
   SimpleGrid,
   Stack,
+  Switch,
   Text,
   TextInput,
   Tooltip,
@@ -520,6 +521,8 @@ const ChannelManagerTable = () => {
   // The order rows are listed in, and the fewest streams a row must have to be shown ('' is
   // any number)
   const [sortBy, setSortBy] = useState('plan');
+  // Only rows with a stream from every login you have switched on
+  const [everyProvider, setEveryProvider] = useState(false);
   const [atLeast, setAtLeast] = useState('');
   const [clearing, setClearing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -699,6 +702,16 @@ const ChannelManagerTable = () => {
       .map((a) => ({ id: a.id, name: a.name }));
   }, [options, levers?.accounts]);
 
+  // Every login switched on, whatever the levers look at: "from every provider" is about
+  // what you have, and with the levers narrowed to one provider it would mean only that one
+  const everyLogin = useMemo(
+    () =>
+      (options?.accounts || [])
+        .filter((a) => a.active && a.name !== 'custom')
+        .map((a) => a.id),
+    [options]
+  );
+
   const rows = useMemo(() => {
     const all = (plan?.rows || []).map((planned) => {
       // Streams put on by hand go after the row's own and before the fallback, as they
@@ -800,9 +813,17 @@ const ChannelManagerTable = () => {
           })
         : inGroup;
     const least = Number(atLeast) || 0;
-    const byCount = least
+    const byLeast = least
       ? byProviders.filter((row) => streamCount(row) >= least)
       : byProviders;
+    // Counted as the row would come out, so a new channel is judged by what it would carry
+    const byCount =
+      everyProvider && everyLogin.length
+        ? byLeast.filter((row) => {
+            const have = providersOf(row.streams);
+            return everyLogin.every((id) => have.has(id));
+          })
+        : byLeast;
     const wanted = search.trim().toLowerCase();
     const found = !wanted
       ? byCount
@@ -837,6 +858,8 @@ const ChannelManagerTable = () => {
     missing,
     sortBy,
     atLeast,
+    everyProvider,
+    everyLogin,
   ]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -1528,6 +1551,16 @@ const ChannelManagerTable = () => {
                   ]}
                   size="xs"
                   style={{ width: 170 }}
+                />
+                <Switch
+                  size="xs"
+                  label={`From all ${everyLogin.length} providers`}
+                  aria-label="From every provider"
+                  checked={everyProvider}
+                  onChange={(event) => {
+                    setEveryProvider(event.currentTarget.checked);
+                    setPageIndex(0);
+                  }}
                 />
                 <NumberInput
                   aria-label="At least streams"

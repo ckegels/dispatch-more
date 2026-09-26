@@ -988,6 +988,17 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     await waitFor(() => expect(screen.queryAllByText('┃AT┃ ORF 1')).toHaveLength(0));
   });
 
+  it('shows only what comes from every login switched on', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    await pickOption('Which channels', 'Everything');
+    await screen.findAllByText('┃AT┃ ORF 2');
+    // Three logins switched on; the one switched off does not count
+    fireEvent.click(screen.getByRole('switch', { name: 'From every provider' }));
+    await waitFor(() => expect(screen.queryAllByText('┃AT┃ ORF 1')).toHaveLength(0));
+    expect(screen.getAllByText('┃AT┃ ORF 2').length).toBeGreaterThan(0);
+  });
+
   it('shows the channels missing one provider in particular', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
