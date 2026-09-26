@@ -45,6 +45,7 @@ from typing import Optional
 import gevent
 from django.db.models.signals import post_delete, post_save
 
+from . import app_devices
 from .constants import ChannelMetadataField, ChannelState
 from .redis_keys import RedisKeys
 
@@ -189,8 +190,13 @@ class Viewer:
     app: Optional[str] = field(default=None, compare=False)
     # The device behind a media server, when its server could say which one (see
     # media_servers.sole_device). A media server asks on behalf of its viewers, so without
-    # this it is one anonymous viewer for all of them.
+    # this it is one anonymous viewer for all of them. Also a device a player app declared
+    # itself ("app|<user>|<id>", see app_devices): the same thing -- somebody saying which
+    # device this is -- only said by the device itself.
     server_device: Optional[str] = None
+    # The multiview session a tile of a declared device belongs to (see app_devices): Force
+    # Close never closes one tile of a session for another. Not part of who the viewer is.
+    multiview: Optional[str] = field(default=None, compare=False)
 
 
 def is_viewer_request(viewer) -> bool:
@@ -700,9 +706,23 @@ def viewer_from_request(request, user, client_ip, redis_client=None):
     user_agent = request.META.get("HTTP_USER_AGENT")
     if is_recording(user_agent):
         return Viewer(ip=client_ip, recording=True)
+    user_id = user.id if user is not None else None
+    # An app that says which device it is is taken at its word (with its login), rather
+    # than guessed from an address several devices can share -- a VPN, a router, a proxy
+    device = app_devices.declared_device(request)
+    if device:
+        key = app_devices.device_key(user_id, device)
+        app_devices.remember_name(redis_client, key, request, getattr(user, "username", ""))
+        return Viewer(
+            ip=client_ip,
+            user_id=user_id,
+            app=app_name(user_agent, client_ip),
+            server_device=key,
+            multiview=app_devices.declared_multiview(request) or None,
+        )
     return Viewer(
         ip=client_ip,
-        user_id=user.id if user is not None else None,
+        user_id=user_id,
         # None for media servers, so their viewers stay anonymous (see app_name)
         app=app_name(user_agent, client_ip),
         server_device=_server_device(user_agent, client_ip, redis_client),
@@ -798,7 +818,11 @@ def record_client_viewer(redis_client, channel_uuid, client_id, viewer):
     identity needs. The viewer is also added to the channel's viewer set, which outlives the
     client (see CHANNEL_VIEWERS_KEY).
     """
-    if not redis_client or not is_viewer_request(viewer) or not in_use():
+    # Also for Force Close alone, and for a device that declared itself: without it on the
+    # client, a later request from the same device is not the viewer of its own channel
+    if not redis_client or not is_viewer_request(viewer) or not (
+        in_use() or skipping_in_use() or app_devices.is_declared(viewer.server_device)
+    ):
         return
     channel_uuid = str(channel_uuid)
     try:
@@ -812,6 +836,12 @@ def record_client_viewer(redis_client, channel_uuid, client_id, viewer):
                 RedisKeys.client_metadata(channel_uuid, str(client_id)),
                 "server_device",
                 viewer.server_device,
+            )
+        if viewer.multiview:
+            redis_client.hset(
+                RedisKeys.client_metadata(channel_uuid, str(client_id)),
+                "multiview",
+                viewer.multiview,
             )
     except Exception as e:
         logger.debug(f"Could not record viewer for client {client_id}: {e}")
@@ -865,6 +895,7 @@ def _client_viewer(client) -> Viewer:
         app=app_name(client.get("user_agent"), client.get("ip_address")),
         # Written when the viewer was recognised (see record_client_viewer)
         server_device=client.get("server_device") or None,
+        multiview=client.get("multiview") or None,
     )
 
 
@@ -1411,6 +1442,55 @@ def _stop_channel_now(redis_client, channel_uuid, hold_slot=False):
     gevent.spawn(_stop_channel, channel_uuid)
 
 
+def leave_previous_channel(redis_client, viewer, previous_channel_uuid, requested_channel_uuid):
+    """
+    The app said it is leaving previous_channel_uuid for the channel it is asking for (see
+    app_devices, switch_hints). That channel is closed now, and its slot held for this
+    device, so the new channel gets it instead of waiting for the old connection to time
+    out -- on an account with one connection, the difference between switching and a
+    refusal.
+
+    Only for a device that declared itself, and only a channel nobody else is on: a
+    channel another viewer is watching, or one being recorded, is left alone whatever the
+    app says. Returns whether the channel was closed.
+    """
+    previous = str(previous_channel_uuid or "")
+    if (
+        not redis_client
+        or not previous
+        or previous == str(requested_channel_uuid)
+        or not is_viewer_request(viewer)
+        or not app_devices.is_declared(viewer.server_device)
+    ):
+        return False
+    try:
+        if (
+            not redis_client.exists(f"live:channel:{previous}:metadata")
+            or redis_client.exists(_skipped_stopping_key(previous))
+            or _dispatcharr_is_stopping(redis_client, previous)
+            or _is_being_recorded(redis_client, previous, _being_recorded(redis_client))
+        ):
+            return False
+        clients = list(_channel_clients(redis_client, previous))
+        if not clients or any(
+            _client_viewer(client).server_device != viewer.server_device for client in clients
+        ):
+            return False
+        logger.info(
+            f"App switch: closing channel {previous} for {viewer}, who said it is leaving it "
+            f"for channel {requested_channel_uuid}"
+        )
+        record_event(
+            redis_client, viewer, "left channel (the app said so)",
+            channel=previous, result="closed",
+        )
+        _stop_channel_now(redis_client, previous, hold_slot=True)
+        return True
+    except Exception as e:
+        logger.error(f"App switch: could not close channel {previous} for {viewer}: {e}", exc_info=True)
+        return False
+
+
 def _being_recorded(redis_client) -> set:
     """The channels a media server is recording, asked once per stop rather than per channel."""
     try:
@@ -1461,6 +1541,11 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
     """
     if not may_be_identified(viewer) or not redis_client:
         return []
+    if viewer.multiview:
+        # A multiview tile: the device means to watch several channels at once, including
+        # the one it was on full screen before -- which started before the session did and
+        # so carries none. What a tile leaves, the app names (leave_previous_channel).
+        return []
 
     try:
         # Its own switch: stopping a skipped channel needs no overlap slot from the provider
@@ -1500,6 +1585,10 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
                     # Someone else is watching too: never stop a shared channel
                     joined = []
                     break
+                if viewer.multiview and client.get("multiview") == viewer.multiview:
+                    # Another tile of the same multiview: the device is watching both
+                    joined = []
+                    break
                 joined.append(joined_at)
             if joined:
                 # The earliest join counts, so a player reconnecting to a channel it has
@@ -1525,7 +1614,13 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
             if not (account_stops_skipped_channels(account) and is_identified(viewer, account)):
                 continue
             watched_for = now - joined_at
-            guessed = viewer.server_device is not None and certain is not True
+            # Only a media server's player can be named by a guess; a device that declared
+            # itself is certain
+            guessed = (
+                viewer.server_device is not None
+                and not app_devices.is_declared(viewer.server_device)
+                and certain is not True
+            )
             if guessed and watched_for > GUESSED_WINDOW_SECONDS:
                 continue
             logger.info(

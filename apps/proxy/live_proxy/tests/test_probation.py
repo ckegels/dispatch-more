@@ -17,7 +17,7 @@ from apps.m3u.connection_pool import (
 )
 from apps.m3u.models import M3UAccount, M3UAccountProfile, ServerGroup
 from apps.m3u.serializers import M3UAccountSerializer
-from apps.proxy.live_proxy import media_servers, probation
+from apps.proxy.live_proxy import app_devices, media_servers, probation
 
 # Waits that exist to be kind to a real media server, and cost only time here. Set once,
 # in the module the others import, so every test file gets them.
@@ -1644,6 +1644,64 @@ class StopSkippedChannelsTests(TestCase):
         self.assertEqual(self._stop(viewer=player), ["just-opened"])
         # Once the server has said who it is, the rest goes too
         self.assertIn("long-ago", self._stop(viewer=player, certain=True))
+
+    # ── Apps that say which device they are (app_devices) ──
+
+    def _device(self, device, user_id=1, multiview=None):
+        return probation.Viewer(
+            "192.168.65.3", user_id=user_id, app="arrTV",
+            server_device=app_devices.device_key(user_id, device), multiview=multiview,
+        )
+
+    def _device_channel(self, uuid, viewer, seconds_ago=5, client="c"):
+        self._channel(uuid, clients=[(f"{client}-{uuid}", viewer.ip, str(viewer.user_id), "arrTV", seconds_ago, viewer.server_device)])
+        if viewer.multiview:
+            self.redis.hset(RedisKeys.client_metadata(uuid, f"{client}-{uuid}"), "multiview", viewer.multiview)
+
+    def test_two_devices_on_one_login_behind_one_address_are_two_viewers(self, mock_stop, _mock_spawn):
+        """
+        On the real installation a SHIELD and a Mac on the admin login both came through the
+        VPN as 192.168.65.3, and each channel start closed the other's stream.
+        """
+        shield, mac = self._device("shield-0001"), self._device("macbook-0001")
+        self._device_channel("on-the-tv", shield, seconds_ago=600)
+        self._device_channel("on-the-mac", mac, seconds_ago=600)
+        self.assertEqual(self._stop(viewer=mac), ["on-the-mac"])
+
+    def test_a_declared_device_is_certain_not_a_guess(self, mock_stop, _mock_spawn):
+        """The media server's ten-second window is for a guess; a device that said so is not one."""
+        shield = self._device("shield-0001")
+        self._device_channel("an-hour-ago", shield, seconds_ago=3600)
+        self.assertEqual(self._stop(viewer=shield), ["an-hour-ago"])
+
+    def test_a_multiview_tile_closes_nothing_of_its_device(self, mock_stop, _mock_spawn):
+        """
+        Not the other tiles, and not the channel the device was on full screen before
+        multiview opened -- that one started before the session and carries none of it.
+        """
+        tile = self._device("shield-0001", multiview="mv-1")
+        self._device_channel("tile-1", tile)
+        self._device_channel("full-screen-before", self._device("shield-0001"))
+        self.assertEqual(self._stop(viewer=tile), [])
+        # A request outside multiview afterwards closes them as usual
+        self.assertEqual(sorted(self._stop(viewer=self._device("shield-0001"))), ["full-screen-before", "tile-1"])
+
+    def test_the_app_says_which_channel_it_is_leaving(self, mock_stop, _mock_spawn):
+        shield, mac = self._device("shield-0001"), self._device("macbook-0001")
+        self._device_channel("leaving", shield)
+        self._device_channel("the-macs", mac)
+        with self.assertLogs("live_proxy", level="INFO") as logs:
+            self.assertTrue(probation.leave_previous_channel(self.redis, shield, "leaving", "new"))
+        self.assertTrue(any("App switch: closing channel leaving" in line for line in logs.output))
+        # Not another device's channel, whatever the app says
+        self.assertFalse(probation.leave_previous_channel(self.redis, shield, "the-macs", "new"))
+        # Not one somebody else is on as well
+        self._device_channel("shared", shield)
+        self._channel("shared", clients=[("x1", "192.168.2.5", "2", "TiviMate", 30)])
+        self.assertFalse(probation.leave_previous_channel(self.redis, shield, "shared", "new"))
+        # Not for a player that did not say which device it is
+        self._device_channel("guessed", shield)
+        self.assertFalse(probation.leave_previous_channel(self.redis, self.viewer, "guessed", "new"))
 
     def test_only_accounts_with_the_option_are_affected(self, mock_stop, _mock_spawn):
         _other_account, other_profile = _make_account("no-stop", probation_enabled=True)

@@ -3074,7 +3074,11 @@ def build_plan(settings):
             })
 
     _fill_what_is_on(rows)
-    order = {"new": 0, "combine": 1, "merge": 2, "conflict": 3, "unchanged": 4}
+    # Your own channels first, what is suggested new after them. With a provider's whole
+    # playlist in scope that is two thousand new channels, and listed first they filled
+    # forty pages before the first stream found for a channel you have: it looked as though
+    # nothing had matched at all.
+    order = {"merge": 0, "combine": 1, "conflict": 2, "new": 3, "unchanged": 4}
     rows.sort(key=lambda r: (order[r["status"]], (r["channel"] or {}).get("number") or 0))
     summary = {status: sum(1 for r in rows if r["status"] == status) for status in order}
     summary["streams"] = len(streams)

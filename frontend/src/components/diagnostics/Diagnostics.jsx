@@ -10,6 +10,7 @@ import {
   Select,
   SegmentedControl,
   Stack,
+  Switch,
   Table,
   Text,
 } from '@mantine/core';
@@ -37,6 +38,39 @@ const KEEP_LABELS = {
   7200: '2 hours',
   21600: '6 hours',
   86400: '24 hours',
+};
+
+// What a player app built to say so (arrTV) may tell the server about itself. Off, both of
+// them: a request from any app is then read exactly as before. See app_devices.py, and
+// fork/arrTV-integration.md for what the app sends.
+const AppIntegration = ({ settings, onChange }) => {
+  const value = settings || {};
+  return (
+    <Box
+      p="sm"
+      style={{ border: '1px solid #3f3f46', borderRadius: 'var(--mantine-radius-sm)' }}
+    >
+      <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb={6}>
+        Apps that say who they are
+      </Text>
+      <Stack gap="xs">
+        <Switch
+          size="xs"
+          label="Believe the device an app says it is"
+          description="An app such as arrTV sends which device it is and what it calls itself. That device, with its login, is then one viewer, whatever address it comes from: two devices on one login behind a VPN or a router are no longer taken for one, so Force Close does not close one's channel for the other. Multiview tiles of one device are never closed for each other. The device's name is shown here instead of its address."
+          checked={!!value.devices}
+          onChange={(e) => onChange({ ...value, devices: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          label="Close the channel an app says it is leaving"
+          description="When such an app changes channel it says which channel it is leaving, and that channel is closed the moment the new one is asked for, with its connection held for the new one. On an account with one connection, that is the difference between a quick switch and a refusal. Only a channel nobody else is watching, and never one being recorded."
+          checked={!!value.switch_hints}
+          onChange={(e) => onChange({ ...value, switch_hints: e.currentTarget.checked })}
+        />
+      </Stack>
+    </Box>
+  );
 };
 
 const Diagnostics = ({ active }) => {
@@ -71,6 +105,15 @@ const Diagnostics = ({ active }) => {
       setError(null);
     } catch {
       setError('Could not change the channel health recording.');
+    }
+  };
+
+  const changeAppIntegration = async (settings) => {
+    try {
+      setActivity(await API.setAppIntegration(settings));
+      setError(null);
+    } catch {
+      setError('Could not change what apps may tell the server.');
     }
   };
 
@@ -128,6 +171,12 @@ const Diagnostics = ({ active }) => {
 
       {tab === 'starts' && (
         <ChannelStarts starts={activity.starts} onCopy={copyToClipboard} />
+      )}
+      {tab === 'switches' && (
+        <AppIntegration
+          settings={activity.app_integration}
+          onChange={changeAppIntegration}
+        />
       )}
       {tab === 'switches' && (
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />

@@ -531,6 +531,22 @@ def log_center_bundle(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def capabilities(request):
+    """
+    What a player app may rely on from this server: which build it is, and which of the
+    app integration switches are on (apps.proxy.live_proxy.app_devices). For every logged-in
+    user, since a TV app is usually not an admin. Stock Dispatcharr has no such page, which
+    is how an app tells the two apart.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_devices
+
+    return JsonResponse(app_devices.capabilities())
+
+
+@api_view(["GET"])
 @permission_classes([IsAdmin])
 def modified_build(request):
     """What this modified build is, as the installer recorded it (see core.modified_build)."""

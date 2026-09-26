@@ -228,6 +228,27 @@ first channel.
 Upstream issues: #1694 (the user's own "probation-slots" request), #1600 (configurable retry
 budget, a simpler related idea). CONTRIBUTING.md: PRs target `dev`, need an agreed issue.
 
+**Apps that say who they are** (v197, `app_devices.py`, hand-over for the app:
+`fork/arrTV-integration.md`). Measured on the real server: a SHIELD (arrTV) and a Mac
+(Chrome) on the admin login both arrived through the user's VPN as `192.168.65.3`, so the
+identity (IP + login; the app only counts on LAN subnets) made them one device and Force
+Close closed each one's channel for the other -- 25 times in one evening in the log. The
+user's own app, arrTV, now says which device it is. Two global switches, off
+(`CoreSettings` "app-integration", on Diagnostics → Channel switches):
+- `devices`: `X-Dispatch-Device` (+ `-Name`) makes the viewer `app|<user id>|<device>` in
+  `server_device` -- the path a media server's named device already takes, so identity,
+  client records and viewer sets need nothing new. Never "guessed" (the 10 s window is for
+  media servers only). `X-Dispatch-Multiview` marks a tile: a tile's request runs no Force
+  Close at all (the full-screen channel it came from carries no session). Names in
+  Diagnostics.
+- `switch_hints`: `X-Dispatch-Previous-Channel` (UUID or the Xtream number id) →
+  `leave_previous_channel` closes that channel at once and holds its slot, only for a
+  declared device and only when it is that device's alone and not being recorded.
+Every header also works as a query parameter (`dm_device` …) for players that cannot set
+headers. `GET /api/core/capabilities/` (any logged-in user; 404 on stock) is how the app
+knows. `record_client_viewer` now also runs for Force Close alone and for declared devices:
+without it a device was never the viewer of its own older channel.
+
 ### 5.2 Media Servers (Plex, Jellyfin) — `media_servers.py`, `media_server_views.py`, `media_server_tuner_views.py`
 
 A settings tab that talks to Plex and Jellyfin: who is watching which channel (sessions,

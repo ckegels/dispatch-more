@@ -2721,6 +2721,15 @@ export default class API {
     });
   }
 
+  static async setAppIntegration(settings) {
+    // What player apps that say which device they are may tell the server; answers with
+    // the page, like a GET
+    return await request(`${host}/proxy/diagnostics/`, {
+      method: 'POST',
+      body: { app_integration: settings },
+    });
+  }
+
   static async setDiagnosticsRetention(keepSeconds) {
     // How long the page keeps starts and switches; answers with the page, like a GET
     try {

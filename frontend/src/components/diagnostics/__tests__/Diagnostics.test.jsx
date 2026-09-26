@@ -4,7 +4,11 @@ import React from 'react';
 import Diagnostics from '../Diagnostics.jsx';
 
 vi.mock('../../../api', () => ({
-  default: { getDiagnostics: vi.fn(), setDiagnosticsRetention: vi.fn() },
+  default: {
+    getDiagnostics: vi.fn(),
+    setDiagnosticsRetention: vi.fn(),
+    setAppIntegration: vi.fn(),
+  },
 }));
 
 // Mantine components are rendered as plain elements, like the other settings tests
@@ -24,6 +28,12 @@ vi.mock('@mantine/core', () => {
       </button>
     ),
     Alert: ({ children }) => <div role="alert">{children}</div>,
+    Switch: ({ label, checked, onChange }) => (
+      <label>
+        <input type="checkbox" role="switch" checked={checked} onChange={onChange} />
+        {label}
+      </label>
+    ),
     Badge: ({ children }) => <span>{children}</span>,
     Box: (props) => <div {...props} />,
     Button: ({ children, onClick }) => (
@@ -277,6 +287,30 @@ describe('Diagnostics', () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText('confirmed after 1.3s')).toBeInTheDocument();
+  });
+
+  it('switches on what apps may say about themselves, both off at first', async () => {
+    API.getDiagnostics.mockResolvedValue({
+      ...activity,
+      app_integration: { devices: false, switch_hints: false },
+    });
+    API.setAppIntegration.mockResolvedValue({
+      ...activity,
+      app_integration: { devices: true, switch_hints: false },
+    });
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+    openSwitches();
+
+    const devices = screen.getByRole('switch', { name: /Believe the device an app says it is/ });
+    const hints = screen.getByRole('switch', { name: /Close the channel an app says it is leaving/ });
+    expect(devices).not.toBeChecked();
+    expect(hints).not.toBeChecked();
+
+    fireEvent.click(devices);
+    await waitFor(() =>
+      expect(API.setAppIntegration).toHaveBeenCalledWith({ devices: true, switch_hints: false })
+    );
   });
 
   it('refreshes by itself and stops when the page is left', async () => {

@@ -221,6 +221,16 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                     status=429
                 )
 
+        # An app that said which channel it is leaving (app_devices, off unless switched on):
+        # close that one now, so its slot is free for this one
+        from . import app_devices
+
+        leaving = app_devices.declared_previous_channel(request)
+        if leaving:
+            probation.leave_previous_channel(
+                proxy_server.redis_client, viewer, leaving, channel_id
+            )
+
         # Channel Switch Overlap: a channel this viewer just surfed past may still be closing;
         # wait for that instead of answering "Channel is stopping"
         probation.wait_for_stop_to_finish(proxy_server.redis_client, channel_id)

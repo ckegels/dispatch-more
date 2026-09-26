@@ -10,6 +10,7 @@ from .api_views import (
     SystemNotificationViewSet,
     environment,
     version,
+    capabilities,
     modified_build,
     log_center_sources,
     log_center_read,
@@ -35,6 +36,7 @@ router.register(r'notifications', SystemNotificationViewSet, basename='systemnot
 urlpatterns = [
     path('settings/env/', environment, name='token_refresh'),
     path('version/', version, name='version'),
+    path('capabilities/', capabilities, name='capabilities'),
     path('modified-build/', modified_build, name='modified_build'),
     path('log-center/', log_center_sources, name='log_center_sources'),
     path('log-center/read/', log_center_read, name='log_center_read'),

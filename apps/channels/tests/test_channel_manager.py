@@ -508,6 +508,17 @@ class MergeTests(_Setup):
         self.assertEqual(Channel.objects.count(), 1)
 
 
+class RowOrderTests(_Setup):
+    def test_your_own_channels_come_before_the_new_ones(self):
+        """Two thousand new channels listed first hid every match behind forty pages."""
+        self._stream("┃AT┃ ORF 1 FHD", self.b)
+        for i in range(3):
+            self._stream(f"┃AT┃ SOMETHING NEW {i}", self.b)
+        statuses = [r["status"] for r in channel_manager.build_plan(settings())["rows"]]
+        self.assertEqual(statuses[0], "merge")
+        self.assertLess(statuses.index("merge"), statuses.index("new"))
+
+
 class HandOrderTests(_Setup):
     """Streams put in another order on the page, so the Channels page is not needed for it."""
 

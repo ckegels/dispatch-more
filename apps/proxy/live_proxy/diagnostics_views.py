@@ -17,6 +17,7 @@ from rest_framework.decorators import api_view, permission_classes
 from apps.accounts.permissions import IsAdmin
 from core.utils import RedisClient
 
+from . import app_devices
 from . import health
 from . import media_servers
 from . import probation
@@ -28,6 +29,11 @@ logger = logging.getLogger("live_proxy")
 def _viewer_name(event, usernames, redis_client=None):
     """A short, readable viewer: who a media server said it is, its login, or address and app."""
     device = event.get("server_device")
+    if device and redis_client and app_devices.is_declared(device):
+        # "admin · Living room SHIELD", as the app named itself
+        name = app_devices.device_name(redis_client, device)
+        if name:
+            return name
     if device and redis_client:
         # "Ckegels · Chrome", which is what the media server calls whoever is watching
         name = media_servers.device_name(redis_client, device)
@@ -247,6 +253,8 @@ def diagnostics(request):
                 health.save_settings({
                     key: wanted[key] for key in health.DEFAULTS if key in wanted
                 })
+            if "app_integration" in request.data:
+                app_devices.save_settings(request.data.get("app_integration") or {})
         except (TypeError, ValueError) as e:
             return JsonResponse({"error": str(e)}, status=400)
 
@@ -267,6 +275,7 @@ def diagnostics(request):
         "enabled": enabled,
         "accounts": _section("accounts", lambda: _account_rows(redis_client), []) if enabled else [],
         "events": _section("switches", lambda: _events(redis_client), []) if enabled else [],
+        "app_integration": _section("app integration", app_devices.load_settings, dict(app_devices.DEFAULTS)),
         "keep_seconds": probation.event_ttl(redis_client),
         "keep_choices": list(probation.EVENT_TTL_CHOICES),
         "timestamp": time.time(),
