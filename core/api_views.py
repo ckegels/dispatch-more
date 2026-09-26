@@ -546,6 +546,37 @@ def capabilities(request):
     return JsonResponse(app_devices.capabilities())
 
 
+@api_view(["GET", "POST", "DELETE"])
+@permission_classes([IsAuthenticated])
+def app_reports(request):
+    """
+    Error reports from player apps (apps.proxy.live_proxy.app_reports).
+
+    POST: an app sends one; any logged-in user may, since a TV app is usually not an admin.
+    Refused while reports are switched off. GET (admins): the list, or ?id= for one whole.
+    DELETE (admins): ?id= for one, none for all of them.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_reports as reports
+
+    if request.method == "POST":
+        if not reports.enabled():
+            return JsonResponse({"error": "This server does not take reports from apps"}, status=403)
+        report = reports.receive(request.data, request, request.user)
+        return JsonResponse({"id": report["id"]}, status=201)
+    if not IsAdmin().has_permission(request, None):
+        return JsonResponse({"error": "Only an admin can read reports"}, status=403)
+    wanted = request.GET.get("id")
+    if request.method == "DELETE":
+        reports.delete(wanted or None)
+        return JsonResponse({"deleted": wanted or "all"})
+    if wanted:
+        found = next((r for r in reports.list_reports() if r.get("id") == wanted), None)
+        return JsonResponse(found or {"error": "No such report"}, status=200 if found else 404)
+    return JsonResponse({"reports": [reports.summary(r) for r in reports.list_reports()]})
+
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def modified_build(request):

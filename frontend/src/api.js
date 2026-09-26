@@ -2730,6 +2730,25 @@ export default class API {
     });
   }
 
+  // Error reports sent from player apps (arrTV); only an admin reads them
+  static async getAppReports() {
+    return await request(`${host}/api/core/app-reports/`);
+  }
+
+  static async getAppReport(id) {
+    return await request(
+      `${host}/api/core/app-reports/?${new URLSearchParams({ id })}`
+    );
+  }
+
+  static async deleteAppReport(id) {
+    // Without an id, every report
+    const query = id ? `?${new URLSearchParams({ id })}` : '';
+    return await request(`${host}/api/core/app-reports/${query}`, {
+      method: 'DELETE',
+    });
+  }
+
   static async setDiagnosticsRetention(keepSeconds) {
     // How long the page keeps starts and switches; answers with the page, like a GET
     try {
@@ -2885,15 +2904,17 @@ export default class API {
     drops = {},
     names = {},
     epgs = {},
-    adds = {}
+    adds = {},
+    into = {}
   ) {
     // groups: {row key: channel group id} for new channels put in another group;
     // drops: {row key: [stream ids]} taken out of a row on the page;
     // names and epgs: {row key: name} and {row key: guide id, or null for no guide},
-    // set by hand on the row; adds: {row key: [stream ids]} found and put on by hand
+    // set by hand on the row; adds: {row key: [stream ids]} found and put on by hand;
+    // into: {row key: channel id} for a suggested new channel put on one you have instead
     return await request(`${host}/api/channels/channel-manager/apply/`, {
       method: 'POST',
-      body: { settings, keys, orders, groups, drops, names, epgs, adds },
+      body: { settings, keys, orders, groups, drops, names, epgs, adds, into },
     });
   }
 
@@ -2905,15 +2926,27 @@ export default class API {
     accounts = [],
     leave_out = [],
     name = '',
+    unassigned = false,
   } = {}) {
+    // unassigned: only streams no channel has yet
     const query = new URLSearchParams({
       q,
       accounts: accounts.join(','),
       leave_out: leave_out.join(','),
       name,
+      unassigned: unassigned ? '1' : '',
     });
     return await request(
       `${host}/api/channels/channel-manager/streams/?${query}`
+    );
+  }
+
+  // Your channels, to put a suggested new channel's streams on: every word of q, or with
+  // nothing typed the ones most like name (the suggestion's)
+  static async searchChannelManagerChannels({ q = '', name = '' } = {}) {
+    const query = new URLSearchParams({ q, name });
+    return await request(
+      `${host}/api/channels/channel-manager/channels/?${query}`
     );
   }
 

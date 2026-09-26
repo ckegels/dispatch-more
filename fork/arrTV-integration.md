@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: telling the server which device you are
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31, v197 and later) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -40,6 +40,8 @@ send none of the headers below. On Dispatch More:
   "devices": true,
   "multiview": true,
   "switch_hints": false,
+  "reports": false,
+  "report_url": "/api/core/app-reports/",
   "headers": {
     "device": "X-Dispatch-Device",
     "device_name": "X-Dispatch-Device-Name",
@@ -55,8 +57,9 @@ send none of the headers below. On Dispatch More:
 }
 ```
 
-- `devices`, `multiview` and `switch_hints` are the server admin's switches (Settings →
-  Diagnostics → Channel switches → "Apps that say who they are"). **Both are off by default.**
+- `devices`, `multiview`, `switch_hints` and `reports` are the server admin's switches
+  (Settings → Diagnostics → Channel switches → "Apps that say who they are"). **All are off
+  by default.**
   Sending the headers while they are off is harmless: they are ignored.
 - Ask once when a Dispatcharr playlist is added or refreshed, and cache the answer with the
   playlist (next to `DispatcharrCapability`). Re-ask on app start. It is cheap.
@@ -203,7 +206,76 @@ background "for a fast return". On single-connection accounts that blocks every 
 (Dispatcharr's `/proxy/ts/stop_client/` endpoint is admin-only and needs a server-side client
 id the app never sees. Do not use it.)
 
-## 7. Behaviour matrix
+## 7. Error reports
+
+Server switch: `reports` (off by default). Only offer "Report a problem" when capabilities
+say `"reports": true`.
+
+**Where in arrTV:** in the player's settings panel (the one opened while a channel plays), a
+long press on the entry that adds info for the developer offers **"Send a report to the
+server"**. Ask for one optional line of text ("What went wrong?"), then send. Show "Sent"
+with the report id from the answer, or the error message.
+
+**The request:**
+
+```
+POST /api/core/app-reports/
+Authorization: Bearer <access token>          (the playlist's login; any user level)
+X-Dispatch-Device: <device id>                (as everywhere, see §2)
+Content-Type: application/json
+```
+
+```json
+{
+  "device_id": "3f2a9c1e-0b7d-4e21-9a55-0f1c2d3e4f50",
+  "device_name": "Living room SHIELD",
+  "channel_uuid": "0f1e2d3c-...",
+  "channel_id": 1234,
+  "what": "Picture froze after two minutes, sound kept going",
+  "happened_at": "2026-09-27T20:14:05Z",
+  "app": {
+    "name": "arrTV", "version": "1.4.0", "build": 140,
+    "android": "11", "model": "SHIELD Android TV", "manufacturer": "NVIDIA",
+    "decoder": "c2.nvidia.hevc.decoder"
+  },
+  "player": {
+    "state": "BUFFERING",
+    "error": "Source error: HttpDataSourceException: Response code: 503",
+    "error_code": 2004,
+    "url": "http://server:9191/proxy/ts/stream/0f1e2d3c-...",
+    "position_ms": 128000, "buffered_ms": 0,
+    "video": "1920x1080 h264 25fps", "audio": "aac 2ch",
+    "bitrate_kbps": 5400, "dropped_frames": 12, "stalls": 3,
+    "stall_seconds": 14.5, "first_byte_ms": 820, "failover_steps": 1
+  },
+  "network": { "type": "ethernet", "vpn": true, "down_kbps": 48000 },
+  "extra": { "multiview_tiles": 1, "cast": false },
+  "log": "<the player's own log for the last minutes, newest last>"
+}
+```
+
+- Send **either** `channel_uuid` (Direct Connect) **or** `channel_id` (Xtream), whichever
+  the app used to play it. Everything else is optional: send what you have. The more you
+  send, the less guessing on the other side.
+- `player`, `network`, `app` and `extra` may hold any keys. They are kept as sent (at most 60
+  keys each, text up to 4,000 characters per value). `log` is kept up to its last 100,000
+  characters: send the tail of the player log (`DebugLogger`), not the whole file.
+- `happened_at` is when it went wrong (ISO 8601, UTC). The user presses "report" a moment
+  later, and the server uses the time it received the report for its own side.
+- **Logins and passwords are removed by the server** (Xtream `/live/<user>/<pass>/…` paths,
+  `password=`/`token=` parameters). Still, don't send the playlist password on purpose.
+
+**The answer:** `201 {"id": "a1b2c3d4e5f6"}`. `403` when the server does not take reports
+(switch off): tell the user "This server does not take reports". Nothing is retried.
+
+**What the server adds by itself**, so the app need not: the channel with its streams in
+order, each stream's provider and what Stream Check last found; the channel's live readings
+and what happened to it (reconnects, stream switches, errors); how it started, phase by
+phase; this device's channel switches and Force Close; and the server's log lines about the
+channel over the last 30 minutes. The admin reads it all on Settings → Diagnostics → Reports,
+and copies it whole to pass on.
+
+## 8. Behaviour matrix
 
 | Server | Capabilities | What arrTV does | Result |
 |---|---|---|---|
@@ -211,8 +283,9 @@ id the app never sees. Do not use it.)
 | Dispatch More, switches off | 200, `devices: false` | sends headers | ignored: exactly as today |
 | Dispatch More, `devices` on | 200, `devices: true` | sends headers | each device is its own viewer, Multiview safe, names in Diagnostics |
 | Dispatch More, `switch_hints` on | 200, `switch_hints: true` | also sends previous on zaps | old channel closed at once, faster switching |
+| Dispatch More, `reports` on | 200, `reports: true` | offers "Send a report" in the player settings | report on Diagnostics → Reports, with the server's view |
 
-## 8. Testing without the app
+## 9. Testing without the app
 
 With both switches on in Diagnostics → Channel switches, from two terminals with the same login:
 
@@ -242,7 +315,15 @@ App switch: closing channel <A> for Viewer(... server_device='app|<user id>|test
 and **no** `Force close: stopping channel <A>` caused by `test-device-0002`. The Channel
 switches tab names the devices "admin · Test TV" and "admin · Test Mac".
 
-## 9. Checklist
+A report, by hand:
+
+```bash
+curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d "{\"channel_uuid\": \"$CHANNEL_A\", \"what\": \"test report\", \"player\": {\"state\": \"BUFFERING\"}}" \
+  "$SERVER/api/core/app-reports/"
+```
+
+## 10. Checklist
 
 - [ ] Capabilities call on playlist add/refresh and app start; cached per playlist.
 - [ ] Device UUID made once, stored privately, excluded from Drive sync and Android backup.
@@ -254,8 +335,11 @@ switches tab names the devices "admin · Test TV" and "admin · Test Mac".
 - [ ] Multiview: one session id per open Multiview, on every tile's request; tile channel
       change sends previous.
 - [ ] Connection closed when playback is left.
+- [ ] "Send a report" in the player settings (long press), only when `reports: true`; the
+      channel, the player's state and error, and the tail of the player log.
 - [ ] Nothing changes against a stock server (capabilities 404).
 
-Questions about the server side: the implementation is `apps/proxy/live_proxy/app_devices.py`
+Questions about the server side: the implementation is `apps/proxy/live_proxy/app_devices.py`,
+`apps/proxy/live_proxy/app_reports.py`
 and `leave_previous_channel` / `viewer_from_request` in `apps/proxy/live_proxy/probation.py`
 of https://github.com/ckegels/dispatch-more.

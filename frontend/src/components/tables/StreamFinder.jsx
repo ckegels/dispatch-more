@@ -124,6 +124,8 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
   const missing = providers.filter((p) => !have.has(p.id));
   const [search, setSearch] = useState(searchWords(channel.name));
   const [onlyMissing, setOnlyMissing] = useState(missing.length > 0);
+  // Only what a provider carries that no channel has yet; then nothing needs typing
+  const [onlyUnassigned, setOnlyUnassigned] = useState(false);
   const [found, setFound] = useState([]);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState(null);
@@ -143,7 +145,7 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
   const channelName = channel.name;
   useEffect(() => {
     const words = search.trim();
-    if (!words) {
+    if (!words && !onlyUnassigned) {
       setFound([]);
       return undefined;
     }
@@ -158,6 +160,7 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
           accounts: onlyMissing && missingIds ? missingIds.split(',') : [],
           leave_out: leaveOutIds ? leaveOutIds.split(',') : [],
           name: channelName,
+          unassigned: onlyUnassigned,
         });
         if (current) setFound(answer?.streams || []);
       } catch (e) {
@@ -171,7 +174,7 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
       current = false;
       clearTimeout(timer);
     };
-  }, [channelName, search, onlyMissing, missingIds, leaveOutIds]);
+  }, [channelName, search, onlyMissing, missingIds, leaveOutIds, onlyUnassigned]);
 
   return (
     <Stack gap="sm">
@@ -200,12 +203,19 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
           onChange={(event) => setOnlyMissing(event.currentTarget.checked)}
         />
       )}
+      <Switch
+        size="xs"
+        label="Only streams on no channel"
+        description="What a provider carries that is nowhere in your lineup yet. Nothing needs typing: empty the search to see them all."
+        checked={onlyUnassigned}
+        onChange={(event) => setOnlyUnassigned(event.currentTarget.checked)}
+      />
       {error && (
         <Text size="xs" c="red">
           {error}
         </Text>
       )}
-      {!asking && search.trim() && found.length === 0 && !error && (
+      {!asking && (search.trim() || onlyUnassigned) && found.length === 0 && !error && (
         <Text size="xs" c="dimmed">
           Nothing by those words
           {onlyMissing && missing.length ? ' from the missing providers' : ''}.

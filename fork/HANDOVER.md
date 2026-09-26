@@ -249,6 +249,22 @@ headers. `GET /api/core/capabilities/` (any logged-in user; 404 on stock) is how
 knows. `record_client_viewer` now also runs for Force Close alone and for declared devices:
 without it a device was never the viewer of its own older channel.
 
+**Error reports from apps** (v198, `app_reports.py`, Diagnostics → Reports; contract in
+`fork/arrTV-integration.md` §7). `POST /api/core/app-reports/` (any logged-in user, refused
+while the `reports` switch of `app_devices` is off): the app sends the channel, player state
+and error, its measurements and its log; the server adds its own view of that channel at that
+moment -- the streams in order with provider and Stream Check state, `health` readings and
+events, the start phases (`timing`), this device's switches, and 30 minutes of the server log
+about it (`log_center.read`). Credentials are taken out of everything (`_redact`: Xtream
+paths, password/token parameters). The last 50 are kept in a `CoreSettings` row, since they
+are read later by somebody else; admins list, open, copy and delete them.
+
+**Lineup: a suggestion onto a channel you have, and streams on no channel** (v198). A "New"
+row can be put on one of your channels instead (`search_channels`, `apply_plan(into=…)`,
+`ChannelFinder.jsx`): its streams go after that channel's own and before its fallback, and no
+channel is made. The stream search takes `unassigned` (streams no channel has; nothing needs
+typing then) -- stock's Streams page has the same as a filter, the Lineup did not.
+
 ### 5.2 Media Servers (Plex, Jellyfin) — `media_servers.py`, `media_server_views.py`, `media_server_tuner_views.py`
 
 A settings tab that talks to Plex and Jellyfin: who is watching which channel (sessions,

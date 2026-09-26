@@ -27,6 +27,7 @@ vi.mock('../../../api', () => ({
     addChannelGroup: vi.fn(),
     getChannelManagerGuides: vi.fn(),
     searchChannelManagerStreams: vi.fn(),
+    searchChannelManagerChannels: vi.fn(),
     getGuideMatching: vi.fn(),
     saveGuideMatching: vi.fn(),
     loadChannelManagerGuide: vi.fn(),
@@ -160,7 +161,7 @@ describe('ChannelManagerTable', () => {
 
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}, {}
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}, {}, {}
       )
     );
   });
@@ -189,7 +190,7 @@ describe('ChannelManagerTable', () => {
         {},
         {},
         {},
-        {}
+        {}, {}
       )
     );
   });
@@ -219,6 +220,40 @@ describe('ChannelManagerTable', () => {
     expect(screen.getAllByText(/After · in the order they are tried/).length).toBe(1);
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
     await waitFor(() => expect(screen.queryByText(/nothing is done with them/)).toBeNull());
+  });
+
+  it('puts a suggested new channel on one you have instead of making it', async () => {
+    const newRow = {
+      key: 'new:at:orfeins', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      channel: {
+        id: null, name: 'AT| ORF EINS', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
+        logo_url: '', epg: null,
+      },
+      before: { channel: null, streams: [stream(6, 'AT| ORF EINS HD')] },
+      streams: [stream(6, 'AT| ORF EINS HD', { added: true }), fallback],
+    };
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
+    API.searchChannelManagerChannels.mockResolvedValue({
+      channels: [{ id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', providers: ['Provider A'] }],
+    });
+    draw();
+    await screen.findAllByText('AT| ORF EINS');
+    fireEvent.click(screen.getByRole('button', { name: 'Put AT| ORF EINS on a channel you have' }));
+    // Nothing typed: the channels most like the suggestion
+    await waitFor(() =>
+      expect(API.searchChannelManagerChannels).toHaveBeenCalledWith({ q: '', name: 'AT| ORF EINS' })
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Put it on ┃AT┃ ORF 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done choosing a channel' }));
+    expect(await screen.findByText(/→ onto ┃AT┃ ORF 1 \(1\), no new channel/)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(API.applyChannelManager).toHaveBeenCalledWith(
+        { order: 'quality' }, ['new:at:orfeins'], {}, {}, {}, {}, {}, {}, { 'new:at:orfeins': 1 }
+      )
+    );
   });
 
   it('suggests a group for a new channel, which can be changed before applying', async () => {
@@ -256,7 +291,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }, {}, {}, {}, {}
+        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }, {}, {}, {}, {}, {}
       )
     );
   });
@@ -273,7 +308,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, { 'ch:1': [2] }, {}, {}, {}
+        { order: 'quality' }, ['ch:1'], {}, {}, { 'ch:1': [2] }, {}, {}, {}, {}
       )
     );
   });
@@ -353,7 +388,7 @@ describe('ChannelManagerTable', () => {
         {},
         { 'ch:1': '┃AT┃ ORF Eins' },
         {},
-        {}
+        {}, {}
       )
     );
   });
@@ -450,7 +485,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': 7 }, {}
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': 7 }, {}, {}
       )
     );
   });
@@ -468,7 +503,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': null }, {}
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': null }, {}, {}
       )
     );
   });
@@ -662,7 +697,7 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['combine:at:orf1'], {}, { 'combine:at:orf1': 3 }, {}, {}, {}, {}
+        { order: 'quality' }, ['combine:at:orf1'], {}, { 'combine:at:orf1': 3 }, {}, {}, {}, {}, {}
       )
     );
   });
@@ -941,7 +976,7 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     expect(await screen.findByDisplayValue('ORF 1')).toBeInTheDocument();
     await waitFor(() =>
       expect(API.searchChannelManagerStreams).toHaveBeenCalledWith({
-        q: 'ORF 1', accounts: ['3'], leave_out: ['1', '2', '9'], name: '┃AT┃ ORF 1',
+        q: 'ORF 1', accounts: ['3'], leave_out: ['1', '2', '9'], name: '┃AT┃ ORF 1', unassigned: false,
       })
     );
     expect(await screen.findByText('AT: ORF1 HD')).toBeInTheDocument();
@@ -956,7 +991,20 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}, { 'ch:1': [21] }
+        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}, { 'ch:1': [21] }, {}
+      )
+    );
+  });
+
+  it('lists what a provider carries that no channel has, without typing', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
+    fireEvent.change(await screen.findByDisplayValue('ORF 1'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('switch', { name: /Only streams on no channel/ }));
+    await waitFor(() =>
+      expect(API.searchChannelManagerStreams).toHaveBeenLastCalledWith(
+        expect.objectContaining({ q: '', unassigned: true, accounts: ['3'] })
       )
     );
   });
@@ -974,7 +1022,7 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenLastCalledWith(
-        { order: 'quality' }, ['ch:1'], { 'ch:1': [1, 21, 2] }, {}, {}, {}, {}, { 'ch:1': [21] }
+        { order: 'quality' }, ['ch:1'], { 'ch:1': [1, 21, 2] }, {}, {}, {}, {}, { 'ch:1': [21] }, {}
       )
     );
   });
@@ -996,7 +1044,7 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], { 'ch:1': [1, 2] }, {}, {}, {}, {}, {}
+        { order: 'quality' }, ['ch:1'], { 'ch:1': [1, 2] }, {}, {}, {}, {}, {}, {}
       )
     );
   });

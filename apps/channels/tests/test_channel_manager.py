@@ -610,6 +610,35 @@ class HandAddTests(_Setup):
         self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "could not dispatch"])
 
 
+class IntoAChannelTests(_Setup):
+    """A suggested new channel that is really one you have, put on it by hand."""
+
+    def setUp(self):
+        super().setUp()
+        self.c = M3UAccount.objects.create(name="Provider C", account_type="XC", server_url="http://c", is_active=True)
+
+    def test_finding_your_channels(self):
+        self._channel("┃AT┃ PULS 4", 4, self.austria)
+        self.assertEqual([c["name"] for c in channel_manager.search_channels("orf")], ["┃AT┃ ORF 1"])
+        found = channel_manager.search_channels("", name="AT| ORF EINS")
+        self.assertEqual(found[0]["name"], "┃AT┃ ORF 1")
+        self.assertEqual(found[0]["providers"], ["Provider A"])
+
+    def test_a_suggestion_goes_on_a_channel_you_have_and_makes_none(self):
+        theirs = self._stream("AT| ORF EINS HD", self.c)
+        plan = channel_manager.build_plan(settings(create_new=True, new_from="all"))
+        row = next(r for r in plan["rows"] if r["status"] == "new" and any(s["id"] == theirs.id for s in r["streams"]))
+        before = Channel.objects.count()
+        result = channel_manager.apply_plan(
+            settings(create_new=True, new_from="all"), [row["key"]], into={row["key"]: self.orf1.id}
+        )
+        self.assertEqual(Channel.objects.count(), before)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["streams_added"], 1)
+        # After the channel's own, before its fallback
+        self.assertEqual(self._order(self.orf1), ["┃AT┃ ORF 1", "AT| ORF EINS HD", "could not dispatch"])
+
+
 class StreamSearchTests(_Setup):
     """Finding the stream to put on by hand: every word, anywhere, in any order."""
 
@@ -652,6 +681,16 @@ class StreamSearchTests(_Setup):
         self.assertEqual([c["name"] for c in mine["channels"]], ["┃AT┃ ORF 1"])
         self.assertEqual(mine["account_id"], self.a.id)
         self.assertIsNone(mine["check"])
+
+    def test_streams_on_no_channel_are_listed_without_typing(self):
+        """What a provider carries that is nowhere in your lineup yet."""
+        self._stream("AT: ORF 1 HD", self.c)
+        self._stream("AT: PULS 24", self.c)
+        found = self.names("", accounts=[self.c.id], unassigned=True)
+        self.assertEqual(sorted(found), ["AT: ORF 1 HD", "AT: PULS 24"])
+        # The one already on a channel is not one of them
+        self.assertNotIn(self.existing.name, self.names("orf", unassigned=True))
+        self.assertIn(self.existing.name, self.names("orf"))
 
     def test_through_the_page(self):
         self._stream("AT: ORF 1 HD", self.c)

@@ -29,6 +29,7 @@ import ChannelSwitches, {
   ACTION_MEANINGS,
 } from './ChannelSwitches';
 import ChannelHealth, { HEALTH_COLORS, HEALTH_MEANINGS } from './ChannelHealth';
+import AppReports from './AppReports';
 import LogViewer from './LogViewer';
 
 const REFRESH_MS = 5000;
@@ -67,6 +68,13 @@ const AppIntegration = ({ settings, onChange }) => {
           description="When such an app changes channel it says which channel it is leaving, and that channel is closed the moment the new one is asked for, with its connection held for the new one. On an account with one connection, that is the difference between a quick switch and a refusal. Only a channel nobody else is watching, and never one being recorded."
           checked={!!value.switch_hints}
           onChange={(e) => onChange({ ...value, switch_hints: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          label="Take error reports from apps"
+          description="Someone with a problem on a channel sends a report from the app's player settings. It arrives on the Reports tab with what the app saw and what the server knew about that channel at that moment: its streams and providers, its readings, how it started, the switches, Stream Check, the log. Logins and passwords are taken out."
+          checked={!!value.reports}
+          onChange={(e) => onChange({ ...value, reports: e.currentTarget.checked })}
         />
       </Stack>
     </Box>
@@ -165,6 +173,7 @@ const Diagnostics = ({ active }) => {
             // What is running now, not what has gone wrong: the count that matters
             label: `${phone ? 'Health' : 'Channel health'} (${(activity.running || []).length})`,
           },
+          { value: 'reports', label: 'Reports' },
           { value: 'logs', label: 'Logs' },
         ]}
       />
@@ -182,6 +191,12 @@ const Diagnostics = ({ active }) => {
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
       {tab === 'logs' && <LogViewer />}
+      {tab === 'reports' && (
+        <AppReports
+          enabled={!!activity.app_integration?.reports}
+          onCopy={copyToClipboard}
+        />
+      )}
       {tab === 'health' && (
         <ChannelHealth
           events={activity.health}
@@ -192,7 +207,7 @@ const Diagnostics = ({ active }) => {
         />
       )}
 
-      {tab !== 'logs' && (
+      {tab !== 'logs' && tab !== 'reports' && (
         <Group gap="xs" align="center">
           <Text size="xs" c="dimmed">
             Keep for

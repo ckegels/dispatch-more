@@ -8,6 +8,9 @@ vi.mock('../../../api', () => ({
     getDiagnostics: vi.fn(),
     setDiagnosticsRetention: vi.fn(),
     setAppIntegration: vi.fn(),
+    getAppReports: vi.fn(),
+    getAppReport: vi.fn(),
+    deleteAppReport: vi.fn(),
   },
 }));
 
@@ -28,6 +31,11 @@ vi.mock('@mantine/core', () => {
       </button>
     ),
     Alert: ({ children }) => <div role="alert">{children}</div>,
+    UnstyledButton: ({ children, onClick, ...rest }) => (
+      <button aria-label={rest['aria-label']} onClick={onClick}>
+        {children}
+      </button>
+    ),
     Switch: ({ label, checked, onChange }) => (
       <label>
         <input type="checkbox" role="switch" checked={checked} onChange={onChange} />
@@ -81,7 +89,12 @@ vi.mock('@mantine/core', () => {
   };
 });
 
-vi.mock('lucide-react', () => ({ Copy: () => <span>copy</span> }));
+vi.mock('lucide-react', () => ({
+  Copy: () => <span>copy</span>,
+  ChevronDown: () => <span />,
+  ChevronRight: () => <span />,
+  Trash2: () => <span>delete</span>,
+}));
 
 // The Logs tab has its own tests and its own half of Mantine; here it only has to be
 // something that renders, so that switching to it can be seen
@@ -311,6 +324,29 @@ describe('Diagnostics', () => {
     await waitFor(() =>
       expect(API.setAppIntegration).toHaveBeenCalledWith({ devices: true, switch_hints: false })
     );
+  });
+
+  it('lists the reports apps sent and opens one whole', async () => {
+    API.getAppReports.mockResolvedValue({
+      reports: [{
+        id: 'r1', received_at: 1790000000, user: 'tv', device_name: 'Living room SHIELD',
+        what: 'Picture froze', channel: '┃AT┃ ORF 1', error: 'HttpDataSourceException 503',
+      }],
+    });
+    API.getAppReport.mockResolvedValue({
+      id: 'r1', received_at: 1790000000, user: 'tv', device_name: 'Living room SHIELD',
+      what: 'Picture froze', app: { name: 'arrTV' }, player: { state: 'BUFFERING' },
+      server: { channel: { name: '┃AT┃ ORF 1', streams: [] }, log: ['a server line'] },
+      log: 'an app line',
+    });
+    render(<Diagnostics active={true} />);
+    await screen.findByText('ZIB');
+    fireEvent.click(screen.getByRole('button', { name: 'Reports' }));
+
+    expect(await screen.findByText('┃AT┃ ORF 1 — Picture froze')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open report r1' }));
+    expect(await screen.findByText('a server line')).toBeInTheDocument();
+    expect(screen.getByText('an app line')).toBeInTheDocument();
   });
 
   it('refreshes by itself and stops when the page is left', async () => {

@@ -737,7 +737,7 @@ STREAMS_FOUND = 50
 STREAMS_LOOKED_AT = 2000
 
 
-def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOUND):
+def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOUND, unassigned=False):
     """
     Streams to put on a channel by hand, for the one the matching could not find: every
     word typed, anywhere in the name, in any order -- "orf 1 hd at" finds "┃AT┃ ORF1 HD" as
@@ -751,6 +751,9 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
 
     Each says where else it is already, and what Stream Check last found, because
     "is this the one, and does it play" is the whole question when choosing.
+
+    unassigned: only streams no channel has yet -- what a provider carries that is nowhere
+    in your lineup. Then nothing needs typing: every one of them is listed, a page at a time.
     """
     from django.db.models import Q
 
@@ -760,9 +763,11 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
     from . import stream_check
 
     words = [w for w in str(search or "").lower().split() if w]
-    if not words:
+    if not words and not unassigned:
         return []
     streams = Stream.objects.filter(is_custom=False)
+    if unassigned:
+        streams = streams.filter(channels__isnull=True)
     wanted = [int(a) for a in accounts or ()]
     if wanted:
         streams = streams.filter(m3u_account_id__in=wanted)
@@ -784,7 +789,7 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
         {**_row(s, settings, aliases, account_names, group_names, {}, in_scope=True), "stale": s["is_stale"]}
         # Enough to rank, not every stream there is: a single common word is tens of
         # thousands on a real setup
-        for s in streams.values(*STREAM_FIELDS, "is_stale")[:STREAMS_LOOKED_AT]
+        for s in streams.order_by("name").values(*STREAM_FIELDS, "is_stale")[:STREAMS_LOOKED_AT]
     ]
     wanted_key = channel_key(name, settings, aliases) if name else ""
     found.sort(key=lambda s: (
@@ -828,6 +833,64 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
             } if record else None,
         })
     return out
+
+
+CHANNELS_FOUND = 30
+
+
+def search_channels(search, name="", limit=CHANNELS_FOUND):
+    """
+    Your channels, for putting a suggested new channel's streams on one you have instead:
+    every word typed, anywhere in the name, in any order, as the stream search does. With
+    nothing typed, the channels whose name is most like `name` (the suggestion's), since
+    that is nearly always the one it should have been.
+
+    Each says its number, group, and which providers it has streams from, so a channel
+    already carrying this provider can be told from one that needs it.
+    """
+    import difflib
+
+    from django.db.models import Q
+
+    from apps.m3u.models import M3UAccount
+
+    from .models import Channel, ChannelStream
+
+    channels = Channel.objects.select_related("channel_group")
+    words = [w for w in str(search or "").lower().split() if w]
+    if words:
+        query = Q()
+        for word in words:
+            query &= Q(name__icontains=word)
+        channels = channels.filter(query)
+    found = list(channels.values("id", "name", "channel_number", "channel_group__name")[:5000])
+    wanted = "".join(guide_words(name)) if name else ""
+    if wanted:
+        found.sort(key=lambda c: -difflib.SequenceMatcher(None, wanted, "".join(guide_words(c["name"]))).ratio())
+    else:
+        found.sort(key=lambda c: (c["channel_number"] is None, c["channel_number"] or 0, c["name"]))
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = CHANNELS_FOUND
+    found = found[:limit]
+
+    account_names = dict(M3UAccount.objects.values_list("id", "name"))
+    providers = {}
+    for link in ChannelStream.objects.filter(
+        channel_id__in=[c["id"] for c in found], stream__is_custom=False,
+    ).values("channel_id", "stream__m3u_account_id"):
+        providers.setdefault(link["channel_id"], set()).add(link["stream__m3u_account_id"])
+    return [
+        {
+            "id": c["id"],
+            "name": c["name"],
+            "number": c["channel_number"],
+            "group": c["channel_group__name"] or "",
+            "providers": sorted(account_names.get(a, "") for a in providers.get(c["id"], ()) if a),
+        }
+        for c in found
+    ]
 
 
 def _row(s, settings, aliases, account_names, group_names, priority, in_scope):
@@ -3201,7 +3264,47 @@ def _adds_given(adds):
     return out
 
 
-def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None, epgs=None, adds=None):
+def _into_given(into):
+    """{row key: channel id} for suggested new channels put on a channel you have instead."""
+    from .models import Channel
+
+    given = {}
+    for key, channel_id in (into if isinstance(into, dict) else {}).items():
+        try:
+            given[key] = int(channel_id)
+        except (TypeError, ValueError):
+            continue
+    known = set(Channel.objects.filter(id__in=set(given.values())).values_list("id", flat=True))
+    return {k: v for k, v in given.items() if v in known}
+
+
+def _put_on_channel(channel, stream_ids):
+    """
+    These streams onto a channel you have: after its own, before its fallback, which stays
+    last. Returns how many were not on it already.
+    """
+    from .models import ChannelStream
+
+    links = list(
+        ChannelStream.objects.filter(channel=channel).select_related("stream").order_by("order")
+    )
+    present = {link.stream_id for link in links}
+    fresh = [i for i in dict.fromkeys(stream_ids) if i not in present]
+    if not fresh:
+        return 0
+    own = [link.stream_id for link in links if not link.stream.is_custom]
+    fallback = [link.stream_id for link in links if link.stream.is_custom]
+    final = own + fresh + fallback
+    for order, stream_id in enumerate(final):
+        if stream_id in present:
+            ChannelStream.objects.filter(channel=channel, stream_id=stream_id).update(order=order)
+    ChannelStream.objects.bulk_create(
+        [ChannelStream(channel=channel, stream_id=i, order=final.index(i)) for i in fresh]
+    )
+    return len(fresh)
+
+
+def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None, epgs=None, adds=None, into=None):
     """
     Carry out the chosen rows of the plan, worked out again now rather than trusted from the
     page: if the streams have changed since it was looked at, what is applied is what is
@@ -3222,6 +3325,10 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     adds is {row key: [stream ids]}: streams found and put on the row by hand, for the
     provider the matching did not find it on. They go after the row's own streams and
     before the fallback, which stays last; an order given on the page places them.
+
+    into is {row key: channel id}: a suggested new channel whose streams go on a channel you
+    have instead -- the one the matching did not see was the same channel. No channel is
+    made; its streams go after that channel's own and before its fallback.
     """
     from django.db import transaction
 
@@ -3234,6 +3341,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     names = _names_given(names)
     epgs, guides_known = _guides_given(epgs)
     adds = _adds_given(adds)
+    into = _into_given(into)
     plan = build_plan(settings)
     homes = _NewHomes() if groups else None
     if homes:
@@ -3271,6 +3379,15 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 final_ids = _in_the_order_given(final_ids, orders[row["key"]], custom_ids)
             if not final_ids:
                 # Never leaves a channel with nothing to play
+                continue
+            if row["status"] == "new" and row["key"] in into:
+                target = Channel.objects.filter(id=into[row["key"]]).first()
+                if target is None:
+                    continue
+                streams_added += _put_on_channel(
+                    target, [i for i in final_ids if i not in custom_ids]
+                )
+                updated += 1
                 continue
             info = row["channel"]
             chosen_name = names.get(row["key"])

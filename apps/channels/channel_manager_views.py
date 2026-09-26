@@ -125,6 +125,7 @@ def channel_manager_apply(request):
     return JsonResponse(channel_manager.apply_plan(
         settings, keys, request.data.get("orders"), request.data.get("groups"), request.data.get("drops"),
         request.data.get("names"), request.data.get("epgs"), request.data.get("adds"),
+        request.data.get("into"),
     ))
 
 
@@ -174,6 +175,18 @@ def channel_manager_streams(request):
         numbers(request.GET.get("leave_out")),
         request.GET.get("name", ""),
         request.GET.get("limit", channel_manager.STREAMS_FOUND),
+        unassigned=str(request.GET.get("unassigned", "")).lower() in ("1", "true", "yes", "on"),
+    )})
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def channel_manager_channels(request):
+    """Your channels to put a suggested new channel's streams on: `q` words, `name` to rank by."""
+    return JsonResponse({"channels": channel_manager.search_channels(
+        request.GET.get("q", ""),
+        request.GET.get("name", ""),
+        request.GET.get("limit", channel_manager.CHANNELS_FOUND),
     )})
 
 

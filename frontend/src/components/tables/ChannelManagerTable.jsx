@@ -11,6 +11,7 @@ import {
   Check,
   ChevronsDownUp,
   ChevronsUpDown,
+  CornerDownRight,
   EyeOff,
   Play,
   Plus,
@@ -47,6 +48,7 @@ import { CustomTable, useTable } from './CustomTable';
 import { Logo, Watch } from './StreamParts';
 import { GuidePicker } from './GuidePicker';
 import StreamFinder from './StreamFinder';
+import ChannelFinder from './ChannelFinder';
 
 // Laid out like Find Logos and the Logo Manager tabs: the same panel, toolbar, table and
 // pagination. Each row is one channel as it would come out, and opens to show every stream
@@ -266,6 +268,7 @@ const Expanded = ({
   chosenGuide,
   onGuide,
   onFind,
+  onPlace,
 }) => {
   const moving = row.streams.filter(movable);
   // Making a group from the row, rather than leaving the page to go and make one
@@ -433,6 +436,18 @@ const Expanded = ({
                 />
               );
             })}
+            {onPlace && row.status === 'new' && (
+              <Group mt={4}>
+                <Button
+                  size="compact-xs"
+                  variant="default"
+                  leftSection={<CornerDownRight size={12} />}
+                  onClick={() => onPlace(row.key)}
+                >
+                  {row.into ? `On ${row.into.name}: change…` : 'Put on a channel you have…'}
+                </Button>
+              </Group>
+            )}
             {onFind && row.channel && (
               <Group mt={4}>
                 <Button
@@ -488,6 +503,10 @@ const ChannelManagerTable = () => {
   const [adds, setAdds] = useState({});
   // The row whose streams are being searched for, or null
   const [finding, setFinding] = useState(null);
+  // Suggested new channels put on a channel you have instead: {key: channel}; and the row
+  // whose channel is being searched for
+  const [intoChoice, setIntoChoice] = useState({});
+  const [placing, setPlacing] = useState(null);
   // Channels with fewer providers than this ('' is any number), and channels missing
   // this one provider ('' is none in particular)
   const [fewerThan, setFewerThan] = useState('');
@@ -513,6 +532,7 @@ const ChannelManagerTable = () => {
       setNameChoice({});
       setGuideChoice({});
       setAdds({});
+      setIntoChoice({});
       tableRef.current?.setSelectedTableIds?.([]);
       // Kept, so the page opens the way it was left
       API.saveChannelManagerSettings(withLevers).catch(() => {});
@@ -698,10 +718,12 @@ const ChannelManagerTable = () => {
           }
         : given;
       const chosen = groupChoice[raw.key];
+      const into = intoChoice[raw.key];
       let row =
         chosen && chosen !== raw.channel?.group_id
           ? { ...raw, chosenGroup: groupNames[chosen] || String(chosen) }
           : raw;
+      if (into && raw.status === 'new') row = { ...row, into };
       // What was set by hand is what the row says it would come out as
       const name = nameChoice[row.key];
       const guide = guideChoice[row.key];
@@ -790,6 +812,7 @@ const ChannelManagerTable = () => {
     guideChoice,
     group,
     adds,
+    intoChoice,
     fewerThan,
     missing,
   ]);
@@ -857,6 +880,11 @@ const ChannelManagerTable = () => {
           .filter((key) => adds[key]?.length)
           .map((key) => [key, adds[key].map((s) => s.id)])
       );
+      const placed = Object.fromEntries(
+        tickedKeys
+          .filter((key) => intoChoice[key])
+          .map((key) => [key, intoChoice[key].id])
+      );
       await API.applyChannelManager(
         levers,
         tickedKeys,
@@ -865,7 +893,8 @@ const ChannelManagerTable = () => {
         dropped,
         named,
         guided,
-        put
+        put,
+        placed
       );
       await preview(levers);
     } catch (e) {
@@ -925,6 +954,20 @@ const ChannelManagerTable = () => {
           : all
       );
       tick(key);
+    },
+    [tick]
+  );
+
+  // A suggested new channel put on one you have (or taken off it again); ticked with it
+  const placeOn = useCallback(
+    (key, channel) => {
+      setIntoChoice((all) => {
+        const next = { ...all };
+        if (channel) next[key] = channel;
+        else delete next[key];
+        return next;
+      });
+      if (channel) tick(key);
     },
     [tick]
   );
@@ -1025,6 +1068,8 @@ const ChannelManagerTable = () => {
   ignoreRowRef.current = ignoreRow;
   const findRef = useRef(setFinding);
   findRef.current = setFinding;
+  const placeRef = useRef(setPlacing);
+  placeRef.current = setPlacing;
 
   const chooseGroup = useCallback((key, group) => {
     setGroupChoice((all) => ({ ...all, [key]: group }));
@@ -1081,6 +1126,22 @@ const ChannelManagerTable = () => {
                   <Badge size="xs" variant="light" color="teal">
                     +{r.handAdded} by hand
                   </Badge>
+                </Tooltip>
+              )}
+              {r.status === 'new' && (
+                <Tooltip label="Put on a channel you have">
+                  <ActionIcon
+                    size="xs"
+                    variant={r.into ? 'filled' : 'subtle'}
+                    color={r.into ? 'teal' : 'gray'}
+                    aria-label={`Put ${r.channel?.name || r.key} on a channel you have`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      placeRef.current(r.key);
+                    }}
+                  >
+                    <CornerDownRight size={12} />
+                  </ActionIcon>
                 </Tooltip>
               )}
               {r.channel && r.status !== 'conflict' && (
@@ -1178,6 +1239,13 @@ const ChannelManagerTable = () => {
                   <Text size="sm" fw={500} style={{ wordBreak: 'break-word' }}>
                     {channel.name}
                   </Text>
+                  {row.original.into && (
+                    <Text size="xs" c="teal" style={{ flexShrink: 0 }}>
+                      → onto {row.original.into.name}
+                      {row.original.into.number != null ? ` (${row.original.into.number})` : ''}
+                      , no new channel
+                    </Text>
+                  )}
                   <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
                     {row.original.chosenGroup
                       ? `new number · ${row.original.chosenGroup}`
@@ -1290,6 +1358,7 @@ const ChannelManagerTable = () => {
         chosenGuide={guideChoice[row.original.key]}
         onGuide={chooseGuide}
         onFind={setFinding}
+        onPlace={setPlacing}
       />
     ),
     headerCellRenderFns: {
@@ -1693,6 +1762,12 @@ const ChannelManagerTable = () => {
         title={`Apply ${tickedKeys.length} channel${tickedKeys.length === 1 ? '' : 's'}?`}
         message="Each ticked channel becomes what its row shows: new channels are made in the group shown, numbered after the last channel of that group, and channels you have gain the streams marked +. Streams you took out are not added, or come off the channel. A Combine row keeps one channel and deletes the others named on it, which cannot be undone except from a backup. It is worked out again as it is applied, so what is applied is what is true now. Custom fallback streams stay last."
         confirmLabel="Apply"
+      />
+      <ChannelFinder
+        row={placing ? rows.find((r) => r.key === placing) || null : null}
+        chosen={placing ? intoChoice[placing] : null}
+        onChoose={(channel) => placeOn(placing, channel)}
+        onClose={() => setPlacing(null)}
       />
       <StreamFinder
         row={finding ? rows.find((r) => r.key === finding) || null : null}

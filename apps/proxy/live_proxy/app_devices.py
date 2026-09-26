@@ -32,7 +32,8 @@ import time
 logger = logging.getLogger("live_proxy")
 
 SETTINGS_KEY = "app-integration"
-DEFAULTS = {"devices": False, "switch_hints": False}
+# reports: an app may send error reports (see app_reports)
+DEFAULTS = {"devices": False, "switch_hints": False, "reports": False}
 
 # Read on every stream request, so kept for a few seconds rather than asked of the database
 _HELD = {"at": 0.0, "value": None}
@@ -192,6 +193,8 @@ def capabilities():
         "devices": settings["devices"],
         "multiview": settings["devices"],
         "switch_hints": settings["switch_hints"],
+        "reports": settings["reports"],
+        "report_url": "/api/core/app-reports/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
