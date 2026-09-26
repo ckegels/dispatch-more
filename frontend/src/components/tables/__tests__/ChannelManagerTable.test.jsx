@@ -1056,6 +1056,28 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     );
   });
 
+  it('shows more of what no channel has, a page at a time', async () => {
+    const page = (from, count) =>
+      Array.from({ length: count }, (_, i) => ({ ...found, id: 500 + from + i, name: `AT| SPARE ${from + i}` }));
+    // Three streams no channel has, two to a page
+    API.searchChannelManagerStreams.mockImplementation(async ({ offset = 0 }) =>
+      offset ? { streams: page(2, 1), more: false } : { streams: page(0, 2), more: true }
+    );
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
+    fireEvent.change(await screen.findByDisplayValue('ORF 1'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('switch', { name: /Only streams on no channel/ }));
+    expect(await screen.findByText('AT| SPARE 1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('AT| SPARE 2')).toBeInTheDocument();
+    expect(API.searchChannelManagerStreams).toHaveBeenLastCalledWith(
+      expect.objectContaining({ unassigned: true, offset: 2 })
+    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull());
+  });
+
   it('keeps a stream put on in the order set by hand', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');

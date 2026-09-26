@@ -1693,6 +1693,9 @@ class StopSkippedChannelsTests(TestCase):
         with self.assertLogs("live_proxy", level="INFO") as logs:
             self.assertTrue(probation.leave_previous_channel(self.redis, shield, "leaving", "new"))
         self.assertTrue(any("App switch: closing channel leaving" in line for line in logs.output))
+        # Its clients no longer count against the user's own stream limit, which is asked
+        # right after this and before the background stop has finished
+        self.assertEqual(self.redis.hgetall(RedisKeys.client_metadata("leaving", "c-leaving")), {})
         # Not another device's channel, whatever the app says
         self.assertFalse(probation.leave_previous_channel(self.redis, shield, "the-macs", "new"))
         # Not one somebody else is on as well

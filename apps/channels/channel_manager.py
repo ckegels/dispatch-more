@@ -740,7 +740,8 @@ STREAMS_FOUND = 50
 STREAMS_LOOKED_AT = 2000
 
 
-def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOUND, unassigned=False):
+def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOUND, unassigned=False,
+                   offset=0, with_more=False):
     """
     Streams to put on a channel by hand, for the one the matching could not find: every
     word typed, anywhere in the name, in any order -- "orf 1 hd at" finds "┃AT┃ ORF1 HD" as
@@ -756,7 +757,8 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
     "is this the one, and does it play" is the whole question when choosing.
 
     unassigned: only streams no channel has yet -- what a provider carries that is nowhere
-    in your lineup. Then nothing needs typing: every one of them is listed, a page at a time.
+    in your lineup. Then nothing needs typing: every one of them is listed, a page at a time
+    from offset, in name order. with_more returns (streams, whether there are more).
     """
     from django.db.models import Q
 
@@ -788,25 +790,41 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
     aliases = _alias_map(settings)
     account_names = dict(M3UAccount.objects.values_list("id", "name"))
     group_names = dict(ChannelGroup.objects.values_list("id", "name"))
-    found = [
-        {**_row(s, settings, aliases, account_names, group_names, {}, in_scope=True), "stale": s["is_stale"]}
-        # Enough to rank, not every stream there is: a single common word is tens of
-        # thousands on a real setup
-        for s in streams.order_by("name").values(*STREAM_FIELDS, "is_stale")[:STREAMS_LOOKED_AT]
-    ]
-    wanted_key = channel_key(name, settings, aliases) if name else ""
-    found.sort(key=lambda s: (
-        # The channel it is for first, then what still plays, then the best picture
-        s["key"] != wanted_key if wanted_key else False,
-        s["stale"],
-        s["quality_rank"],
-        len(s["name"]),
-        s["name"].lower(),
-    ))
     try:
         limit = max(1, min(int(limit), 200))
     except (TypeError, ValueError):
         limit = STREAMS_FOUND
+    try:
+        offset = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    as_rows = lambda values: [  # noqa: E731
+        {**_row(s, settings, aliases, account_names, group_names, {}, in_scope=True), "stale": s["is_stale"]}
+        for s in values
+    ]
+    if words:
+        found = as_rows(
+            # Enough to rank, not every stream there is: a single common word is tens of
+            # thousands on a real setup
+            streams.order_by("name").values(*STREAM_FIELDS, "is_stale")[:STREAMS_LOOKED_AT]
+        )
+        wanted_key = channel_key(name, settings, aliases) if name else ""
+        found.sort(key=lambda s: (
+            # The channel it is for first, then what still plays, then the best picture
+            s["key"] != wanted_key if wanted_key else False,
+            s["stale"],
+            s["quality_rank"],
+            len(s["name"]),
+            s["name"].lower(),
+        ))
+        found = found[offset:offset + limit + 1]
+    else:
+        # Everything no channel has, nothing typed: a page at a time in name order, straight
+        # from the database, since there is nothing to rank by and it can be thousands
+        found = as_rows(
+            streams.order_by("name", "id").values(*STREAM_FIELDS, "is_stale")[offset:offset + limit + 1]
+        )
+    more = len(found) > limit
     found = found[:limit]
 
     ids = [s["id"] for s in found]
@@ -835,7 +853,7 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
                 "at": record.get("checked_at"),
             } if record else None,
         })
-    return out
+    return (out, more) if with_more else out
 
 
 CHANNELS_FOUND = 30
@@ -2281,6 +2299,8 @@ def guides_to_scan(matching, country=""):
 # the browser before any of them could be read.
 SEARCH_PAGE = 100
 SEARCH_MOST = 5000
+# The most matches a search puts in order by how near they are (see _search)
+SEARCH_SCORED = 2000
 
 
 def search_guides(search, limit=SEARCH_PAGE, current=None, source=None):
@@ -2345,23 +2365,29 @@ def _search(active, matching, wanted, found, seen, limit):
     # Every word, anywhere, in any order -- not the phrase as typed. Somebody looking for
     # the Philadelphia PBS station types "pbs philadelphia", and the guide calls it "PBS
     # WHYY Philadelphia": the words are all there and the phrase is not.
+    from django.db.models.functions import Length
+
     rows = active.exclude(id__in=seen)
     for word in wanted.split():
         rows = rows.filter(Q(name__icontains=word) | Q(tvg_id__icontains=word))
+    # Scored, at most SEARCH_SCORED of them: every match used to be scored, and a short word
+    # ("pbs", "news") on a catalogue of eighty thousand guides stalled every keystroke and
+    # every "Show more". The shortest names are read first, because the words being most of
+    # a name is what makes it near -- "PBS" before "PBS KIDS WEST COAST" -- so what is left
+    # unscored is what would have come last anyway. How many there are is counted in full.
+    total = rows.count()
     rows = [
-        row for row in rows.order_by("-epg_source__priority", "name")
-        .values_list("id", "tvg_id", "name", "epg_source__name")
+        row for row in rows.order_by(Length("name"), "-epg_source__priority", "name")
+        .values_list("id", "tvg_id", "name", "epg_source__name")[:SEARCH_SCORED]
         if _id_is_like(row[1], matching["tvg_id_like"])
     ]
-    # Nearest to what was typed first, so the words being in a shorter name counts. Every
-    # match is put in order, not the first few: the nearest can sort anywhere by name.
     typed = guide_words(wanted)
     rows.sort(key=lambda row: _alike(typed, guide_words(row[2])), reverse=True)
     return {
         "guides": _what_they_carry(
             found + [_guide_entry(*row, "search") for row in rows[:limit]]
         ),
-        "total": len(rows),
+        "total": total if matching["tvg_id_like"] in (None, "", []) else len(rows),
     }
 
 

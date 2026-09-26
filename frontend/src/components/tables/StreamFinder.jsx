@@ -127,6 +127,8 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
   // Only what a provider carries that no channel has yet; then nothing needs typing
   const [onlyUnassigned, setOnlyUnassigned] = useState(false);
   const [found, setFound] = useState([]);
+  // Whether the server has more than the page shown
+  const [more, setMore] = useState(false);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState(null);
 
@@ -147,6 +149,7 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
     const words = search.trim();
     if (!words && !onlyUnassigned) {
       setFound([]);
+      setMore(false);
       return undefined;
     }
     let current = true;
@@ -162,7 +165,10 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
           name: channelName,
           unassigned: onlyUnassigned,
         });
-        if (current) setFound(answer?.streams || []);
+        if (current) {
+          setFound(answer?.streams || []);
+          setMore(!!answer?.more);
+        }
       } catch (e) {
         if (current)
           setError(e?.body?.error || 'Could not search the streams.');
@@ -175,6 +181,27 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
       clearTimeout(timer);
     };
   }, [channelName, search, onlyMissing, missingIds, leaveOutIds, onlyUnassigned]);
+
+  // The next page of the same search, added under what is shown
+  const showMore = async () => {
+    setAsking(true);
+    try {
+      const answer = await API.searchChannelManagerStreams({
+        q: search.trim(),
+        accounts: onlyMissing && missingIds ? missingIds.split(',') : [],
+        leave_out: leaveOutIds ? leaveOutIds.split(',') : [],
+        name: channelName,
+        unassigned: onlyUnassigned,
+        offset: found.length,
+      });
+      setFound((shown) => [...shown, ...(answer?.streams || [])]);
+      setMore(!!answer?.more);
+    } catch (e) {
+      setError(e?.body?.error || 'Could not search the streams.');
+    } finally {
+      setAsking(false);
+    }
+  };
 
   return (
     <Stack gap="sm">
@@ -234,6 +261,13 @@ const FinderBody = ({ row, providers, onAdd, onRemove }) => {
             />
           ))}
       </Stack>
+      {more && (
+        <Group>
+          <Button size="xs" variant="default" loading={asking} onClick={showMore}>
+            Show more
+          </Button>
+        </Group>
+      )}
     </Stack>
   );
 };

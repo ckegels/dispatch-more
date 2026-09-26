@@ -285,13 +285,27 @@ def channel_files(settings=None):
     return sorted(found, key=lambda one: one["path"])
 
 
+# What each list was counted to, with the size and time it had then: {path: (size, mtime, n)}
+_LIST_COUNTS = {}
+
+
 def _count_channels(path):
-    """How many channels a list holds, counted without reading it into memory."""
+    """
+    How many channels a list holds, counted without reading it into memory -- and only again
+    when the file has changed. The page asks every three seconds for as long as a grab runs,
+    which can be hours, and read every list in the folder each time.
+    """
     try:
-        if os.path.getsize(path) > 64 * 1024 * 1024:
+        info = os.stat(path)
+        if info.st_size > 64 * 1024 * 1024:
             return 0
+        known = _LIST_COUNTS.get(path)
+        if known and known[:2] == (info.st_size, info.st_mtime):
+            return known[2]
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            return sum(chunk.count("<channel ") for chunk in iter(lambda: handle.read(1 << 20), ""))
+            count = sum(chunk.count("<channel ") for chunk in iter(lambda: handle.read(1 << 20), ""))
+        _LIST_COUNTS[path] = (info.st_size, info.st_mtime, count)
+        return count
     except OSError:
         return 0
 

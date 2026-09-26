@@ -88,6 +88,22 @@ class WhoWroteItTests(TestCase):
         uwsgi = {"logger": "", "text": "spawned uWSGI worker for the M3U refresh", "level": ""}
         self.assertTrue(log_center._keep(uwsgi, "ALL", "m3u", ""))
 
+    def test_the_overlap_and_the_media_servers_find_their_own_lines(self):
+        """They looked for loggers nothing writes as, and showed nothing at all."""
+        import logging
+
+        from apps.proxy.live_proxy import media_servers, probation
+
+        self.assertEqual(probation.logger.name, "live_proxy.probation")
+        self.assertEqual(media_servers.logger.name, "live_proxy.media_servers")
+        switch = {"logger": probation.logger.name, "text": "Force close: stopping channel x", "level": "INFO"}
+        plex = {"logger": media_servers.logger.name, "text": "Plex session started", "level": "INFO"}
+        self.assertTrue(log_center._keep(switch, "ALL", "overlap", ""))
+        self.assertTrue(log_center._keep(plex, "ALL", "media_servers", ""))
+        # And both are still part of the proxy's lines, whose children they are
+        self.assertTrue(log_center._keep(switch, "ALL", "proxy", ""))
+        self.assertIs(logging.getLogger("live_proxy.probation").parent, logging.getLogger("live_proxy"))
+
     def test_the_channel_managers_own_tabs_can_be_asked_for(self):
         # They had nowhere of their own at all: everything they write was "everything else"
         found = {"logger": "apps.channels.guide_manager", "text": "Guides: done", "level": "INFO"}

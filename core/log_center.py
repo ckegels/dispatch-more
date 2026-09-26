@@ -61,12 +61,14 @@ TOPICS = {
     ),
     "overlap": _topic(
         "Channel Switch Overlap",
-        ("apps.proxy.live_proxy.probation",),
+        # Its lines were written as plain "live_proxy" until v203, and a line that names its
+        # logger is never matched by its words, so this topic showed nothing
+        ("live_proxy.probation",),
         ("probation", "Overlap", "overlap", "skipped channel"),
     ),
     "media_servers": _topic(
         "Media servers (Plex, Jellyfin)",
-        ("apps.proxy.live_proxy.media_server", "apps.proxy.live_proxy.media_servers"),
+        ("live_proxy.media_servers",),
         ("Plex", "Jellyfin", "plex", "jellyfin", "media server"),
     ),
     "stream_check": _topic(

@@ -1561,6 +1561,30 @@ and replaces what was ticked on the others. That is stock Dispatcharr's own beha
 
 ---
 
+### 5.10 The review of v173–v202 (v203)
+
+Everything added since the second read-through (31 commits, ~6,600 lines) was reviewed; five
+real faults, all fixed in v203, and again mostly the shape of §5.9 -- a rule kept in one
+path and missed in its sibling:
+
+- **The arrTV channel change still counted against the user's stream limit.** v202 moved it
+  before the limit check, but the limit counts a channel by its clients' Redis records, which
+  the background stop removes only when done. `leave_previous_channel` deletes that device's
+  client records itself now. With "terminate on limit exceeded" on (the default), the old
+  behaviour could end *another* device's stream.
+- **Two Logs topics showed nothing.** "Channel Switch Overlap" and "Media servers" looked for
+  logger names nothing writes as: `probation.py` and the media server modules wrote as plain
+  `live_proxy`, and a line that names a logger is never matched by its words. They write as
+  `live_proxy.probation` / `live_proxy.media_servers` now (children: level and handlers
+  unchanged, still under the proxy's topic).
+- **"Only streams on no channel" stopped at 50** with "see them all" beside it. Pages now
+  (`offset`, `more`, "Show more"); with nothing typed straight from the database.
+- **The EPG Grabber page re-read every channel list on every 3 s poll** for the whole of a
+  grab. `_count_channels` keeps a count until the file's size or time changes (`_LIST_COUNTS`
+  -- `_COUNTED` was already a regex in the same module, which the tests caught).
+- **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
+  shortest names first; the total is counted in the database.
+
 ## 6. Measured on the real installation (do not re-derive)
 
 1. **Plex:** one guide per channel source, the add-channel-source API sequence (in §5.2 and

@@ -13,7 +13,9 @@ from apps.accounts.permissions import IsAdmin
 
 from . import media_servers
 
-logger = logging.getLogger("live_proxy")
+# Its own name under live_proxy, so the Logs page can pick its lines out (a child logger
+# keeps the parent's level and handlers, so nothing else about the log changes)
+logger = logging.getLogger("live_proxy.media_servers")
 
 
 

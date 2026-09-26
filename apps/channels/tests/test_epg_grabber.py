@@ -623,3 +623,26 @@ class ReadyMadeTests(_Setup):
     def test_only_a_web_address_is_made_a_source(self):
         with self.assertRaises(ValueError):
             epg_grabber.add_ready_made("file:///etc/passwd", "no")
+
+
+class CountingTests(TestCase):
+    """The page asks every three seconds while a grab runs: a list is counted once."""
+
+    def test_a_list_is_counted_again_only_when_it_changes(self):
+        import os
+        import tempfile
+        from unittest.mock import patch
+
+        from apps.channels import epg_grabber
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "pbs.channels.xml")
+            with open(path, "w") as handle:
+                handle.write('<channels><channel site="a">A</channel><channel site="b">B</channel></channels>')
+            self.assertEqual(epg_grabber._count_channels(path), 2)
+            with patch("builtins.open", side_effect=AssertionError("read again")):
+                self.assertEqual(epg_grabber._count_channels(path), 2)
+            with open(path, "w") as handle:
+                handle.write('<channels><channel site="a">A</channel></channels>')
+            os.utime(path, (1, 1))
+            self.assertEqual(epg_grabber._count_channels(path), 1)

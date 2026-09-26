@@ -49,7 +49,9 @@ from . import app_devices
 from .constants import ChannelMetadataField, ChannelState
 from .redis_keys import RedisKeys
 
-logger = logging.getLogger("live_proxy")
+# Its own name under live_proxy, so the Logs page can pick its lines out (a child logger
+# keeps the parent's level and handlers, so nothing else about the log changes)
+logger = logging.getLogger("live_proxy.probation")
 
 # Redis hash describing a channel's pending probation (see mark_probation).
 PROBATION_KEY = "live:probation:{channel_uuid}"
@@ -1485,6 +1487,13 @@ def leave_previous_channel(redis_client, viewer, previous_channel_uuid, requeste
             channel=previous, result="closed",
         )
         _stop_channel_now(redis_client, previous, hold_slot=True)
+        # The user's own stream limit counts a channel by its clients' records, which the
+        # stop removes only once it has finished -- after the limit is checked, so the
+        # channel being left still counted and the switch was refused, or with "terminate on
+        # limit exceeded" another of the user's streams was ended instead. They are this
+        # device's alone (checked above), and going anyway, so they go now.
+        for client_id in redis_client.smembers(RedisKeys.clients(previous)) or ():
+            redis_client.delete(RedisKeys.client_metadata(previous, _as_str(client_id)))
         return True
     except Exception as e:
         logger.error(f"App switch: could not close channel {previous} for {viewer}: {e}", exc_info=True)

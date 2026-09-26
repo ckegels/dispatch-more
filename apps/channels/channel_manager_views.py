@@ -169,14 +169,17 @@ def channel_manager_streams(request):
     def numbers(value):
         return [int(n) for n in str(value or "").split(",") if n.strip().isdigit()]
 
-    return JsonResponse({"streams": channel_manager.search_streams(
+    streams, more = channel_manager.search_streams(
         request.GET.get("q", ""),
         numbers(request.GET.get("accounts")),
         numbers(request.GET.get("leave_out")),
         request.GET.get("name", ""),
         request.GET.get("limit", channel_manager.STREAMS_FOUND),
         unassigned=str(request.GET.get("unassigned", "")).lower() in ("1", "true", "yes", "on"),
-    )})
+        offset=request.GET.get("offset", 0),
+        with_more=True,
+    )
+    return JsonResponse({"streams": streams, "more": more})
 
 
 @api_view(["GET"])

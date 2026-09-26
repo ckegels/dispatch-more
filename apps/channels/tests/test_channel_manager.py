@@ -692,6 +692,19 @@ class StreamSearchTests(_Setup):
         self.assertNotIn(self.existing.name, self.names("orf", unassigned=True))
         self.assertIn(self.existing.name, self.names("orf"))
 
+    def test_streams_on_no_channel_come_a_page_at_a_time(self):
+        """It said "see them all" and stopped at fifty, with no way on."""
+        for i in range(7):
+            self._stream(f"AT: CHANNEL {i}", self.c)
+        first, more = channel_manager.search_streams("", accounts=[self.c.id], unassigned=True, limit=5, with_more=True)
+        self.assertEqual(len(first), 5)
+        self.assertTrue(more)
+        rest, more = channel_manager.search_streams(
+            "", accounts=[self.c.id], unassigned=True, limit=5, offset=5, with_more=True
+        )
+        self.assertEqual([s["name"] for s in rest], ["AT: CHANNEL 5", "AT: CHANNEL 6"])
+        self.assertFalse(more)
+
     def test_through_the_page(self):
         self._stream("AT: ORF 1 HD", self.c)
         client = APIClient()
@@ -2372,6 +2385,23 @@ class ViewTests(_Setup):
             ).status_code,
             200,
         )
+
+    def test_a_search_scores_a_bounded_number_and_counts_them_all(self):
+        """
+        Every match was scored on every keystroke: a short word on eighty thousand guides
+        stalled the window. The shortest names are scored first; the count is all of them.
+        """
+        source = EPGSource.objects.create(name="PBS", source_type="xmltv", priority=9)
+        EPGData.objects.create(tvg_id="pbs.us", name="PBS", epg_source=source)
+        for n in range(20):
+            EPGData.objects.create(tvg_id=f"pbskids{n}.us", name=f"PBS KIDS WEST COAST {n}", epg_source=source)
+        with patch.object(channel_manager, "SEARCH_SCORED", 3):
+            answer = self.client_api.get(
+                "/api/channels/channel-manager/guides/", {"q": "pbs", "limit": 50}
+            ).json()
+        self.assertEqual(answer["total"], 21)
+        self.assertEqual(len(answer["guides"]), 3)
+        self.assertEqual(answer["guides"][0]["name"], "PBS")
 
     def test_a_search_finds_every_guide_that_matches_not_a_dozen(self):
         """

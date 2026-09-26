@@ -23,7 +23,9 @@ from core.utils import RedisClient
 from . import media_servers
 from .hdhr_tuner_views import MAX_TUNERS
 
-logger = logging.getLogger("live_proxy")
+# Its own name under live_proxy, so the Logs page can pick its lines out (a child logger
+# keeps the parent's level and handlers, so nothing else about the log changes)
+logger = logging.getLogger("live_proxy.media_servers")
 
 # A channel profile built here is named so it is obvious where it came from and what it is for
 PROFILE_PREFIX = "plexmedia"

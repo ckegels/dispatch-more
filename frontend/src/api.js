@@ -2930,14 +2930,17 @@ export default class API {
     leave_out = [],
     name = '',
     unassigned = false,
+    offset = 0,
   } = {}) {
-    // unassigned: only streams no channel has yet
+    // unassigned: only streams no channel has yet; offset: where the next page starts.
+    // The answer says whether there are more.
     const query = new URLSearchParams({
       q,
       accounts: accounts.join(','),
       leave_out: leave_out.join(','),
       name,
       unassigned: unassigned ? '1' : '',
+      offset: String(offset),
     });
     return await request(
       `${host}/api/channels/channel-manager/streams/?${query}`
