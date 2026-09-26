@@ -222,6 +222,36 @@ describe('ChannelManagerTable', () => {
     await waitFor(() => expect(screen.queryByText(/nothing is done with them/)).toBeNull());
   });
 
+  it('lists the new channels with the most streams first, and hides the ones with too few', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const suggestion = (key, name, count) => ({
+      key, status: 'new', adds: count, removes: 0, changes: [], country: 'at',
+      channel: { id: null, name, number: 20, group: '┃AT┃ AUSTRIA', group_id: 1, logo_url: '', epg: null },
+      before: { channel: null, streams: [] },
+      streams: [
+        ...Array.from({ length: count }, (_, i) => stream(100 + key.length * 10 + i, `${name} ${i}`, { added: true })),
+        fallback,
+      ],
+    });
+    API.previewChannelManager.mockResolvedValue({
+      ...plan,
+      rows: [suggestion('new:a', 'ONE PROVIDER TV', 1), suggestion('new:bb', 'THREE PROVIDERS TV', 3)],
+    });
+    draw();
+    await screen.findAllByText('ONE PROVIDER TV');
+    const order = () =>
+      screen.getAllByText(/PROVIDERS? TV$/).map((el) => el.textContent).filter((t, i, all) => all.indexOf(t) === i);
+    expect(order()).toEqual(['ONE PROVIDER TV', 'THREE PROVIDERS TV']);
+
+    await pickOption('Order', 'Most streams first');
+    await waitFor(() => expect(order()).toEqual(['THREE PROVIDERS TV', 'ONE PROVIDER TV']));
+
+    // The fallback does not count as a stream
+    fireEvent.change(screen.getByLabelText('At least streams'), { target: { value: '2' } });
+    await waitFor(() => expect(screen.queryAllByText('ONE PROVIDER TV')).toHaveLength(0));
+    expect(screen.getAllByText('THREE PROVIDERS TV').length).toBeGreaterThan(0);
+  });
+
   it('puts a suggested new channel on one you have instead of making it', async () => {
     const newRow = {
       key: 'new:at:orfeins', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',

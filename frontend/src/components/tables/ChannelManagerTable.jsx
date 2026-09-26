@@ -192,6 +192,12 @@ const StreamLine = ({ stream, move, onDrop }) => (
 // The streams that can be moved: not one taken off, and not the fallback, which stays last
 const movable = (stream) => !stream.removed && !stream.custom;
 
+// How many streams a row comes out with: not the fallback, and not one taken off. For a new
+// channel that is how many copies of it the providers carry, which is what says whether it
+// is worth making.
+const streamCount = (row) =>
+  (row.streams || []).filter((s) => !s.custom && !s.removed && !s.dropped).length;
+
 // A provider is a login: every M3U account is one, two logins at the same provider
 // included, since each carries streams of its own. The fallback is nobody's -- counted, it
 // made every channel one provider richer than it is. By id where the plan says it, since
@@ -511,6 +517,10 @@ const ChannelManagerTable = () => {
   // this one provider ('' is none in particular)
   const [fewerThan, setFewerThan] = useState('');
   const [missing, setMissing] = useState('');
+  // The order rows are listed in, and the fewest streams a row must have to be shown ('' is
+  // any number)
+  const [sortBy, setSortBy] = useState('plan');
+  const [atLeast, setAtLeast] = useState('');
   const [clearing, setClearing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -789,17 +799,27 @@ const ChannelManagerTable = () => {
             return true;
           })
         : inGroup;
+    const least = Number(atLeast) || 0;
+    const byCount = least
+      ? byProviders.filter((row) => streamCount(row) >= least)
+      : byProviders;
     const wanted = search.trim().toLowerCase();
-    if (!wanted) return byProviders;
-    return byProviders.filter((row) =>
-      [
-        row.channel?.name,
-        row.before?.channel?.name,
-        ...row.before.streams.map((s) => s.name),
-      ]
-        .filter(Boolean)
-        .some((name) => name.toLowerCase().includes(wanted))
-    );
+    const found = !wanted
+      ? byCount
+      : byCount.filter((row) =>
+          [
+            row.channel?.name,
+            row.before?.channel?.name,
+            ...row.before.streams.map((s) => s.name),
+          ]
+            .filter(Boolean)
+            .some((name) => name.toLowerCase().includes(wanted))
+        );
+    // Most streams first: the new channels most providers carry, worth making before the
+    // ones only one does. Stable, so rows with as many keep the plan's order.
+    return sortBy === 'streams'
+      ? [...found].sort((a, b) => streamCount(b) - streamCount(a))
+      : found;
   }, [
     plan,
     show,
@@ -815,6 +835,8 @@ const ChannelManagerTable = () => {
     intoChoice,
     fewerThan,
     missing,
+    sortBy,
+    atLeast,
   ]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -1491,6 +1513,34 @@ const ChannelManagerTable = () => {
                   }))}
                   size="xs"
                   style={{ width: 190 }}
+                />
+                <Select
+                  aria-label="Order"
+                  value={sortBy}
+                  onChange={(value) => {
+                    if (value) setSortBy(value);
+                    setPageIndex(0);
+                  }}
+                  allowDeselect={false}
+                  data={[
+                    { value: 'plan', label: 'In channel order' },
+                    { value: 'streams', label: 'Most streams first' },
+                  ]}
+                  size="xs"
+                  style={{ width: 170 }}
+                />
+                <NumberInput
+                  aria-label="At least streams"
+                  placeholder="At least … streams"
+                  value={atLeast}
+                  min={1}
+                  allowDecimal={false}
+                  onChange={(value) => {
+                    setAtLeast(value === '' ? '' : Number(value));
+                    setPageIndex(0);
+                  }}
+                  size="xs"
+                  style={{ width: 150 }}
                 />
               </Group>
 
