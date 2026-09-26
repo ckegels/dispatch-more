@@ -99,6 +99,55 @@ class RecognitionTests(TestCase):
         self.assertEqual(calls("NAT GEO | WILD"), set())
         self.assertEqual(calls("DE| WELT (WELT)", "de"), set())
 
+    def test_three_letter_call_signs_and_call_signs_anywhere_in_a_local_name(self):
+        calls = channel_manager.call_signs_of
+        self.assertEqual(calls("US| CBS 03 (KYW) PHILADELPHIA HD", "us"), {"kyw"})
+        self.assertEqual(calls("ABC 2 | ATLANTA | WSB"), {"wsb"})
+        self.assertEqual(calls("ABC 5 WCVB | BOSTON |"), {"wcvb"})
+        self.assertEqual(calls("US| PBS 09 KIXE REDDING", "us"), {"kixe"})
+        # Anywhere only in a network's local station: elsewhere four letters are a word
+        self.assertEqual(calls("WILD KIDS WORLD"), set())
+
+    def test_a_local_station_by_network_number_and_town(self):
+        local = channel_manager.local_station_of
+        self.assertEqual(local("┃USA┃ NBC 46 | SIOUX FALLS  IA", "us"), ("nbc", "46", ["sioux", "falls"]))
+        self.assertEqual(local("US| NBC 46 (KDLT) SIOUX FALLS", "us"), ("nbc", "46", ["sioux", "falls"]))
+        self.assertEqual(local("US| NBC 08 (WGAL) LANCASTER", "us")[1], "8")
+        # What is in brackets is not the town: KING is a call sign, not Seattle
+        self.assertEqual(local("US| NBC 05 (KING) SEATTLE", "us")[2], ["seattle"])
+        # The first town, whole
+        self.assertEqual(local("US| NBC 13 (KCWY) CASPER/RIVERTON", "us")[2], ["casper"])
+        self.assertNotEqual(local("US| NBC 03 (KFDX) WICHITA FALLS", "us")[2], local("┃USA┃ NBC 3 | WICHITA KS", "us")[2])
+        # Not without a number, nor from a country that has no such stations
+        self.assertIsNone(local("PBS | DALLAS | KERA", "us"))
+        self.assertIsNone(local("┃DE┃ ARD 1 | BERLIN", "de"))
+
+    def test_a_country_is_written_one_way(self):
+        """┃USA┃ was "usa" and US| was "us": two countries, as far as Same country only knew."""
+        self.assertEqual(channel_manager.country_for("┃USA┃ NBC 4 | NEW YORK"), "us")
+        self.assertEqual(channel_manager.country_for("┃GER┃ ARD"), "de")
+        self.assertEqual(channel_manager.country_for("PBS | DALLAS | KERA"), "")
+
+    def test_the_east_feed_is_the_one_that_does_not_say_when_asked(self):
+        east = {"east_is_default": True, "name_matching": "loose", "country_any_way": True}
+        self.assertTrue(self.same("US| FYI HD", "FYI HD [EAST]", **east))
+        self.assertTrue(self.same("US| OXYGEN EAST HD", "OXYGEN HD [EAST]", **east))
+        self.assertFalse(self.same("US| FYI HD", "FYI HD [WEST]", **east))
+        self.assertFalse(self.same("US| FYI HD", "FYI HD [EAST]", name_matching="loose", country_any_way=True))
+
+    def test_a_country_named_in_its_own_country_is_said_again(self):
+        self.assertTrue(self.same("CA| DISCOVERY CANADA HD", "┃CA EN┃ DISCOVERY", country_any_way=True, name_matching="loose"))
+        # "America" is part of names, not where they are
+        self.assertFalse(self.same("US| RT AMERICA", "┃USA┃ RT", country_any_way=True, name_matching="loose"))
+
+    def test_loose_matching_keeps_a_town_in_brackets_at_the_end(self):
+        """"ROGERS TV (BATHURST)" is one of ten Rogers TV towns; the loose key made it all ten."""
+        loose = {"name_matching": "loose", "country_any_way": True}
+        self.assertFalse(self.same("CA| ROGERS TV", "┃CA EN┃ ROGERS TV (BATHURST)", **loose))
+        # A call sign, a country, a language or a quality in brackets still comes off
+        self.assertTrue(self.same("US| TRUE CRIME NETWORK", "TRUE CRIME NETWORK HD (WTSP)", **loose))
+        self.assertTrue(self.same("UK| AL JAZEERA", "┃UK┃ AL JAZEERA HD (EN)", **loose))
+
     def test_quality_is_a_whole_word_not_part_of_one(self):
         """"HD" in the middle of a word is the word: SHD Sport is not SH plus a quality."""
         self.assertFalse(self.same("SHD Sport", "S Sport"))
@@ -214,6 +263,44 @@ class MergeTests(_Setup):
         self.assertIn(kcbs.id, [s["id"] for s in self._row(plan, f"ch:{cbs2.id}")["streams"]])
         self.assertNotIn(kcbs.id, [s["id"] for s in self._row(plan, f"ch:{start.id}")["streams"]])
 
+    def _added(self, plan, channel):
+        return [s["name"] for s in self._row(plan, f"ch:{channel.id}")["streams"] if s.get("added")]
+
+    def test_a_local_station_without_a_call_sign_by_network_number_and_town(self):
+        usa = ChannelGroup.objects.create(name="┃USA┃ NBC NETWORK")
+        sioux = self._channel("┃USA┃ NBC 46 | SIOUX FALLS  IA", 46, usa)
+        wichita = self._channel("┃USA┃ NBC 3 | WICHITA KS", 3, usa)
+        self._stream("US| NBC 46 (KDLT) SIOUX FALLS", self.b, group=usa)
+        self._stream("US| NBC 03 (KFDX) WICHITA FALLS", self.b, group=usa)
+        plan = channel_manager.build_plan(settings(match_call_signs=True))
+        self.assertEqual(self._added(plan, sioux), ["US| NBC 46 (KDLT) SIOUX FALLS"])
+        self.assertEqual(self._added(plan, wichita), [])
+
+    def test_same_country_only_lets_a_country_written_another_way_through(self):
+        usa = ChannelGroup.objects.create(name="┃USA┃ ENTERTAINMENT")
+        amc = self._channel("┃USA┃ AMC", 70, usa)
+        self._stream("US| AMC HD", self.b, group=usa)
+        plan = channel_manager.build_plan(settings(country_any_way=True, same_country=True))
+        self.assertEqual(self._added(plan, amc), ["US| AMC HD"])
+
+    def test_leaving_out_filler_only_where_it_still_names_one_channel(self):
+        usa = ChannelGroup.objects.create(name="┃USA┃ ENTERTAINMENT")
+        paramount = self._channel("┃USA┃ PARAMOUNT", 70, usa)
+        laff = self._channel("┃USA┃ LAFF", 71, usa)
+        laff_more = self._channel("┃USA┃ LAFF MORE", 72, usa)
+        self._stream("US| PARAMOUNT NETWORK HD", self.b, group=usa)
+        self._stream("US| LAFF TV", self.b, group=usa)
+        plan = channel_manager.build_plan(settings(country_any_way=True, leave_out_filler=True))
+        self.assertEqual(self._added(plan, paramount), ["US| PARAMOUNT NETWORK HD"])
+        self.assertEqual(self._added(plan, laff), ["US| LAFF TV"])
+        self.assertEqual(self._added(plan, laff_more), [])
+        # Two of yours that the word tells apart: neither is found by leaving it out
+        cbs = self._channel("┃USA┃ CBS", 73, usa)
+        cbs_tv = self._channel("┃USA┃ CBS TV", 74, usa)
+        self._stream("US| CBS NETWORK", self.b, group=usa)
+        plan = channel_manager.build_plan(settings(country_any_way=True, leave_out_filler=True))
+        self.assertEqual(self._added(plan, cbs) + self._added(plan, cbs_tv), [])
+
     def test_every_copy_of_a_channel_is_found_across_providers(self):
         self._stream("┃AT┃ ORF 1 FHD", self.b)
         self._stream("┃AT┃ ORF 1 HD", self.a)
@@ -298,6 +385,51 @@ class MergeTests(_Setup):
         self._stream("┃AT┃ KRONE TV", self.b, tvg_id="euronews.at")
         row = self._row(channel_manager.build_plan(settings()), f"ch:{euronews.id}")
         self.assertEqual(row["adds"], 0)
+
+    def test_a_tvg_id_the_names_contradict_is_not_believed_even_when_trusted(self):
+        """On the real lineup, trusting tvg-ids put three hundred streams on the wrong channel."""
+        euronews = Channel.objects.create(name="┃AT┃ EURONEWS", channel_number=5, channel_group=self.austria, tvg_id="euronews.at")
+        self._stream("┃AT┃ KRONE TV", self.b, tvg_id="euronews.at")
+        usa = ChannelGroup.objects.create(name="┃USA┃ ABC NETWORK")
+        # One playlist stamps every ABC station with WHAS Louisville's id
+        billings = self._channel("ABC 6 | BILLINGS | KSVI", 60, usa, tvg_id="abc11whas.us")
+        whas = self._stream("US| ABC 11 (WHAS) LOUISVILLE", self.b, group=usa, tvg_id="abc11whas.us")
+        west = self._channel("COMEDY CENTRAL HD [WEST]", 61, usa, tvg_id="comedycentraleast.us")
+        self._stream("US| COMEDY CENTRAL EAST HD", self.b, group=usa, tvg_id="comedycentraleast.us")
+        plan = channel_manager.build_plan(settings(match_tvg_id=True))
+        self.assertEqual(self._row(plan, f"ch:{euronews.id}")["adds"], 0)
+        self.assertNotIn(whas.id, [s["id"] for s in self._row(plan, f"ch:{billings.id}")["streams"]])
+        self.assertEqual(self._row(plan, f"ch:{west.id}")["adds"], 0)
+
+    def test_a_tvg_id_in_another_language_is_not_believed(self):
+        english = self._channel("┃CA EN┃ CPAC", 50, self.austria, tvg_id="cpac.ca")
+        self._stream("CA| (FR) CPAC FRENCH", self.b, tvg_id="cpac.ca")
+        plan = channel_manager.build_plan(settings(match_tvg_id=True))
+        self.assertEqual(self._row(plan, f"ch:{english.id}")["adds"], 0)
+
+    def test_a_tvg_id_a_provider_gives_several_of_its_channels_names_none_of_them(self):
+        """Every ORF 2 region is "orf2.at": ORF 2 Kärnten went onto ORF 2 Steiermark."""
+        steiermark = self._channel("┃AT┃ ORF 2ST", 20, self.austria, tvg_id="orf2.at")
+        self._stream("AT| ORF 2 KÄRNTEN HD", self.b, tvg_id="orf2.at")
+        self._stream("AT| ORF 2 WIEN HD", self.b, tvg_id="orf2.at")
+        plan = channel_manager.build_plan(settings(match_tvg_id=True))
+        self.assertEqual(self._row(plan, f"ch:{steiermark.id}")["adds"], 0)
+
+    def test_a_tvg_id_on_several_of_your_channels_names_none_of_them(self):
+        towns = [self._channel(f"┃CA EN┃ ROGERS TV ({t})", 30 + i, self.austria, tvg_id="rogerstv.ca")
+                 for i, t in enumerate(("BATHURST", "GUELPH", "OTTAWA"))]
+        self._stream("CA| ROGERS TV", self.b, tvg_id="rogerstv.ca")
+        plan = channel_manager.build_plan(settings(match_tvg_id=True))
+        self.assertEqual(sum(self._row(plan, f"ch:{t.id}")["adds"] for t in towns), 0)
+
+    def test_the_name_comes_before_the_tvg_id(self):
+        """CHEDDAR BUSINESS carried Cheddar News' id; its name is one of your channels."""
+        news = self._channel("┃AT┃ CHEDDAR NEWS", 40, self.austria, tvg_id="cheddar.us")
+        business = self._channel("┃AT┃ CHEDDAR BUSINESS", 41, self.austria)
+        self._stream("┃AT┃ CHEDDAR BUSINESS HD", self.b, tvg_id="cheddar.us")
+        plan = channel_manager.build_plan(settings(match_tvg_id=True))
+        self.assertEqual(self._row(plan, f"ch:{business.id}")["adds"], 1)
+        self.assertEqual(self._row(plan, f"ch:{news.id}")["adds"], 0)
 
     def test_stations_of_one_network_are_not_made_one(self):
         cbs = Channel.objects.create(name="┃US┃ CBS", channel_number=6, channel_group=self.austria, tvg_id="CBS.us")

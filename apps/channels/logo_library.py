@@ -118,10 +118,18 @@ def country_of(name) -> str:
     it at a certain hundred per cent. The first part is the country -- when it is one
     that exists, since two words in a box are just as often "VIP SD".
     """
-    found = re.match(r"\s*[┃|\[(]?\s*([A-Za-z]{2,3})\s*[┃|\])]", str(name or ""))
+    found = re.match(r"\s*[┃|\[(]\s*([A-Za-z]{2,3})\s*[┃|\])]", str(name or ""))
     if found:
         code = found.group(1).lower()
         return COUNTRY_ALIASES.get(code, code)
+    # Without the opening mark it is only a country when it is one: "ABC | NEW YORK | WABC"
+    # and "PBS | DALLAS | KERA" are how a playlist names a network's local station, and
+    # read as the countries "abc" and "pbs" they fell out of every American match there is
+    found = re.match(r"\s*([A-Za-z]{2,3})\s*[┃|\])]", str(name or ""))
+    if found:
+        code = found.group(1).lower()
+        if code in ISO_COUNTRIES or code in THREE_LETTER_COUNTRIES:
+            return COUNTRY_ALIASES.get(code, code)
     found = re.match(
         r"\s*[┃|\[(]\s*([A-Za-z]{2})[\s\-_/]+[A-Za-z]{2,3}\s*[┃|\])]", str(name or "")
     )
@@ -137,6 +145,16 @@ def country_of(name) -> str:
     if code not in ISO_COUNTRIES:
         return ""
     return COUNTRY_ALIASES.get(code, code)
+
+
+# The three-letter ways playlists write a country before a bar ("USA |", "GER|"), as the
+# Channel Manager reads them (channel_manager.ALSO_CALLED says which country each is)
+THREE_LETTER_COUNTRIES = {
+    "usa", "can", "mex", "gbr", "eng", "ger", "deu", "ned", "nld", "hol", "fra", "esp", "ita",
+    "por", "bel", "aut", "sui", "che", "swe", "nor", "den", "dnk", "fin", "pol", "svk", "cze",
+    "hun", "rom", "rou", "gre", "grc", "tur", "rus", "ukr", "aus", "nzl", "bra", "arg", "ire",
+    "irl", "ind",
+}
 
 
 # ── Building the index ───────────────────────────────────────────────────────

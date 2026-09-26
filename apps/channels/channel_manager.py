@@ -30,6 +30,7 @@ as words, and the country box in front taken off.
 import fnmatch
 import logging
 import re
+import unicodedata
 
 from . import known_channels, logo_library
 from .settings_rows import change_row
@@ -108,6 +109,11 @@ DEFAULTS = {
     # "ABC 10 | ALBANY | WTEN" and "US| ABC 10 (WTEN) ALBANY" are one station, and no rule
     # about names makes them so. Off, as in DispatcharrUtils, which only compares names.
     "match_call_signs": False,
+    # "FYI HD" is "FYI HD [EAST]": the feed an American playlist does not name is the East one
+    "east_is_default": False,
+    # "PARAMOUNT NETWORK" is Paramount, "WDR FERNSEHEN" is WDR -- where that still names only
+    # one of your channels
+    "leave_out_filler": False,
     # ── Quality ──
     # "quality" puts the best picture first, "provider" the preferred account first.
     # "provider" is what DispatcharrUtils does.
@@ -332,7 +338,10 @@ def _country_one_way(name):
 # A call sign as a name writes one: its own part of the name, between bars or slashes or in
 # brackets ("| WTEN", "WYIN/WTTW", "(KATU)"), perhaps with the ending the FCC gives it
 # ("KQED-DT"). Four letters beginning with K or W anywhere else are a word: "WILD", "WELT".
-_CALL_SIGN_PART = re.compile(r"^([KW][A-Z]{3})(?:[-_ ]?(?:TV|DT(\d?)|CD|LD|LP))?$")
+_CALL_SIGN_PART = re.compile(r"^([KW][A-Z]{2,3})(?:[-_ ]?(?:TV|DT|CD|LD|LP)(\d?))?$")
+# In a local station's name, anywhere: "ABC 5 WCVB | BOSTON", "PBS 09 KIXE REDDING",
+# "WBAY-TV2". Only four letters here -- three anywhere in a name are too often a word.
+_CALL_SIGN_WORD = re.compile(r"(?<![A-Z0-9])([KW][A-Z]{3})(?:-?(?:TV|DT|CD|LD|LP)(\d?))?(?![A-Z0-9])")
 
 # The networks a local station carries. On the real lineup "START TV HD (KCBS)" is what KCBS
 # sends on a subchannel, not CBS 2 Los Angeles: a call sign says which station, the network
@@ -342,6 +351,17 @@ NETWORKS = {
     "univision", "unimas", "independent",
 }
 
+# What follows a station's number and is not its place: the state, and what the stream is
+STATES = set(
+    "al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma mi mn ms mo mt ne nv nh nj "
+    "nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy dc pr dt tv hd fhd uhd sd".split()
+)
+
+
+def _call_sign(said):
+    sub = said.group(2) or ""
+    return said.group(1).lower() + (f"-{sub}" if sub and sub != "1" else "")
+
 
 def call_signs_of(name, country=""):
     """
@@ -349,15 +369,23 @@ def call_signs_of(name, country=""):
     WLOX is ABC and WLOX-DT2 is CBS, so the subchannel is part of which station it is. Two
     for a channel that is two stations ("WYIN/WTTW"), none for a name from a country that
     does not give call signs out: four letters on a German channel are four letters.
+
+    A call sign written as one -- its own part of the name, three letters or four (WSB, KYW
+    are as much call signs as WTEN) -- and, in the name of a network's local station, four
+    letters anywhere ("ABC 5 WCVB | BOSTON"), since that is how some playlists write it.
     """
     if _one_country(country) not in CALL_SIGN_COUNTRIES:
         return set()
+    text = str(name or "").upper()
     found = set()
-    for part in re.split(r"[|/()\[\]┃]", str(name or "").upper()):
+    for part in re.split(r"[|/()\[\]┃]", text):
         said = _CALL_SIGN_PART.match(part.strip())
         if said and said.group(1).lower() not in NOT_A_CALL_SIGN:
-            sub = said.group(2) or ""
-            found.add(said.group(1).lower() + (f"-{sub}" if sub and sub != "1" else ""))
+            found.add(_call_sign(said))
+    if not found and network_of(name):
+        for said in _CALL_SIGN_WORD.finditer(text):
+            if said.group(1).lower() not in NOT_A_CALL_SIGN:
+                found.add(_call_sign(said))
     return found
 
 
@@ -366,10 +394,178 @@ def network_of(name):
     return next((w for w in re.findall(r"[a-z]+", str(name or "").lower()) if w in NETWORKS), "")
 
 
+def local_station_of(name, country=""):
+    """
+    An American local station as its name describes it without a call sign: the network,
+    the channel number and the place -- "NBC 46 | SIOUX FALLS IA" and "US| NBC 46 (KDLT)
+    SIOUX FALLS" are ("nbc", "46", ["sioux", "falls"]). None where one of the three is not
+    there: a network and a place alone are every station of it in town.
+
+    What is in brackets is left out, since that is where the call sign goes and a call sign
+    that is also a word ("KING", "WAVE") would be taken for the place. The state and what
+    the stream is (HD, DT) are left out too; the number without its leading zero, as one
+    playlist writes 08 where another writes 8.
+    """
+    if _one_country(country) not in CALL_SIGN_COUNTRIES:
+        return None
+    text = re.sub(r"[(\[][^)\]]*[)\]]", " ", _strip_country_box(str(name or "")))
+    words = re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKD", text.lower()))
+    network = next((w for w in words if w in NETWORKS), "")
+    if not network:
+        return None
+    after = words[words.index(network) + 1:]
+    if not after or not after[0].isdigit():
+        return None
+    calls = {c.split("-")[0] for c in call_signs_of(name, country)}
+    # The first town, whole: "CASPER/RIVERTON" is Casper, but "WICHITA FALLS" is not Wichita
+    towns = []
+    for part in re.split(r"[/,|]", text.lower()):
+        words_here = [
+            w for w in re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKD", part))
+            if not w.isdigit() and w not in STATES and w not in calls and w not in NETWORKS
+        ]
+        if words_here:
+            towns.append(words_here)
+    if not towns:
+        return None
+    return network, str(int(after[0])), towns[0]
+
+
+def _same_place(mine, theirs):
+    """
+    One town: "SIOUX FALLS IA" and "SIOUX FALLS", "CASPER" and "CASPER/RIVERTON" (the first
+    town of each, the state left out). Word for word, since "WICHITA" and "WICHITA FALLS"
+    are two towns with an NBC 3 each.
+    """
+    return mine == theirs
+
+
+# Words for what a channel is rather than which: "PARAMOUNT NETWORK" is Paramount, "LAFF TV"
+# is Laff, "WDR FERNSEHEN" is WDR. Only ever used where leaving them out still names exactly
+# one of your channels, so a word that tells two of them apart is never left out.
+FILLER_WORDS = {"tv", "channel", "network", "the", "television", "televisie", "télévision", "fernsehen"}
+
+# The East feed is the one an American playlist does not bother to name: "FYI HD" is
+# "FYI HD [EAST]". The West one always says so.
+_EAST = re.compile(r"[\[(]\s*east\s*[\])]|\beast\s*$", re.IGNORECASE)
+
+# A country's own name in a channel's name is where the channel is, said again: "DISCOVERY
+# CANADA" on a Canadian playlist is Discovery. Not "america", which is part of names
+# ("RT America", "BBC America") rather than where they are.
+COUNTRY_NAMES = {
+    "at": {"austria", "osterreich"}, "be": {"belgium", "belgie", "belgique"},
+    "ca": {"canada"}, "de": {"germany", "deutschland"}, "fr": {"france"},
+    "it": {"italy", "italia"}, "nl": {"netherlands", "nederland", "holland"},
+    "gb": {"uk", "britain"}, "ch": {"switzerland", "schweiz", "suisse"},
+    "es": {"spain", "espana"}, "pt": {"portugal"},
+}
+
+
+def _without_country_name(text, country):
+    words = text.split()
+    kept = [w for w in words if w.strip("()[]").lower() not in COUNTRY_NAMES.get(_one_country(country), ())]
+    return " ".join(kept) if kept and len(kept) < len(words) else text
+
+
+# The language a name says it is in: the second half of a box ("┃CA EN┃"), a code in
+# brackets ("(FR)"), or the word. Canada has one CPAC in English and one in French.
+_LANGUAGE_WORDS = {
+    "en": "en", "eng": "en", "english": "en", "fr": "fr", "fre": "fr", "french": "fr",
+    "francais": "fr", "français": "fr", "es": "es", "spa": "es", "spanish": "es", "espanol": "es",
+    "de": "de", "ger": "de", "german": "de", "nl": "nl", "dutch": "nl", "it": "it", "italian": "it",
+}
+
+
+def _language_of(name):
+    text = str(name or "")
+    box = re.match(r"\s*[┃|\[(]\s*[A-Za-z]{2}[\s\-_/]+([A-Za-z]{2,3})\s*[┃|\])]", text)
+    if box and box.group(1).lower() in _LANGUAGE_WORDS:
+        return _LANGUAGE_WORDS[box.group(1).lower()]
+    for said in re.findall(r"[(\[]\s*([A-Za-zçÇ]{2,8})\s*[)\]]|\b(english|french|francais|français|spanish|espanol)\b", text, re.IGNORECASE):
+        word = (said[0] or said[1]).lower()
+        if word in _LANGUAGE_WORDS:
+            return _LANGUAGE_WORDS[word]
+    return ""
+
+
+def _is_west(name):
+    return bool(re.search(r"\b(west|pacific)\b", str(name or ""), re.IGNORECASE))
+
+
+def _is_plus(name):
+    return bool(re.search(r"\+\s*$|\+\s*[\[(]|\bplus\b", clean_name(name, {}), re.IGNORECASE))
+
+
+# How alike the letters of two names with no words in common must be for a tvg-id to be
+# believed: "NBCLX" and "NBC LX" are; "KRONE" and "EURONEWS" (0.62) are not
+TVG_LETTERS_ALIKE = 0.8
+
+
+def _tvg_contradicted(stream, record):
+    """
+    Whether the names say a tvg-id is wrong. A tvg-id is a provider's word, not proof, and on
+    a real lineup it was wrong three hundred times over: one playlist stamps every ABC
+    station "abc11whas.us", so WHAS Louisville went onto the ABC station of a dozen other
+    towns, and ORF 2 Vorarlberg went onto ORF 2 Steiermark. Believed unless the names give
+    another country, another call sign, another network, another station number or place,
+    or are nothing alike -- and then the stream is matched by its name like any other.
+    """
+    import difflib
+
+    channel = record["channel"].name
+    mine, theirs = record["country"], stream["country"]
+    if mine and theirs and mine != theirs:
+        return True
+    spoken_c, spoken_s = _language_of(channel), _language_of(stream["name"])
+    if spoken_c and spoken_s and spoken_c != spoken_s:
+        # The French CPAC went onto the English one by its id
+        return True
+    calls_c, calls_s = call_signs_of(channel, mine or "us"), call_signs_of(stream["name"], theirs or "us")
+    if calls_c and calls_s:
+        return not calls_c & calls_s
+    if network_of(channel) != network_of(stream["name"]):
+        return True
+    if _is_west(channel) != _is_west(stream["name"]) or _is_plus(channel) != _is_plus(stream["name"]):
+        # The West feed carried the East one's id: "COMEDY CENTRAL EAST" went onto both.
+        # And "OUTSIDE TV+" is another channel than "OUTSIDE TV".
+        return True
+    local_c, local_s = local_station_of(channel, mine or "us"), local_station_of(stream["name"], theirs or "us")
+    if local_c and local_s:
+        return local_c[:2] != local_s[:2] or not _same_place(local_c[2], local_s[2])
+    # Compared as the guide matcher reads names, so "ORF EINS" is "ORF 1" and "NGC" is
+    # National Geographic before anything is judged unlike. By words: half the words of the
+    # shorter name in the other ("REAL TIME" in "DISCOVERY REAL TIME"), or nearly the same
+    # letters ("NBCLX" and "NBC LX"). Letters alone let "KRONE" pass for "EURONEWS".
+    a, b = guide_words(channel), guide_words(stream["name"])
+    if not a or not b:
+        return True
+    shared = len(set(a) & set(b)) / min(len(set(a)), len(set(b)))
+    alike = difflib.SequenceMatcher(None, "".join(a), "".join(b)).ratio()
+    return shared < 0.5 and alike < TVG_LETTERS_ALIKE
+
+
 def _comparable(name, settings):
-    """A name as it is compared: cleaned, and with the country written one way if asked."""
-    text = clean_name(name, settings)
-    return _country_one_way(text) if settings.get("country_any_way") else text
+    """
+    A name as it is compared: cleaned, and with what was asked for written one way -- the
+    country, the East feed.
+    """
+    text = str(name or "")
+    if settings.get("east_is_default"):
+        text = re.sub(r"\s+", " ", _EAST.sub(" ", clean_name(text, settings))).strip()
+    text = clean_name(text, settings)
+    if settings.get("country_any_way"):
+        text = _country_one_way(text)
+        country = logo_library.country_of(text)
+        if country:
+            box, _, rest = text.partition(" ")
+            text = f"{box} {_without_country_name(rest, country)}".strip()
+    return text
+
+
+def _without_filler(key_text, settings):
+    """The name without the words for what a channel is, as a key; "" where nothing is left."""
+    words = [w for w in key_text.split() if w.lower() not in FILLER_WORDS]
+    return _key(" ".join(words), settings) if words else ""
 
 
 def _alias_map(settings):
@@ -395,9 +591,21 @@ def _exact_key(name):
 _SIDE_IN_BRACKETS = re.compile(r"[\[(]\s*(east|west|pacific|atlantic)\s*[\])]", re.IGNORECASE)
 
 
+# What a name ends on in brackets, when that is where the channel is: "ROGERS TV (BATHURST)"
+# is one of ten Rogers TV towns, and the loose key took every bracket off as decoration, so a
+# Rogers TV stream went on all ten. Not a call sign, a country, a language or a quality,
+# which are what brackets usually hold ("(WTSP)", "(NL)", "(EN)", "(1080p)").
+_TRAILING_BRACKETS = re.compile(r"[\[(]\s*([^\])]+?)\s*[\])]\s*$")
+_NOT_A_PLACE = re.compile(r"^(?:[KW][A-Z]{2,3}(?:-\w+)?|[A-Z]{2,3}|\d{3,4}[pi]?|UHD|FHD|HD|SD|4K|8K|HEVC)$", re.IGNORECASE)
+
+
 def _key(name, settings):
     if settings.get("name_matching") == "loose":
-        return logo_library.match_key(_SIDE_IN_BRACKETS.sub(r" \1 ", str(name or "")))
+        text = _SIDE_IN_BRACKETS.sub(r" \1 ", str(name or ""))
+        said = _TRAILING_BRACKETS.search(text)
+        if said and not _NOT_A_PLACE.match(said.group(1).strip()):
+            text = f"{text[: said.start()]} {said.group(1)}"
+        return logo_library.match_key(text)
     return _exact_key(name)
 
 
@@ -447,8 +655,14 @@ def _strip_country_box(name):
 
 
 def country_for(name, group_name=""):
-    """The country a stream or channel says it is from: its name first, then its group."""
-    return logo_library.country_of(name) or logo_library.country_of(group_name or "")
+    """
+    The country a stream or channel says it is from: its name first, then its group -- in
+    one way of writing it. "┃USA┃" was "usa" and "US|" was "us", so "Same country only" took
+    a provider writing US| for another country than your ┃USA┃ channels, turned away the
+    very streams it was meant to let through, and a new US| channel never found the group
+    your American channels are in.
+    """
+    return _one_country(logo_library.country_of(name) or logo_library.country_of(group_name or ""))
 
 
 # ── Building the plan ────────────────────────────────────────────────────────
@@ -2510,10 +2724,23 @@ def build_plan(settings):
         if tvg_id:
             by_tvg.setdefault(tvg_id, []).append(record)
     by_call = {}
+    by_local = {}
     if settings.get("match_call_signs"):
         for record in existing.values():
             for call in call_signs_of(record["channel"].name, record["country"]):
                 by_call.setdefault(call, []).append(record)
+            local = local_station_of(record["channel"].name, record["country"])
+            if local:
+                by_local.setdefault(local[:2] + (local[2][0],), []).append((record, local[2]))
+    by_filler = {}
+    if settings.get("leave_out_filler"):
+        # Every channel under its name without them. Where two land on one ("PARAMOUNT" and
+        # "PARAMOUNT NETWORK"), the word is what tells them apart, and neither is found this
+        # way (only a name naming exactly one channel is used below).
+        for record in existing.values():
+            bare = _without_filler(_comparable(record["channel"].name, settings), settings)
+            if bare:
+                by_filler.setdefault(bare, []).append(record)
 
     # Every stream already on a channel in scope counts as that channel's, whatever it is
     # called: it was put there by someone
@@ -2522,6 +2749,17 @@ def build_plan(settings):
         for stream_id in record["stream_ids"]:
             belongs.setdefault(stream_id, set()).add(record["channel"].id)
 
+    # A tvg-id one provider gives to several of its own channels names a family, not a
+    # channel: every ORF 2 region is "orf2.at" and every France 3 region "france3.fr". Its
+    # own playlist says so, and those streams are matched by their names instead.
+    family_ids = set()
+    if settings.get("match_tvg_id"):
+        named = {}
+        for stream in streams:
+            if stream["tvg_id"] and stream["key"]:
+                named.setdefault((stream["account_id"], stream["tvg_id"].lower()), set()).add(stream["key"])
+        family_ids = {key for key, names in named.items() if len(names) > 1}
+
     additions = {}
     conflicts = {}
     homeless = {}
@@ -2529,12 +2767,23 @@ def build_plan(settings):
     for stream in streams:
         record, tied = None, None
         give_all = settings.get("several_matches") != "conflict"
-        if settings.get("match_tvg_id") and stream["tvg_id"]:
-            record, tied = _pick(
-                by_tvg.get(stream["tvg_id"].lower(), []), stream["country"], same_country, give_all
-            )
-        if record is None and tied is None and stream["key"]:
+        if stream["key"]:
             record, tied = _pick(by_key.get(stream["key"], []), stream["country"], same_country, give_all)
+        if (
+            record is None and tied is None
+            and settings.get("match_tvg_id") and stream["tvg_id"]
+            and (stream["account_id"], stream["tvg_id"].lower()) not in family_ids
+        ):
+            # After the name, not before it: a stream whose name is one of your channels is
+            # that channel, whatever id the provider stamped on it ("CHEDDAR BUSINESS" went
+            # onto Cheddar News by its id). And only where the id then names one channel --
+            # "rogerstv.ca" on ten Rogers TV towns is not which of them.
+            believed = [
+                r for r in by_tvg.get(stream["tvg_id"].lower(), [])
+                if not _tvg_contradicted(stream, r)
+            ]
+            if len(believed) == 1:
+                record, tied = _pick(believed, stream["country"], same_country, give_all)
         if record is None and tied is None and by_call:
             # Only when the name found nothing: a station is its call sign whatever it is
             # called. A stream carrying two ("WYIN/WTTW") is either station's.
@@ -2547,6 +2796,21 @@ def build_plan(settings):
             }
             if found:
                 record, tied = _pick(list(found.values()), stream["country"], same_country, give_all)
+        if record is None and tied is None and by_local:
+            # No call sign on one side: the network, the number and the place instead
+            local = local_station_of(stream["name"], stream["country"])
+            if local:
+                found = [
+                    r for r, place in by_local.get(local[:2] + (local[2][0],), [])
+                    if _same_place(place, local[2])
+                ]
+                if found:
+                    record, tied = _pick(found, stream["country"], same_country, give_all)
+        if record is None and tied is None and by_filler:
+            bare = _without_filler(_comparable(stream["name"], settings), settings)
+            found = by_filler.get(bare, []) if bare else []
+            if len(found) == 1:
+                record, tied = _pick(found, stream["country"], same_country, give_all)
         if tied:
             if settings.get("several_matches") == "conflict":
                 conflict_key = (stream["country"], stream["key"])

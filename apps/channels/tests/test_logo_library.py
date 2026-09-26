@@ -120,6 +120,15 @@ class MatchingTests(TestCase):
         self.assertEqual(logo_library.country_of("US ▎ CBS"), "us")
         self.assertEqual(logo_library.country_of("GO ▎ CNN"), "")
 
+    def test_a_network_before_a_bar_is_not_a_country(self):
+        """How a playlist names a local station. Read as the country "pbs", it matched nothing."""
+        self.assertEqual(logo_library.country_of("PBS | DALLAS | KERA"), "")
+        self.assertEqual(logo_library.country_of("ABC | NEW YORK | WABC"), "")
+        self.assertEqual(logo_library.country_of("USA | CNN"), "usa")
+        self.assertEqual(logo_library.country_of("AT| ATV"), "at")
+        # A box with its opening mark is still taken at its word
+        self.assertEqual(logo_library.country_of("┃PBS┃ KERA"), "pbs")
+
 
 class SuggestionTests(TestCase):
     def setUp(self):

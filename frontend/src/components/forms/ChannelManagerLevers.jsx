@@ -195,7 +195,7 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
         <Switch
           size="xs"
           label="Trust tvg-id first"
-          description="A stream with the same tvg-id as a channel is that channel, whatever it is called. Off in DispatcharrUtils: providers give one tvg-id to channels that are not the same, such as every CBS station, or East and West."
+          description="A stream whose name finds none of your channels is the channel with its tvg-id — unless the names say otherwise: another call sign, network, station, town, country, East or West, or names nothing alike. Not an id the provider gives to several of its own channels (every ORF 2 region is orf2.at), nor one that points at several of yours. Off in DispatcharrUtils: providers give one tvg-id to channels that are not the same."
           checked={!!value.match_tvg_id}
           onChange={(e) => set({ match_tvg_id: e.currentTarget.checked })}
         />
@@ -215,10 +215,24 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
         />
         <Switch
           size="xs"
-          label="US and Canadian stations by call sign"
-          description="When a name matches nothing: ABC 10 | ALBANY | WTEN and US| ABC 10 (WTEN) ALBANY are one station. Only a call sign written as one — in brackets, between bars, or as KQED-DT — and only where both say the same network; a subchannel (WLOX-DT2) is a station of its own. Off in DispatcharrUtils, which only compares names."
+          label="American local stations"
+          description="When a name matches nothing: by call sign (ABC 10 | ALBANY | WTEN and US| ABC 10 (WTEN) ALBANY), or by network, number and town where one side has no call sign (NBC 46 | SIOUX FALLS IA and US| NBC 46 (KDLT) SIOUX FALLS). Both must say the same network; a subchannel (WLOX-DT2) is a station of its own, and Wichita is not Wichita Falls. Off in DispatcharrUtils, which only compares names."
           checked={!!value.match_call_signs}
           onChange={(e) => set({ match_call_signs: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          label="A feed that does not say is the East one"
+          description="FYI HD is FYI HD [EAST], as American playlists write it: the West feed always says so."
+          checked={!!value.east_is_default}
+          onChange={(e) => set({ east_is_default: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          label="Leave out words like TV, Channel and Network"
+          description="PARAMOUNT NETWORK is Paramount, LAFF TV is Laff, WDR FERNSEHEN is WDR — only where that still names exactly one of your channels, so a word that tells two apart is never left out."
+          checked={!!value.leave_out_filler}
+          onChange={(e) => set({ leave_out_filler: e.currentTarget.checked })}
         />
         <TextInput
           size="xs"

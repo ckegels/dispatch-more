@@ -466,6 +466,37 @@ Loose without "Same country only" is wrong on real names (IT Sky Documentaries o
 one, DE ATV onto BE ATV). Measured gain, channels given a Digitalizard stream they lacked:
 country 59; + call signs 418; loose + same country + country 127; all four 481.
 
+**Measured against the whole real lineup, and what that found** (v196). The user's
+channels and all three providers' streams (9,194) were loaded into a local database through
+the API and the real `build_plan` run with only the third login in scope; every pair judged
+by call sign, network, station, town and name. From 205 channels with a stream from it to
+1,204 of 1,412 -- 1,142 pairs, none found wrong. What it took, all general:
+- **`country_for` wrote a country two ways** ("┃USA┃" `usa`, "US|" `us`), so *Same country
+  only* turned away exactly the streams it exists to let through, and a new US| channel never
+  found the American group. It goes through `_one_country` now.
+- **`country_of` read "PBS | DALLAS" as the country "pbs"** -- three letters before a bar.
+  Without an opening mark it has to be a real code now (`THREE_LETTER_COUNTRIES`). Guides
+  share it; their tests pass.
+- **Trusting tvg-ids was wrong ~300 times** on this lineup: one playlist stamps every ABC
+  station "abc11whas.us" and every CBS one "kval.us"; regional feeds share one id. Now the
+  name comes first; a tvg-id is used only when the name finds nothing, only when it points at
+  one channel, never when the provider gives it to several of its own differently named
+  streams (`family_ids`), and never when the names contradict it (`_tvg_contradicted`: country,
+  language, call sign, network, East/West, "+", station/town, or no words in common --
+  letters alone let KRONE pass for EURONEWS at 0.62).
+- **Local stations** (`match_call_signs`, label "American local stations"): call signs of
+  three letters (WSB, KYW) and, in a network's name, four anywhere ("ABC 5 WCVB | BOSTON");
+  and without a call sign, network + number + first town, whole (`local_station_of`: Wichita
+  is not Wichita Falls; brackets are not the town, KING is a call sign).
+- New levers, off: `east_is_default` ("FYI HD" is "[EAST]"), `leave_out_filler` (TV, Channel,
+  Network, Fernsehen -- only where the rest names one channel). `country_any_way` also drops
+  the country's own name ("DISCOVERY CANADA"). The loose key keeps a trailing town in brackets
+  ("ROGERS TV (BATHURST)" went onto all ten towns).
+The scripts are in the session scratchpad, not the repo: they download with the user's API
+key. The user switched on 20 more Digitalizard groups for this (Spectrum, MeTV & ION, HBO Max,
+USA Cinema/Kids/Music/Fox, NL Kids/Music/Sports/ESPN/Cinema/Viaplay, BE Kids-Docum, CA
+Français/Others, FR Divertissement/Enfants, IT Kids/Cinema).
+
 **Groups can be left alone** (v173, `exclude_channel_groups`). Out of the plan altogether:
 no row, no streams added, nothing combined, and never a home for a new channel either (see
 `_NewHomes.group_for`, which says so when a stream's own group is one of them). For the

@@ -60,8 +60,12 @@ describe('ChannelManagerLevers', () => {
     open('Recognising a channel');
     fireEvent.click(screen.getByRole('switch', { name: /The country however it is written/ }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ country_any_way: true }));
-    fireEvent.click(screen.getByRole('switch', { name: /stations by call sign/ }));
+    fireEvent.click(screen.getByRole('switch', { name: /American local stations/ }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ match_call_signs: true }));
+    fireEvent.click(screen.getByRole('switch', { name: /does not say is the East one/ }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ east_is_default: true }));
+    fireEvent.click(screen.getByRole('switch', { name: /Leave out words like TV/ }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ leave_out_filler: true }));
   });
 
   it('shows rules and other names as lines of text', () => {
