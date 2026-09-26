@@ -214,15 +214,9 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                 {"error": "A newer channel was requested by this player"}, status=409
             )
 
-        if user:
-            if not check_user_stream_limits(user, client_id, media_id=channel_id):
-                return JsonResponse(
-                    {"error": f"Stream limit exceeded ({user.stream_limit} concurrent streams allowed)"},
-                    status=429
-                )
-
         # An app that said which channel it is leaving (app_devices, off unless switched on):
-        # close that one now, so its slot is free for this one
+        # close that one now, so its slot is free for this one. Before the user's own stream
+        # limit, which would otherwise count the channel being left and refuse the switch.
         from . import app_devices
 
         leaving = app_devices.declared_previous_channel(request)
@@ -230,6 +224,13 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             probation.leave_previous_channel(
                 proxy_server.redis_client, viewer, leaving, channel_id
             )
+
+        if user:
+            if not check_user_stream_limits(user, client_id, media_id=channel_id):
+                return JsonResponse(
+                    {"error": f"Stream limit exceeded ({user.stream_limit} concurrent streams allowed)"},
+                    status=429
+                )
 
         # Channel Switch Overlap: a channel this viewer just surfed past may still be closing;
         # wait for that instead of answering "Channel is stopping"

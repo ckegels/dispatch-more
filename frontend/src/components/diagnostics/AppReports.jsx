@@ -180,8 +180,8 @@ const AppReports = ({ enabled, onCopy }) => {
       {!enabled && (
         <Alert color="gray" p="xs">
           <Text size="xs">
-            Apps cannot send reports while &quot;Take error reports from apps&quot; is off
-            (Channel switches tab).
+            arrTV cannot send reports while &quot;Take problem reports from arrTV&quot; is
+            off.
           </Text>
         </Alert>
       )}

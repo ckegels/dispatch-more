@@ -2721,12 +2721,15 @@ export default class API {
     });
   }
 
-  static async setAppIntegration(settings) {
-    // What player apps that say which device they are may tell the server; answers with
-    // the page, like a GET
-    return await request(`${host}/proxy/diagnostics/`, {
-      method: 'POST',
-      body: { app_integration: settings },
+  // What arrTV may tell this server (Settings → arrTV)
+  static async getArrTvSettings() {
+    return await request(`${host}/api/core/arrtv/`);
+  }
+
+  static async saveArrTvSettings(settings) {
+    return await request(`${host}/api/core/arrtv/`, {
+      method: 'PUT',
+      body: settings,
     });
   }
 

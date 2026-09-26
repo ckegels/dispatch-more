@@ -253,8 +253,6 @@ def diagnostics(request):
                 health.save_settings({
                     key: wanted[key] for key in health.DEFAULTS if key in wanted
                 })
-            if "app_integration" in request.data:
-                app_devices.save_settings(request.data.get("app_integration") or {})
         except (TypeError, ValueError) as e:
             return JsonResponse({"error": str(e)}, status=400)
 
@@ -275,7 +273,6 @@ def diagnostics(request):
         "enabled": enabled,
         "accounts": _section("accounts", lambda: _account_rows(redis_client), []) if enabled else [],
         "events": _section("switches", lambda: _events(redis_client), []) if enabled else [],
-        "app_integration": _section("app integration", app_devices.load_settings, dict(app_devices.DEFAULTS)),
         "keep_seconds": probation.event_ttl(redis_client),
         "keep_choices": list(probation.EVENT_TTL_CHOICES),
         "timestamp": time.time(),

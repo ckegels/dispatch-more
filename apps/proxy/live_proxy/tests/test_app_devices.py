@@ -75,13 +75,19 @@ class AppDevicesTests(TestCase):
         self.assertEqual(answer["headers"]["previous"], "X-Dispatch-Previous-Channel")
         self.assertEqual(APIClient().get("/api/core/capabilities/").status_code, 401)
 
-    def test_switched_on_from_the_diagnostics_page(self):
+    def test_switched_on_from_the_arrtv_settings(self):
         client = APIClient()
         client.force_authenticate(user=self.user)
-        answer = client.post(
-            "/proxy/diagnostics/", {"app_integration": {"devices": True}}, format="json"
-        ).json()
-        self.assertEqual(answer["app_integration"], {"devices": True, "switch_hints": False, "reports": False})
+        self.assertEqual(
+            client.get("/api/core/arrtv/").json(),
+            {"devices": False, "switch_hints": False, "reports": False},
+        )
+        answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
+        self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False})
+        # Only an admin changes them
+        viewer = User.objects.create_user(username="tv", password="x", user_level=0)
+        client.force_authenticate(user=viewer)
+        self.assertEqual(client.put("/api/core/arrtv/", {"reports": True}, format="json").status_code, 403)
 
 
 class AppReportsTests(TestCase):

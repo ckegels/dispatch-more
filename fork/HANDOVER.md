@@ -234,7 +234,9 @@ budget, a simpler related idea). CONTRIBUTING.md: PRs target `dev`, need an agre
 identity (IP + login; the app only counts on LAN subnets) made them one device and Force
 Close closed each one's channel for the other -- 25 times in one evening in the log. The
 user's own app, arrTV, now says which device it is. Two global switches, off
-(`CoreSettings` "app-integration", on Diagnostics → Channel switches):
+(`CoreSettings` "app-integration", on Settings → Streaming → arrTV since v202, via
+`/api/core/arrtv/`; they were a box on Diagnostics → Channel switches before, which was the
+wrong place and the wrong name -- only arrTV sends any of this):
 - `devices`: `X-Dispatch-Device` (+ `-Name`) makes the viewer `app|<user id>|<device>` in
   `server_device` -- the path a media server's named device already takes, so identity,
   client records and viewer sets need nothing new. Never "guessed" (the 10 s window is for
@@ -249,7 +251,7 @@ headers. `GET /api/core/capabilities/` (any logged-in user; 404 on stock) is how
 knows. `record_client_viewer` now also runs for Force Close alone and for declared devices:
 without it a device was never the viewer of its own older channel.
 
-**Error reports from apps** (v198, `app_reports.py`, Diagnostics → Reports; contract in
+**Error reports from apps** (v198, `app_reports.py`, Settings → arrTV since v202; contract in
 `fork/arrTV-integration.md` §7). `POST /api/core/app-reports/` (any logged-in user, refused
 while the `reports` switch of `app_devices` is off): the app sends the channel, player state
 and error, its measurements and its log; the server adds its own view of that channel at that

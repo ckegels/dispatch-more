@@ -7,10 +7,6 @@ vi.mock('../../../api', () => ({
   default: {
     getDiagnostics: vi.fn(),
     setDiagnosticsRetention: vi.fn(),
-    setAppIntegration: vi.fn(),
-    getAppReports: vi.fn(),
-    getAppReport: vi.fn(),
-    deleteAppReport: vi.fn(),
   },
 }));
 
@@ -300,53 +296,6 @@ describe('Diagnostics', () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText('confirmed after 1.3s')).toBeInTheDocument();
-  });
-
-  it('switches on what apps may say about themselves, both off at first', async () => {
-    API.getDiagnostics.mockResolvedValue({
-      ...activity,
-      app_integration: { devices: false, switch_hints: false },
-    });
-    API.setAppIntegration.mockResolvedValue({
-      ...activity,
-      app_integration: { devices: true, switch_hints: false },
-    });
-    render(<Diagnostics active={true} />);
-    await screen.findByText('ZIB');
-    openSwitches();
-
-    const devices = screen.getByRole('switch', { name: /Believe the device an app says it is/ });
-    const hints = screen.getByRole('switch', { name: /Close the channel an app says it is leaving/ });
-    expect(devices).not.toBeChecked();
-    expect(hints).not.toBeChecked();
-
-    fireEvent.click(devices);
-    await waitFor(() =>
-      expect(API.setAppIntegration).toHaveBeenCalledWith({ devices: true, switch_hints: false })
-    );
-  });
-
-  it('lists the reports apps sent and opens one whole', async () => {
-    API.getAppReports.mockResolvedValue({
-      reports: [{
-        id: 'r1', received_at: 1790000000, user: 'tv', device_name: 'Living room SHIELD',
-        what: 'Picture froze', channel: '┃AT┃ ORF 1', error: 'HttpDataSourceException 503',
-      }],
-    });
-    API.getAppReport.mockResolvedValue({
-      id: 'r1', received_at: 1790000000, user: 'tv', device_name: 'Living room SHIELD',
-      what: 'Picture froze', app: { name: 'arrTV' }, player: { state: 'BUFFERING' },
-      server: { channel: { name: '┃AT┃ ORF 1', streams: [] }, log: ['a server line'] },
-      log: 'an app line',
-    });
-    render(<Diagnostics active={true} />);
-    await screen.findByText('ZIB');
-    fireEvent.click(screen.getByRole('button', { name: 'Reports' }));
-
-    expect(await screen.findByText('┃AT┃ ORF 1 — Picture froze')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open report r1' }));
-    expect(await screen.findByText('a server line')).toBeInTheDocument();
-    expect(screen.getByText('an app line')).toBeInTheDocument();
   });
 
   it('refreshes by itself and stops when the page is left', async () => {

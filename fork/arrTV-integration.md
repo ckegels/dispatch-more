@@ -58,7 +58,8 @@ send none of the headers below. On Dispatch More:
 ```
 
 - `devices`, `multiview`, `switch_hints` and `reports` are the server admin's switches
-  (Settings → Diagnostics → Channel switches → "Apps that say who they are"). **All are off
+  (Settings → Streaming → **arrTV**: "Recognise each arrTV device", "Close the previous
+  channel when arrTV changes channel", "Take problem reports from arrTV"). **All are off
   by default.**
   Sending the headers while they are off is harmless: they are ignored.
 - Ask once when a Dispatcharr playlist is added or refreshed, and cache the answer with the
@@ -157,6 +158,14 @@ X-Dispatch-Previous-Channel: <channel A>
 The server then closes A immediately (if this device is its only viewer and it is not being
 recorded) and holds its connection slot for B. On single-connection accounts, the difference is
 between a quick switch and a refusal or a stall while A's connection times out.
+
+**"Previous" is the channel that is actually playing, not the last one asked for.** When the
+user zaps quickly A → B → C, the server may drop the request for B unanswered (Dispatch
+More's surfing delay: a request a newer one has replaced is never sent to the provider). B
+then never plays, and A is still the channel open. So the request for C must say
+`Previous-Channel: A`, the channel the player is really leaving. If it said B, nothing would be
+closed and A would stay open until its connection ends. In code: remember the channel of the
+stream that last *started playing* (first frames), not of the last tune request, and send that.
 
 Channel A may be given as:
 - its **UUID**, the id in `/proxy/ts/stream/<uuid>` (Direct Connect), or
@@ -272,7 +281,7 @@ Content-Type: application/json
 order, each stream's provider and what Stream Check last found; the channel's live readings
 and what happened to it (reconnects, stream switches, errors); how it started, phase by
 phase; this device's channel switches and Force Close; and the server's log lines about the
-channel over the last 30 minutes. The admin reads it all on Settings → Diagnostics → Reports,
+channel over the last 30 minutes. The admin reads it all on Settings → arrTV → Problem reports,
 and copies it whole to pass on.
 
 ## 8. Behaviour matrix
@@ -283,11 +292,11 @@ and copies it whole to pass on.
 | Dispatch More, switches off | 200, `devices: false` | sends headers | ignored: exactly as today |
 | Dispatch More, `devices` on | 200, `devices: true` | sends headers | each device is its own viewer, Multiview safe, names in Diagnostics |
 | Dispatch More, `switch_hints` on | 200, `switch_hints: true` | also sends previous on zaps | old channel closed at once, faster switching |
-| Dispatch More, `reports` on | 200, `reports: true` | offers "Send a report" in the player settings | report on Diagnostics → Reports, with the server's view |
+| Dispatch More, `reports` on | 200, `reports: true` | offers "Send a report" in the player settings | report on Settings → arrTV, with the server's view |
 
 ## 9. Testing without the app
 
-With both switches on in Diagnostics → Channel switches, from two terminals with the same login:
+With the first two switches on in Settings → arrTV, from two terminals with the same login:
 
 ```bash
 # "device 1" starts channel A
@@ -330,8 +339,8 @@ curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
 - [ ] Device name sent (system name or user-set).
 - [ ] Headers on the Ktor client and on the Media3 data source for live playback.
 - [ ] Query parameters instead of headers wherever a URL is handed to something else to play.
-- [ ] `X-Dispatch-Previous-Channel` only on a user channel change, with the id form the app
-      used to open the old channel.
+- [ ] `X-Dispatch-Previous-Channel` only on a user channel change, naming the channel that
+      is actually playing (not the last one asked for), in the id form used to open it.
 - [ ] Multiview: one session id per open Multiview, on every tile's request; tile channel
       change sends previous.
 - [ ] Connection closed when playback is left.

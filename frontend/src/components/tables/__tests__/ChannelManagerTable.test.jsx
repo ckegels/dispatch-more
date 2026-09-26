@@ -567,7 +567,9 @@ describe('ChannelManagerTable', () => {
       await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 5000 })
     ).toBeInTheDocument();
     expect(screen.getByText('Now: Bundesliga')).toBeInTheDocument();
-  });
+    // The reading is asked after every three real seconds (GuidePicker), so this waits
+    // at least that long: more than the default five seconds leaves on a busy machine
+  }, 15000);
 
   it('reads every unread guide at once, which costs one pass of the file', async () => {
     const first = { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: false };
@@ -602,7 +604,9 @@ describe('ChannelManagerTable', () => {
       await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 6000 })
     ).toBeInTheDocument();
     expect(screen.getByText('ORF1.at · 90 programmes')).toBeInTheDocument();
-  });
+    // The reading is asked after every three real seconds (GuidePicker), so this waits
+    // at least that long: more than the default five seconds leaves on a busy machine
+  }, 15000);
 
   it('says on the left when a channel is on no guide yet', async () => {
     API.previewChannelManager.mockResolvedValue({
@@ -906,7 +910,9 @@ describe('ChannelManagerTable', () => {
     expect(await screen.findByText('AT | PROVIDER SPORT')).toBeInTheDocument();
     // ...and the kind that was not asked for is still left out
     expect(screen.queryByText('AT | OLD PROVIDER')).toBeNull();
-  });
+    // The reading is asked after every three real seconds (GuidePicker), so this waits
+    // at least that long: more than the default five seconds leaves on a busy machine
+  }, 15000);
 });
 
 // Three logins, three providers: a channel is short when one of them has nothing on it

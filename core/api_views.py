@@ -546,6 +546,19 @@ def capabilities(request):
     return JsonResponse(app_devices.capabilities())
 
 
+@api_view(["GET", "PUT"])
+@permission_classes([IsAdmin])
+def arrtv_settings(request):
+    """What arrTV may tell this server (apps.proxy.live_proxy.app_devices): Settings → arrTV."""
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_devices
+
+    if request.method == "PUT":
+        return JsonResponse(app_devices.save_settings(request.data or {}))
+    return JsonResponse(app_devices.load_settings())
+
+
 @api_view(["GET", "POST", "DELETE"])
 @permission_classes([IsAuthenticated])
 def app_reports(request):
