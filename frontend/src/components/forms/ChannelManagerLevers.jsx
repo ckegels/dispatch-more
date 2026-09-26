@@ -370,6 +370,18 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
                 },
               ]}
             />
+            <MultiSelect
+              size="xs"
+              label="Name them after"
+              description="Whose stream names a new channel is called by: one provider writes ┃AT┃ ATV as the rest of your lineup does, another AT| ATV. The first provider picked that carries the channel names it; none picked is the preferred provider's best picture, as before."
+              data={toOptions(
+                (options.accounts || []).filter((a) => a.active && a.name !== 'custom')
+              )}
+              value={asStrings(value.name_from)}
+              onChange={(picked) => set({ name_from: ids(picked) })}
+              searchable
+              clearable
+            />
             <Select
               size="xs"
               label="Logo"

@@ -12,7 +12,7 @@ const value = {
   min_streams_new: 1, keep_country_prefix: true, number_start: null, reorder_existing: false,
   replace_streams: false, epg: 'tvg_id_then_name', logo: 'collections',
 };
-const options = { accounts: [{ id: 1, name: 'A' }], stream_groups: [], channel_groups: [], all_groups: [], profiles: [] };
+const options = { accounts: [{ id: 1, name: 'A', active: true }, { id: 2, name: 'B', active: true }], stream_groups: [], channel_groups: [], all_groups: [], profiles: [] };
 
 const draw = (overrides = {}, onChange = vi.fn(), resetKey = 0) => {
   const view = render(
@@ -114,6 +114,13 @@ describe('ChannelManagerLevers', () => {
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ profiles_group_more_than: 4 })
     );
+  });
+
+  it('names new channels after the providers picked', () => {
+    draw({ create_new: true, name_from: [2] });
+    open('New channels');
+    expect(screen.getByText(/Whose stream names a new channel is called by/)).toBeInTheDocument();
+    expect(screen.getAllByText('B').length).toBeGreaterThan(0);
   });
 
   it('and asks for no number for the other choices', () => {

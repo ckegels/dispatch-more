@@ -1018,6 +1018,32 @@ class NumberFromTests(_Setup):
         self.assertEqual([n for n in numbers if n in taken - set(numbers)], [])
 
 
+class NewChannelNameTests(_Setup):
+    """Whose stream name a new channel is named after."""
+
+    def setUp(self):
+        super().setUp()
+        self.c = M3UAccount.objects.create(name="Provider C", account_type="XC", server_url="http://c", is_active=True)
+        self._stream("┃AT┃ NEW TV HD", self.a)
+        self._stream("AT| NEW TV FHD", self.c)
+
+    def names(self, **overrides):
+        plan = channel_manager.build_plan(settings(
+            create_new=True, new_from="all", country_any_way=True, name_matching="loose", **overrides
+        ))
+        return [r["channel"]["name"] for r in plan["rows"] if r["status"] == "new"]
+
+    def test_by_default_the_best_picture_names_it(self):
+        self.assertEqual(self.names(), ["AT| NEW TV"])
+
+    def test_or_the_provider_asked_for(self):
+        self.assertEqual(self.names(name_from=[self.a.id]), ["┃AT┃ NEW TV"])
+        # The first one asked for that carries it
+        self.assertEqual(self.names(name_from=[self.b.id, self.c.id, self.a.id]), ["AT| NEW TV"])
+        # None of them does: as before
+        self.assertEqual(self.names(name_from=[self.b.id]), ["AT| NEW TV"])
+
+
 class NewChannelTests(_Setup):
     def setUp(self):
         super().setUp()

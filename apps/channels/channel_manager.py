@@ -114,6 +114,9 @@ DEFAULTS = {
     # "PARAMOUNT NETWORK" is Paramount, "WDR FERNSEHEN" is WDR -- where that still names only
     # one of your channels
     "leave_out_filler": False,
+    # Whose stream names a new channel is named after, in order: the first of these providers
+    # that carries it. Empty is the preferred provider's best stream, as it always was.
+    "name_from": [],
     # ── Quality ──
     # "quality" puts the best picture first, "provider" the preferred account first.
     # "provider" is what DispatcharrUtils does.
@@ -2738,6 +2741,24 @@ def _duplicate_sets(by_key, same_country=False):
     return sets
 
 
+def _named_after(streams, settings):
+    """
+    The stream a new channel takes its name from, when a provider's names were asked for:
+    one writes "┃AT┃ ATV" as the rest of your lineup does, another "AT| ATV", and the
+    best picture should not decide which a channel is called. The first provider asked for
+    that carries it, its best stream; None when none of them does.
+    """
+    for account_id in settings.get("name_from") or ():
+        try:
+            account_id = int(account_id)
+        except (TypeError, ValueError):
+            continue
+        theirs = [s for s in streams if s.get("account_id") == account_id]
+        if theirs:
+            return min(theirs, key=lambda s: s["quality_rank"])
+    return None
+
+
 def _which_to_keep(records, group_id):
     """
     Which of these channels survives being combined: the one already in the group the
@@ -3085,7 +3106,8 @@ def build_plan(settings):
             if settings.get("drop_sd_when_hd") and any(s["quality_rank"] < 3 for s in ordered):
                 ordered = [s for s in ordered if s["quality"] != "SD"]
             best = min(ordered, key=lambda s: (s["priority"], s["quality_rank"]))
-            name = best["clean"] if settings.get("keep_country_prefix") else _strip_country_box(best["clean"])
+            namer = _named_after(ordered, settings) or best
+            name = namer["clean"] if settings.get("keep_country_prefix") else _strip_country_box(namer["clean"])
             if target:
                 group_id, why = int(target), "the group chosen in the levers"
             else:
