@@ -1,7 +1,7 @@
 """Error reports sent by a player app (arrTV), with the server's own view of the moment.
 
-Someone watching a channel that stutters, stops or never starts long-presses in arrTV's
-player settings and sends a report. The app sends what it saw -- the player's state and
+Someone watching a channel that stutters, stops or never starts holds OK in arrTV's player
+and sends a report from its options. The app sends what it saw -- the player's state and
 error, what it measured, its own log -- and the server adds everything it knows about that
 channel at that moment: which stream and provider it was on, the channel's readings and
 what happened to it, how it started, the switches this device made, what Stream Check has
@@ -9,8 +9,13 @@ on its streams, and the server's log lines about it. Together they are the whole
 place, instead of a screenshot and a guess at the time.
 
 Off unless switched on ("reports" in app_devices' settings): a stock server has no such page.
-Kept as a CoreSettings row, the last KEPT of them, so they survive a restart -- they are meant
-to be read later, by somebody else.
+Each report is a CoreSettings row of its own (ROW_PREFIX + its id), kept until an admin
+deletes it: they are meant to be read later, by somebody else, and a report about something
+that happens once a month is worth most when it is still there next month. One row each and
+not one row for all: a report can carry a hundred thousand characters of log, so a single
+row would be rewritten whole for every new report, and two arriving together would each
+write back a list without the other. Reports kept the old way, the last 50 in one row
+(OLD_KEY, to v203), are moved into rows of their own the first time the list is read.
 
 The contract for the app is in fork/arrTV-integration.md.
 """
@@ -25,8 +30,10 @@ from . import app_devices
 
 logger = logging.getLogger("live_proxy")
 
-REPORTS_KEY = "app-reports"
-KEPT = 50
+ROW_PREFIX = "app-report-"
+OLD_KEY = "app-reports"
+# A report's id as receive() makes it; anything else asked for is no report
+_REPORT_ID = re.compile(r"^[0-9a-f]{12}$")
 # What one report may be: a player log is useful, a whole day of one is not
 MAX_TEXT = 4_000
 MAX_LOG = 100_000
@@ -203,7 +210,7 @@ def receive(data, request, user):
         "log": log,
         "server": server_view(channel, viewer_key, user_id),
     }
-    _store([report] + list_reports())
+    _keep(report)
     logger.info(
         f"App report {report['id']} from {report['user'] or 'nobody'} "
         f"({report['device_name'] or device or report['address']}) about "
@@ -212,41 +219,107 @@ def receive(data, request, user):
     return report
 
 
-def list_reports():
+def _rows():
     from core.models import CoreSettings
 
-    try:
-        stored = CoreSettings.objects.filter(key=REPORTS_KEY).first()
-        if stored and isinstance(stored.value, dict):
-            return list(stored.value.get("reports") or [])
-    except Exception as e:
-        logger.debug(f"App reports: could not read them: {e}")
-    return []
+    return CoreSettings.objects.filter(key__startswith=ROW_PREFIX)
 
 
-def _store(reports):
+def _keep(report):
     from core.models import CoreSettings
 
     CoreSettings.objects.update_or_create(
-        key=REPORTS_KEY, defaults={"name": "App reports", "value": {"reports": reports[:KEPT]}}
+        key=ROW_PREFIX + report["id"],
+        defaults={"name": f"App report {report['id']}", "value": report},
     )
+
+
+def _move_old_row():
+    """
+    Reports kept the old way, all in one row, each into a row of its own; then the old row
+    goes. A report already moved is left as it is, so a move cut short is finished next time.
+    """
+    from django.db import transaction
+
+    from core.models import CoreSettings
+
+    old = CoreSettings.objects.filter(key=OLD_KEY).first()
+    if not old:
+        return
+    with transaction.atomic():
+        value = old.value if isinstance(old.value, dict) else {}
+        for report in value.get("reports") or []:
+            if isinstance(report, dict) and _REPORT_ID.match(str(report.get("id") or "")):
+                CoreSettings.objects.get_or_create(
+                    key=ROW_PREFIX + report["id"],
+                    defaults={"name": f"App report {report['id']}", "value": report},
+                )
+        old.delete()
+    logger.info("App reports: moved the reports kept in one row into a row each")
+
+
+def get_report(report_id):
+    """One whole report, or None."""
+    if not _REPORT_ID.match(str(report_id or "")):
+        return None
+    _move_old_row()
+    row = _rows().filter(key=ROW_PREFIX + report_id).first()
+    return row.value if row and isinstance(row.value, dict) else None
+
+
+def list_reports():
+    """Every report, whole, newest first."""
+    try:
+        _move_old_row()
+        reports = [r.value for r in _rows() if isinstance(r.value, dict)]
+    except Exception as e:
+        logger.debug(f"App reports: could not read them: {e}")
+        return []
+    return sorted(reports, key=lambda r: r.get("received_at") or 0, reverse=True)
+
+
+def summaries():
+    """
+    Every report as the list shows it, newest first. Only the fields the list shows are
+    read from the database: the logs stay where they are, however many reports there are.
+    """
+    try:
+        _move_old_row()
+        rows = _rows().values(
+            "value__id",
+            "value__received_at",
+            "value__user",
+            "value__device_name",
+            "value__what",
+            "value__channel_asked",
+            "value__server__channel__name",
+            "value__player__error",
+        )
+        found = [
+            {
+                "id": row["value__id"],
+                "received_at": row["value__received_at"],
+                "user": row["value__user"],
+                "device_name": row["value__device_name"],
+                "what": row["value__what"],
+                "channel": row["value__server__channel__name"] or row["value__channel_asked"] or "",
+                "error": row["value__player__error"] or "",
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.debug(f"App reports: could not read them: {e}")
+        return []
+    return sorted(found, key=lambda r: r.get("received_at") or 0, reverse=True)
 
 
 def delete(report_id=None):
     """One report, or every one of them without an id."""
-    _store([] if not report_id else [r for r in list_reports() if r.get("id") != report_id])
+    from core.models import CoreSettings
 
-
-def summary(report):
-    """One report as the list shows it, without the long parts."""
-    server = report.get("server") or {}
-    channel = server.get("channel") or {}
-    return {
-        "id": report.get("id"),
-        "received_at": report.get("received_at"),
-        "user": report.get("user"),
-        "device_name": report.get("device_name"),
-        "what": report.get("what"),
-        "channel": channel.get("name") or report.get("channel_asked") or "",
-        "error": (report.get("player") or {}).get("error") or "",
-    }
+    if report_id:
+        if _REPORT_ID.match(str(report_id)):
+            _rows().filter(key=ROW_PREFIX + report_id).delete()
+        return
+    CoreSettings.objects.filter(key=OLD_KEY).delete()
+    _rows().delete()

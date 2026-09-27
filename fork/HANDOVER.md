@@ -258,8 +258,13 @@ and error, its measurements and its log; the server adds its own view of that ch
 moment -- the streams in order with provider and Stream Check state, `health` readings and
 events, the start phases (`timing`), this device's switches, and 30 minutes of the server log
 about it (`log_center.read`). Credentials are taken out of everything (`_redact`: Xtream
-paths, password/token parameters). The last 50 are kept in a `CoreSettings` row, since they
-are read later by somebody else; admins list, open, copy and delete them.
+paths, password/token parameters). Since v204 **every report is kept until an admin deletes
+it** (one, or all after a confirmation), each in a `CoreSettings` row of its own
+(`app-report-<id>`): a report can hold 100,000 characters of log, so one row for all of them
+was rewritten whole per report, and two arriving together lost one. The list reads only the
+fields it shows (JSON key lookups), never the logs. To v203 it was the last 50 in one row
+(`app-reports`); that row is split into rows the first time the list is read, then deleted.
+Admins list, open, copy and delete them on Settings → arrTV.
 
 **Lineup: a suggestion onto a channel you have, and streams on no channel** (v198). A "New"
 row can be put on one of your channels instead (`search_channels`, `apply_plan(into=…)`,

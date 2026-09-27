@@ -66,4 +66,22 @@ describe('ArrTvSettings', () => {
     expect(await screen.findByText('a server line')).toBeInTheDocument();
     expect(screen.getByText('an app line')).toBeInTheDocument();
   });
+
+  it('asks before deleting every report, since they are kept until deleted', async () => {
+    API.getArrTvSettings.mockResolvedValue({ devices: true, switch_hints: false, reports: true });
+    API.getAppReports.mockResolvedValue({
+      reports: [
+        { id: 'r1', received_at: 1790000000, what: 'Picture froze', channel: 'A', error: '' },
+        { id: 'r2', received_at: 1790000100, what: 'No sound', channel: 'B', error: '' },
+      ],
+    });
+    API.deleteAppReport.mockResolvedValue({ deleted: 'all' });
+    draw();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete all reports' }));
+    expect(API.deleteAppReport).not.toHaveBeenCalled();
+    expect(await screen.findByText(/All 2 reports are deleted/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all' }));
+    await waitFor(() => expect(API.deleteAppReport).toHaveBeenCalledWith(null));
+  });
 });

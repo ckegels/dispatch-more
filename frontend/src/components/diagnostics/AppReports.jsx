@@ -13,6 +13,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import API from '../../api';
+import ConfirmationDialog from '../ConfirmationDialog';
 
 // Error reports sent from a player app (arrTV): what the app saw, and what the server knew
 // about the channel at that moment (see app_reports.py). Read here, copied whole to pass on.
@@ -154,6 +155,8 @@ const Report = ({ summary, onCopy, onDelete }) => {
 const AppReports = ({ enabled, onCopy }) => {
   const [reports, setReports] = useState(null);
   const [error, setError] = useState(null);
+  // Reports are kept until someone deletes them, so all of them at once asks first
+  const [confirmingAll, setConfirmingAll] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -187,8 +190,9 @@ const AppReports = ({ enabled, onCopy }) => {
       )}
       {reports.length === 0 ? (
         <Text size="sm" c="dimmed">
-          No reports. In arrTV, someone who has a problem with a channel sends one from the
-          player&apos;s settings; it arrives here with what the server knew at that moment.
+          No reports. In arrTV, someone who has a problem with a channel holds OK while it
+          plays and sends one from the options; it arrives here with what the server knew at
+          that moment, and stays until it is deleted.
         </Text>
       ) : (
         <>
@@ -196,12 +200,23 @@ const AppReports = ({ enabled, onCopy }) => {
             <Report key={summary.id} summary={summary} onCopy={onCopy} onDelete={remove} />
           ))}
           <Group>
-            <Button size="xs" variant="subtle" color="red" onClick={() => remove(null)}>
+            <Button size="xs" variant="subtle" color="red" onClick={() => setConfirmingAll(true)}>
               Delete all reports
             </Button>
           </Group>
         </>
       )}
+      <ConfirmationDialog
+        opened={confirmingAll}
+        onClose={() => setConfirmingAll(false)}
+        onConfirm={() => {
+          setConfirmingAll(false);
+          remove(null);
+        }}
+        title="Delete all reports?"
+        message={`All ${reports.length} reports are deleted, with everything the server added to them. This cannot be undone.`}
+        confirmLabel="Delete all"
+      />
     </Stack>
   );
 };

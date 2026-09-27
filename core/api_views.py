@@ -585,9 +585,9 @@ def app_reports(request):
         reports.delete(wanted or None)
         return JsonResponse({"deleted": wanted or "all"})
     if wanted:
-        found = next((r for r in reports.list_reports() if r.get("id") == wanted), None)
+        found = reports.get_report(wanted)
         return JsonResponse(found or {"error": "No such report"}, status=200 if found else 404)
-    return JsonResponse({"reports": [reports.summary(r) for r in reports.list_reports()]})
+    return JsonResponse({"reports": reports.summaries()})
 
 
 @api_view(["GET"])

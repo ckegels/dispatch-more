@@ -220,10 +220,13 @@ id the app never sees. Do not use it.)
 Server switch: `reports` (off by default). Only offer "Report a problem" when capabilities
 say `"reports": true`.
 
-**Where in arrTV:** in the player's settings panel (the one opened while a channel plays), a
-long press on the entry that adds info for the developer offers **"Send a report to the
-server"**. Ask for one optional line of text ("What went wrong?"), then send. Show "Sent"
-with the report id from the answer, or the error message.
+**Where in arrTV:** holding OK while a channel plays opens the player's options; **"Send a
+report to the server"** is the first entry there. Ask for one optional line of text ("What
+went wrong?"), then send. Show "Sent" with the report id from the answer, or the error
+message.
+
+**Kept until deleted.** The server keeps every report, one database row each, with no count
+or age limit, until an admin deletes it (one at a time, or all at once) on Settings → arrTV.
 
 **The request:**
 
@@ -344,8 +347,8 @@ curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
 - [ ] Multiview: one session id per open Multiview, on every tile's request; tile channel
       change sends previous.
 - [ ] Connection closed when playback is left.
-- [ ] "Send a report" in the player settings (long press), only when `reports: true`; the
-      channel, the player's state and error, and the tail of the player log.
+- [ ] "Send a report" as the first entry of the hold-OK options, only when `reports: true`;
+      the channel, the player's state and error, and the tail of the player log.
 - [ ] Nothing changes against a stock server (capabilities 404).
 
 Questions about the server side: the implementation is `apps/proxy/live_proxy/app_devices.py`,

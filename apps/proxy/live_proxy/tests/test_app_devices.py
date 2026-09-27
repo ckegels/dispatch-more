@@ -158,6 +158,57 @@ class AppReportsTests(TestCase):
         self.as_user(self.admin).delete(f"/api/core/app-reports/?id={listed[0]['id']}")
         self.assertEqual(self.as_user(self.admin).get("/api/core/app-reports/").json()["reports"], [])
 
+    def test_every_report_is_kept_until_it_is_deleted(self):
+        # No count and no age limit: the 51st report does not push the first one out
+        from core.models import CoreSettings
+        from apps.proxy.live_proxy import app_reports
+
+        app_devices.save_settings({"reports": True})
+        client = self.as_user(self.tv)
+        for n in range(55):
+            client.post("/api/core/app-reports/", dict(self.report, what=f"report {n}"), format="json")
+        listed = self.as_user(self.admin).get("/api/core/app-reports/").json()["reports"]
+        self.assertEqual(len(listed), 55)
+        self.assertEqual({r["what"] for r in listed}, {f"report {n}" for n in range(55)})
+        self.assertEqual(CoreSettings.objects.filter(key__startswith=app_reports.ROW_PREFIX).count(), 55)
+
+    def test_delete_all_takes_every_one_and_nothing_else(self):
+        from core.models import CoreSettings
+        from apps.proxy.live_proxy import app_reports
+
+        app_devices.save_settings({"reports": True})
+        for _ in range(3):
+            self.as_user(self.tv).post("/api/core/app-reports/", self.report, format="json")
+        self.as_user(self.admin).delete("/api/core/app-reports/")
+        self.assertEqual(self.as_user(self.admin).get("/api/core/app-reports/").json()["reports"], [])
+        self.assertFalse(CoreSettings.objects.filter(key__startswith=app_reports.ROW_PREFIX).exists())
+        # The arrTV switches are a row too, and not a report
+        app_devices._HELD.update(at=0.0, value=None)
+        self.assertTrue(app_devices.load_settings().get("reports"))
+
+    def test_reports_kept_in_one_row_before_are_moved_to_a_row_each(self):
+        from core.models import CoreSettings
+        from apps.proxy.live_proxy import app_reports
+
+        old = [
+            {"id": "a1b2c3d4e5f6", "received_at": 200.0, "what": "newer", "log": "x" * 1000},
+            {"id": "0123456789ab", "received_at": 100.0, "what": "older"},
+        ]
+        CoreSettings.objects.create(key=app_reports.OLD_KEY, name="App reports", value={"reports": old})
+        listed = self.as_user(self.admin).get("/api/core/app-reports/").json()["reports"]
+        self.assertEqual([r["what"] for r in listed], ["newer", "older"])
+        self.assertFalse(CoreSettings.objects.filter(key=app_reports.OLD_KEY).exists())
+        whole = self.as_user(self.admin).get("/api/core/app-reports/?id=a1b2c3d4e5f6").json()
+        self.assertEqual(whole["log"], "x" * 1000)
+
+    def test_an_id_that_is_not_a_reports_finds_and_deletes_nothing(self):
+        app_devices.save_settings({"reports": True})
+        self.as_user(self.tv).post("/api/core/app-reports/", self.report, format="json")
+        answer = self.as_user(self.admin).get("/api/core/app-reports/?id=../app-integration")
+        self.assertEqual(answer.status_code, 404)
+        self.as_user(self.admin).delete("/api/core/app-reports/?id=nonsense")
+        self.assertEqual(len(self.as_user(self.admin).get("/api/core/app-reports/").json()["reports"]), 1)
+
     def test_the_capabilities_say_where_to_send_them(self):
         app_devices.save_settings({"reports": True})
         answer = self.as_user(self.tv).get("/api/core/capabilities/").json()
