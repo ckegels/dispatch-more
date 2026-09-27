@@ -744,6 +744,58 @@ describe('GuideManagerTable', () => {
     );
   });
 
+  // With twenty sources, wanting one meant clicking nineteen away
+  it('unselects every source at once and keeps the first one clicked', async () => {
+    API.getGuideMatching.mockResolvedValue({
+      matching: { sources: [], tvg_id_like: '', country_must_agree: false },
+      sources: [
+        { id: 7, name: 'epg ripper ALL', active: true, holds: 4000, channels: 12 },
+        { id: 8, name: 'open epg', active: true, holds: 900, channels: 3 },
+        { id: 9, name: 'PBS TV', active: true, holds: 700, channels: 40 },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Unselect all' }));
+    // Nothing is saved yet: an empty list means every source, never none
+    expect(API.saveGuideMatching).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Match against open epg' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Match against PBS TV' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Match against PBS TV' }));
+    await waitFor(() =>
+      expect(API.saveGuideMatching).toHaveBeenCalledWith(
+        expect.objectContaining({ sources: [9] })
+      )
+    );
+    expect(screen.getByRole('button', { name: 'Leave out PBS TV' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Match against open epg' })).toBeInTheDocument();
+  });
+
+  it('and selects every source again at once', async () => {
+    API.getGuideMatching.mockResolvedValue({
+      matching: { sources: [9], tvg_id_like: '', country_must_agree: false },
+      sources: [
+        { id: 7, name: 'epg ripper ALL', active: true, holds: 4000, channels: 12 },
+        { id: 8, name: 'open epg', active: true, holds: 900, channels: 3 },
+        { id: 9, name: 'PBS TV', active: true, holds: 700, channels: 40 },
+      ],
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select all' }));
+    await waitFor(() =>
+      expect(API.saveGuideMatching).toHaveBeenCalledWith(
+        expect.objectContaining({ sources: [] })
+      )
+    );
+    expect(screen.getByRole('button', { name: 'Leave out open epg' })).toBeInTheDocument();
+  });
+
   // "Not read yet" about a guide that has been read sends you round the same loop for
   // ever: read it, nothing changes, read it again.
   it('says a guide was read and had nothing, rather than not read yet', async () => {

@@ -149,6 +149,10 @@ const GuideManagerTable = () => {
   // and the window on a Lineup row obeys them too.
   const [matching, setMatching] = useState(null);
   const [sources, setSources] = useState([]);
+  // Every source clicked away at once, to pick the one or two wanted from nothing rather
+  // than clicking the other twenty off. Only on screen: saved, an empty list means every
+  // source, so "none" is never kept -- the first source clicked is what gets saved.
+  const [noSources, setNoSources] = useState(false);
   // What the matching has to go on besides the two names: how many channels the reference
   // knows, and how many call signs were found in the guides themselves
   const [reference, setReference] = useState(null);
@@ -1283,6 +1287,33 @@ const GuideManagerTable = () => {
                             is still read, and still used by the channels
                             already on it.
                           </Text>
+                          {sources.length > 1 && (
+                            <Group gap={6} mb={6}>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                onClick={() => {
+                                  setNoSources(false);
+                                  saveMatching({ ...matching, sources: [] });
+                                }}
+                              >
+                                Select all
+                              </Button>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                onClick={() => setNoSources(true)}
+                              >
+                                Unselect all
+                              </Button>
+                              {noSources && (
+                                <Text size="xs" c="orange">
+                                  Now click the ones to match against. Until you do,
+                                  every source is still matched.
+                                </Text>
+                              )}
+                            </Group>
+                          )}
                           <Group gap={6} wrap="wrap">
                             {sources.length === 0 && (
                               <Text size="xs" c="dimmed">
@@ -1294,7 +1325,8 @@ const GuideManagerTable = () => {
                               // the list is empty as well as when it names this one
                               const some = (matching.sources || []).length > 0;
                               const on =
-                                !some || matching.sources.includes(one.id);
+                                !noSources &&
+                                (!some || matching.sources.includes(one.id));
                               return (
                                 <Tooltip
                                   key={one.id}
@@ -1318,6 +1350,17 @@ const GuideManagerTable = () => {
                                     role="button"
                                     aria-label={`${on ? 'Leave out' : 'Match against'} ${one.name}`}
                                     onClick={() => {
+                                      // After "Unselect all" the first one clicked is
+                                      // the only one on
+                                      if (noSources) {
+                                        setNoSources(false);
+                                        saveMatching({
+                                          ...matching,
+                                          sources:
+                                            sources.length === 1 ? [] : [one.id],
+                                        });
+                                        return;
+                                      }
                                       // Starting from "all of them", clicking one off
                                       // means naming the others. Kept as what is on
                                       // rather than what is off, and emptied again when
