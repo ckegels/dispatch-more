@@ -1348,13 +1348,16 @@ def _surf_delay_for_channel(channel_uuid, viewer):
 
     try:
         channel = Channel.objects.filter(uuid=channel_uuid).first()
+        streams = channel.streams.select_related("m3u_account") if channel else []
     except (ValidationError, ValueError):
-        # Stream previews use a stream hash instead of a channel UUID
-        return 0, 0
-    if channel is None:
-        return 0, 0
+        # A stream run on its own is asked for by its hash: a preview, or a stream arrTV was
+        # given to itself (app_own_streams), which opens a connection like any channel start
+        # and is surfed past like one, so its account's delay applies
+        from apps.channels.models import Stream
+
+        streams = Stream.objects.select_related("m3u_account").filter(stream_hash=channel_uuid)
     delay = window = 0
-    for stream in channel.streams.select_related("m3u_account"):
+    for stream in streams:
         account = stream.m3u_account
         if (
             not account

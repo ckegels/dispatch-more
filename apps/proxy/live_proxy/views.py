@@ -194,6 +194,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         # request is for that stream, run apart from the channel as a stream preview is
         from . import app_own_streams
 
+        asked_for = channel_id
         own = app_own_streams.own_stream_for(proxy_server.redis_client, viewer, channel)
         if own is not None:
             logger.info(
@@ -238,7 +239,9 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             )
 
         if user:
-            if not check_user_stream_limits(user, client_id, media_id=channel_id):
+            # The channel asked for: a device given a stream of its own is still watching that
+            # channel, as far as the user's limit goes (joining it would not have counted twice)
+            if not check_user_stream_limits(user, client_id, media_id=asked_for):
                 return JsonResponse(
                     {"error": f"Stream limit exceeded ({user.stream_limit} concurrent streams allowed)"},
                     status=429
@@ -1026,7 +1029,14 @@ def change_stream(request, channel_id):
     # which is what it was given a stream of its own to avoid
     from . import app_own_streams
 
-    if app_own_streams.enabled():
+    from . import app_devices
+
+    user_agent = request.META.get("HTTP_USER_AGENT") or ""
+    # Only arrTV is ever given a stream of its own, and working out who anybody else is can
+    # mean waiting on a media server
+    if app_own_streams.enabled() and (
+        app_devices.declared_device(request) or app_devices._ARRTV_AGENT.search(user_agent)
+    ):
         asking = probation.viewer_from_request(
             request, getattr(request, "user", None), get_client_ip(request), proxy_server.redis_client
         )

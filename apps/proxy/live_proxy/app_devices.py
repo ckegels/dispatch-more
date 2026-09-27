@@ -276,9 +276,10 @@ def quality_limit_for(viewer):
     Also the best the device says it can decode (X-Dispatch-Max-Video), and a quality it
     stuttered its way down to where it is now (see app_stalls): the lowest of them.
     """
-    settings = load_settings()
+    # Asked on every channel start: anybody but arrTV costs nothing, not even the settings
     if not is_arrtv(viewer):
         return ""
+    settings = load_settings()
     limit = settings.get("outside_max_quality") or ""
     at_home = _at_home(getattr(viewer, "ip", ""), settings.get("home_networks"))
     limit = limit if limit and at_home is False else ""
@@ -343,21 +344,48 @@ def _limits_in_use(settings):
 
 def remember_channel_limit(redis_client, channel_uuid, viewer):
     """
-    Keep the limit of the viewer starting a channel, or forget an older one. Called where a
-    channel picks its stream, which is only when it starts: a channel is one stream for
-    everyone on it, and the one who starts it is who it was chosen for.
+    Keep the limit of the arrTV device starting a channel, with when. Called where a channel
+    picks its stream, which is when it starts: a channel is one stream for everyone on it,
+    and the one who starts it is who it was chosen for.
+
+    Anybody else starting a channel costs nothing here -- no settings, no Redis -- as with
+    everything this fork hooks into stock. So a limit is never taken away; failover_order
+    believes it only for the run of the channel it was kept for (by the channel's start time).
+    Without a viewer it is not somebody starting the channel at all: stock re-reserves a
+    running channel's stream that way when a shutdown is cancelled.
     """
-    if not redis_client or not _limits_in_use(load_settings()):
+    if viewer is None or not is_arrtv(viewer) or not redis_client:
         return
-    key = CHANNEL_LIMIT_KEY.format(channel_uuid=channel_uuid)
     try:
         limit = quality_limit_for(viewer)
         if limit:
-            redis_client.setex(key, CHANNEL_LIMIT_TTL, limit)
-        else:
-            redis_client.delete(key)
+            redis_client.setex(
+                CHANNEL_LIMIT_KEY.format(channel_uuid=channel_uuid), CHANNEL_LIMIT_TTL, f"{limit}|{time.time()}"
+            )
     except Exception as e:
         logger.debug(f"App devices: could not keep the limit of channel {channel_uuid}: {e}")
+
+
+# A channel's start time is written a moment after its stream is picked; a limit kept longer
+# than this before it was for an earlier run of the channel
+LIMIT_BEFORE_START = 120
+
+
+def _limit_of_this_run(redis_client, channel_uuid):
+    raw = redis_client.get(CHANNEL_LIMIT_KEY.format(channel_uuid=channel_uuid))
+    raw = raw.decode() if isinstance(raw, bytes) else raw
+    if not raw:
+        return ""
+    limit, _, kept = raw.partition("|")
+    started = redis_client.hget(f"live:channel:{channel_uuid}:metadata", "init_time")
+    started = started.decode() if isinstance(started, bytes) else started
+    try:
+        if started and kept and float(kept) < float(started) - LIMIT_BEFORE_START:
+            # Somebody else started the channel since: stock's order for them
+            return ""
+    except ValueError:
+        pass
+    return limit
 
 
 def failover_order(redis_client, channel_uuid, alternates, streams):
@@ -370,8 +398,7 @@ def failover_order(redis_client, channel_uuid, alternates, streams):
     if not alternates or not redis_client or not _limits_in_use(load_settings()):
         return alternates
     try:
-        limit = redis_client.get(CHANNEL_LIMIT_KEY.format(channel_uuid=channel_uuid))
-        limit = limit.decode() if isinstance(limit, bytes) else limit
+        limit = _limit_of_this_run(redis_client, channel_uuid)
         if not limit:
             return alternates
         from apps.channels.channel_manager import QUALITY_LABELS, quality_of

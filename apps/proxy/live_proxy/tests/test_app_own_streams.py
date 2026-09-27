@@ -112,9 +112,26 @@ class OwnStreamTests(TestCase):
         # A reconnect goes back to the same stream
         self.assertEqual(self.own(), "DE| RTL ZWEI FHD")
 
-    def test_one_already_running_costs_nothing_and_comes_first(self):
-        self.redis.set(f"stream_profile:{self.streams['┃DE┃ RTL ZWEI FHD'].id}", 1)
+    def test_one_already_run_for_another_device_costs_nothing_and_comes_first(self):
+        stream = self.streams["┃DE┃ RTL ZWEI FHD"]
+        self.redis.set(f"stream_profile:{stream.id}", 1)
+        self.redis.hset(f"live:channel:{stream.stream_hash}:metadata", "state", "active")
         self.assertEqual(self.own(), "┃DE┃ RTL ZWEI FHD")
+
+    def test_never_a_stream_another_channel_is_playing(self):
+        # Stock would not count the second connection to it, and the provider would be one
+        # over its limit: somebody's stream ends
+        self.redis.set(f"stream_profile:{self.streams['DE| RTL ZWEI FHD'].id}", 1)
+        # The other provider's HD then: another provider first, as the user put it
+        self.assertEqual(self.own(), "DE| RTL ZWEI HD")
+
+    def test_never_a_stream_whose_id_a_channel_has(self):
+        from apps.channels.models import Channel
+
+        # Its slot would be kept under the same key as that channel's
+        clash = self.streams["DE| RTL ZWEI FHD"].id
+        Channel.objects.create(id=clash, name="Somebody else's channel", channel_number=900)
+        self.assertEqual(self.own(), "DE| RTL ZWEI HD")
 
     def test_only_where_a_connection_is_free(self):
         self.free[self.two.id] = False
@@ -129,6 +146,16 @@ class OwnStreamTests(TestCase):
     def test_a_channel_nobody_plays_it_starts_itself(self):
         self.redis.delete(RedisKeys.channel_metadata(str(self.channel.uuid)))
         self.assertIsNone(self.own())
+
+    def test_anybody_else_costs_nothing(self):
+        # Asked on every stream request: not a query, not a Redis call, for anybody but arrTV
+        redis = mock.MagicMock()
+        app_devices._HELD.update(at=0.0, value=None)
+        with self.assertNumQueries(0):
+            self.assertIsNone(app_own_streams.own_stream_for(redis, probation.Viewer("192.168.2.40", 2, app="Plex"), self.channel))
+            app_devices.remember_channel_limit(redis, str(self.channel.uuid), probation.Viewer("192.168.2.40", 2, app="TiviMate"))
+            self.assertEqual(app_devices.quality_limit_for(probation.Viewer("192.168.2.40", 2, app="TiviMate")), "")
+        self.assertEqual(redis.mock_calls, [])
 
     def test_only_for_arrtv_with_a_limit_and_the_switch_on(self):
         self.assertIsNone(self.own(probation.Viewer("192.168.2.50", 1, app="TiviMate")))
@@ -167,11 +194,41 @@ class FailoverOrderTests(TestCase):
             ["DE| RTL ZWEI FHD", "DE| RTL ZWEI HD", "DE| RTL ZWEI 4K", "DE| RTL ZWEI UHD", "Could Not Dispatch"],
         )
 
+    def test_a_channel_re_reserved_without_a_viewer_keeps_its_limit(self):
+        viewer = probation.Viewer("192.168.2.50", 1, app="okhttp", server_device=CHROMECAST, max_quality="FHD")
+        app_devices.remember_channel_limit(self.redis, "rtl2", viewer)
+        # Stock re-reserves a running channel's stream when a shutdown is cancelled
+        app_devices.remember_channel_limit(self.redis, "rtl2", None)
+        self.assertEqual(self.order()[0], "DE| RTL ZWEI FHD")
+
     def test_started_by_anyone_else_it_is_stock(self):
+        import time
+
         app_devices.remember_channel_limit(self.redis, "rtl2", probation.Viewer("192.168.2.50", 1, app="okhttp", server_device=CHROMECAST, max_quality="FHD"))
-        # The next start is somebody without a limit: the old one goes
+        # The Chromecast's run, a minute after its stream was picked: its limit holds
+        self.redis.hset("live:channel:rtl2:metadata", "init_time", time.time())
+        self.assertEqual(self.order()[0], "DE| RTL ZWEI FHD")
+        # Plex starts the channel an hour later: nothing is written for it, and the
+        # Chromecast's limit is from an earlier run
         app_devices.remember_channel_limit(self.redis, "rtl2", probation.Viewer("192.168.2.40", 2, app="Plex"))
+        self.redis.hset("live:channel:rtl2:metadata", "init_time", time.time() + 3600)
         self.assertEqual(self.order()[0], "DE| RTL ZWEI 4K")
+
+
+class SurfingDelayTests(TestCase):
+    def test_a_stream_run_on_its_own_is_surfed_past_like_a_channel(self):
+        from apps.channels.models import Stream
+        from apps.m3u.models import M3UAccount
+
+        account = M3UAccount.objects.create(
+            name="TiviBridge", account_type="XC", server_url="http://a",
+            custom_properties={"probation_enabled": True, "probation_lan_subnets": ["192.168.0.0/16"],
+                               "probation_surf_delay_ms": 700, "probation_seconds": 20},
+        )
+        Stream.objects.create(name="DE| RTL ZWEI FHD", url="http://x", m3u_account=account, stream_hash="hash-fhd")
+        viewer = probation.Viewer("192.168.2.50", 1, app="AerioTV", server_device=CHROMECAST)
+        self.assertEqual(probation._surf_delay_for_channel("hash-fhd", viewer), (0.7, 20))
+        self.assertEqual(probation._surf_delay_for_channel("no-such-hash", viewer), (0, 0))
 
 
 class StreamRequestTests(SimpleTestCase):

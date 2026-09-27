@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v209** (2026-09-27). The commit messages on the branch
+Written 2026-09-19, kept current to **release v210** (2026-09-27). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1674,6 +1674,36 @@ ExoPlayer showed one frame and waited for good. Three parts:
   so it never changes the channel under the others. Not yet: failover on a stream of its own
   (a stream run by its hash has no alternates in stock -- it ends, and the device's reconnect
   is given another), and a stutter there (answered "none").
+
+**The review of v207–v209 against everything else** (v210). Every place the three hook into
+stock or the fork was read again for what it does to what was there. Five faults, all fixed:
+- **A stream of its own could open an uncounted provider connection** (the serious one). A
+  stream another *channel* was playing counted as "already running, free". It is not: stock's
+  `Stream.get_stream` sees `stream_profile:<id>` and reserves nothing, while the stream run on
+  its own opens a second connection -- one past the provider's limit, which ends somebody's
+  stream. Free now means run on its own for another device (`live:channel:<hash>:metadata`);
+  a stream playing on another channel is never chosen.
+- **It skipped the surfing delay**: `_surf_delay_for_channel` gave a stream hash no delay, so
+  a device zapping past a channel others watch in 4K opened a provider connection for each.
+  A stream asked for by its hash now has its own account's delay.
+- **The failover limit was forgotten by a viewer-less `get_stream`** (stock re-reserves a
+  running channel's stream when a shutdown is cancelled), and **every channel start read the
+  settings** to decide it -- the cost-nothing-when-off rule `test_probation`'s
+  `test_get_stream_with_a_viewer_does_the_same_work_as_without` pins, which caught it. Only an
+  arrTV start writes the limit now, with its time; nothing deletes it, and `failover_order`
+  believes it only for the run it was kept for (`_limit_of_this_run`, by `init_time`). Non-arrTV
+  viewers never reach the settings in `quality_limit_for` or `own_stream_for` either.
+- **The change_stream guard worked out who any admin was**, which for a request looking like a
+  media server can wait on it: only for arrTV now.
+- **The user's stream limit** with "ignore same channel" counted a stream of its own as another
+  channel; it counts the channel asked for.
+And one taken out of stock's way: a stream run on its own keeps its slot under
+`channel_stream:<stream id>`, the key a channel keeps its slot under by *its* id, so a channel
+whose id equals that stream's would be handed it on start. Stock's previews take that chance;
+a stream whose id is a channel's is never chosen as a device's own.
+Checked and fine: arrTV parses capabilities with `ignoreUnknownKeys`; held slots are respected
+(`reserve_profile_slot` counts them); Stream Check sees a stream of its own as its provider in
+use (`stream_profile:*`); the fork's abandoned-slot sweep already knows stream-hash sessions.
 
 **Reports are not settings** (v205). Reports are `CoreSettings` rows (`app-report-<id>`
 since v204, one `app-reports` row before), and stock's `CoreSettingsViewSet` lists and

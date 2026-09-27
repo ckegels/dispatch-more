@@ -91,11 +91,12 @@ def own_stream_for(redis_client, viewer, channel):
     Never raises: a viewer who cannot be given a stream of their own still gets the channel.
     """
     try:
+        # arrTV first: on every other request this costs nothing, not even the settings
         if (
-            not redis_client
+            not app_devices.is_arrtv(viewer)
+            or not redis_client
             or not hasattr(channel, "uuid")  # a stream asked for by its hash is already its own
             or not enabled()
-            or not app_devices.is_arrtv(viewer)
         ):
             return None
         limit = app_devices.quality_limit_for(viewer)
@@ -130,22 +131,32 @@ def own_stream_for(redis_client, viewer, channel):
 
 
 def _pick(redis_client, viewer, channel, current, limit):
+    from apps.channels.models import Channel
     from apps.m3u.connection_pool import pool_has_capacity_for_profile
 
+    streams = list(channel.streams.select_related("m3u_account").order_by("channelstream__order"))
+    # Stock keeps a stream run on its own under channel_stream:<stream id>, the same keys a
+    # channel's slot is kept under by *its* id: a channel whose id is this stream's would be
+    # handed this stream when it starts. Stock's previews take that chance; this is automatic,
+    # so a stream whose id is a channel's is never chosen.
+    clashing = set(Channel.objects.filter(id__in=[s.id for s in streams]).values_list("id", flat=True))
     choices = []
-    for position, stream in enumerate(
-        channel.streams.select_related("m3u_account").order_by("channelstream__order")
-    ):
+    for position, stream in enumerate(streams):
         if stream.id == current.id or stream.is_custom or not stream.m3u_account or not stream.stream_hash:
             continue
-        if stream.m3u_account.is_active is False:
+        if stream.m3u_account.is_active is False or stream.id in clashing:
             continue
         fits, says = _fits(stream, limit)
         if not fits:
             continue
-        # Already running somewhere: joining it opens nothing at the provider
-        if redis_client.get(f"stream_profile:{stream.id}"):
+        if _running(redis_client, stream.stream_hash):
+            # Already run on its own for another device: joining it opens nothing
             cost = 0
+        elif redis_client.get(f"stream_profile:{stream.id}"):
+            # Playing on some other channel. Stock would not count a second connection to
+            # it (Stream.get_stream takes the stream as already reserved) while it opens
+            # one: past the provider's limit, which ends somebody's stream. Never that.
+            continue
         elif any(
             profile.is_active and pool_has_capacity_for_profile(profile, redis_client, viewer)
             for profile in stream.m3u_account.profiles.all()
