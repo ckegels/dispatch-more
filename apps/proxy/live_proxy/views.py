@@ -237,9 +237,17 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             probation.leave_previous_channel(
                 proxy_server.redis_client, viewer, leaving, channel_id
             )
+        # How many other streams this channel could switch to for this arrTV device now
+        # (app_alternatives, off unless switched on): sent back with the stream, and faster
+        # failover waits less where there are several
+        from . import app_alternatives
+
+        alternatives = None if own is not None else app_alternatives.count(
+            proxy_server.redis_client, viewer, channel
+        )
         # arrTV's faster failover (off unless switched on): a stream of this channel that
         # connects and sends nothing is left after seconds, not stock's minute
-        app_devices.mark_fast_start(proxy_server.redis_client, request, channel_id)
+        app_devices.mark_fast_start(proxy_server.redis_client, request, channel_id, alternatives)
 
         if user:
             # The channel asked for: a device given a stream of its own is still watching that
@@ -931,6 +939,8 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             streaming_content=generate(), content_type=content_type
         )
         response["Cache-Control"] = "no-cache"
+        if alternatives is not None:
+            response[app_alternatives.HEADER] = str(alternatives)
         return response
 
     except Http404:

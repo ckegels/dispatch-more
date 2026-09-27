@@ -5,6 +5,7 @@ import {
   Button,
   Group,
   Loader,
+  NumberInput,
   Select,
   Stack,
   Switch,
@@ -69,6 +70,30 @@ const HeldDevices = () => {
         </Group>
       ))}
     </Stack>
+  );
+};
+
+// A wait in whole seconds, saved when the field is left (not on every key)
+const Seconds = ({ label, description, value, disabled, onSave }) => {
+  const [typed, setTyped] = useState(value);
+  useEffect(() => setTyped(value), [value]);
+  return (
+    <NumberInput
+      size="xs"
+      w={220}
+      label={label}
+      description={description}
+      value={typed}
+      min={1}
+      max={60}
+      suffix=" s"
+      allowDecimal={false}
+      disabled={disabled}
+      onChange={setTyped}
+      onBlur={() => {
+        if (typed !== value && typed !== '') onSave(Number(typed));
+      }}
+    />
   );
 };
 
@@ -165,6 +190,40 @@ const ArrTvSettings = () => {
             checked={settings.fast_failover}
             disabled={!settings.devices}
             onChange={(on) => change({ fast_failover: on })}
+          />
+          {settings.devices && settings.fast_failover && (
+            <Group mt="xs" gap="md" align="flex-start">
+              <Seconds
+                label="Wait"
+                description="With one or two other streams to go to"
+                value={settings.fast_grace}
+                onSave={(s) => change({ fast_grace: s })}
+              />
+              <Seconds
+                label="Wait with three or more"
+                description={
+                  settings.alternatives
+                    ? 'When at least three other streams are usable now'
+                    : 'Needs "Tell arrTV how many other streams a channel has"'
+                }
+                value={settings.fast_grace_many}
+                disabled={!settings.alternatives}
+                onSave={(s) => change({ fast_grace_many: s })}
+              />
+            </Group>
+          )}
+        </Box>
+        <Box pl="xl">
+          <Setting
+            label="Tell arrTV how many other streams a channel has"
+            description={
+              settings.devices
+                ? "With each stream, arrTV is told how many of the channel's other streams it could be moved to now: ones it can play, on an account with a connection free, never the fallback. arrTV gives up on a slow stream sooner where there are several, and waits a little longer where one is left; faster failover uses it too, and does not hurry a channel with none."
+                : 'Needs "Recognise each arrTV device": only a device that said who it is can be counted for.'
+            }
+            checked={settings.alternatives}
+            disabled={!settings.devices}
+            onChange={(on) => change({ alternatives: on })}
           />
         </Box>
         <Box>

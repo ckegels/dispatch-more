@@ -81,11 +81,13 @@ class AppDevicesTests(TestCase):
         self.assertEqual(
             client.get("/api/core/arrtv/").json(),
             {"devices": False, "switch_hints": False, "reports": False,
-             "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False},
+             "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
+             "alternatives": False, "fast_grace": 5, "fast_grace_many": 3},
         )
         answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
         self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
-                                  "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False})
+                                  "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
+             "alternatives": False, "fast_grace": 5, "fast_grace_many": 3})
         # Only an admin changes them
         viewer = User.objects.create_user(username="tv", password="x", user_level=0)
         client.force_authenticate(user=viewer)
@@ -326,6 +328,12 @@ class _FakeRedis:
     def exists(self, key):
         return int(key in self.values)
 
+    def get(self, key):
+        return self.values.get(key)
+
+    def hget(self, key, field):
+        return self.values.get((key, field))
+
 
 class FastFailoverTests(TestCase):
     """A channel an arrTV device starts leaves a silent stream after seconds, not a minute."""
@@ -386,3 +394,114 @@ class FastFailoverTests(TestCase):
         # A channel nobody marked: the stock start grace
         fake.buffer.index, fake.channel_id = 0, "ch2"
         self.assertEqual(threshold(), ConfigHelper.channel_init_grace_period())
+
+
+class FastGraceTests(TestCase):
+    """The wait faster failover gives a channel follows the settings and what it can switch to."""
+
+    def setUp(self):
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        self.redis = _FakeRedis()
+        self.arrtv = RequestFactory().get(
+            "/proxy/ts/stream/abc", HTTP_X_DISPATCH_DEVICE="3f2a9c1e-0b7d-4e21-9a55-0f1c2d3e4f50"
+        )
+        app_devices.save_settings({"devices": True, "fast_failover": True, "fast_grace": 7, "fast_grace_many": 2})
+
+    def test_several_alternatives_wait_less_one_waits_the_normal_grace(self):
+        app_devices.mark_fast_start(self.redis, self.arrtv, "many", alternatives=4)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "one", alternatives=1)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "unknown", alternatives=None)
+        self.assertEqual(app_devices.fast_start_grace(self.redis, "many"), 2)
+        self.assertEqual(app_devices.fast_start_grace(self.redis, "one"), 7)
+        self.assertEqual(app_devices.fast_start_grace(self.redis, "unknown"), 7)
+
+    def test_a_channel_with_nowhere_to_go_is_not_hurried(self):
+        app_devices.mark_fast_start(self.redis, self.arrtv, "none", alternatives=0)
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "none"))
+
+    def test_the_seconds_are_whole_and_bounded(self):
+        saved = app_devices.save_settings({"fast_grace": "0", "fast_grace_many": "99.7"})
+        self.assertEqual((saved["fast_grace"], saved["fast_grace_many"]), (1, 60))
+        saved = app_devices.save_settings({"fast_grace": "rubbish"})
+        self.assertEqual(saved["fast_grace"], 5)
+
+    def test_a_mark_from_v212_is_not_read_as_one_second(self):
+        self.redis.set("live:app_devices:fast_start:old", "1")
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "old"))
+
+
+class AlternativesTests(TestCase):
+    """How many streams a channel could move to for an arrTV device, sent with the stream."""
+
+    def setUp(self):
+        from unittest import mock
+
+        from apps.channels.models import Channel, ChannelStream, Stream
+        from apps.m3u.models import M3UAccount, M3UAccountProfile
+
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        app_devices.save_settings({"devices": True, "alternatives": True})
+        self.redis = _FakeRedis()
+        self.free = M3UAccount.objects.create(name="Free", account_type="XC", server_url="http://a")
+        self.full = M3UAccount.objects.create(name="Full", account_type="XC", server_url="http://b")
+        for account in (self.free, self.full):
+            if not account.profiles.exists():
+                M3UAccountProfile.objects.create(m3u_account=account, name="default", is_default=True, max_streams=1)
+        self.channel = Channel.objects.create(name="┃DE┃ RTL ZWEI", channel_number=2)
+        self.streams = []
+        for n, (name, account) in enumerate(
+            [("RTL ZWEI 4K", self.free), ("RTL ZWEI FHD", self.free), ("RTL ZWEI HD", self.full),
+             ("RTL ZWEI SD", self.free)]
+        ):
+            stream = Stream.objects.create(name=name, url=f"http://x/{n}", m3u_account=account)
+            ChannelStream.objects.create(channel=self.channel, stream=stream, order=n)
+            self.streams.append(stream)
+        fallback = Stream.objects.create(name="Could Not Dispatch", url="http://local/f", is_custom=True)
+        ChannelStream.objects.create(channel=self.channel, stream=fallback, order=9)
+        # The free account has a connection free, the full one has not
+        patcher = mock.patch(
+            "apps.m3u.connection_pool.pool_has_capacity_for_profile",
+            side_effect=lambda profile, redis_client, viewer=None: profile.m3u_account_id == self.free.id,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.viewer = probation.Viewer("192.168.2.40", 1, app="okhttp", server_device="app|1|dev-0001")
+
+    def count(self, viewer=None):
+        from apps.proxy.live_proxy import app_alternatives
+
+        return app_alternatives.count(self.redis, viewer or self.viewer, self.channel)
+
+    def test_off_or_not_arrtv_counts_nothing(self):
+        app_devices.save_settings({"alternatives": False})
+        self.assertIsNone(self.count())
+        app_devices.save_settings({"alternatives": True})
+        stranger = probation.Viewer("192.168.2.40", 1, app="VLC")
+        self.assertIsNone(self.count(stranger))
+
+    def test_a_channel_about_to_start(self):
+        # 4K, FHD and SD are on the free account; HD's account is full; the fallback never
+        # counts. One of the three is the stream it starts on: two left to go to
+        self.assertEqual(self.count(), 2)
+
+    def test_a_running_channel_counts_its_own_accounts_streams(self):
+        from apps.proxy.live_proxy.constants import ChannelMetadataField
+        from apps.proxy.live_proxy.redis_keys import RedisKeys
+
+        # Running on the HD stream of the full account: the others are on the free one
+        key = RedisKeys.channel_metadata(str(self.channel.uuid))
+        self.redis.values[(key, ChannelMetadataField.STREAM_ID)] = str(self.streams[2].id).encode()
+        self.assertEqual(self.count(), 3)
+
+    def test_what_the_device_cannot_play_does_not_count(self):
+        limited = probation.Viewer(
+            "192.168.2.40", 1, app="okhttp", server_device="app|1|dev-0001", max_quality="FHD"
+        )
+        # 4K goes: FHD and SD are left, one of them is where it starts
+        self.assertEqual(self.count(limited), 1)
+
+    def test_a_stream_playing_on_another_channel_does_not_count(self):
+        self.redis.values[f"stream_profile:{self.streams[3].id}"] = b"1"
+        self.assertEqual(self.count(), 1)

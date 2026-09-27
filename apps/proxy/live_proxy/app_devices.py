@@ -48,16 +48,28 @@ SETTINGS_KEY = "app-integration"
 # fast_failover: a channel an arrTV device starts moves on from a stream that connects and
 # sends nothing after FAST_START_GRACE seconds and one health check, not stock's start grace
 # (60 s) and three (see fast_start_grace)
+# alternatives: tell arrTV with each stream how many other streams the channel could switch to
+# for it right now (app_alternatives, X-Dispatch-Alternatives), so it waits less where there
+# are several; fast_grace / fast_grace_many: faster failover's wait in seconds, and the wait
+# when three or more alternatives are usable (a channel with none keeps the stock grace)
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
-    "own_stream": False, "fast_failover": False,
+    "own_stream": False, "fast_failover": False, "alternatives": False,
+    "fast_grace": 5, "fast_grace_many": 3,
 }
+# The seconds settings: whole seconds within these bounds
+GRACE_BOUNDS = (1, 60)
 
-# Faster failover: which channels an arrTV device started, for the start phase only
-FAST_START_KEY = "live:app_devices:fast_start:{channel}"
+# Faster failover: which channels an arrTV device started, and the wait each was given, for
+# the start phase only
+# (v212 wrote "1" under fast_start:, meaning its fixed 5 s; this key holds the grace itself)
+FAST_START_KEY = "live:app_devices:fast_grace:{channel}"
 FAST_START_TTL = 120
+# The default of fast_grace, for the tests and the documentation
 FAST_START_GRACE = 5
+# From this many usable alternatives on, fast_grace_many applies
+MANY_ALTERNATIVES = 3
 QUALITY_LIMITS = ("FHD", "HD", "SD")
 
 # Read on every stream request, so kept for a few seconds rather than asked of the database
@@ -87,6 +99,11 @@ def _as_kind(key, value):
     """A setting as the kind its default is: the switches on or off, the rest as text."""
     if isinstance(DEFAULTS[key], bool):
         return bool(value)
+    if isinstance(DEFAULTS[key], int):
+        try:
+            return max(GRACE_BOUNDS[0], min(GRACE_BOUNDS[1], int(float(value))))
+        except (TypeError, ValueError):
+            return DEFAULTS[key]
     text = str(value or "").strip()
     if key == "outside_max_quality":
         return text.upper() if text.upper() in QUALITY_LIMITS else ""
@@ -148,18 +165,25 @@ def declared_multiview(request):
     return session if _SESSION_ID.match(session) else ""
 
 
-def mark_fast_start(redis_client, request, channel_id):
+def mark_fast_start(redis_client, request, channel_id, alternatives=None):
     """
     An arrTV device (declared) starts this channel with "faster failover" on: mark the
     channel for FAST_START_TTL seconds, so while its stream has sent nothing yet the stream
-    manager moves on after FAST_START_GRACE seconds (fast_start_grace). IPTV answers within
-    a second or two; stock's 60 s start grace is sized for sources that need to lock first,
-    and a dead stream cost a viewer over a minute. Nothing is written when switched off.
+    manager moves on after the grace written here (fast_start_grace): fast_grace_many when
+    [alternatives] (app_alternatives.count) says three or more streams are usable,
+    fast_grace otherwise. IPTV answers within a second or two; stock's 60 s start grace is
+    sized for sources that need to lock first, and a dead stream cost a viewer over a minute.
+    A channel with no usable alternative is not hurried: leaving its stream could only end on
+    the fallback. Nothing is written when switched off.
     """
-    if redis_client is None or not load_settings().get("fast_failover") or not declared_device(request):
+    settings = load_settings()
+    if redis_client is None or not settings.get("fast_failover") or not declared_device(request):
         return
+    if alternatives == 0:
+        return
+    grace = settings["fast_grace_many"] if (alternatives or 0) >= MANY_ALTERNATIVES else settings["fast_grace"]
     try:
-        redis_client.set(FAST_START_KEY.format(channel=channel_id), "1", ex=FAST_START_TTL)
+        redis_client.set(FAST_START_KEY.format(channel=channel_id), str(grace), ex=FAST_START_TTL)
     except Exception as e:
         logger.debug(f"Faster failover: could not mark {channel_id}: {e}")
 
@@ -173,8 +197,12 @@ def fast_start_grace(redis_client, channel_id):
     if redis_client is None or not load_settings().get("fast_failover"):
         return None
     try:
-        if redis_client.exists(FAST_START_KEY.format(channel=channel_id)):
-            return FAST_START_GRACE
+        value = redis_client.get(FAST_START_KEY.format(channel=channel_id))
+        if value is not None:
+            text = value.decode() if isinstance(value, bytes) else str(value)
+            return max(GRACE_BOUNDS[0], min(GRACE_BOUNDS[1], int(float(text))))
+    except (TypeError, ValueError):
+        return FAST_START_GRACE
     except Exception as e:
         logger.debug(f"Faster failover: could not read {channel_id}: {e}")
     return None
@@ -485,6 +513,8 @@ def capabilities():
         "own_stream": settings["own_stream"],
         # Only for a device the server recognises
         "fast_failover": bool(settings["devices"] and settings["fast_failover"]),
+        # X-Dispatch-Alternatives on each stream response (app_alternatives)
+        "alternatives": bool(settings["devices"] and settings["alternatives"]),
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

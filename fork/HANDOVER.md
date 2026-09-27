@@ -1761,6 +1761,16 @@ The setting is read on every ask, so off ends it at once; once data has come, st
 app's own waits were shortened alongside (arr.40, each with a switch in the app). Tests:
 `FastFailoverTests` in `test_app_devices.py`.
 
+**How many other streams a channel has** (v213, `app_alternatives.py`, `alternatives` in
+`app_devices`, off by default). The user's point: how quickly to give up on a slow stream
+depends on where there is to go. `count()` applies `_pick`'s rules (fallback never, active
+account, the device's quality limit, not playing elsewhere, the channel's own account or one
+with a connection free) and the view sends it as `X-Dispatch-Alternatives`. Faster failover
+stores its grace per channel from it (`fast_grace_many` 3 s with three or more, `fast_grace`
+5 s, both editable, 1-60 s; the Redis key moved to `fast_grace:` so v212's `"1"` marks are not
+read as one second); none = no mark. arrTV scales its picture wait by it (contract §8.8).
+Tests: `FastGraceTests`, `AlternativesTests`.
+
 ---
 
 ## 6. Measured on the real installation (do not re-derive)
