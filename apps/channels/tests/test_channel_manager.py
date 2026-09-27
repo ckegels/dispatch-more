@@ -865,6 +865,26 @@ class CombineTests(_Setup):
         channel_manager.apply_plan(levers, [row["key"]])
         self.assertEqual(self._order(self.orf1)[-1], "could not dispatch")
 
+    def test_two_channels_with_different_fallbacks_come_out_with_one(self):
+        # The same "could not dispatch" screen made twice: the kept channel keeps its own
+        other = Stream.objects.create(name="could not dispatch (2)", url="http://local/2", is_custom=True)
+        self._attach(self.twin, [other])
+        levers = settings()
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "combine"]
+        self.assertEqual([s["name"] for s in row["streams"] if s["custom"]], ["could not dispatch"])
+        channel_manager.apply_plan(levers, [row["key"]])
+        order = self._order(self.orf1)
+        self.assertEqual(order[-1], "could not dispatch")
+        self.assertNotIn("could not dispatch (2)", order)
+
+    def test_a_kept_channel_without_a_fallback_takes_the_others(self):
+        ChannelStream.objects.filter(channel=self.orf1, stream=self.fallback).delete()
+        self._attach(self.twin, [self.fallback])
+        levers = settings()
+        (row,) = [r for r in channel_manager.build_plan(levers)["rows"] if r["status"] == "combine"]
+        channel_manager.apply_plan(levers, [row["key"]])
+        self.assertEqual(self._order(self.orf1)[-1], "could not dispatch")
+
     def test_channels_of_two_different_countries_are_never_combined(self):
         # The whole fork is built on telling these apart; a name they share is not enough
         german = self._channel("┃DE┃ ORF 1", 400, self.germany)

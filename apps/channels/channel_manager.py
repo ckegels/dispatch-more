@@ -2997,8 +2997,20 @@ def build_plan(settings):
         folding = clusters.get(combining.get(channel_id)) if channel_id in combining else None
         others = [r for r in folding["records"] if r is not record] if folding else []
         held = list(record["stream_ids"])
+        # A channel ends in one fallback. Two channels ending in *different* ones -- the same
+        # screen made twice -- came out of a combine with both, the second one never reached
+        # since the first is always there. The kept channel's own stays; another's is taken
+        # only when it has none, and goes with the channel it was on.
+        def _falls_back(stream_id):
+            return bool(by_id.get(stream_id, {}).get("custom"))
+
+        has_fallback = any(_falls_back(s) for s in held)
         for other in others:
-            held += [s for s in other["stream_ids"] if s not in held]
+            for s in other["stream_ids"]:
+                if s in held or (_falls_back(s) and has_fallback):
+                    continue
+                held.append(s)
+                has_fallback = has_fallback or _falls_back(s)
         attached_now = [by_id[s] for s in held if s in by_id]
         # A custom stream on a channel is its fallback -- the screen that says the channel
         # could not be played -- and belongs at the end, after every real stream. Anything

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @permission_classes([IsAdmin])
 def channel_manager_options(request):
     """Everything the levers choose between, with enough about each to choose well."""
-    from apps.m3u.models import M3UAccount
+    from apps.m3u.models import CUSTOM_M3U_ACCOUNT_NAME, M3UAccount
 
     from .models import Channel, ChannelGroup, ChannelProfile, Stream
 
@@ -79,7 +79,10 @@ def channel_manager_options(request):
         "settings": channel_manager.load_settings(),
         "defaults": channel_manager.DEFAULTS,
         "accounts": [
-            {"id": a.id, "name": a.name, "active": a.is_active}
+            # custom: the account the fallback streams ("Could Not Dispatch") live under,
+            # which is nobody's provider; stock knows it by its name and its lock
+            {"id": a.id, "name": a.name, "active": a.is_active,
+             "custom": a.name == CUSTOM_M3U_ACCOUNT_NAME and a.locked}
             for a in M3UAccount.objects.order_by("name")
         ],
         "stream_groups": [

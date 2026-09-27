@@ -204,6 +204,8 @@ const streamCount = (row) =>
 // made every channel one provider richer than it is. By id where the plan says it, since
 // two accounts can share a name.
 const providerOf = (stream) => stream.account_id ?? stream.account;
+// The account the fallback streams live under, as the server says (by name before it did)
+const isCustom = (account) => account.custom ?? account.name === 'custom';
 const providersOf = (streams) =>
   new Set(
     (streams || [])
@@ -694,10 +696,13 @@ const ChannelManagerTable = () => {
   );
 
   // The providers a channel could have: the ones the levers look at, or every one switched
-  // on. How many there are is what "fewer than" is measured against.
+  // on. How many there are is what "fewer than" is measured against. Never the account the
+  // fallback streams live under: a row never counts its fallback, so counting the account
+  // made every channel "3 of 4 providers · missing custom".
   const providers = useMemo(() => {
     const picked = (levers?.accounts || []).map(Number);
     return (options?.accounts || [])
+      .filter((a) => !isCustom(a))
       .filter((a) => (picked.length ? picked.includes(a.id) : a.active))
       .map((a) => ({ id: a.id, name: a.name }));
   }, [options, levers?.accounts]);
@@ -707,7 +712,7 @@ const ChannelManagerTable = () => {
   const everyLogin = useMemo(
     () =>
       (options?.accounts || [])
-        .filter((a) => a.active && a.name !== 'custom')
+        .filter((a) => a.active && !isCustom(a))
         .map((a) => a.id),
     [options]
   );

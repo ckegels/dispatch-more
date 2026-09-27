@@ -922,6 +922,8 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     { id: 2, name: 'Provider B', active: true },
     { id: 3, name: 'Provider C', active: true },
     { id: 4, name: 'Switched off', active: false },
+    // Where the fallback streams live: every server has it, and it is nobody's provider
+    { id: 5, name: 'custom', active: true, custom: true },
   ];
   const a = (id, name, extra = {}) => stream(id, name, { account_id: 1, ...extra });
   const shortRow = {
@@ -980,6 +982,22 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     // Before: its own stream and the fallback -- two streams, one provider
     expect(screen.getByText('2 streams · 1 provider')).toBeInTheDocument();
     expect(screen.getByText('2 of 3 providers · missing Provider C')).toBeInTheDocument();
+  });
+
+  it('never counts the account the fallbacks live under, however the server says it', async () => {
+    // A server from before the flag says it by name only
+    API.getChannelManagerOptions.mockResolvedValue({
+      settings: { order: 'quality' }, defaults: {}, stream_groups: [],
+      channel_groups: [], all_groups: [], profiles: [],
+      accounts: accounts.map((account) => {
+        const { id, name, active } = account;
+        return { id, name, active };
+      }),
+    });
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(screen.getByText('2 of 3 providers · missing Provider C')).toBeInTheDocument();
+    expect(screen.queryByText(/missing custom/)).not.toBeInTheDocument();
   });
 
   it('shows the channels with fewer providers than asked, from every channel', async () => {

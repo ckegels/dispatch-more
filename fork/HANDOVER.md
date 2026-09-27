@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v210** (2026-09-27). The commit messages on the branch
+Written 2026-09-19, kept current to **release v211** (2026-09-27). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -499,6 +499,16 @@ The scripts are in the session scratchpad, not the repo: they download with the 
 key. The user switched on 20 more Digitalizard groups for this (Spectrum, MeTV & ION, HBO Max,
 USA Cinema/Kids/Music/Fox, NL Kids/Music/Sports/ESPN/Cinema/Viaplay, BE Kids-Docum, CA
 Français/Others, FR Divertissement/Enfants, IT Kids/Cinema).
+
+**"missing custom", and two fallbacks from one combine** (v211, the user's finding). The
+row's providers were counted against a list that held the `custom` account the fallback
+streams live under, while the row itself (rightly) never counts its fallback: every channel
+read "3 of 4 providers · missing custom", and "Fewer than" / "Missing" were off by one. "From
+every provider" beside it already left `custom` out -- by name, in the sibling list. The server
+now says which account it is (`custom`: stock's name *and* `locked`), and both lists leave it
+out. The page test had never had a `custom` account in its list, which every real server has.
+And combining two channels ending in *different* fallback streams (the same screen made twice)
+gave the kept channel both; it keeps its own, and takes another's only when it has none.
 
 **Lineup: a suggestion onto a channel you have, and streams on no channel** (v198). A "New"
 row can be put on one of your channels instead (`search_channels`, `apply_plan(into=…)`,
