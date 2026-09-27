@@ -25,7 +25,7 @@ leaving, so the server does not have to guess that either.
 ## Where arrTV stands (2026-09-27)
 
 What the server offers and what arrTV does with it, as of Dispatch More **v212** and arrTV
-**0.5.9-arr.40** (a test build; the published one is arr.29). Every arrTV optimization has a
+**0.5.9-arr.41** (a test build; the published one is arr.29). Every arrTV optimization has a
 switch of its own in the app (Settings → General → **arrTV optimizations**, all on by
 default); switched off, that part does nothing:
 
@@ -495,7 +495,13 @@ for arrTV and off by default.
 The app shortens its own waits the same way (arr.40, switch "Faster switch to the next
 stream"): 6 s (or 1.5× the channel's learned first byte, at most 12 s) before the first step
 instead of 28 s, 5 s per later step instead of 12, 6 s for "data but nothing playable" instead
-of 15. Both sides walk the same channel; whichever moves first, the other sees the new stream.
+of 15. From arr.41 the app also has a **picture deadline** (switch "Leave a stream that is slow
+to start"): no first frame within twice the channel's usual start time (8–20 s) walks to the
+next stream whatever the bytes do -- a stream that connects slowly or trickles its data never
+looks dead to the server. And when the capabilities say `fast_failover`, the app's first
+moves wait at least 12 s so the server moves first: both moving at once would skip a stream.
+The server's 5 s already includes connecting: a stream counts as connected when its reader
+thread starts, before the provider answers.
 
 ## 9. Behaviour matrix
 
