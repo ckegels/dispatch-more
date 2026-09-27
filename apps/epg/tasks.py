@@ -453,6 +453,14 @@ def refresh_epg_data(source_id, force=False, _file_defer_retry=0):
             media_servers.reload_every_guide()
         except Exception as e:
             logger.debug(f"Could not ask the media servers to reload their guides: {e}")
+        # The guides arrTV keeps for its guide choice hold this source's old programmes:
+        # read again from the new file (nothing while that is switched off)
+        try:
+            from apps.proxy.live_proxy import app_guides
+
+            app_guides.after_refresh(source_id)
+        except Exception as e:
+            logger.debug(f"Could not refresh the guides arrTV keeps: {e}")
         return result
     except Exception as e:
         logger.error(

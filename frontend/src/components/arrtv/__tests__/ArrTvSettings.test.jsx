@@ -15,6 +15,10 @@ vi.mock('../../../api', () => ({
     deleteAppReport: vi.fn(),
     getArrTvHeld: vi.fn(),
     forgetArrTvHeld: vi.fn(),
+    getArrTvGuideChanges: vi.fn(),
+    putBackArrTvGuide: vi.fn(),
+    getArrTvGuidePreload: vi.fn(),
+    startArrTvGuidePreload: vi.fn(),
   },
 }));
 
@@ -165,5 +169,54 @@ describe('ArrTvSettings', () => {
     expect(await screen.findByText(/All 2 reports are deleted/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete all' }));
     await waitFor(() => expect(API.deleteAppReport).toHaveBeenCalledWith(null));
+  });
+
+  it('lets arrTV change a guide, shows what is loaded, and puts a change back', async () => {
+    API.getArrTvSettings.mockResolvedValue({ devices: false, reports: false, guide_choice: true });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.getArrTvGuidePreload.mockResolvedValue({
+      state: 'done', kept: 4812, preloaded_at: '2026-09-27T06:10:00+00:00', done: 0, total: 0,
+    });
+    API.startArrTvGuidePreload.mockResolvedValue({ state: 'working', stage: 'finding each channel\'s guides', done: 25, total: 1360, kept: 0 });
+    API.getArrTvGuideChanges.mockResolvedValue({
+      changes: [{
+        channel: 7, channel_name: '┃AT┃ ORF 1', guide_name: 'ORF 1 HD', was_name: 'ORF1.at',
+        at: '2026-09-27T17:41:02+00:00',
+        by: { via: 'arrTV', username: 'alice', device_name: 'Living room SHIELD', ip: '192.168.2.40' },
+      }],
+    });
+    API.putBackArrTvGuide.mockResolvedValue({ changes: [] });
+    draw();
+
+    expect(await screen.findByText("Let arrTV change a channel's guide")).toBeInTheDocument();
+    // It does not need the devices recognised: a device that does not say who it is can still use it
+    expect(screen.getByRole('switch', { name: /Let arrTV change a channel's guide/ })).not.toBeDisabled();
+    expect(await screen.findByText(/Programmes loaded for 4812 guides/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load now' }));
+    expect(await screen.findByText(/25 of 1360 channels/)).toBeInTheDocument();
+
+    expect(await screen.findByText(/by alice on Living room SHIELD \(192\.168\.2\.40\)/)).toBeInTheDocument();
+    expect(screen.getByText(/was ORF1\.at/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    await waitFor(() => expect(API.putBackArrTvGuide).toHaveBeenCalledWith(7));
+    expect(await screen.findByText(/No channel has been put on another guide/)).toBeInTheDocument();
+  });
+
+  it('saves the sources to offer as a list of ids', async () => {
+    API.getArrTvSettings.mockResolvedValue({ guide_choice: false });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.saveArrTvSettings.mockResolvedValue({ guide_choice: true, guide_choice_sources: '' });
+    API.getArrTvGuidePreload.mockResolvedValue({ state: 'working', stage: '', done: 0, total: 0, kept: 0 });
+    API.getArrTvGuideChanges.mockResolvedValue({ changes: [] });
+    draw();
+
+    const guideSwitch = await screen.findByRole('switch', { name: /Let arrTV change a channel's guide/ });
+    // Off, none of its parts are there
+    expect(screen.queryByText('Sources to offer')).toBeNull();
+    fireEvent.click(guideSwitch);
+    await waitFor(() =>
+      expect(API.saveArrTvSettings).toHaveBeenCalledWith(expect.objectContaining({ guide_choice: true }))
+    );
+    expect(await screen.findByText('Sources to offer')).toBeInTheDocument();
   });
 });

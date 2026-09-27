@@ -4633,7 +4633,7 @@ READ_TRIES = 90
 
 
 @shared_task
-def read_guide_programmes(by_source, tries=0):
+def read_guide_programmes(by_source, tries=0, record="", how=""):
     """
     Read the programmes of the guides someone is choosing between, one pass of each
     source's file for all of them.
@@ -4651,6 +4651,11 @@ def read_guide_programmes(by_source, tries=0):
     before rather than a channel with nothing.
 
     by_source is {source id as a string: [EPGData id, ...]}.
+
+    record="app-guide" is arrTV's guide choice reading the guides it offers
+    (apps.proxy.live_proxy.app_guides): what was found goes into its own record, and the
+    Guides page's progress line and record are left alone -- a preload of thousands of
+    guides is not something that page is doing.
     """
     from django.db import transaction
     from lxml import etree
@@ -4666,6 +4671,22 @@ def read_guide_programmes(by_source, tries=0):
     from core.utils import is_task_lock_held
 
     from apps.channels import channel_manager
+
+    for_app = record == "app-guide"
+
+    def say(mapping):
+        if not for_app:
+            channel_manager.say_reading(mapping)
+
+    def written_down(found, why=""):
+        if for_app:
+            from apps.proxy.live_proxy import app_guides
+
+            app_guides.note_read(found, how=how or "preload")
+        elif why:
+            channel_manager.note_read(found, why)
+        else:
+            channel_manager.note_read(found)
 
     read = 0
     # What each guide came back with, written down once at the end
@@ -4692,7 +4713,7 @@ def read_guide_programmes(by_source, tries=0):
                 )
                 read_guide_programmes.apply_async(
                     args=[{str(source_id): epg_ids}],
-                    kwargs={"tries": tries + 1},
+                    kwargs={"tries": tries + 1, "record": record, "how": how},
                     countdown=READ_AGAIN_SECONDS,
                 )
                 waiting += len(epg_ids)
@@ -4701,14 +4722,14 @@ def read_guide_programmes(by_source, tries=0):
                     f"Guide programmes: source {source_id} has been refreshing for too "
                     f"long; its guides were not read"
                 )
-                channel_manager.note_read(
+                written_down(
                     {epg_id: 0 for epg_id in epg_ids}, "its source was being refreshed"
                 )
             continue
         source = EPGSource.objects.filter(id=source_id).first()
         if not source:
             continue
-        channel_manager.say_reading({
+        say({
             "stage": f"going through {source.name}", "at": "", "done": read,
             "total": wanted_in_all,
         })
@@ -4747,7 +4768,7 @@ def read_guide_programmes(by_source, tries=0):
             ):
                 seen += 1
                 if seen % 20000 == 0:
-                    channel_manager.say_reading({
+                    say({
                         "stage": f"{seen:,} programmes into {source.name}".replace(",", " "),
                         "done": read, "total": wanted_in_all,
                     })
@@ -4822,14 +4843,14 @@ def read_guide_programmes(by_source, tries=0):
                 # holds every guide ever read, and writing it back per guide is that whole
                 # record read and written again for each one.
                 what_was_found[epg.id] = len(made)
-                channel_manager.say_reading({
+                say({
                     "stage": f"keeping what {source.name} had", "at": epg.name or epg.tvg_id,
                     "done": read, "total": wanted_in_all,
                 })
                 logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
     if what_was_found:
-        channel_manager.note_read(what_was_found)
-    channel_manager.say_reading({
+        written_down(what_was_found)
+    say({
         "state": "reading" if waiting else "done",
         "stage": f"waiting on {waiting} more" if waiting else "",
         "at": "", "done": read, "total": wanted_in_all,
@@ -4921,3 +4942,32 @@ def suggest_guides(settings, offset=0):
     # and doing it by hand inside one closes the connection the caller is using
     suggest_guides.delay(settings, offset + len(channels))
     return f"Looked at {len(channels)} channel(s)"
+
+
+# Channels per batch of the arrTV guide preload. Each is matched on its own against the
+# whole guide table (the Guides tab's picker matcher, which is not built for runs), so a
+# batch is small: the one Celery worker gets back to M3U and EPG refreshes every few seconds.
+PRELOAD_BATCH_CHANNELS = 25
+
+
+@shared_task
+def preload_guide_choices(offset=0, wanted=None):
+    """
+    arrTV's guide choice (apps.proxy.live_proxy.app_guides): find every channel's best
+    candidate guides, a batch at a time, then read all of their programmes in one pass of
+    each source's file, so the list a viewer opens already has something to show.
+
+    Each batch queues the next, carrying the guides wanted so far. It stops between batches
+    when the feature is switched off.
+    """
+    from apps.proxy.live_proxy import app_guides
+
+    if not app_guides.enabled():
+        logger.info("arrTV guides: switched off, preload stopped")
+        return "Switched off"
+    wanted, more = app_guides.preload_batch(offset, PRELOAD_BATCH_CHANNELS, wanted)
+    if more:
+        preload_guide_choices.delay(offset + PRELOAD_BATCH_CHANNELS, sorted(wanted))
+        return f"Looked at channels {offset} to {offset + PRELOAD_BATCH_CHANNELS}"
+    asked = app_guides.finish_preload(wanted)
+    return f"Reading {asked} guide(s)"

@@ -2061,7 +2061,7 @@ class GuideChoiceTests(_Setup):
         ) as again:
             read_guide_programmes({str(self.local.id): [guide.id]})
         self.assertTrue(again.called, "it should try again rather than give up")
-        self.assertEqual(again.call_args.kwargs["kwargs"], {"tries": 1})
+        self.assertEqual(again.call_args.kwargs["kwargs"], {"tries": 1, "record": "", "how": ""})
 
     def test_and_said_to_be_unreadable_once_it_has_waited_long_enough(self):
         from apps.channels import tasks as channel_tasks

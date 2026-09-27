@@ -595,6 +595,71 @@ def app_stall(request):
     return JsonResponse(app_stalls.report(redis_client, viewer, request.data))
 
 
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def app_guide(request):
+    """
+    arrTV's "Wrong guide? Choose another" (apps.proxy.live_proxy.app_guides).
+
+    GET ?channel=<uuid or id>: the channel's guide now, and the guides it could be that hold
+    a programme right now, best first. POST {"channel", "epg_id"}: put the channel on that
+    guide, for everybody, recorded with who did it. Any logged-in user, for a channel that
+    login may watch; refused while switched off.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_guides
+
+    if not app_guides.enabled():
+        return JsonResponse({"error": "Changing the guide is switched off on the server"}, status=403)
+    given = request.GET.get("channel") if request.method == "GET" else (request.data or {}).get("channel")
+    channel = app_guides.channel_for(request.user, given)
+    if channel is None:
+        return JsonResponse({"error": "That channel or guide no longer exists"}, status=404)
+    if request.method == "GET":
+        return JsonResponse(app_guides.choices_for(channel, request.user))
+    try:
+        return JsonResponse(
+            app_guides.choose(channel, (request.data or {}).get("epg_id"), request, request.user)
+        )
+    except app_guides.Refused as refused:
+        return JsonResponse({"error": refused.message}, status=refused.status)
+
+
+@api_view(["GET", "DELETE"])
+@permission_classes([IsAdmin])
+def arrtv_guide_changes(request):
+    """
+    The guide changes made from arrTV, newest first; DELETE ?channel=<id> puts one back on the
+    guide it had before (app_guides.put_back).
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_guides
+
+    if request.method == "DELETE":
+        try:
+            app_guides.put_back(request.GET.get("channel"))
+        except (app_guides.Refused, TypeError, ValueError) as e:
+            return JsonResponse({"error": getattr(e, "message", "No such change")}, status=404)
+    return JsonResponse({"changes": app_guides.changes()})
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def arrtv_guide_preload(request):
+    """How the arrTV guide preload is going; POST starts one ("Load now")."""
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_guides
+
+    if request.method == "POST":
+        if not app_guides.enabled():
+            return JsonResponse({"error": "Changing the guide is switched off"}, status=409)
+        app_guides.start_preload()
+    return JsonResponse(app_guides.preload_state())
+
+
 @api_view(["GET", "DELETE"])
 @permission_classes([IsAdmin])
 def arrtv_held(request):

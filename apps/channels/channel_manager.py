@@ -1991,6 +1991,10 @@ def kept_after_reading():
     The guides read from here in the last READ_KEPT_DAYS that found programmes: the ones
     Dispatcharr's clean-up is asked to leave alone. Empty -- and so exactly stock -- for
     anybody who has never read a guide from the Guides page.
+
+    Also the guides arrTV's guide choice keeps for its lists (app_guides.kept_ids): the
+    alternatives it offers are guides no channel uses, which the clean-up would otherwise
+    empty at every refresh. Empty while that is switched off.
     """
     from datetime import datetime, timedelta
 
@@ -2010,6 +2014,12 @@ def kept_after_reading():
                 found.add(int(key))
         except (TypeError, ValueError):
             continue
+    try:
+        from apps.proxy.live_proxy import app_guides
+
+        found |= app_guides.kept_ids()
+    except Exception as e:
+        logger.debug(f"Could not ask which guides arrTV keeps: {e}")
     return found
 
 

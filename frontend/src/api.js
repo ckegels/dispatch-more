@@ -2746,6 +2746,29 @@ export default class API {
     });
   }
 
+  // Guide changes made from arrTV ("Wrong guide? Choose another"), and putting one back
+  static async getArrTvGuideChanges() {
+    return await request(`${host}/api/core/arrtv/guide-changes/`);
+  }
+
+  static async putBackArrTvGuide(channel) {
+    return await request(
+      `${host}/api/core/arrtv/guide-changes/?${new URLSearchParams({ channel })}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  // The programmes loaded ahead of time for arrTV's guide lists, and "Load now"
+  static async getArrTvGuidePreload() {
+    return await request(`${host}/api/core/arrtv/guide-preload/`);
+  }
+
+  static async startArrTvGuidePreload() {
+    return await request(`${host}/api/core/arrtv/guide-preload/`, {
+      method: 'POST',
+    });
+  }
+
   // Error reports sent from player apps (arrTV); only an admin reads them
   static async getAppReports() {
     return await request(`${host}/api/core/app-reports/`);

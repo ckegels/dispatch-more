@@ -42,6 +42,7 @@ default); switched off, that part does nothing:
 | Reopen when a swap inside the connection freezes the picture | — (app only) | built (arr.40), switch "Reopen a frozen stream" | §8.6 |
 | Faster failover when arrTV starts a channel | v212 | nothing to build (device header); the app's own waits are shorter too, switch "Faster switch to the next stream" | §8.7 |
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v214 | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
+| Wrong guide? Choose another (`/api/core/app-guide/`) | v216 | not built | §7a |
 
 The user's server was still on **v205** when the TV report below was taken: install the
 latest release before testing any of §8.
@@ -330,6 +331,70 @@ and what happened to it (reconnects, stream switches, errors); how it started, p
 phase; this device's channel switches and Force Close; and the server's log lines about the
 channel over the last 30 minutes. The admin reads it all on Settings → arrTV → Problem reports,
 and copies it whole to pass on.
+
+## 7a. Wrong guide? Choose another (server v216)
+
+Server switch: `guide_choice` (off by default), on Settings → arrTV. Capabilities say
+`"guide_choice": true` and `"guide_choice_url": "/api/core/app-guide/"`. It does **not** need
+`devices`: a device that does not say who it is can still use it (the record then says
+"unknown device"). The whole design, with the reasons, is `fork/arrTV-guide-choice.md`.
+
+**Where in arrTV:** the player's options (hold OK), directly **under "Send a report to the
+server"**: **"Wrong guide? Choose another"**, only when capabilities say `guide_choice`. The
+report and its "Wrong or missing guide" choice stay as they are; the two are independent.
+
+**The list:** `GET /api/core/app-guide/?channel=<uuid or id>` with the usual `Authorization`
+and `X-Dispatch-Device` / `-Name` headers.
+
+```json
+{
+  "channel": {"uuid": "0f1e…", "id": 1234, "name": "┃AT┃ ORF 1", "number": 101},
+  "current": {
+    "epg_id": 5501, "name": "ORF1.at", "source": "EPGShare AT",
+    "now":  {"title": "Zeit im Bild", "start": "2026-09-27T17:30:00Z", "end": "2026-09-27T17:50:00Z"},
+    "next": {"title": "Wetter", "start": "2026-09-27T17:50:00Z"}
+  },
+  "guides": [
+    {
+      "epg_id": 88213, "name": "ORF 1 HD", "tvg_id": "ORF1HD.de", "score": 91,
+      "source": {"id": 3, "name": "EPGShare DE"},
+      "now":  {"title": "Zeit im Bild", "start": "…", "end": "…"},
+      "next": {"title": "Wetter", "start": "…"}
+    }
+  ],
+  "reading": false
+}
+```
+
+- `guides`: at most **20**, best match first across every source (the Guides tab's own
+  ranking), **only guides with a programme on now**, the current guide never among them.
+  `next` may be `null`.
+- `current`: the channel's guide, shown apart as what is being replaced; `null` for a channel
+  on no guide; its `now` is `null` when it holds nothing ("Guide now: no information").
+- `reading: true`: some candidates had never been read and are being read now. Show "Looking
+  for more guides…" and ask **once** more after about 10 seconds.
+- 403: switched off (hide the entry until capabilities are read again). 404: this login may
+  not watch that channel, or it is gone.
+
+**The screen:** "Guide now: ORF1.at — Zeit im Bild (17:30–17:50)" at the top, then one row per
+guide: **the programme on now in large type** (what is compared with the picture), under it the
+guide's name, its source and when the programme ends. The video keeps playing beside or behind
+it. One press on a row chooses it; Back closes without changing anything. Nothing on the list:
+"No other guide has anything on for this channel right now."
+
+**Choosing:** `POST /api/core/app-guide/` with `{"channel": "<uuid>", "epg_id": 88213}`.
+
+- **200** `{"ok": true, "channel": {…}, "guide": {"epg_id", "name", "source", "now", "next"}}`:
+  close the screen, show "Guide changed to ORF 1 HD" for a few seconds, and put `guide.now` /
+  `guide.next` in the player's now/next at once. Then reload that channel's programmes after
+  about 5 seconds (the server reads the new guide in the background after the save). The
+  guide the channel is already on is answered 200 too: it means "this one is right".
+- **409**: the guide has nothing on any more; show the message and ask for the list again.
+- **403** / **404**: as for the list.
+
+The change is for every viewer (and Plex and Jellyfin), and the server records it with the
+login, the device id and name, and the address it came from; an admin sees it on Settings →
+arrTV ("Guide changes", with Put back) and on the Guides tab.
 
 ## 8. Picture quality
 

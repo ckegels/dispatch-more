@@ -5,6 +5,7 @@ import {
   Button,
   Group,
   Loader,
+  MultiSelect,
   NumberInput,
   Select,
   Stack,
@@ -13,6 +14,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import API from '../../api';
+import useEPGsStore from '../../store/epgs';
 import AppReports from '../diagnostics/AppReports';
 import { copy } from '../diagnostics/copyText';
 
@@ -73,6 +75,96 @@ const HeldDevices = () => {
   );
 };
 
+const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
+
+// The programmes loaded ahead of time for the guides arrTV offers, and "Load now"
+const GuidePreload = () => {
+  const [state, setState] = useState(null);
+
+  useEffect(() => {
+    API.getArrTvGuidePreload()
+      .then(setState)
+      .catch(() => setState(null));
+  }, []);
+
+  const loadNow = async () => {
+    try {
+      setState(await API.startArrTvGuidePreload());
+    } catch {
+      // Left as it is: the line still says what is loaded
+    }
+  };
+
+  if (!state) return null;
+  const working = state.state === 'working';
+  return (
+    <Group gap="xs" mt="xs" wrap="nowrap">
+      <Text size="xs" c="dimmed">
+        {working
+          ? `Loading: ${state.stage || 'working'}${state.total ? ` (${state.done} of ${state.total} channels)` : ''}`
+          : `Programmes loaded for ${state.kept} guide${state.kept === 1 ? '' : 's'}` +
+            (state.preloaded_at ? `, last ${when(state.preloaded_at)}` : '')}
+      </Text>
+      <Button size="compact-xs" variant="subtle" onClick={loadNow} disabled={working}>
+        Load now
+      </Button>
+    </Group>
+  );
+};
+
+const byWhom = (by) =>
+  `${by?.username || 'someone'} on ${by?.device_name || by?.device || 'an unknown device'}` +
+  (by?.ip ? ` (${by.ip})` : '');
+
+// The guide changes made from arrTV, newest first, each one undoable: anyone may change a
+// guide, so an admin has to be able to see what was changed and put it back
+const GuideChanges = () => {
+  const [changes, setChanges] = useState(null);
+
+  useEffect(() => {
+    API.getArrTvGuideChanges()
+      .then((given) => setChanges(given?.changes || []))
+      .catch(() => setChanges([]));
+  }, []);
+
+  const putBack = async (channel) => {
+    try {
+      const given = await API.putBackArrTvGuide(channel);
+      setChanges(given?.changes || []);
+    } catch {
+      // Left as it is: the list still says what was changed
+    }
+  };
+
+  if (!changes) return null;
+  return (
+    <Box mt="xs">
+      <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb={4}>
+        Guide changes
+      </Text>
+      {!changes.length && (
+        <Text size="xs" c="dimmed">
+          No channel has been put on another guide from arrTV.
+        </Text>
+      )}
+      <Stack gap={4}>
+        {changes.map((change) => (
+          <Group key={change.channel} gap="xs" wrap="nowrap" align="flex-start">
+            <Text size="xs">
+              <b>{change.channel_name || `Channel ${change.channel}`}</b>: {change.guide_name || 'no guide'}
+              {change.was_name ? `, was ${change.was_name}` : ', had no guide'} — by {byWhom(change.by)},{' '}
+              {when(change.at)}
+            </Text>
+            <Button size="compact-xs" variant="subtle" onClick={() => putBack(change.channel)}>
+              Put back
+            </Button>
+          </Group>
+        ))}
+      </Stack>
+    </Box>
+  );
+};
+
 // A wait in whole seconds, saved when the field is left (not on every key)
 const Seconds = ({ label, description, value, disabled, onSave }) => {
   const [typed, setTyped] = useState(value);
@@ -104,6 +196,12 @@ const ArrTvSettings = () => {
   // The home networks as typed, saved when the field is left rather than on every key
   const [networks, setNetworks] = useState('');
   const [networksError, setNetworksError] = useState(null);
+  // The guide sources arrTV may offer: every active one that is not a dummy (a dummy makes
+  // its programmes up from the channel's name, so it says nothing about which channel it is)
+  const epgs = useEPGsStore((s) => s.epgs);
+  const guideSources = Object.values(epgs || {})
+    .filter((epg) => epg.source_type !== 'dummy' && epg.is_active !== false)
+    .map((epg) => ({ value: String(epg.id), label: epg.name }));
 
   useEffect(() => {
     API.getArrTvSettings()
@@ -274,6 +372,35 @@ const ArrTvSettings = () => {
           checked={settings.own_stream}
           onChange={(on) => change({ own_stream: on })}
         />
+        <Box>
+          <Setting
+            label="Let arrTV change a channel's guide"
+            description="Whoever is watching can pick another guide for the channel from the player (“Wrong guide? Choose another”), from the guides that could be that channel and have something on now. The change is for every viewer and for Plex and Jellyfin, and is recorded with the user, device and address that made it. The best guides for every channel have their programmes loaded ahead of time so the list has something to show."
+            checked={settings.guide_choice}
+            onChange={(on) => change({ guide_choice: on })}
+          />
+          {settings.guide_choice && (
+            <Box pl="xl">
+              <MultiSelect
+                size="xs"
+                mt="xs"
+                maw={520}
+                label="Sources to offer"
+                description="Empty is every active source that is not a dummy"
+                placeholder="Every source"
+                data={guideSources}
+                value={String(settings.guide_choice_sources || '')
+                  .split(',')
+                  .filter(Boolean)}
+                onChange={(ids) => change({ guide_choice_sources: ids.join(',') })}
+                clearable
+                searchable
+              />
+              <GuidePreload />
+              <GuideChanges />
+            </Box>
+          )}
+        </Box>
         <Setting
           label="Take problem reports from arrTV"
           description="Someone with a problem on a channel sends a report from arrTV's player settings. It arrives below with what arrTV saw and what the server knew about that channel at that moment: its streams and providers, its readings, how it started, the channel switches and the log. Logins and passwords are taken out."

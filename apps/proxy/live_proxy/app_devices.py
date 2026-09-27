@@ -52,11 +52,15 @@ SETTINGS_KEY = "app-integration"
 # for it right now (app_alternatives, X-Dispatch-Alternatives), so it waits less where there
 # are several; fast_grace / fast_grace_many: faster failover's wait in seconds with one usable
 # alternative, and with two or more (a channel with none keeps the stock grace)
+# guide_choice: whoever watches a channel in arrTV may put it on another guide, from the
+# guides that have something on now (see app_guides); guide_choice_sources: the EPG source
+# ids to offer from, comma separated ("" is every active one that is not a dummy)
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
     "own_stream": False, "fast_failover": False, "alternatives": False,
     "fast_grace": 5, "fast_grace_many": 3,
+    "guide_choice": False, "guide_choice_sources": "",
 }
 # The seconds settings: whole seconds within these bounds
 GRACE_BOUNDS = (1, 60)
@@ -105,6 +109,10 @@ def _as_kind(key, value):
             return max(GRACE_BOUNDS[0], min(GRACE_BOUNDS[1], int(float(value))))
         except (TypeError, ValueError):
             return DEFAULTS[key]
+    if key == "guide_choice_sources":
+        # Ids only: given as a list by the settings page, kept as text like the other rows
+        parts = value if isinstance(value, (list, tuple)) else str(value or "").split(",")
+        return ",".join(str(int(p)) for p in parts if str(p).strip().isdigit())
     text = str(value or "").strip()
     if key == "outside_max_quality":
         return text.upper() if text.upper() in QUALITY_LIMITS else ""
@@ -131,11 +139,25 @@ def load_settings():
 def save_settings(given):
     from core.models import CoreSettings
 
-    values = {**load_settings(), **{k: _as_kind(k, given[k]) for k in DEFAULTS if k in (given or {})}}
+    before = load_settings()
+    values = {**before, **{k: _as_kind(k, given[k]) for k in DEFAULTS if k in (given or {})}}
     CoreSettings.objects.update_or_create(
         key=SETTINGS_KEY, defaults={"name": "App integration", "value": values}
     )
     _HELD.update(at=0.0, value=None)
+    # The guide choice's lists need programmes for guides no channel uses: read them when it
+    # goes on, and stop keeping them when it goes off, so off is stock again after the next
+    # refresh's clean-up
+    if values["guide_choice"] != before["guide_choice"]:
+        try:
+            from . import app_guides
+
+            if values["guide_choice"]:
+                app_guides.start_preload()
+            else:
+                app_guides.forget_kept()
+        except Exception as e:
+            logger.warning(f"arrTV guides: could not start or stop keeping guides: {e}")
     return values
 
 
@@ -516,6 +538,9 @@ def capabilities():
         "fast_failover": bool(settings["devices"] and settings["fast_failover"]),
         # X-Dispatch-Alternatives on each stream response (app_alternatives)
         "alternatives": bool(settings["devices"] and settings["alternatives"]),
+        # "Wrong guide? Choose another" (app_guides); any device, recognised or not
+        "guide_choice": settings["guide_choice"],
+        "guide_choice_url": "/api/core/app-guide/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

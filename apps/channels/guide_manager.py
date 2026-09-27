@@ -303,6 +303,9 @@ def mark_chosen(rows, chosen=None):
         on_now = row.get("instead_of_epg") or None
         row["chosen"] = bool(entry) and (entry.get("epg") or None) == on_now
         row["chosen_at"] = entry.get("at", "") if row["chosen"] else ""
+        # Who chose it, where it was chosen in arrTV (app_guides): anyone may change a guide
+        # there, so the page says who did. A choice made on this page has no "by".
+        row["chosen_by"] = (entry.get("by") or None) if row["chosen"] else None
         # Settled means nothing is put forward for it. The suggestion itself stays on the
         # row: "every channel" is for looking, and being able to see what would have been
         # suggested is the point of looking.
@@ -952,9 +955,13 @@ def asked_to_stop(redis_client):
 # ── Applying ─────────────────────────────────────────────────────────────────
 
 
-def apply(choices):
+def apply(choices, extra=None):
     """
     Put these guides on these channels: {channel id: guide id, or None for no guide}.
+
+    `extra` is {channel id: {...}} added to that channel's "chosen" entry, in the same write:
+    arrTV's guide choice records who made it and the guide it replaced ("by", "was"), and an
+    entry is never, even for a moment, without its author.
 
     Saved one at a time with update_fields, because that is what Dispatcharr's own signal
     watches: it drops the guide cache and reads the new guide's programmes, which is the
@@ -1005,7 +1012,10 @@ def apply(choices):
         if epg_id is not None and epg_id not in guides:
             continue
         name = (guides.get(epg_id) or {}).get("name") or ""
-        settled_channels[str(channel.id)] = {"name": name, "epg": epg_id, "at": settled_now}
+        settled_channels[str(channel.id)] = {
+            "name": name, "epg": epg_id, "at": settled_now,
+            **((extra or {}).get(channel.id) or (extra or {}).get(str(channel.id)) or {}),
+        }
         if channel.epg_data_id == epg_id:
             done_with.append(str(channel.id))
             continue

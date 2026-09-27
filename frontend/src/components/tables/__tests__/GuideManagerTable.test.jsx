@@ -640,6 +640,31 @@ describe('GuideManagerTable', () => {
     expect(screen.getByText('Left alone')).toBeInTheDocument();
   });
 
+  // Anyone watching may change a guide in arrTV, so the page says who did, and where from
+  it('says who chose a guide in arrTV', async () => {
+    const settled = {
+      channel: 4, channel_name: '┃AT┃ ORF 2', number: 2, uuid: 'uuid-four',
+      group: '┃AT┃ AUSTRIA', group_id: 1, why: '', chosen: true, chosen_at: '2026-09-27T17:41:02+00:00',
+      chosen_by: { via: 'arrTV', username: 'alice', device_name: 'Living room SHIELD', ip: '192.168.2.40' },
+      epg: 11, name: 'ORF 2', tvg_id: 'ORF2.at', source: 'xmltv.at', score: 91,
+      tier: 'certain', programmes: 40, now: 'Bundesland heute', in_use: true,
+      instead_of: 'ORF 2', instead_of_epg: 11, instead_of_holds: 40,
+      instead_of_now: 'Bundesland heute', instead_of_source: 'xmltv.at',
+    };
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      suggestions: [settled],
+      chosen: [{ channel: '4', name: 'ORF 2', epg: 11, at: '2026-09-27T17:41:02+00:00', by: settled.chosen_by }],
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    draw();
+    fireEvent.click(await screen.findByRole('textbox', { name: 'Why' }));
+    fireEvent.click(await screen.findByText(/^Left alone/));
+    expect(
+      await screen.findByText(/chosen in arrTV by alice on Living room SHIELD \(192\.168\.2\.40\)/)
+    ).toBeInTheDocument();
+  });
+
   it('settles the guide a channel is already on, and unsettles it again', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');

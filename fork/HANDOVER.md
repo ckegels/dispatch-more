@@ -1968,6 +1968,11 @@ Tests: `FastGraceTests`, `AlternativesTests`.
 
 ## 8. Open / possible next
 
+- **arrTV "Wrong guide? Choose another"** (asked for 2026-09-27, designed, not built): the
+  viewer picks another guide for the channel from the player, from guides that have something
+  on now, recorded with user, device and IP. The whole design is in
+  **`fork/arrTV-guide-choice.md`**.
+
 - Stream Check has not yet completed a full real round since the speed work (v113+); watch the
   pace and the estimate. The learned provider limits (483 per 101 min, 454 per 186 min) are the
   main brake and were learned under the old 407 handling: worth forgetting once to see whether

@@ -695,6 +695,15 @@ const GuideManagerTable = () => {
               >
                 {one.chosen ? 'Left alone' : kind.label}
               </Badge>
+              {/* Chosen in arrTV: anyone watching may change a guide there, so who did */}
+              {one.chosen && one.chosen_by?.via === 'arrTV' && (
+                <Text size="xs" c="dimmed">
+                  chosen in arrTV by {one.chosen_by.username || 'someone'} on{' '}
+                  {one.chosen_by.device_name || one.chosen_by.device || 'an unknown device'}
+                  {one.chosen_by.ip ? ` (${one.chosen_by.ip})` : ''}
+                  {one.chosen_at ? `, ${new Date(one.chosen_at).toLocaleString()}` : ''}
+                </Text>
+              )}
               {/* What the two scores came to, where that is what "better" rests on */}
               {one.why === 'better' && one.instead_of_score != null && (
                 <Text size="xs" c="dimmed">
