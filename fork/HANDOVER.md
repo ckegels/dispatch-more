@@ -44,6 +44,10 @@ The user's setup (matters for almost every decision):
   installed with upstream's `debian_install.sh`, virtualenv at `/opt/dispatcharr/.venv`, UI
   on port 9191). Services: `dispatcharr` (uWSGI, gevent, 4 workers), `dispatcharr-celery`,
   `dispatcharr-celerybeat`, `dispatcharr-daphne`. Server clock is UTC.
+- **arrTV** (the user's own player, §5.11) on a **SHIELD** and a **Chromecast with Google TV
+  HD** (1.4 GB RAM, decodes up to 1080p -- not 4K). Networks as seen by the server: home
+  `192.168.2.0/24`, the Chromecast at `192.168.10.100` (another subnet: counted *away* unless
+  added to Home networks), the VPN as `192.168.65.x`.
 
 ---
 
@@ -171,8 +175,9 @@ venv with the backend requirements, Postgres on **127.0.0.1:55432** (via the `pg
 pip package), and a node venv for the frontend. Recreate the equivalent, then:
 
 ```bash
-POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 DJANGO_SECRET_KEY=x DISPATCHARR_ENV=aio \
-  DISPATCHARR_LOG_LEVEL=WARNING python manage.py test --noinput            # full: ~65 s
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres \
+  POSTGRES_DB=postgres DJANGO_SECRET_KEY=x DISPATCHARR_ENV=aio \
+  DISPATCHARR_LOG_LEVEL=WARNING python manage.py test --noinput            # full: ~110 s
 # one module:  ... manage.py test --keepdb apps.channels.tests.test_stream_check
 cd frontend && npx vitest run      # ~6500 tests
 npx eslint <files>                 # api.js has 14 errors that are stock's own
@@ -186,7 +191,13 @@ npx eslint <files>                 # api.js has 14 errors that are stock's own
 - Probe tests use a real local HTTP server and real ffmpeg-made video (skipped without
   ffmpeg/ffprobe).
 - Frontend tests render real Mantine and the real `CustomTable`; Mantine `Select` needs
-  `Element.prototype.scrollIntoView = vi.fn()` in jsdom.
+  `Element.prototype.scrollIntoView = vi.fn()` in jsdom, and its options are still in their
+  opening transition when read, so `findAllByRole('option', { hidden: true })`.
+- The Postgres user is `postgres`/`postgres` (without it: `role "dispatch" does not exist`).
+- **Test data must have what every real server has**: a stream without an M3U account is
+  custom to stock (`is_custom`), streams only get a `stream_hash` from a playlist, a server
+  always has the locked `custom` account, and a test database has no default stream profile.
+  Each of these hid or faked a result once in v207–v211.
 
 ---
 
@@ -1586,7 +1597,17 @@ here is on the server; the app side is described for its developer in
 **`fork/arrTV-integration.md`** (support check, device id, headers, channel change,
 multiview, leaving a channel, problem reports, testing with curl, checklist). It lives in
 Settings → Streaming → **arrTV** (`/api/core/arrtv/`, `CoreSettings` "app-integration"),
-every switch off: no other app sends any of it, and off is stock.
+every switch off: no other app sends any of it, and off is stock. **What arrTV has built of
+it and what it has not** is the table at the top of that file ("Where arrTV stands"): as of
+v211 the decoding limit, the stutter report, 409 handling and reopening after a frozen swap
+are server-ready and not in the app.
+
+**How "quality" is judged** everywhere below (`channel_manager.quality_of`): a measured
+resolution when there is one -- only recorded when a stream plays through ffmpeg, so on the
+user's Proxy profile almost never -- else the name ("HD" is 720p, "FHD"/"1080i" is 1080); a
+name saying nothing is let through. Providers write "HD" for 1080i channels, so a 720p limit
+lets them through (the user saw exactly that: RTL ZWEI 720p, others 1080p). Stream Check
+already ffprobes every stream and could record the resolution (§8).
 
 **Apps that say who they are** (v197, `app_devices.py`, hand-over for the app:
 `fork/arrTV-integration.md`). Measured on the real server: a SHIELD (arrTV) and a Mac
@@ -1761,6 +1782,15 @@ networking in Docker. Neither crosses the VPN.
    "could not connect to the provider" was shown for streams that had connected and sent video.
 8. **Cloudflare 502s** ("one-zone.cc | 502: Bad gateway") happen now and then mid-run: the
    provider's own server behind Cloudflare, not the channel.
+9. **A Chromecast with Google TV HD cannot play a 4K stream, and a swap across codecs freezes
+   ExoPlayer** (2026-09-27, arrTV arr.36, server v205, from the TV's own log over adb):
+   RTL ZWEI's first stream is 4K; bytes at full rate, nothing ever buffered. arrTV's walk
+   (`change_stream`, the upstream swapped behind the open connection) reached an AVC 1080p
+   stream, which rendered one frame and stalled with data still arriving, "Reconnecting" for
+   minutes. The fix on the server is v208's decoding limit; on the app side,
+   `fork/arrTV-integration.md` §8.6.
+10. **The Debian install's nginx has no `uwsgi_buffering off`** for streams (read from
+    `debian_install.sh`, not yet from the server itself; §8).
 
 ---
 
@@ -1889,6 +1919,24 @@ networking in Docker. Neither crosses the VPN.
   needed, and the other path that does the same job in bulk, or on the retry, or from the
   other tab, quietly does not have it. → when a rule is put in one place, go and look for
   the other places that do the same job, and write the test from the one that was missed.
+- **"Nobody switches on a slow stream" was said without reading stock** (2026-09-27, in a
+  plan, not in code): stock does switch -- when ffmpeg runs slower than real time for
+  `buffering_timeout` -- only never on the Proxy profile. → before saying stock lacks
+  something, find where it would be and read it.
+- **"Already running, so free" was a Redis key read as a connection** (v208, fixed v210): a
+  stream another channel played has `stream_profile:<id>`, and a stream run on its own took
+  that as reserved and opened a second connection nothing counted -- one past the provider's
+  limit, the thing this fork was started to prevent. → a key that says something is reserved
+  is not a connection *this* session holds; ask which session holds it.
+- **The sibling list again** (v194, fixed v211): "From every provider" left the `custom`
+  account out, by name; the list beside it that every row is counted against did not, so every
+  channel read "missing custom". The page test never had a `custom` account -- which every
+  server has -- so it could not see it. → §5.9's lesson, and: test data holds what every real
+  install holds (§4.5).
+- **A hook meant to cost nothing read the settings for every viewer** (v208, fixed v210):
+  `test_get_stream_with_a_viewer_does_the_same_work_as_without` caught it. → in a hook on a
+  stock path, ask "is this arrTV?" (a string check) before anything that touches the database
+  or Redis.
 - **"Check again" looked like it did nothing** (to v114): the page asked once, before the check
   had started; Stop's signal ended a check by hand; a batch still going dropped it. → keep
   looking for five minutes, Stop ends rounds only, wait your turn.
@@ -1926,6 +1974,18 @@ networking in Docker. Neither crosses the VPN.
   live instead of being skipped ahead. Server-side detection of a struggling device (a
   client's position against the buffer head) needs this off first. Check
   `/etc/nginx/sites-enabled/dispatcharr.conf` on 192.168.2.142.
+- **Record measured resolution**: Stream Check's ffprobe already reads each stream's picture;
+  written into `stream_stats` (`resolution`), every quality limit would use the real size
+  instead of the name (§5.11). Offered to the user, not wanted yet ("they work fast").
+- **A stream of its own** has no failover (a stream run by its hash has no alternates: it
+  ends and the device's reconnect gets another) and a stutter on it is answered "none".
+- **Server-side detection of a struggling device** (a client's buffer position against the
+  head, `output/ts/generator.py`) was designed on 2026-09-27 and not built: it needs nginx's
+  buffering off first (the item below), and the user chose the device's own stutter report
+  as the trigger instead.
+- **arrTV's side** of v207–v208 (see `fork/arrTV-integration.md`, "Where arrTV stands"): not
+  built in the app yet; the Chromecast still starts RTL ZWEI on 4K until it sends
+  `X-Dispatch-Max-Video`.
 - Still to do for quality (discussed 2026-09-27): a lighter transcoded variant per device
   (`?output_profile=`) when no other stream has a connection free (v208 opens another
   provider's stream when one does) -- depends on the server's CPU/GPU; arrTV reopening the

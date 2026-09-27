@@ -1,7 +1,7 @@
-# arrTV ↔ Dispatch More: telling the server which device you are
+# arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206, stutter from v207, what it can decode and a stream of its own from v208) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208; latest release v211) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -21,6 +21,37 @@ channel start on one closed the stream on the other.
 
 The app knows which device it is, so it can say so. It can also say which channel it is
 leaving, so the server does not have to guess that either.
+
+## Where arrTV stands (2026-09-27)
+
+What the server offers and what arrTV does with it, as of Dispatch More **v211** and arrTV
+**0.5.9-arr.36** (a test build; the published one is arr.29):
+
+| Server feature | Server since | In arrTV | This document |
+|---|---|---|---|
+| Support check, device id and name | v197 | built | §1–§3 |
+| Channel change (`X-Dispatch-Previous-Channel`) | v197 | built | §4 |
+| Multiview session | v197 | built | §5 |
+| Problem reports | v198 | built | §7 |
+| Quality away from home | v206 | nothing to build (User-Agent or device header) | §8.1 |
+| What the device can decode (`X-Dispatch-Max-Video`) | v208 | **not yet** | §8.2 |
+| A stream of its own (409 on `change_stream`) | v208 | **not yet** (409 handling) | §8.3 |
+| Stutter report (`POST /api/core/app-stall/`) | v207 | **not yet** | §8.4 |
+| Reopen when a swap inside the connection freezes the picture | — (app only) | **not yet** | §8.6 |
+
+The user's server was still on **v205** when the TV report below was taken: install the
+latest release before testing any of §8.
+
+**Why §8.2 and §8.6 matter first** (measured on the user's Chromecast with Google TV HD,
+1.4 GB RAM, Android 14, arrTV arr.36): RTL ZWEI's first stream is 4K. Every tune began on it,
+bytes arrived at full rate and nothing ever became playable (bufferedPosition 0). After 15 s
+arr.36's new `[UNPLAYABLE]` rule walked with `change_stream` (the server swaps the upstream
+behind the open connection); the next stream was unplayable too, the one after it (AVC 1080p,
+E-AC-3 decoded in software) rendered **one frame** and then stalled with data still arriving
+("ingest quiet 0ms") -- "Reconnecting" for over two minutes, nothing retried. Both the
+`[UNPLAYABLE]` rule and the 50 s cold-start `[NO-DATA]` net require `!videoFrameRendered`, so
+that one frame switched every rescue off. With `X-Dispatch-Max-Video: 1080` the server never
+starts that device on the 4K stream (§8.2); §8.6 covers the freeze itself.
 
 ## 1. Detect support
 
@@ -293,10 +324,15 @@ phase; this device's channel switches and Force Close; and the server's log line
 channel over the last 30 minutes. The admin reads it all on Settings → arrTV → Problem reports,
 and copies it whole to pass on.
 
-### Quality away from home (server v206)
+## 8. Picture quality
+
+Four server features about getting each device a stream it can play, and two things the app
+should know. §8.2, §8.4 and §8.6 are what arrTV still has to build.
+
+### 8.1 Quality away from home (server v206)
 
 Nothing to build for this. The server admin sets **home networks** and **"Away from home, at
-most HD"** (or FHD from v209, or SD). An arrTV request from outside the home networks (the VPN, a phone
+most"** FHD (1080p, from v209), HD (720p) or SD; "No limit" is 4K. An arrTV request from outside the home networks (the VPN, a phone
 connection) then starts a channel on a stream within that quality, where the channel has
 one. `outside_max_quality` in the capabilities says it is on ("" is off), in case the app
 wants to show it.
@@ -306,7 +342,7 @@ header (§2), **or** keep the User-Agent as it is now, `AerioTV/<version>-arr. (
 A User-Agent without `-arr` and without the device header is taken for another app and gets no
 limit.
 
-### What the device can decode: `X-Dispatch-Max-Video` (server v208)
+### 8.2 What the device can decode: `X-Dispatch-Max-Video` (server v208)
 
 Server switch: `devices` (read with the other device headers). Send, with the device headers,
 the tallest picture this device can decode, as a height: `1080` on a Chromecast with Google TV
@@ -322,9 +358,9 @@ What the server does with it:
 - The channel's **failover** keeps to it too: it does not fail over onto the 4K stream.
 - A channel **someone else is already watching** in a quality the device cannot use: with the
   server's `own_stream` switch on, the device gets another stream of that channel to itself,
-  from a provider with a connection free (see below). Off, it joins what is playing.
+  from a provider with a connection free (§8.3). Off, it joins what is playing.
 
-### A stream of its own (server v208)
+### 8.3 A stream of its own (server v208)
 
 Nothing to build: the request is the usual `/proxy/ts/stream/<channel uuid>` (or `/live/…`) and
 the server decides. With `own_stream` on, an arrTV device whose limit (decoding, away from
@@ -335,8 +371,17 @@ another of the channel's streams, run on its own. What the app should know:
 - `POST /proxy/ts/change_stream/<uuid>` (LiveStreamFailover's walk) is refused with **409**
   while the device is on a stream of its own: changing the channel would change it for the
   others on it. Treat 409 like any refused step; the stream it is on is within what it can play.
+- A stutter report (§8.4) while on a stream of its own is answered
+  `{"action": "none", "reason": "This device plays this channel on a stream of its own."}`:
+  the server does not yet move a device's own stream. If it stutters there, reopening the
+  connection (§8.6) gets the device a stream of its own again, chosen afresh.
+- When the device's own stream ends (the provider drops it), there is no server-side
+  failover for it: the connection closes, and arrTV's normal reconnect asks for the channel
+  again and is given a stream afresh.
+- It opens one more provider connection, and only where one is free: on a single-connection
+  account already in use the device joins the channel as before, 4K and all.
 
-### Stutter: tell the server the moment the picture stops (server v207)
+### 8.4 Stutter: tell the server the moment the picture stops (server v207)
 
 Server switch: `stall_switch` (needs `devices`; capabilities say `"stall_switch": true` and
 `"stall_url": "/api/core/app-stall/"`). Only the device knows it is stuttering: the server sees
@@ -374,7 +419,8 @@ server's log and Channel health so a person can see why it switched: `stalls` si
 
 **The answer** (200): `{"action": "switched", "stream": "┃AT┃ ORF 1 HD"}` or
 `{"action": "none", "reason": "…"}`. Nothing to do with either: after a switch the picture
-continues on the same connection. `403` while the switch is off: stop sending for that server
+continues on the same connection -- except when the new stream's codec differs and the
+picture freezes, which is §8.6. `403` while the switch is off: stop sending for that server
 until the next capabilities call.
 
 What the server does, so the app need not:
@@ -389,8 +435,50 @@ What the server does, so the app need not:
   on it, or every other viewer is an arrTV device that stuttered in the last 30 s.
 - `LiveStreamFailover` stays as it is: it handles silence (no bytes); this handles a picture
   that plays badly.
+- Where the `onStall` hook fires today (arr.36) is the right place: it already only counts
+  a rebuffer after the first frame, and it has every number the report carries.
 
-## 8. Behaviour matrix
+### 8.5 How the server judges a stream's quality (nothing to build)
+
+So the app knows why a limit sometimes lets a 1080p stream through. The server reads a
+stream's **measured resolution** where one was recorded -- only when a stream played through
+ffmpeg (a stream profile other than Proxy), so on the user's server almost never -- and
+otherwise its **name**: `4K`/`UHD`/`2160p` is 4K, `FHD`/`1080p`/`1080i` is FHD, `HD`/`720p`
+is HD, `SD`/`576p`/`480p` is SD. A name without any of those is *unknown* and is let
+through, so a good stream is never buried for saying nothing. Providers write "HD" for
+anything that is not SD, and German private channels (RTL, ProSieben, SAT.1) broadcast
+1080i, so an "HD" stream is often 1080 in fact: with "at most HD" it passes. Observed by the
+user: RTL ZWEI came out 720p, other channels still 1080p (and played fine).
+
+The limits also only apply to a device the server counts as **away from home**: an address
+outside the admin's home networks. The Chromecast was at `192.168.10.100`; with home networks
+`192.168.2.0/24` it counts as away although it is in the house.
+
+### 8.6 A stream swap inside the open connection can freeze the picture (arrTV to build)
+
+Dispatcharr changes a running channel's stream *behind the same connection*: stock failover,
+`POST /proxy/ts/change_stream/<uuid>` (LiveStreamFailover), and the stutter switch (§8.4) all
+do it. The player keeps its connection and sees one MPEG-TS stream turn into another. When
+the codec changes (HEVC 4K → AVC 1080p on the Chromecast), ExoPlayer rendered one frame and
+then waited for good while data kept arriving. Not yet proven which part does it (PIDs,
+timestamps, the decoder); what is proven is that nothing in arrTV recovered.
+
+What to build:
+- **After a server-side stream change** (a `change_stream` that answered 200, or a stutter
+  report answered `"switched"`), watch the picture: if no new frame is rendered for a few
+  seconds while bytes keep arriving, **re-prime the player** -- release it and open the same
+  URL again. Open the new connection *before* dropping the old one, or the channel has no
+  viewer for a moment: the server's shutdown delay is 0, the channel stops, and the new
+  request starts it from its first stream. With §8.2 sent, that first stream is one the
+  device can decode, so reopening cannot land on the 4K stream again.
+- **A stall after the first frame must reach a rescue.** Today `[UNPLAYABLE]` and the
+  `[NO-DATA]` net both need `!videoFrameRendered`; a "Reconnecting" that lasts minutes with
+  bytes arriving should end in the same walk or reopen.
+- The server reports what happened on its side in Channel health (Settings → Diagnostics →
+  Channel health → What happened) and in a problem report (§7), which carries the channel's
+  switches: send one when this happens.
+
+## 9. Behaviour matrix
 
 | Server | Capabilities | What arrTV does | Result |
 |---|---|---|---|
@@ -400,8 +488,10 @@ What the server does, so the app need not:
 | Dispatch More, `switch_hints` on | 200, `switch_hints: true` | also sends previous on zaps | old channel closed at once, faster switching |
 | Dispatch More, `reports` on | 200, `reports: true` | offers "Send a report" in the player settings | report on Settings → arrTV, with the server's view |
 | Dispatch More, `stall_switch` on | 200, `stall_switch: true` | posts each rebuffer after the first frame | the channel moves to its next stream at once |
+| Dispatch More, `devices` on, `X-Dispatch-Max-Video` sent | 200 | sends the header with the device headers | channels it starts, and their failover, keep to what it decodes |
+| Dispatch More, `own_stream` on | 200, `own_stream: true` | nothing new; treats 409 on `change_stream` as a refused step | a device that cannot use what a channel plays for others gets another stream of it |
 
-## 9. Testing without the app
+## 10. Testing without the app
 
 With the first two switches on in Settings → arrTV, from two terminals with the same login:
 
@@ -439,7 +529,29 @@ curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   "$SERVER/api/core/app-reports/"
 ```
 
-## 10. Checklist
+What a device can decode (§8.2), with `devices` on: start a channel whose first stream is 4K
+as a device that says 1080, and the server log names the stream it chose instead:
+
+```bash
+curl -s -o /dev/null -H "X-API-Key: $KEY" -H "User-Agent: AerioTV/test-arr." \
+  -H "X-Dispatch-Device: test-device-0001" -H "X-Dispatch-Max-Video: 1080" \
+  "$SERVER/proxy/ts/stream/$CHANNEL_4K" &
+```
+
+A stutter (§8.4), with `stall_switch` on, while that device plays the channel and more than
+10 s after it started:
+
+```bash
+curl -s -X POST -H "X-API-Key: $KEY" -H "X-Dispatch-Device: test-device-0001" \
+  -H "Content-Type: application/json" -d "{\"channel_uuid\": \"$CHANNEL_4K\", \"stalls\": 1}" \
+  "$SERVER/api/core/app-stall/"
+# {"action": "switched", "stream": "..."}  or  {"action": "none", "reason": "..."}
+```
+
+Settings → Diagnostics → Channel health → What happened then says "switched stream (arrTV
+stuttered)", or "own stream for a device" for §8.3.
+
+## 11. Checklist
 
 - [ ] Capabilities call on playlist add/refresh and app start; cached per playlist.
 - [ ] Device UUID made once, stored privately, excluded from Drive sync and Android backup.
@@ -457,6 +569,11 @@ curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
       `MediaCodecList`, worked out once.
 - [ ] Stutter: on each live rebuffer after the first frame, `POST /api/core/app-stall/` with the
       channel and the device header, only when `stall_switch: true`; nothing to do with the answer.
+- [ ] `change_stream` answered 409 (the device is on a stream of its own): a refused step, not an
+      error to show.
+- [ ] After a server-side stream change, a picture frozen for a few seconds with bytes arriving:
+      re-prime, the new connection opened before the old one is dropped.
+- [ ] A stall after the first frame reaches a rescue (today only a stall before it does).
 - [ ] Nothing changes against a stock server (capabilities 404).
 
 Questions about the server side: the implementation is `apps/proxy/live_proxy/app_devices.py`,
