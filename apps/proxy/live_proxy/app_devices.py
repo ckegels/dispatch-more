@@ -50,8 +50,8 @@ SETTINGS_KEY = "app-integration"
 # (60 s) and three (see fast_start_grace)
 # alternatives: tell arrTV with each stream how many other streams the channel could switch to
 # for it right now (app_alternatives, X-Dispatch-Alternatives), so it waits less where there
-# are several; fast_grace / fast_grace_many: faster failover's wait in seconds, and the wait
-# when three or more alternatives are usable (a channel with none keeps the stock grace)
+# are several; fast_grace / fast_grace_many: faster failover's wait in seconds with one usable
+# alternative, and with two or more (a channel with none keeps the stock grace)
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
@@ -68,8 +68,9 @@ FAST_START_KEY = "live:app_devices:fast_grace:{channel}"
 FAST_START_TTL = 120
 # The default of fast_grace, for the tests and the documentation
 FAST_START_GRACE = 5
-# From this many usable alternatives on, fast_grace_many applies
-MANY_ALTERNATIVES = 3
+# From this many usable alternatives on, fast_grace_many applies (two: the user's channels
+# have three streams at most, so at most two others)
+MANY_ALTERNATIVES = 2
 QUALITY_LIMITS = ("FHD", "HD", "SD")
 
 # Read on every stream request, so kept for a few seconds rather than asked of the database
@@ -170,7 +171,7 @@ def mark_fast_start(redis_client, request, channel_id, alternatives=None):
     An arrTV device (declared) starts this channel with "faster failover" on: mark the
     channel for FAST_START_TTL seconds, so while its stream has sent nothing yet the stream
     manager moves on after the grace written here (fast_start_grace): fast_grace_many when
-    [alternatives] (app_alternatives.count) says three or more streams are usable,
+    [alternatives] (app_alternatives.count) says two or more streams are usable,
     fast_grace otherwise. IPTV answers within a second or two; stock's 60 s start grace is
     sized for sources that need to lock first, and a dead stream cost a viewer over a minute.
     A channel with no usable alternative is not hurried: leaving its stream could only end on

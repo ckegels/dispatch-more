@@ -195,15 +195,15 @@ const ArrTvSettings = () => {
             <Group mt="xs" gap="md" align="flex-start">
               <Seconds
                 label="Wait"
-                description="With one or two other streams to go to"
+                description="With one other stream to go to"
                 value={settings.fast_grace}
                 onSave={(s) => change({ fast_grace: s })}
               />
               <Seconds
-                label="Wait with three or more"
+                label="Wait with two or more"
                 description={
                   settings.alternatives
-                    ? 'When at least three other streams are usable now'
+                    ? 'When at least two other streams are usable now'
                     : 'Needs "Tell arrTV how many other streams a channel has"'
                 }
                 value={settings.fast_grace_many}

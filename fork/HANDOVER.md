@@ -1766,8 +1766,8 @@ app's own waits were shortened alongside (arr.40, each with a switch in the app)
 depends on where there is to go. `count()` applies `_pick`'s rules (fallback never, active
 account, the device's quality limit, not playing elsewhere, the channel's own account or one
 with a connection free) and the view sends it as `X-Dispatch-Alternatives`. Faster failover
-stores its grace per channel from it (`fast_grace_many` 3 s with three or more, `fast_grace`
-5 s, both editable, 1-60 s; the Redis key moved to `fast_grace:` so v212's `"1"` marks are not
+stores its grace per channel from it (`fast_grace_many` 3 s with two or more, `fast_grace`
+5 s with one, both editable, 1-60 s; the Redis key moved to `fast_grace:` so v212's `"1"` marks are not
 read as one second); none = no mark. arrTV scales its picture wait by it (contract §8.8).
 Tests: `FastGraceTests`, `AlternativesTests`.
 

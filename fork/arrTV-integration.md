@@ -41,7 +41,7 @@ default); switched off, that part does nothing:
 | Stutter report (`POST /api/core/app-stall/`) | v207 | built (arr.37), switch "Tell the server when the picture stutters" | §8.4 |
 | Reopen when a swap inside the connection freezes the picture | — (app only) | built (arr.40), switch "Reopen a frozen stream" | §8.6 |
 | Faster failover when arrTV starts a channel | v212 | nothing to build (device header); the app's own waits are shorter too, switch "Faster switch to the next stream" | §8.7 |
-| How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 | built (arr.42): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
+| How many other streams a channel has (`X-Dispatch-Alternatives`) | v214 | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 
 The user's server was still on **v205** when the TV report below was taken: install the
 latest release before testing any of §8.
@@ -504,7 +504,7 @@ moves wait at least 12 s so the server moves first: both moving at once would sk
 The server's 5 s already includes connecting: a stream counts as connected when its reader
 thread starts, before the provider answers.
 
-### 8.8 How many other streams a channel could switch to: `X-Dispatch-Alternatives` (server v213)
+### 8.8 How many other streams a channel could switch to: `X-Dispatch-Alternatives` (server v213, two tiers from v214)
 
 Server switch: `alternatives` (needs `devices`; capabilities say `"alternatives": true`). Each
 stream response to a declared arrTV device carries
@@ -521,12 +521,12 @@ own, `app_own_streams._pick`). A channel not running yet counts one less (one of
 it starts). No header: switched off, not a declared device, or a stream of its own.
 
 What the server does with it itself: faster failover's wait is `fast_grace_many` (default 3 s)
-with three or more, `fast_grace` (default 5 s) otherwise, both editable under the switch; a
+with two or more, `fast_grace` (default 5 s) with one, both editable under the switch; a
 channel with **none** is not hurried (leaving its stream could only end on the fallback).
 
-What arrTV does (arr.42): the picture wait ("Leave a stream that is slow to start") is the
-channel's usual start time × 1.5 / 2 / 2.5 for 3+ / 2 / 1 others, at least 3 / 4 / 5 s, at
-most 10 s -- all editable in the app (Settings → General → Wait for a picture) -- and no walk
+What arrTV does (arr.43): the picture wait ("Leave a stream that is slow to start") is the
+channel's usual start time × 1.5 with 2+ others and × 2 with 1, at least 3 s / 5 s, at most
+10 s (two tiers: the user's channels have three streams at most) -- all editable in the app (Settings → General → Wait for a picture) -- and no walk
 at all with 0. The count is taken less the streams the walk already left. A stream that sends
 nothing is left to the server when its faster failover is on; the app's deadline takes the
 ones whose data arrives without a picture, so the two never move at once.

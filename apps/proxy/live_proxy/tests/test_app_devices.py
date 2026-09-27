@@ -410,9 +410,12 @@ class FastGraceTests(TestCase):
 
     def test_several_alternatives_wait_less_one_waits_the_normal_grace(self):
         app_devices.mark_fast_start(self.redis, self.arrtv, "many", alternatives=4)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "two", alternatives=2)
         app_devices.mark_fast_start(self.redis, self.arrtv, "one", alternatives=1)
         app_devices.mark_fast_start(self.redis, self.arrtv, "unknown", alternatives=None)
         self.assertEqual(app_devices.fast_start_grace(self.redis, "many"), 2)
+        # Two others already count as several: a channel here has three streams at most
+        self.assertEqual(app_devices.fast_start_grace(self.redis, "two"), 2)
         self.assertEqual(app_devices.fast_start_grace(self.redis, "one"), 7)
         self.assertEqual(app_devices.fast_start_grace(self.redis, "unknown"), 7)
 
