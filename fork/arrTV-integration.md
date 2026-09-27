@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: telling the server which device you are
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206, stutter from v207) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -43,6 +43,8 @@ send none of the headers below. On Dispatch More:
   "reports": false,
   "report_url": "/api/core/app-reports/",
   "outside_max_quality": "HD",
+  "stall_switch": false,
+  "stall_url": "/api/core/app-stall/",
   "headers": {
     "device": "X-Dispatch-Device",
     "device_name": "X-Dispatch-Device-Name",
@@ -301,6 +303,60 @@ header (§2), **or** keep the User-Agent as it is now, `AerioTV/<version>-arr. (
 A User-Agent without `-arr` and without the device header is taken for another app and gets no
 limit.
 
+### Stutter: tell the server the moment the picture stops (server v207)
+
+Server switch: `stall_switch` (needs `devices`; capabilities say `"stall_switch": true` and
+`"stall_url": "/api/core/app-stall/"`). Only the device knows it is stuttering: the server sees
+what the provider sends, not how fast the device receives it. When arrTV says so, the server
+moves the channel to its next stream **at once, in place** (the same swap a failover does, so
+the player keeps its connection and does nothing).
+
+**When to send:** on every rebuffer of a live stream **after its first frame**, which is
+exactly `PlaybackTrace.onBuffering` / the `onStall` hook. Not before the first frame (that is
+the start), not for catch-up/VOD, not when the connection itself failed (that is the existing
+retry ladder). Send it straight away; do not wait to see whether it recovers. Fire and forget,
+off the main thread, one request per stall.
+
+```
+POST /api/core/app-stall/
+Authorization: Bearer <access token>          (the playlist's login; any user level)
+X-Dispatch-Device: <device id>                (required: the server matches it to the stream)
+Content-Type: application/json
+```
+
+```json
+{
+  "channel_uuid": "0f1e2d3c-...",
+  "stalls": 3,
+  "feed_media_ratio": 0.72,
+  "worst_gap_ms": 4100,
+  "bandwidth_kbps": 3800,
+  "dropped_frames": 0
+}
+```
+
+Either `channel_uuid` or `channel_id`, as in §4. The rest is optional and only written into the
+server's log and Channel health so a person can see why it switched: `stalls` since the tune,
+`feedMediaRatio()`, `worstGapMs()`, `bitrateEstimateBps / 1000`, `droppedTotal`.
+
+**The answer** (200): `{"action": "switched", "stream": "┃AT┃ ORF 1 HD"}` or
+`{"action": "none", "reason": "…"}`. Nothing to do with either: after a switch the picture
+continues on the same connection. `403` while the switch is off: stop sending for that server
+until the next capabilities call.
+
+What the server does, so the app need not:
+- Same quality or lower, never better, never the "Could Not Dispatch" fallback, in the
+  channel's own order. No other stream: nothing.
+- The first 10 s after a start or a switch are ignored: the swap itself makes the player
+  wait, and that is not stutter. So a stall right after a switch is expected and harmless.
+- A stream left for stuttering is not gone back to for 10 minutes.
+- Stuttering again goes down in quality, and **that device starts every channel within
+  that quality for 24 hours** (learned at home and away apart). An admin can forget it.
+- Never on a channel someone else watches without trouble: only when this device is alone
+  on it, or every other viewer is an arrTV device that stuttered in the last 30 s.
+- `LiveStreamFailover` stays as it is: it handles silence (no bytes); this handles a picture
+  that plays badly.
+
 ## 8. Behaviour matrix
 
 | Server | Capabilities | What arrTV does | Result |
@@ -310,6 +366,7 @@ limit.
 | Dispatch More, `devices` on | 200, `devices: true` | sends headers | each device is its own viewer, Multiview safe, names in Diagnostics |
 | Dispatch More, `switch_hints` on | 200, `switch_hints: true` | also sends previous on zaps | old channel closed at once, faster switching |
 | Dispatch More, `reports` on | 200, `reports: true` | offers "Send a report" in the player settings | report on Settings → arrTV, with the server's view |
+| Dispatch More, `stall_switch` on | 200, `stall_switch: true` | posts each rebuffer after the first frame | the channel moves to its next stream at once |
 
 ## 9. Testing without the app
 
@@ -363,9 +420,11 @@ curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
 - [ ] Connection closed when playback is left.
 - [ ] "Send a report" as the first entry of the hold-OK options, only when `reports: true`;
       the channel, the player's state and error, and the tail of the player log.
+- [ ] Stutter: on each live rebuffer after the first frame, `POST /api/core/app-stall/` with the
+      channel and the device header, only when `stall_switch: true`; nothing to do with the answer.
 - [ ] Nothing changes against a stock server (capabilities 404).
 
 Questions about the server side: the implementation is `apps/proxy/live_proxy/app_devices.py`,
-`apps/proxy/live_proxy/app_reports.py`
+`apps/proxy/live_proxy/app_reports.py`, `apps/proxy/live_proxy/app_stalls.py`
 and `leave_previous_channel` / `viewer_from_request` in `apps/proxy/live_proxy/probation.py`
 of https://github.com/ckegels/dispatch-more.

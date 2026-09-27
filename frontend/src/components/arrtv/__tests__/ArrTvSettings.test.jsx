@@ -13,6 +13,8 @@ vi.mock('../../../api', () => ({
     getAppReports: vi.fn(),
     getAppReport: vi.fn(),
     deleteAppReport: vi.fn(),
+    getArrTvHeld: vi.fn(),
+    forgetArrTvHeld: vi.fn(),
   },
 }));
 
@@ -37,13 +39,43 @@ describe('ArrTvSettings', () => {
     const [devices, hints] = screen.getAllByRole('switch');
     expect(devices).not.toBeChecked();
     expect(hints).toBeDisabled();
-    expect(screen.getByText(/Needs "Recognise each arrTV device"/)).toBeInTheDocument();
+    // Both switches under it say what they need
+    expect(screen.getAllByText(/Needs "Recognise each arrTV device"/)).toHaveLength(2);
 
     fireEvent.click(devices);
     await waitFor(() =>
       expect(API.saveArrTvSettings).toHaveBeenCalledWith({ devices: true, switch_hints: false, reports: false })
     );
     await waitFor(() => expect(hints).not.toBeDisabled());
+  });
+
+  it('changes stream on stutter only with devices, and lets a held device go', async () => {
+    API.getArrTvSettings.mockResolvedValue({
+      devices: true, switch_hints: false, reports: false, stall_switch: true,
+    });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.getArrTvHeld.mockResolvedValue({
+      held: [{ device: 'app|1|shield-0001', name: 'admin · Living room SHIELD', where: 'away', quality: 'HD', until: null }],
+    });
+    API.forgetArrTvHeld.mockResolvedValue({ held: [] });
+    draw();
+
+    const stutter = await screen.findByRole('switch', { name: /Change stream when arrTV stutters/ });
+    expect(stutter).toBeChecked();
+    expect(stutter).not.toBeDisabled();
+    expect(await screen.findByText('admin · Living room SHIELD: starts within HD away from home')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
+    await waitFor(() => expect(API.forgetArrTvHeld).toHaveBeenCalledWith('app|1|shield-0001', 'away'));
+    await waitFor(() => expect(screen.queryByText(/starts within HD/)).not.toBeInTheDocument());
+  });
+
+  it('asks nothing about held devices while the stutter switch is off', async () => {
+    API.getArrTvSettings.mockResolvedValue({ devices: false, switch_hints: false, reports: false, stall_switch: false });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    draw();
+    const stutter = await screen.findByRole('switch', { name: /Change stream when arrTV stutters/ });
+    expect(stutter).toBeDisabled();
+    expect(API.getArrTvHeld).not.toHaveBeenCalled();
   });
 
   it('saves the home networks when the field is left, and says when one is not a network', async () => {

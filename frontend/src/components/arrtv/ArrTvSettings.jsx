@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   Group,
   Loader,
   Select,
@@ -29,6 +30,47 @@ const Setting = ({ label, description, checked, disabled, onChange }) => (
     onChange={(e) => onChange(e.currentTarget.checked)}
   />
 );
+
+const WHERE = { home: 'at home', away: 'away from home', any: '' };
+
+// The devices that stuttered their way down to a lower quality, each startable at its best
+// again: a device held to HD because of one bad evening should not stay there for a day
+const HeldDevices = () => {
+  const [held, setHeld] = useState(null);
+
+  useEffect(() => {
+    API.getArrTvHeld()
+      .then((given) => setHeld(given?.held || []))
+      .catch(() => setHeld([]));
+  }, []);
+
+  const forget = async (device, where) => {
+    try {
+      const given = await API.forgetArrTvHeld(device, where);
+      setHeld(given?.held || []);
+    } catch {
+      // Left as it is: the list still says what is held
+    }
+  };
+
+  if (!held?.length) return null;
+  return (
+    <Stack gap={4} mt="xs">
+      {held.map((h) => (
+        <Group key={`${h.device}-${h.where}`} gap="xs" wrap="nowrap">
+          <Text size="xs">
+            {h.name}: starts within {h.quality}
+            {WHERE[h.where] ? ` ${WHERE[h.where]}` : ''}
+            {h.until ? `, until ${new Date(h.until * 1000).toLocaleString()}` : ''}
+          </Text>
+          <Button size="compact-xs" variant="subtle" onClick={() => forget(h.device, h.where)}>
+            Forget
+          </Button>
+        </Group>
+      ))}
+    </Stack>
+  );
+};
 
 const ArrTvSettings = () => {
   const [settings, setSettings] = useState(null);
@@ -97,6 +139,20 @@ const ArrTvSettings = () => {
             disabled={!settings.devices}
             onChange={(on) => change({ switch_hints: on })}
           />
+        </Box>
+        <Box pl="xl">
+          <Setting
+            label="Change stream when arrTV stutters"
+            description={
+              settings.devices
+                ? "arrTV says the moment its picture stops to wait, and the channel moves to its next stream at once, the way it does when a stream fails: never to a better one, never to the fallback, and nothing when there is no other. Stuttering again goes down in quality, and that device starts channels within it for a day (at home and away apart). Never a channel someone else is watching without trouble. Nothing counts against a stream."
+                : 'Needs "Recognise each arrTV device": only a device that said who it is can say it is the one stuttering.'
+            }
+            checked={settings.stall_switch}
+            disabled={!settings.devices}
+            onChange={(on) => change({ stall_switch: on })}
+          />
+          {settings.devices && settings.stall_switch && <HeldDevices />}
         </Box>
         <Box>
           <Text size="sm" fw={500}>

@@ -574,6 +574,47 @@ def arrtv_settings(request):
     return JsonResponse(app_devices.load_settings())
 
 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def app_stall(request):
+    """
+    arrTV's picture stuttered on a channel (apps.proxy.live_proxy.app_stalls): the channel
+    moves to its next stream when that is right, and the answer says what was done. Any
+    logged-in user, since a TV app is usually not an admin; refused while switched off.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_stalls, probation
+    from core.utils import RedisClient
+    from dispatcharr.utils import get_client_ip
+
+    if not app_stalls.enabled():
+        return JsonResponse({"error": "This server does not act on stutter from apps"}, status=403)
+    redis_client = RedisClient.get_client()
+    viewer = probation.viewer_from_request(request, request.user, get_client_ip(request), redis_client)
+    return JsonResponse(app_stalls.report(redis_client, viewer, request.data))
+
+
+@api_view(["GET", "DELETE"])
+@permission_classes([IsAdmin])
+def arrtv_held(request):
+    """
+    The arrTV devices held to a lower quality after stuttering (app_stalls), and letting one
+    go: DELETE with ?device= (and ?where=), or none for every device.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_stalls
+    from core.utils import RedisClient
+
+    redis_client = RedisClient.get_client()
+    if request.method == "DELETE":
+        app_stalls.forget_held(
+            redis_client, request.GET.get("device") or None, request.GET.get("where") or None
+        )
+    return JsonResponse({"held": app_stalls.held_devices(redis_client)})
+
+
 @api_view(["GET", "POST", "DELETE"])
 @permission_classes([IsAuthenticated])
 def app_reports(request):

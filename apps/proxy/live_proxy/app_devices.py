@@ -19,6 +19,9 @@ changes nothing):
   new channel, instead of the old one lingering until the player's connection times out or
   Force Close works out that it was left.
 
+- **stall_switch** (needs devices): arrTV says when its picture stutters, and the channel moves
+  to its next stream at once (app_stalls).
+
 Every header also works as a query parameter (`dm_device`, `dm_device_name`, `dm_multiview`,
 `dm_previous`), for what plays a link without letting the app set headers (a Cast receiver).
 
@@ -35,9 +38,10 @@ SETTINGS_KEY = "app-integration"
 # reports: an app may send error reports (see app_reports)
 # home_networks / outside_max_quality: an arrTV device outside the home networks is given
 # a stream no better than this ("HD", "SD"; "" is no limit) -- see ordered_for
+# stall_switch: a channel arrTV stutters on moves to its next stream (see app_stalls)
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
-    "home_networks": "", "outside_max_quality": "",
+    "home_networks": "", "outside_max_quality": "", "stall_switch": False,
 }
 QUALITY_LIMITS = ("HD", "SD")
 
@@ -234,13 +238,30 @@ def quality_limit_for(viewer):
     The best quality this viewer should be given ("HD", "SD"), or "" for none: an arrTV
     device whose address is outside the home networks, when a limit is set. Nothing is
     limited while the home networks are empty -- without them everything would be outside.
+    And an arrTV device that stuttered its way down to a quality where it is now (see
+    app_stalls), whichever of the two is lower.
     """
     settings = load_settings()
-    limit = settings.get("outside_max_quality") or ""
-    if not limit or not is_arrtv(viewer):
+    if not is_arrtv(viewer):
         return ""
+    limit = settings.get("outside_max_quality") or ""
     at_home = _at_home(getattr(viewer, "ip", ""), settings.get("home_networks"))
-    return limit if at_home is False else ""
+    limit = limit if limit and at_home is False else ""
+    # What this device turned out to manage where it is now (app_stalls), when that is less
+    if settings.get("stall_switch") and settings.get("devices") and is_declared(
+        getattr(viewer, "server_device", None)
+    ):
+        try:
+            from core.utils import RedisClient
+
+            from .app_stalls import held_quality
+
+            held = held_quality(RedisClient.get_client(), viewer)
+        except Exception:
+            held = ""
+        if held and (not limit or QUALITY_LIMITS.index(held) > QUALITY_LIMITS.index(limit)):
+            limit = held
+    return limit
 
 
 def ordered_for(viewer, streams):
@@ -292,6 +313,9 @@ def capabilities():
         "reports": settings["reports"],
         "outside_max_quality": settings["outside_max_quality"],
         "report_url": "/api/core/app-reports/",
+        # A stutter is only acted on for a device the server recognises
+        "stall_switch": bool(settings["devices"] and settings["stall_switch"]),
+        "stall_url": "/api/core/app-stall/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

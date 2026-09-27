@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v177** (2026-09-23). The commit messages on the branch
+Written 2026-09-19, kept current to **release v207** (2026-09-27). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1568,7 +1568,7 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
-### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
+### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
 
 arrTV is the user's own Android / Google TV player, a fork of AerioTV
 (https://github.com/jonzey231/AerioTV-Android) built to work with this server. Everything
@@ -1630,6 +1630,25 @@ is nobody's choice. **Limit:** a channel is one upstream for everyone on it; joi
 channel someone at home watches in FHD is joining that stream. Only who *starts* it chooses.
 Empty home networks limit nothing (everything would be "outside"). Home networks are checked
 when saved (`parse_lan_subnets`, 400 on anything that is not a local network).
+
+**A channel arrTV stutters on changes stream at once** (v207, `app_stalls.py`, switch
+`stall_switch`, needs `devices`; contract in `fork/arrTV-integration.md`). Only the device
+knows its picture stops: the server sees the provider's side, and on the user's Debian
+install not even how fast a device takes the stream (nginx buffers it, §8). arrTV posts every
+rebuffer after the first frame (`POST /api/core/app-stall/`) and the channel moves in place
+(`ChannelService.change_stream_url`, as a failover) to the next stream in its order that is
+**no better** than the current one, never the fallback, never one left for stutter in the
+last 10 minutes (`LEFT_KEY`); nothing to move to, nothing done. The user's rule, on purpose:
+**no waiting window.** The "measure twice" of §5.3 and §7 is about judging a stream; this is
+a viewer already watching a bad picture, and nothing here counts against a stream (Stream
+Check is not told). What stays: the first `SETTLE_SECONDS` (10) after a start or any switch
+are ignored -- the swap makes the player wait, and counting that would walk the channel
+through every stream. A **second** stutter (a stream was already left) takes a lower quality
+first and remembers it for the device, at home and away apart (`HELD_KEY`, 24 h;
+`quality_limit_for` applies it at the next start; Settings → arrTV lists and forgets them).
+Never on a channel somebody else watches fine: only when the device is alone on it or every
+other viewer is an arrTV device that stuttered in the last 30 s. Recorded in Channel health's
+What happened, with the app's numbers.
 
 **Reports are not settings** (v205). Reports are `CoreSettings` rows (`app-report-<id>`
 since v204, one `app-reports` row before), and stock's `CoreSettingsViewSet` lists and
@@ -1834,6 +1853,21 @@ networking in Docker. Neither crosses the VPN.
 - A device identity that always counts the app (not only on LAN subnets), as the fallback for
   players that do not declare themselves: discussed with the TV/Mac-over-VPN case, not built.
 - `docs/channel-switch-overlap.md` does not mention arrTV's declared devices yet.
+- **nginx buffers live streams on the Debian install** (found 2026-09-27, not yet checked on
+  the server): `debian_install.sh`'s site has no `uwsgi_buffering off` and the live response
+  sends no `X-Accel-Buffering: no` (Docker's config does turn it off for `/proxy/`). nginx then
+  takes the stream as fast as it comes and holds what a slow device cannot take yet (up to
+  1 GB on disk), so Dispatcharr never sees a device fall behind and the device drifts behind
+  live instead of being skipped ahead. Server-side detection of a struggling device (a
+  client's position against the buffer head) needs this off first. Check
+  `/etc/nginx/sites-enabled/dispatcharr.conf` on 192.168.2.142.
+- **Failover does not keep an arrTV device's quality order**: v206's `ordered_for` is applied
+  when a channel starts, but stock failover (`url_utils.get_alternate_streams`) walks the
+  channel's plain order, so a device away from home can fail over onto FHD.
+- Still to do for quality (discussed 2026-09-27): a lighter transcoded variant per device
+  (`?output_profile=`) for a device stuttering on a channel others watch fine -- depends on the
+  server's CPU/GPU; and switching on a starved upstream for the plain Proxy profile (stock
+  only does it when ffmpeg runs: `buffering_speed`/`buffering_timeout`).
 - From Podium (github.com/lpukatch/podium, which ranks streams by measured quality): measuring
   bitrate during Stream Check's own read, to rank by it; not checking event channels whose
   match has not started (EPG). Running Podium beside this fork: both reorder streams and both

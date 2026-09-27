@@ -2733,6 +2733,19 @@ export default class API {
     });
   }
 
+  // arrTV devices held to a lower quality after stuttering, and letting them go
+  static async getArrTvHeld() {
+    return await request(`${host}/api/core/arrtv/held/`);
+  }
+
+  static async forgetArrTvHeld(device, where) {
+    // Without a device, every device
+    const query = device ? `?${new URLSearchParams({ device, where: where || '' })}` : '';
+    return await request(`${host}/api/core/arrtv/held/${query}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Error reports sent from player apps (arrTV); only an admin reads them
   static async getAppReports() {
     return await request(`${host}/api/core/app-reports/`);
