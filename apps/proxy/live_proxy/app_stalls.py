@@ -53,7 +53,7 @@ STALLED_TOGETHER_SECONDS = 30
 # One switch at a time per channel: two devices reporting the same stall switch once
 SWITCHING_KEY = "live:app_stalls:switching:{channel_uuid}"
 SWITCHING_TTL = SETTLE_SECONDS
-# The best quality a device turned out to manage, at home or away: "HD" / "SD"
+# The best quality a device turned out to manage, at home or away: "FHD" / "HD" / "SD"
 HELD_KEY = "live:app_stalls:held:{device}:{where}"
 HELD_TTL = 24 * 3600
 

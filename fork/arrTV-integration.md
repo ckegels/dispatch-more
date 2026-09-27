@@ -296,7 +296,7 @@ and copies it whole to pass on.
 ### Quality away from home (server v206)
 
 Nothing to build for this. The server admin sets **home networks** and **"Away from home, at
-most HD"** (or SD). An arrTV request from outside the home networks (the VPN, a phone
+most HD"** (or FHD from v209, or SD). An arrTV request from outside the home networks (the VPN, a phone
 connection) then starts a channel on a stream within that quality, where the channel has
 one. `outside_max_quality` in the capabilities says it is on ("" is off), in case the app
 wants to show it.

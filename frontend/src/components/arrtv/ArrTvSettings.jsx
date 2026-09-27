@@ -186,9 +186,11 @@ const ArrTvSettings = () => {
               value={settings.outside_max_quality || ''}
               onChange={(value) => change({ outside_max_quality: value || '' })}
               data={[
-                { value: '', label: 'No limit' },
+                // 4K is "No limit": nothing is better than it
+                { value: '', label: 'No limit (4K)' },
+                { value: 'FHD', label: 'FHD (1080p)' },
                 { value: 'HD', label: 'HD (720p)' },
-                { value: 'SD', label: 'SD' },
+                { value: 'SD', label: 'SD (576p)' },
               ]}
               style={{ width: 180 }}
             />

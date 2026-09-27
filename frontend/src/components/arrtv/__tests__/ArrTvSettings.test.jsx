@@ -25,6 +25,9 @@ const draw = () =>
     </MantineProvider>
   );
 
+// Mantine's Select scrolls to the chosen option, which jsdom does not have
+Element.prototype.scrollIntoView = vi.fn();
+
 describe('ArrTvSettings', () => {
   afterEach(() => vi.clearAllMocks());
 
@@ -90,6 +93,22 @@ describe('ArrTvSettings', () => {
       expect(API.saveArrTvSettings).toHaveBeenCalledWith(expect.objectContaining({ own_stream: true }))
     );
     await waitFor(() => expect(own).toBeChecked());
+  });
+
+  it('offers every quality away from home, FHD included', async () => {
+    API.getArrTvSettings.mockResolvedValue({
+      devices: false, switch_hints: false, reports: false, home_networks: '', outside_max_quality: 'FHD',
+    });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    draw();
+    const select = await screen.findByRole('textbox', { name: 'Away from home, at most' });
+    expect(select).toHaveValue('FHD (1080p)');
+    fireEvent.click(select);
+    // The dropdown is still in its opening transition, which hides it from roles
+    const options = await screen.findAllByRole('option', { hidden: true });
+    expect(options.map((o) => o.textContent)).toEqual([
+      'No limit (4K)', 'FHD (1080p)', 'HD (720p)', 'SD (576p)',
+    ]);
   });
 
   it('saves the home networks when the field is left, and says when one is not a network', async () => {

@@ -290,6 +290,17 @@ class QualityAwayFromHomeTests(TestCase):
         app_devices.save_settings({"outside_max_quality": "SD"})
         self.assertEqual(self.order("192.168.65.3")[:2], ["AT| ORF 1", "AT| ORF 1 FHD"])
 
+    def test_fhd_at_most(self):
+        # Only the 4K stream goes after: FHD, HD and the one that says nothing all play
+        app_devices.save_settings({"outside_max_quality": "fhd"})
+        self.assertEqual(app_devices.load_settings()["outside_max_quality"], "FHD")
+        self.assertEqual(self.order("192.168.65.3")[-2:], ["AT| ORF 1 4K", "could not dispatch"])
+        self.assertEqual(self.order("192.168.65.3")[0], "AT| ORF 1 FHD")
+
+    def test_a_limit_that_is_not_one_is_no_limit(self):
+        app_devices.save_settings({"outside_max_quality": "4K"})
+        self.assertEqual(app_devices.load_settings()["outside_max_quality"], "")
+
     def test_home_networks_are_checked_when_saved(self):
         admin = User.objects.create_user(username="admin", password="x", user_level=10)
         client = APIClient()

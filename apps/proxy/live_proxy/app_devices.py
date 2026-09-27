@@ -40,7 +40,8 @@ logger = logging.getLogger("live_proxy")
 SETTINGS_KEY = "app-integration"
 # reports: an app may send error reports (see app_reports)
 # home_networks / outside_max_quality: an arrTV device outside the home networks is given
-# a stream no better than this ("HD", "SD"; "" is no limit) -- see ordered_for
+# a stream no better than this ("FHD", "HD", "SD"; "" is no limit, 4K included, since nothing
+# is better than 4K) -- see ordered_for
 # stall_switch: a channel arrTV stutters on moves to its next stream (see app_stalls)
 # own_stream: arrTV gets a stream of its own when a channel plays one it cannot use
 # (see app_own_streams)
@@ -49,7 +50,7 @@ DEFAULTS = {
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
     "own_stream": False,
 }
-QUALITY_LIMITS = ("HD", "SD")
+QUALITY_LIMITS = ("FHD", "HD", "SD")
 
 # Read on every stream request, so kept for a few seconds rather than asked of the database
 _HELD = {"at": 0.0, "value": None}
@@ -170,7 +171,7 @@ def declared_max_quality(request):
     if not load_settings()["devices"]:
         return ""
     said = _said(request, "max_video").upper().rstrip("P")
-    if said in ("FHD", "HD", "SD"):
+    if said in QUALITY_LIMITS:
         return said
     if not said.isdigit():
         return ""
@@ -269,7 +270,7 @@ def _at_home(ip, networks_text):
 
 def quality_limit_for(viewer):
     """
-    The best quality this viewer should be given ("HD", "SD"), or "" for none: an arrTV
+    The best quality this viewer should be given ("FHD", "HD", "SD"), or "" for none: an arrTV
     device whose address is outside the home networks, when a limit is set. Nothing is
     limited while the home networks are empty -- without them everything would be outside.
     Also the best the device says it can decode (X-Dispatch-Max-Video), and a quality it

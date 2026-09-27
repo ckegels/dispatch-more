@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v208** (2026-09-27). The commit messages on the branch
+Written 2026-09-19, kept current to **release v209** (2026-09-27). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1618,7 +1618,7 @@ Admins list, open, copy and delete them on Settings → arrTV.
 
 **Away from home, at most HD** (v206, `app_devices.quality_limit_for` / `ordered_for`). The
 user's network cannot carry FHD to devices outside the house (VPN, phone). With **home
-networks** and **"Away from home, at most"** (HD or SD) set, an arrTV request from an address
+networks** and **"Away from home, at most"** (FHD, HD or SD since v209) set, an arrTV request from an address
 outside the home networks walks the channel's streams with those within the limit first,
 then the better ones (so a channel with nothing else still plays its best), the fallback last
 as ever. Quality is `channel_manager.quality_of` (measured resolution, else the name); a
