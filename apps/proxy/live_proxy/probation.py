@@ -199,6 +199,9 @@ class Viewer:
     # The multiview session a tile of a declared device belongs to (see app_devices): Force
     # Close never closes one tile of a session for another. Not part of who the viewer is.
     multiview: Optional[str] = field(default=None, compare=False)
+    # The best picture a declared device says it can decode ("FHD", "HD", "SD"; see
+    # app_devices.declared_max_quality). What it can play, not who it is.
+    max_quality: Optional[str] = field(default=None, compare=False)
 
 
 def is_viewer_request(viewer) -> bool:
@@ -721,6 +724,7 @@ def viewer_from_request(request, user, client_ip, redis_client=None):
             app=app_name(user_agent, client_ip),
             server_device=key,
             multiview=app_devices.declared_multiview(request) or None,
+            max_quality=app_devices.declared_max_quality(request) or None,
         )
     return Viewer(
         ip=client_ip,
@@ -1457,6 +1461,13 @@ def leave_previous_channel(redis_client, viewer, previous_channel_uuid, requeste
     app says. Returns whether the channel was closed.
     """
     previous = str(previous_channel_uuid or "")
+    # A device on a stream of its own (app_own_streams) is leaving that, not the channel
+    try:
+        from . import app_own_streams
+
+        previous = app_own_streams.session_for(redis_client, viewer, previous) or previous
+    except Exception:
+        pass
     if (
         not redis_client
         or not previous

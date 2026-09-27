@@ -81,11 +81,11 @@ class AppDevicesTests(TestCase):
         self.assertEqual(
             client.get("/api/core/arrtv/").json(),
             {"devices": False, "switch_hints": False, "reports": False,
-             "home_networks": "", "outside_max_quality": "", "stall_switch": False},
+             "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False},
         )
         answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
         self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
-                                  "home_networks": "", "outside_max_quality": "", "stall_switch": False})
+                                  "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False})
         # Only an admin changes them
         viewer = User.objects.create_user(username="tv", password="x", user_level=0)
         client.force_authenticate(user=viewer)

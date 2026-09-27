@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v207** (2026-09-27). The commit messages on the branch
+Written 2026-09-19, kept current to **release v208** (2026-09-27). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1568,7 +1568,7 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
-### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
+### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
 
 arrTV is the user's own Android / Google TV player, a fork of AerioTV
 (https://github.com/jonzey231/AerioTV-Android) built to work with this server. Everything
@@ -1649,6 +1649,31 @@ first and remembers it for the device, at home and away apart (`HELD_KEY`, 24 h;
 Never on a channel somebody else watches fine: only when the device is alone on it or every
 other viewer is an arrTV device that stuttered in the last 30 s. Recorded in Channel health's
 What happened, with the app's numbers.
+
+**What a device can decode, and a stream of its own** (v208). Measured: RTL ZWEI's first
+stream is 4K and a Chromecast with Google TV HD cannot decode it. Every start began on it;
+arrTV's own walk then swapped the stream inside the open connection (HEVC 4K → AVC 1080p),
+ExoPlayer showed one frame and waited for good. Three parts:
+- `X-Dispatch-Max-Video` (read with `devices`, `declared_max_quality`, on the `Viewer` as
+  `max_quality`) joins the limits in `quality_limit_for` -- the strictest of away from home,
+  what it decodes and what it stuttered down to (`_lowest`). So a channel it starts begins on a
+  stream it can decode.
+- **Failover keeps to it** (`remember_channel_limit` in `Channel.get_stream`, which only runs
+  when a channel starts; `failover_order` hooked at the end of stock's
+  `url_utils.get_alternate_streams`). The limit is the starter's: a channel is one stream.
+- **A stream of its own** (`app_own_streams.py`, switch `own_stream`, off): the user's rule --
+  when a channel plays for others in a quality this device cannot use, it opens another
+  provider's stream for it rather than joining. `stream_ts` hands the request, before anything
+  is reserved, to the chosen stream's hash: stock runs a stream apart from any channel that way
+  (it is how a stream is previewed), with its own connection, shared by whoever needs the same
+  stream, ended when the last one leaves. Only onto a stream within the limit, never the
+  fallback, and only one costing nothing to anybody: already running, or on an account with a
+  connection free (another provider's first). None: it joins, as before. What the device says
+  about the channel -- the channel it leaves, a stutter -- reaches its own stream
+  (`session_for`, `OWN_KEY`), and arrTV's `change_stream` walk on the channel is refused (409)
+  so it never changes the channel under the others. Not yet: failover on a stream of its own
+  (a stream run by its hash has no alternates in stock -- it ends, and the device's reconnect
+  is given another), and a stutter there (answered "none").
 
 **Reports are not settings** (v205). Reports are `CoreSettings` rows (`app-report-<id>`
 since v204, one `app-reports` row before), and stock's `CoreSettingsViewSet` lists and
@@ -1861,12 +1886,10 @@ networking in Docker. Neither crosses the VPN.
   live instead of being skipped ahead. Server-side detection of a struggling device (a
   client's position against the buffer head) needs this off first. Check
   `/etc/nginx/sites-enabled/dispatcharr.conf` on 192.168.2.142.
-- **Failover does not keep an arrTV device's quality order**: v206's `ordered_for` is applied
-  when a channel starts, but stock failover (`url_utils.get_alternate_streams`) walks the
-  channel's plain order, so a device away from home can fail over onto FHD.
 - Still to do for quality (discussed 2026-09-27): a lighter transcoded variant per device
-  (`?output_profile=`) for a device stuttering on a channel others watch fine -- depends on the
-  server's CPU/GPU; and switching on a starved upstream for the plain Proxy profile (stock
+  (`?output_profile=`) when no other stream has a connection free (v208 opens another
+  provider's stream when one does) -- depends on the server's CPU/GPU; arrTV reopening the
+  connection when a swap inside it freezes the picture (a codec change mid-connection); and switching on a starved upstream for the plain Proxy profile (stock
   only does it when ffmpeg runs: `buffering_speed`/`buffering_timeout`).
 - From Podium (github.com/lpukatch/podium, which ranks streams by measured quality): measuring
   bitrate during Stream Check's own read, to rank by it; not checking event channels whose

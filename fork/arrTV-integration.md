@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: telling the server which device you are
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206, stutter from v207) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206, stutter from v207, what it can decode and a stream of its own from v208) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -45,17 +45,20 @@ send none of the headers below. On Dispatch More:
   "outside_max_quality": "HD",
   "stall_switch": false,
   "stall_url": "/api/core/app-stall/",
+  "own_stream": false,
   "headers": {
     "device": "X-Dispatch-Device",
     "device_name": "X-Dispatch-Device-Name",
     "multiview": "X-Dispatch-Multiview",
-    "previous": "X-Dispatch-Previous-Channel"
+    "previous": "X-Dispatch-Previous-Channel",
+    "max_video": "X-Dispatch-Max-Video"
   },
   "query_parameters": {
     "device": "dm_device",
     "device_name": "dm_device_name",
     "multiview": "dm_multiview",
-    "previous": "dm_previous"
+    "previous": "dm_previous",
+    "max_video": "dm_max_video"
   }
 }
 ```
@@ -303,6 +306,36 @@ header (§2), **or** keep the User-Agent as it is now, `AerioTV/<version>-arr. (
 A User-Agent without `-arr` and without the device header is taken for another app and gets no
 limit.
 
+### What the device can decode: `X-Dispatch-Max-Video` (server v208)
+
+Server switch: `devices` (read with the other device headers). Send, with the device headers,
+the tallest picture this device can decode, as a height: `1080` on a Chromecast with Google TV
+HD, `2160` on a 4K device (which limits nothing). Work it out once per install from
+`MediaCodecList`: the largest supported height of the `video/hevc` and `video/avc` decoders
+(`VideoCapabilities.getSupportedHeights().upper`), and round down to 2160 / 1080 / 720 / 576.
+`FHD`, `HD` or `SD` are accepted too.
+
+What the server does with it:
+- A channel this device **starts** begins on a stream it can decode, in the channel's order;
+  better ones go last (before "Could Not Dispatch"), so a channel with nothing else still
+  tries its best. The 4K stream of RTL ZWEI is then never where a Chromecast HD starts.
+- The channel's **failover** keeps to it too: it does not fail over onto the 4K stream.
+- A channel **someone else is already watching** in a quality the device cannot use: with the
+  server's `own_stream` switch on, the device gets another stream of that channel to itself,
+  from a provider with a connection free (see below). Off, it joins what is playing.
+
+### A stream of its own (server v208)
+
+Nothing to build: the request is the usual `/proxy/ts/stream/<channel uuid>` (or `/live/…`) and
+the server decides. With `own_stream` on, an arrTV device whose limit (decoding, away from
+home, or a stutter it was held to) is below what the channel is playing for others is served
+another of the channel's streams, run on its own. What the app should know:
+- `X-Dispatch-Previous-Channel` and the stutter report keep naming the **channel**; the server
+  applies them to the device's own stream.
+- `POST /proxy/ts/change_stream/<uuid>` (LiveStreamFailover's walk) is refused with **409**
+  while the device is on a stream of its own: changing the channel would change it for the
+  others on it. Treat 409 like any refused step; the stream it is on is within what it can play.
+
 ### Stutter: tell the server the moment the picture stops (server v207)
 
 Server switch: `stall_switch` (needs `devices`; capabilities say `"stall_switch": true` and
@@ -420,11 +453,13 @@ curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
 - [ ] Connection closed when playback is left.
 - [ ] "Send a report" as the first entry of the hold-OK options, only when `reports: true`;
       the channel, the player's state and error, and the tail of the player log.
+- [ ] `X-Dispatch-Max-Video` with the device headers: the tallest decodable height, from
+      `MediaCodecList`, worked out once.
 - [ ] Stutter: on each live rebuffer after the first frame, `POST /api/core/app-stall/` with the
       channel and the device header, only when `stall_switch: true`; nothing to do with the answer.
 - [ ] Nothing changes against a stock server (capabilities 404).
 
 Questions about the server side: the implementation is `apps/proxy/live_proxy/app_devices.py`,
-`apps/proxy/live_proxy/app_reports.py`, `apps/proxy/live_proxy/app_stalls.py`
+`apps/proxy/live_proxy/app_reports.py`, `apps/proxy/live_proxy/app_stalls.py`, `apps/proxy/live_proxy/app_own_streams.py`
 and `leave_previous_channel` / `viewer_from_request` in `apps/proxy/live_proxy/probation.py`
 of https://github.com/ckegels/dispatch-more.

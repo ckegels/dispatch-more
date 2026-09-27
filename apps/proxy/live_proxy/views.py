@@ -189,6 +189,18 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         viewer = probation.viewer_from_request(
             request, user, client_ip, proxy_server.redis_client
         )
+        # An arrTV device that cannot use the stream this channel is playing is given another
+        # of its streams to itself (app_own_streams, off unless switched on): from here on the
+        # request is for that stream, run apart from the channel as a stream preview is
+        from . import app_own_streams
+
+        own = app_own_streams.own_stream_for(proxy_server.redis_client, viewer, channel)
+        if own is not None:
+            logger.info(
+                f"[{client_id}] Channel {channel_id} plays beyond what this arrTV device can use: "
+                f"its own stream {own.id} ({own.name})"
+            )
+            channel_id, channel = own.stream_hash, own
         logger.info(f"[{client_id}] Requested stream for channel {channel_id}")
         # Where the time goes while this channel starts (see timing.py); measuring only
         timing.start(
@@ -1008,6 +1020,21 @@ def stream_xc(request, username, password, channel_id):
 def change_stream(request, channel_id):
     """Change stream URL for existing channel with enhanced diagnostics"""
     proxy_server = ProxyServer.get_instance()
+
+    # arrTV walking its channel's streams while it is on a stream of its own
+    # (app_own_streams): changing the channel would change it for everyone else on it,
+    # which is what it was given a stream of its own to avoid
+    from . import app_own_streams
+
+    if app_own_streams.enabled():
+        asking = probation.viewer_from_request(
+            request, getattr(request, "user", None), get_client_ip(request), proxy_server.redis_client
+        )
+        if app_own_streams.session_for(proxy_server.redis_client, asking, str(channel_id)):
+            return JsonResponse(
+                {"error": "This device plays this channel on a stream of its own; others are on the channel"},
+                status=409,
+            )
 
     try:
         data = json.loads(request.body)

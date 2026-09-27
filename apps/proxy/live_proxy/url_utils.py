@@ -548,8 +548,14 @@ def get_alternate_streams(
         else:
             logger.warning(f"No alternate streams with available connections found for channel {channel_id}")
 
-        return order_alternates_from_current(
-            alternate_streams, ordered_stream_ids, current_stream_id
+        from . import app_devices
+
+        # Within the quality of the device that started the channel first (arrTV)
+        return app_devices.failover_order(
+            redis_client,
+            str(channel.uuid),
+            order_alternates_from_current(alternate_streams, ordered_stream_ids, current_stream_id),
+            list(streams),
         )
     except Exception as e:
         logger.error(f"Error getting alternate streams for channel {channel_id}: {e}", exc_info=True)

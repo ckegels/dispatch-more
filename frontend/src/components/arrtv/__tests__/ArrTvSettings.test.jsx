@@ -78,6 +78,20 @@ describe('ArrTvSettings', () => {
     expect(API.getArrTvHeld).not.toHaveBeenCalled();
   });
 
+  it('switches a stream of its own on', async () => {
+    API.getArrTvSettings.mockResolvedValue({ devices: true, switch_hints: false, reports: false, own_stream: false });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.saveArrTvSettings.mockResolvedValue({ devices: true, switch_hints: false, reports: false, own_stream: true });
+    draw();
+    const own = await screen.findByRole('switch', { name: /A stream of its own/ });
+    expect(own).not.toBeChecked();
+    fireEvent.click(own);
+    await waitFor(() =>
+      expect(API.saveArrTvSettings).toHaveBeenCalledWith(expect.objectContaining({ own_stream: true }))
+    );
+    await waitFor(() => expect(own).toBeChecked());
+  });
+
   it('saves the home networks when the field is left, and says when one is not a network', async () => {
     API.getArrTvSettings.mockResolvedValue({
       devices: false, switch_hints: false, reports: false, home_networks: '', outside_max_quality: 'HD',

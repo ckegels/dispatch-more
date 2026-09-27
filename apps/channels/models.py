@@ -712,6 +712,11 @@ class Channel(models.Model):
             error_reason = "No streams assigned to channel"
             return None, None, error_reason, False
 
+        from apps.proxy.live_proxy import app_devices
+
+        # Whose picture this channel is chosen for, so its failover keeps to it too
+        app_devices.remember_channel_limit(redis_client, str(self.uuid), viewer)
+
         if requester and self.get_stream_profile().is_redirect():
             from apps.m3u.utils import get_allowed_m3u_profiles
 

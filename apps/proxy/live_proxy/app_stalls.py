@@ -201,6 +201,11 @@ def report(redis_client, viewer, data):
     channel_uuid = _channel_uuid(data.get("channel_uuid") or data.get("channel_id"))
     if not channel_uuid:
         return {"action": "none", "reason": "No such channel."}
+    from . import app_own_streams
+
+    # On a stream of its own (app_own_streams) others are on the channel: never switch it
+    if app_own_streams.session_for(redis_client, viewer, channel_uuid):
+        return {"action": "none", "reason": "This device plays this channel on a stream of its own."}
 
     from .constants import ChannelMetadataField
     from .probation import _channel_clients, _client_viewer

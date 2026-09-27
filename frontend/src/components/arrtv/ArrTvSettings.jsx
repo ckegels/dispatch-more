@@ -195,6 +195,12 @@ const ArrTvSettings = () => {
           </Group>
         </Box>
         <Setting
+          label="A stream of its own when the channel's is too much for it"
+          description="Someone at home watches a channel in 4K, and a device that cannot play it (away from home, a Chromecast HD that says it cannot decode 4K, or one held to a lower quality above) asks for the same channel: it gets another of that channel's streams within what it can play, from another provider with a connection free, and the others keep theirs. It opens one more provider connection, only where one is free; with none, the device joins the channel as before."
+          checked={settings.own_stream}
+          onChange={(on) => change({ own_stream: on })}
+        />
+        <Setting
           label="Take problem reports from arrTV"
           description="Someone with a problem on a channel sends a report from arrTV's player settings. It arrives below with what arrTV saw and what the server knew about that channel at that moment: its streams and providers, its readings, how it started, the channel switches and the log. Logins and passwords are taken out."
           checked={settings.reports}

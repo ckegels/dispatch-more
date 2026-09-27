@@ -21,6 +21,9 @@ changes nothing):
 
 - **stall_switch** (needs devices): arrTV says when its picture stutters, and the channel moves
   to its next stream at once (app_stalls).
+- **own_stream**: an arrTV device that cannot use the stream a channel is playing gets another
+  stream of that channel to itself (app_own_streams). What it cannot use includes what it says
+  it cannot decode (`X-Dispatch-Max-Video`, read with devices on).
 
 Every header also works as a query parameter (`dm_device`, `dm_device_name`, `dm_multiview`,
 `dm_previous`), for what plays a link without letting the app set headers (a Cast receiver).
@@ -39,9 +42,12 @@ SETTINGS_KEY = "app-integration"
 # home_networks / outside_max_quality: an arrTV device outside the home networks is given
 # a stream no better than this ("HD", "SD"; "" is no limit) -- see ordered_for
 # stall_switch: a channel arrTV stutters on moves to its next stream (see app_stalls)
+# own_stream: arrTV gets a stream of its own when a channel plays one it cannot use
+# (see app_own_streams)
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
+    "own_stream": False,
 }
 QUALITY_LIMITS = ("HD", "SD")
 
@@ -64,6 +70,7 @@ HEADERS = {
     "device_name": ("HTTP_X_DISPATCH_DEVICE_NAME", "dm_device_name"),
     "multiview": ("HTTP_X_DISPATCH_MULTIVIEW", "dm_multiview"),
     "previous": ("HTTP_X_DISPATCH_PREVIOUS_CHANNEL", "dm_previous"),
+    "max_video": ("HTTP_X_DISPATCH_MAX_VIDEO", "dm_max_video"),
 }
 
 
@@ -154,6 +161,33 @@ def declared_previous_channel(request):
     return channel
 
 
+def declared_max_quality(request):
+    """
+    The best picture the device says it can decode, as a quality ("FHD", "HD", "SD"), or ""
+    for no limit. Given as the height it can play ("1080") or as the quality itself: a
+    Chromecast HD says 1080, and a 4K stream is then nothing it can use.
+    """
+    if not load_settings()["devices"]:
+        return ""
+    said = _said(request, "max_video").upper().rstrip("P")
+    if said in ("FHD", "HD", "SD"):
+        return said
+    if not said.isdigit():
+        return ""
+    height = int(said)
+    if height >= 2000:
+        return ""
+    return "FHD" if height >= 1000 else "HD" if height >= 700 else "SD" if height > 0 else ""
+
+
+def _lowest(*limits):
+    """The strictest of several quality limits, "" when there is none."""
+    from apps.channels.channel_manager import QUALITY_LABELS
+
+    given = [limit for limit in limits if limit in QUALITY_LABELS]
+    return max(given, key=QUALITY_LABELS.index) if given else ""
+
+
 def device_key(user_id, device):
     """
     A declared device as the channel switch code keys viewers: with its login, so a device
@@ -238,8 +272,8 @@ def quality_limit_for(viewer):
     The best quality this viewer should be given ("HD", "SD"), or "" for none: an arrTV
     device whose address is outside the home networks, when a limit is set. Nothing is
     limited while the home networks are empty -- without them everything would be outside.
-    And an arrTV device that stuttered its way down to a quality where it is now (see
-    app_stalls), whichever of the two is lower.
+    Also the best the device says it can decode (X-Dispatch-Max-Video), and a quality it
+    stuttered its way down to where it is now (see app_stalls): the lowest of them.
     """
     settings = load_settings()
     if not is_arrtv(viewer):
@@ -247,6 +281,8 @@ def quality_limit_for(viewer):
     limit = settings.get("outside_max_quality") or ""
     at_home = _at_home(getattr(viewer, "ip", ""), settings.get("home_networks"))
     limit = limit if limit and at_home is False else ""
+    # What the device says it can decode at all, wherever it is
+    limit = _lowest(limit, getattr(viewer, "max_quality", None) or "")
     # What this device turned out to manage where it is now (app_stalls), when that is less
     if settings.get("stall_switch") and settings.get("devices") and is_declared(
         getattr(viewer, "server_device", None)
@@ -259,8 +295,7 @@ def quality_limit_for(viewer):
             held = held_quality(RedisClient.get_client(), viewer)
         except Exception:
             held = ""
-        if held and (not limit or QUALITY_LIMITS.index(held) > QUALITY_LIMITS.index(limit)):
-            limit = held
+        limit = _lowest(limit, held)
     return limit
 
 
@@ -296,6 +331,69 @@ def ordered_for(viewer, streams):
     return allowed + [s for s in real if s not in allowed] + [s for s in streams if s.is_custom]
 
 
+# The limit of the device that started a channel, for the failover (see failover_order)
+CHANNEL_LIMIT_KEY = "live:app_devices:channel_limit:{channel_uuid}"
+CHANNEL_LIMIT_TTL = 24 * 3600
+
+
+def _limits_in_use(settings):
+    return bool(settings.get("devices") or settings.get("outside_max_quality"))
+
+
+def remember_channel_limit(redis_client, channel_uuid, viewer):
+    """
+    Keep the limit of the viewer starting a channel, or forget an older one. Called where a
+    channel picks its stream, which is only when it starts: a channel is one stream for
+    everyone on it, and the one who starts it is who it was chosen for.
+    """
+    if not redis_client or not _limits_in_use(load_settings()):
+        return
+    key = CHANNEL_LIMIT_KEY.format(channel_uuid=channel_uuid)
+    try:
+        limit = quality_limit_for(viewer)
+        if limit:
+            redis_client.setex(key, CHANNEL_LIMIT_TTL, limit)
+        else:
+            redis_client.delete(key)
+    except Exception as e:
+        logger.debug(f"App devices: could not keep the limit of channel {channel_uuid}: {e}")
+
+
+def failover_order(redis_client, channel_uuid, alternates, streams):
+    """
+    Stock failover's next streams, with those within the limit of whoever started the
+    channel first: without it a device that started on HD because it cannot play 4K fails
+    over onto the 4K stream, which is exactly what it started on HD to avoid. alternates
+    are stock's entries ({"stream_id": ...}); streams the channel's Stream objects.
+    """
+    if not alternates or not redis_client or not _limits_in_use(load_settings()):
+        return alternates
+    try:
+        limit = redis_client.get(CHANNEL_LIMIT_KEY.format(channel_uuid=channel_uuid))
+        limit = limit.decode() if isinstance(limit, bytes) else limit
+        if not limit:
+            return alternates
+        from apps.channels.channel_manager import QUALITY_LABELS, quality_of
+
+        by_id = {stream.id: stream for stream in streams}
+
+        def within(entry):
+            stream = by_id.get(entry["stream_id"])
+            if stream is None:
+                return True
+            label, rank, _probed = quality_of(stream.name, stream.stream_stats)
+            return not label or rank >= QUALITY_LABELS.index(limit)
+
+        # Custom streams (the fallback) stay last, as in ordered_for
+        custom = {s.id for s in streams if s.is_custom}
+        real = [e for e in alternates if e["stream_id"] not in custom]
+        allowed = [e for e in real if within(e)]
+        return allowed + [e for e in real if e not in allowed] + [e for e in alternates if e["stream_id"] in custom]
+    except Exception as e:
+        logger.debug(f"App devices: failover order left as it was for {channel_uuid}: {e}")
+        return alternates
+
+
 def capabilities():
     """What an app may rely on here, for GET /api/core/capabilities/."""
     try:
@@ -316,6 +414,7 @@ def capabilities():
         # A stutter is only acted on for a device the server recognises
         "stall_switch": bool(settings["devices"] and settings["stall_switch"]),
         "stall_url": "/api/core/app-stall/",
+        "own_stream": settings["own_stream"],
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
