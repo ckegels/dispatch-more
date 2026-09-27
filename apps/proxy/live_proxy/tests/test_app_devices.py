@@ -81,11 +81,11 @@ class AppDevicesTests(TestCase):
         self.assertEqual(
             client.get("/api/core/arrtv/").json(),
             {"devices": False, "switch_hints": False, "reports": False,
-             "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False},
+             "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False},
         )
         answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
         self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
-                                  "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False})
+                                  "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False})
         # Only an admin changes them
         viewer = User.objects.create_user(username="tv", password="x", user_level=0)
         client.force_authenticate(user=viewer)
@@ -312,3 +312,77 @@ class QualityAwayFromHomeTests(TestCase):
         ).json()
         self.assertEqual(good["home_networks"], "192.168.2.0/24, 10.0.0.0/8")
         self.assertEqual(good["outside_max_quality"], "HD")
+
+
+class _FakeRedis:
+    """Just what faster failover uses: set with a lifetime, exists."""
+
+    def __init__(self):
+        self.values = {}
+
+    def set(self, key, value, ex=None):
+        self.values[key] = value
+
+    def exists(self, key):
+        return int(key in self.values)
+
+
+class FastFailoverTests(TestCase):
+    """A channel an arrTV device starts leaves a silent stream after seconds, not a minute."""
+
+    def setUp(self):
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        self.redis = _FakeRedis()
+        self.arrtv = RequestFactory().get(
+            "/proxy/ts/stream/abc", HTTP_X_DISPATCH_DEVICE="3f2a9c1e-0b7d-4e21-9a55-0f1c2d3e4f50"
+        )
+        self.other = RequestFactory().get("/proxy/ts/stream/abc", HTTP_USER_AGENT="VLC/3.0")
+
+    def switch(self, **on):
+        app_devices.save_settings({"devices": True, **on})
+        app_devices._HELD.update(at=0.0, value=None)
+
+    def test_off_marks_nothing_and_the_stock_grace_applies(self):
+        self.switch()
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        self.assertEqual(self.redis.values, {})
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch1"))
+        self.assertFalse(app_devices.capabilities()["fast_failover"])
+
+    def test_on_only_for_a_declared_device(self):
+        self.switch(fast_failover=True)
+        app_devices.mark_fast_start(self.redis, self.other, "ch1")
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch1"))
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        self.assertEqual(app_devices.fast_start_grace(self.redis, "ch1"), app_devices.FAST_START_GRACE)
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch2"))
+        self.assertTrue(app_devices.capabilities()["fast_failover"])
+
+    def test_switching_off_ends_it_at_once(self):
+        self.switch(fast_failover=True)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        self.switch(fast_failover=False)
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch1"))
+
+    def test_the_stream_manager_waits_the_short_grace_only_before_any_data(self):
+        import types
+
+        from apps.proxy.live_proxy.config_helper import ConfigHelper
+        from apps.proxy.live_proxy.input.manager import StreamManager
+
+        self.switch(fast_failover=True)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        fake = types.SimpleNamespace(
+            connected=True, channel_id="ch1",
+            buffer=types.SimpleNamespace(index=0, redis_client=self.redis),
+        )
+        fake._fast_start_grace = types.MethodType(StreamManager._fast_start_grace, fake)
+        threshold = types.MethodType(StreamManager._health_inactivity_threshold, fake)
+        self.assertEqual(threshold(), app_devices.FAST_START_GRACE)
+        # Once data came, the stock rule for a running stream
+        fake.buffer.index = 10
+        self.assertNotEqual(threshold(), app_devices.FAST_START_GRACE)
+        # A channel nobody marked: the stock start grace
+        fake.buffer.index, fake.channel_id = 0, "ch2"
+        self.assertEqual(threshold(), ConfigHelper.channel_init_grace_period())

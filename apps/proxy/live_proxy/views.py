@@ -237,6 +237,9 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             probation.leave_previous_channel(
                 proxy_server.redis_client, viewer, leaving, channel_id
             )
+        # arrTV's faster failover (off unless switched on): a stream of this channel that
+        # connects and sends nothing is left after seconds, not stock's minute
+        app_devices.mark_fast_start(proxy_server.redis_client, request, channel_id)
 
         if user:
             # The channel asked for: a device given a stream of its own is still watching that

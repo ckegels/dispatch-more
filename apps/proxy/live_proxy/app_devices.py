@@ -45,11 +45,19 @@ SETTINGS_KEY = "app-integration"
 # stall_switch: a channel arrTV stutters on moves to its next stream (see app_stalls)
 # own_stream: arrTV gets a stream of its own when a channel plays one it cannot use
 # (see app_own_streams)
+# fast_failover: a channel an arrTV device starts moves on from a stream that connects and
+# sends nothing after FAST_START_GRACE seconds and one health check, not stock's start grace
+# (60 s) and three (see fast_start_grace)
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
-    "own_stream": False,
+    "own_stream": False, "fast_failover": False,
 }
+
+# Faster failover: which channels an arrTV device started, for the start phase only
+FAST_START_KEY = "live:app_devices:fast_start:{channel}"
+FAST_START_TTL = 120
+FAST_START_GRACE = 5
 QUALITY_LIMITS = ("FHD", "HD", "SD")
 
 # Read on every stream request, so kept for a few seconds rather than asked of the database
@@ -138,6 +146,38 @@ def declared_multiview(request):
         return ""
     session = _said(request, "multiview")
     return session if _SESSION_ID.match(session) else ""
+
+
+def mark_fast_start(redis_client, request, channel_id):
+    """
+    An arrTV device (declared) starts this channel with "faster failover" on: mark the
+    channel for FAST_START_TTL seconds, so while its stream has sent nothing yet the stream
+    manager moves on after FAST_START_GRACE seconds (fast_start_grace). IPTV answers within
+    a second or two; stock's 60 s start grace is sized for sources that need to lock first,
+    and a dead stream cost a viewer over a minute. Nothing is written when switched off.
+    """
+    if redis_client is None or not load_settings().get("fast_failover") or not declared_device(request):
+        return
+    try:
+        redis_client.set(FAST_START_KEY.format(channel=channel_id), "1", ex=FAST_START_TTL)
+    except Exception as e:
+        logger.debug(f"Faster failover: could not mark {channel_id}: {e}")
+
+
+def fast_start_grace(redis_client, channel_id):
+    """
+    The start grace for a channel an arrTV device started with "faster failover" on, or
+    None: the stock grace applies. Asked by the stream manager only while a connected stream
+    has sent nothing; switching the setting off takes effect at once (the mark is ignored).
+    """
+    if redis_client is None or not load_settings().get("fast_failover"):
+        return None
+    try:
+        if redis_client.exists(FAST_START_KEY.format(channel=channel_id)):
+            return FAST_START_GRACE
+    except Exception as e:
+        logger.debug(f"Faster failover: could not read {channel_id}: {e}")
+    return None
 
 
 def declared_previous_channel(request):
@@ -443,6 +483,8 @@ def capabilities():
         "stall_switch": bool(settings["devices"] and settings["stall_switch"]),
         "stall_url": "/api/core/app-stall/",
         "own_stream": settings["own_stream"],
+        # Only for a device the server recognises
+        "fast_failover": bool(settings["devices"] and settings["fast_failover"]),
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

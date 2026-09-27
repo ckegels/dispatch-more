@@ -1750,6 +1750,19 @@ arrTV can scan its own subnet on port 9191. mDNS (`_dispatcharr._tcp`) would fin
 at once but needs a responder here (the `zeroconf` package is not a dependency) and host
 networking in Docker. Neither crosses the VPN.
 
+**Faster failover when arrTV starts a channel** (v212, `fast_failover` in `app_devices`, off by
+default, under "Recognise each arrTV device"). Stock leaves a stream that connected and sent
+nothing only after the start grace (`channel_init_grace_period`, 60 s) plus three health
+checks (5 s apart): about 75 s per dead stream, while the provider's streams answer in 0.1–3 s.
+A declared arrTV device's stream request marks the channel in Redis for two minutes
+(`mark_fast_start`, `live:app_devices:fast_start:<channel>`); `StreamManager` asks
+`_fast_start_grace` only while connected with an empty buffer, and uses 5 s and one check.
+The setting is read on every ask, so off ends it at once; once data has come, stock rules. The
+app's own waits were shortened alongside (arr.40, each with a switch in the app). Tests:
+`FastFailoverTests` in `test_app_devices.py`.
+
+---
+
 ## 6. Measured on the real installation (do not re-derive)
 
 1. **Plex:** one guide per channel source, the add-channel-source API sequence (in §5.2 and

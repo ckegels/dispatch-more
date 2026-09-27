@@ -154,6 +154,19 @@ const ArrTvSettings = () => {
           />
           {settings.devices && settings.stall_switch && <HeldDevices />}
         </Box>
+        <Box pl="xl">
+          <Setting
+            label="Faster failover when arrTV starts a channel"
+            description={
+              settings.devices
+                ? "A stream that connects and sends nothing is left after 5 seconds and one check, instead of the start grace (Settings → Streaming) and three checks: a dead stream no longer costs a viewer a minute. Only for channels an arrTV device starts; IPTV answers within a second or two, a source that needs longer to lock (a tuner) would be left too soon."
+                : 'Needs "Recognise each arrTV device": only a device that said who it is is given the shorter wait.'
+            }
+            checked={settings.fast_failover}
+            disabled={!settings.devices}
+            onChange={(on) => change({ fast_failover: on })}
+          />
+        </Box>
         <Box>
           <Text size="sm" fw={500}>
             Away from home

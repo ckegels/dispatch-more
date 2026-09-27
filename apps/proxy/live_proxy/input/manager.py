@@ -1603,10 +1603,22 @@ class StreamManager:
         """Check if connection retry is allowed"""
         return self.retry_count < self.max_retries
 
+    def _fast_start_grace(self):
+        """
+        arrTV's faster failover (app_devices, off unless switched on): the short start grace
+        while a channel an arrTV device started has had no data yet, else None.
+        """
+        if not (self.connected and getattr(self.buffer, 'index', 0) == 0):
+            return None
+        from apps.proxy.live_proxy import app_devices
+
+        return app_devices.fast_start_grace(getattr(self.buffer, "redis_client", None), self.channel_id)
+
     def _health_inactivity_threshold(self):
         """How long without data before marking the stream unhealthy."""
         if self.connected and getattr(self.buffer, 'index', 0) == 0:
-            return ConfigHelper.channel_init_grace_period()
+            fast = self._fast_start_grace()
+            return fast if fast is not None else ConfigHelper.channel_init_grace_period()
         return getattr(Config, 'CONNECTION_TIMEOUT', 10)
 
     def _monitor_health(self):
@@ -1628,8 +1640,11 @@ class StreamManager:
 
                     consecutive_unhealthy_checks += 1
 
-                    # Only set flags if enough time has passed since last action
-                    if (consecutive_unhealthy_checks >= max_unhealthy_checks and
+                    # Only set flags if enough time has passed since last action. A stream
+                    # an arrTV device started that never sent anything moves on after one
+                    # check with faster failover on (its grace already waited)
+                    needed_checks = 1 if self._fast_start_grace() is not None else max_unhealthy_checks
+                    if (consecutive_unhealthy_checks >= needed_checks and
                         now - self.last_health_action_time > action_cooldown):
 
                         # Calculate stability to decide on action type

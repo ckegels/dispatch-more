@@ -42,8 +42,8 @@ describe('ArrTvSettings', () => {
     const [devices, hints] = screen.getAllByRole('switch');
     expect(devices).not.toBeChecked();
     expect(hints).toBeDisabled();
-    // Both switches under it say what they need
-    expect(screen.getAllByText(/Needs "Recognise each arrTV device"/)).toHaveLength(2);
+    // Every switch under it (channel change, stutter, faster failover) says what it needs
+    expect(screen.getAllByText(/Needs "Recognise each arrTV device"/)).toHaveLength(3);
 
     fireEvent.click(devices);
     await waitFor(() =>

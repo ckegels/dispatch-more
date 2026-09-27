@@ -24,8 +24,10 @@ leaving, so the server does not have to guess that either.
 
 ## Where arrTV stands (2026-09-27)
 
-What the server offers and what arrTV does with it, as of Dispatch More **v211** and arrTV
-**0.5.9-arr.36** (a test build; the published one is arr.29):
+What the server offers and what arrTV does with it, as of Dispatch More **v212** and arrTV
+**0.5.9-arr.40** (a test build; the published one is arr.29). Every arrTV optimization has a
+switch of its own in the app (Settings → General → **arrTV optimizations**, all on by
+default); switched off, that part does nothing:
 
 | Server feature | Server since | In arrTV | This document |
 |---|---|---|---|
@@ -34,10 +36,11 @@ What the server offers and what arrTV does with it, as of Dispatch More **v211**
 | Multiview session | v197 | built | §5 |
 | Problem reports | v198 | built | §7 |
 | Quality away from home | v206 | nothing to build (User-Agent or device header) | §8.1 |
-| What the device can decode (`X-Dispatch-Max-Video`) | v208 | **not yet** | §8.2 |
-| A stream of its own (409 on `change_stream`) | v208 | **not yet** (409 handling) | §8.3 |
-| Stutter report (`POST /api/core/app-stall/`) | v207 | **not yet** | §8.4 |
-| Reopen when a swap inside the connection freezes the picture | — (app only) | **not yet** | §8.6 |
+| What the device can decode (`X-Dispatch-Max-Video`) | v208 | built (arr.40), switch "Only start streams this TV can play" | §8.2 |
+| A stream of its own (409 on `change_stream`) | v208 | built (arr.40): a 409 reopens instead of walking | §8.3 |
+| Stutter report (`POST /api/core/app-stall/`) | v207 | built (arr.37), switch "Tell the server when the picture stutters" | §8.4 |
+| Reopen when a swap inside the connection freezes the picture | — (app only) | built (arr.40), switch "Reopen a frozen stream" | §8.6 |
+| Faster failover when arrTV starts a channel | v212 | nothing to build (device header); the app's own waits are shorter too, switch "Faster switch to the next stream" | §8.7 |
 
 The user's server was still on **v205** when the TV report below was taken: install the
 latest release before testing any of §8.
@@ -477,6 +480,22 @@ What to build:
 - The server reports what happened on its side in Channel health (Settings → Diagnostics →
   Channel health → What happened) and in a problem report (§7), which carries the channel's
   switches: send one when this happens.
+
+### 8.7 Faster failover when arrTV starts a channel (server v212)
+
+Server switch: `fast_failover` (needs `devices`; capabilities say `"fast_failover": true`).
+Nothing for the app to send beyond the device header. A channel a declared arrTV device
+starts is marked for two minutes; while its stream is connected and has sent **nothing**, the
+stream manager leaves it after `FAST_START_GRACE` (5 s) and **one** health check, instead of
+the start grace (Settings → Streaming, 60 s) and three. Once data has come, stock rules apply.
+Switching it off takes effect at once. IPTV answers within a second or two (the TVs learned
+0.1–3 s); a source that needs longer to lock would be left too soon, which is why it is only
+for arrTV and off by default.
+
+The app shortens its own waits the same way (arr.40, switch "Faster switch to the next
+stream"): 6 s (or 1.5× the channel's learned first byte, at most 12 s) before the first step
+instead of 28 s, 5 s per later step instead of 12, 6 s for "data but nothing playable" instead
+of 15. Both sides walk the same channel; whichever moves first, the other sees the new stream.
 
 ## 9. Behaviour matrix
 
