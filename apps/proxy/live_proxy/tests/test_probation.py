@@ -291,6 +291,27 @@ class GetStreamProbationTests(TestCase):
         self.redis.set(profile_connections_key(self.profile_a.id), 1)
         self.redis.set(profile_connections_key(self.profile_b.id), 1)
 
+    def test_an_arrtv_device_away_from_home_starts_on_the_stream_within_its_quality(self, *_mocks):
+        """app_devices.ordered_for is what the channel walks: FHD first, HD taken."""
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        app_devices.save_settings({"home_networks": "192.168.2.0/24", "outside_max_quality": "HD"})
+        self.stream_a.name = "News A FHD"
+        self.stream_a.save()
+        self.stream_b.name = "News B HD"
+        self.stream_b.save()
+        away = probation.Viewer("192.168.65.3", user_id=1, app="AerioTV/-arr. (Android; SHIELD Android TV)")
+        stream_id, profile_id, error, _reserved = self.channel.get_stream(viewer=away)
+        self.assertIsNone(error)
+        self.assertEqual((stream_id, profile_id), (self.stream_b.id, self.profile_b.id))
+        # At home the channel's own order stands
+        self.redis.delete(f"channel_stream:{self.channel.id}")
+        home = probation.Viewer("192.168.2.40", user_id=1, app="AerioTV/-arr. (Android; SHIELD Android TV)")
+        other = Channel.objects.create(channel_number=901, name="News 2")
+        ChannelStream.objects.create(channel=other, stream=self.stream_a, order=0)
+        ChannelStream.objects.create(channel=other, stream=self.stream_b, order=1)
+        self.assertEqual(other.get_stream(viewer=home)[0], self.stream_a.id)
+
     def _set_props(self, account, **props):
         account.custom_properties = {**account.custom_properties, **props}
         account.save()

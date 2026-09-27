@@ -80,10 +80,12 @@ class AppDevicesTests(TestCase):
         client.force_authenticate(user=self.user)
         self.assertEqual(
             client.get("/api/core/arrtv/").json(),
-            {"devices": False, "switch_hints": False, "reports": False},
+            {"devices": False, "switch_hints": False, "reports": False,
+             "home_networks": "", "outside_max_quality": ""},
         )
         answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
-        self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False})
+        self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
+                                  "home_networks": "", "outside_max_quality": ""})
         # Only an admin changes them
         viewer = User.objects.create_user(username="tv", password="x", user_level=0)
         client.force_authenticate(user=viewer)
@@ -235,3 +237,67 @@ class AppReportsTests(TestCase):
         answer = self.as_user(self.tv).get("/api/core/capabilities/").json()
         self.assertTrue(answer["reports"])
         self.assertEqual(answer["report_url"], "/api/core/app-reports/")
+
+
+class QualityAwayFromHomeTests(TestCase):
+    """An arrTV device outside the home networks is given a stream its connection can carry."""
+
+    ARRTV = "AerioTV/-arr. (Android; SHIELD Android TV)"
+
+    def setUp(self):
+        from apps.channels.models import Channel, ChannelStream, Stream
+        from apps.m3u.models import M3UAccount
+
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        account = M3UAccount.objects.create(name="Digitalizard.com", account_type="XC", server_url="http://d")
+        self.channel = Channel.objects.create(name="┃AT┃ ORF 1", channel_number=1)
+        names = ["AT| ORF 1 FHD", "AT| ORF 1 4K", "AT| ORF 1 HD", "AT| ORF 1"]
+        self.streams = [Stream.objects.create(name=n, url=f"http://d/{i}", m3u_account=account) for i, n in enumerate(names)]
+        self.fallback = Stream.objects.create(name="could not dispatch", url="http://local/f", is_custom=True)
+        for order, stream in enumerate(self.streams + [self.fallback]):
+            ChannelStream.objects.create(channel=self.channel, stream=stream, order=order)
+        app_devices.save_settings({"home_networks": "192.168.2.0/24", "outside_max_quality": "HD"})
+
+    def order(self, ip, app=ARRTV, **viewer):
+        seen = probation.Viewer(ip, user_id=1, app=app, **viewer)
+        return [s.name for s in app_devices.ordered_for(seen, self.channel.streams.order_by("channelstream__order"))]
+
+    def test_away_from_home_what_is_within_the_limit_comes_first(self):
+        self.assertEqual(
+            self.order("192.168.65.3"),
+            # HD and the one that says nothing first; the better ones after, not dropped --
+            # a channel with nothing else still plays; the fallback last as ever
+            ["AT| ORF 1 HD", "AT| ORF 1", "AT| ORF 1 FHD", "AT| ORF 1 4K", "could not dispatch"],
+        )
+
+    def test_at_home_or_not_arrtv_nothing_changes(self):
+        as_is = ["AT| ORF 1 FHD", "AT| ORF 1 4K", "AT| ORF 1 HD", "AT| ORF 1", "could not dispatch"]
+        self.assertEqual(self.order("192.168.2.40"), as_is)
+        self.assertEqual(self.order("192.168.65.3", app="TiviMate/ (Android )"), as_is)
+        # A device arrTV declared counts as arrTV whatever its User-Agent says
+        self.assertEqual(
+            self.order("192.168.65.3", app="okhttp/", server_device="app|1|shield-0001")[0], "AT| ORF 1 HD"
+        )
+
+    def test_without_home_networks_or_a_limit_nothing_is_limited(self):
+        app_devices.save_settings({"home_networks": ""})
+        self.assertEqual(self.order("192.168.65.3")[0], "AT| ORF 1 FHD")
+        app_devices.save_settings({"home_networks": "192.168.2.0/24", "outside_max_quality": ""})
+        self.assertEqual(self.order("192.168.65.3")[0], "AT| ORF 1 FHD")
+
+    def test_sd_at_most(self):
+        app_devices.save_settings({"outside_max_quality": "SD"})
+        self.assertEqual(self.order("192.168.65.3")[:2], ["AT| ORF 1", "AT| ORF 1 FHD"])
+
+    def test_home_networks_are_checked_when_saved(self):
+        admin = User.objects.create_user(username="admin", password="x", user_level=10)
+        client = APIClient()
+        client.force_authenticate(user=admin)
+        bad = client.put("/api/core/arrtv/", {"home_networks": "not a network"}, format="json")
+        self.assertEqual(bad.status_code, 400)
+        good = client.put(
+            "/api/core/arrtv/", {"home_networks": "192.168.2.0/24 10.0.0.0/8", "outside_max_quality": "hd"}, format="json"
+        ).json()
+        self.assertEqual(good["home_networks"], "192.168.2.0/24, 10.0.0.0/8")
+        self.assertEqual(good["outside_max_quality"], "HD")

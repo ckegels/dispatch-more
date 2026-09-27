@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: telling the server which device you are
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -42,6 +42,7 @@ send none of the headers below. On Dispatch More:
   "switch_hints": false,
   "reports": false,
   "report_url": "/api/core/app-reports/",
+  "outside_max_quality": "HD",
   "headers": {
     "device": "X-Dispatch-Device",
     "device_name": "X-Dispatch-Device-Name",
@@ -286,6 +287,19 @@ and what happened to it (reconnects, stream switches, errors); how it started, p
 phase; this device's channel switches and Force Close; and the server's log lines about the
 channel over the last 30 minutes. The admin reads it all on Settings → arrTV → Problem reports,
 and copies it whole to pass on.
+
+### Quality away from home (server v206)
+
+Nothing to build for this. The server admin sets **home networks** and **"Away from home, at
+most HD"** (or SD). An arrTV request from outside the home networks (the VPN, a phone
+connection) then starts a channel on a stream within that quality, where the channel has
+one. `outside_max_quality` in the capabilities says it is on ("" is off), in case the app
+wants to show it.
+
+What the app must keep doing, because it is how the server recognises arrTV: send the device
+header (§2), **or** keep the User-Agent as it is now, `AerioTV/<version>-arr. (Android; …)`.
+A User-Agent without `-arr` and without the device header is taken for another app and gets no
+limit.
 
 ## 8. Behaviour matrix
 

@@ -1938,6 +1938,7 @@ def reserve_sticky_slot(channel, redis_client, viewer):
         lambda account: account_allows_probation(account)
         and account_keeps_viewers(account)
         and is_identified(viewer, account),
+        viewer=viewer,
     )
     if not candidates or channel.get_stream_profile().is_redirect():
         return None
@@ -1994,13 +1995,15 @@ def reserve_sticky_slot(channel, redis_client, viewer):
     return None
 
 
-def _channel_candidates(channel, account_filter=None):
+def _channel_candidates(channel, account_filter=None, viewer=None):
     """
     (stream, profile) pairs in channel order with the default profile first, like
     get_stream(). Profiles are only loaded for accounts that pass account_filter.
     """
     candidates = []
-    for stream in channel.streams.select_related("m3u_account").order_by("channelstream__order"):
+    for stream in app_devices.ordered_for(
+        viewer, channel.streams.select_related("m3u_account").order_by("channelstream__order")
+    ):
         account = stream.m3u_account
         if not account or not account.is_active:
             continue
@@ -2043,7 +2046,7 @@ def reserve_alternate_slot(channel, redis_client, viewer):
 
     # Nothing to do (and nothing to read from Redis) unless an account here alternates.
     # Accounts without the overlap are never moved to, so their profiles are not loaded.
-    candidates = _channel_candidates(channel, account_allows_probation)
+    candidates = _channel_candidates(channel, account_allows_probation, viewer=viewer)
     accounts = {profile.id: stream.m3u_account for stream, profile in candidates}
     if not any(account_alternates_viewers(account) for account in accounts.values()):
         return None

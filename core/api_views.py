@@ -562,7 +562,15 @@ def arrtv_settings(request):
     from apps.proxy.live_proxy import app_devices
 
     if request.method == "PUT":
-        return JsonResponse(app_devices.save_settings(request.data or {}))
+        given = request.data or {}
+        if given.get("home_networks"):
+            from apps.proxy.live_proxy.probation import parse_lan_subnets
+
+            try:
+                given = {**given, "home_networks": ", ".join(parse_lan_subnets(given["home_networks"]))}
+            except ValueError as e:
+                return JsonResponse({"error": str(e)}, status=400)
+        return JsonResponse(app_devices.save_settings(given))
     return JsonResponse(app_devices.load_settings())
 
 

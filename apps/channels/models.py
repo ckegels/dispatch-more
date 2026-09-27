@@ -721,7 +721,12 @@ class Channel(models.Model):
             if allowed_m3u_profiles is not None:
                 # Redirect URLs are issued to individual users, so do not create a
                 # channel-wide assignment that another viewer could reuse.
-                streams = list(self.streams.all().order_by("channelstream__order"))
+                from apps.proxy.live_proxy import app_devices
+
+                # An arrTV device away from home: the streams within its quality first
+                streams = app_devices.ordered_for(
+                    viewer, self.streams.all().order_by("channelstream__order")
+                )
                 for stream in streams:
                     for profile in allowed_m3u_profiles.get(stream.m3u_account_id, []):
                         if pool_has_capacity_for_profile(profile, redis_client, viewer):
@@ -781,8 +786,13 @@ class Channel(models.Model):
             if preferred_result is not None:
                 return preferred_result
 
-        # Iterate through channel streams and their profiles
-        for stream in self.streams.all().order_by("channelstream__order"):
+        from apps.proxy.live_proxy import app_devices
+
+        # Iterate through channel streams and their profiles -- for an arrTV device away from
+        # home, the streams within its quality first (app_devices.ordered_for)
+        for stream in app_devices.ordered_for(
+            viewer, self.streams.all().order_by("channelstream__order")
+        ):
             # Channel Switch Overlap comes before custom streams once the streams before them
             # are full, so a fallback slate on the unlimited "custom" account (for example
             # from the could-not-dispatch plugin) does not replace a channel switch

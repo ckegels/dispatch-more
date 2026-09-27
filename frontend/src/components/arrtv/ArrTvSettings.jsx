@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Box, Loader, Stack, Switch, Text } from '@mantine/core';
+import {
+  Alert,
+  Box,
+  Group,
+  Loader,
+  Select,
+  Stack,
+  Switch,
+  Text,
+  TextInput,
+} from '@mantine/core';
 import API from '../../api';
 import AppReports from '../diagnostics/AppReports';
 import { copy } from '../diagnostics/copyText';
@@ -24,19 +34,30 @@ const ArrTvSettings = () => {
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(null);
+  // The home networks as typed, saved when the field is left rather than on every key
+  const [networks, setNetworks] = useState('');
+  const [networksError, setNetworksError] = useState(null);
 
   useEffect(() => {
     API.getArrTvSettings()
-      .then(setSettings)
+      .then((given) => {
+        setSettings(given);
+        setNetworks(given?.home_networks || '');
+      })
       .catch(() => setError('Could not read the arrTV settings.'));
   }, []);
 
   const change = async (changes) => {
     try {
-      setSettings(await API.saveArrTvSettings({ ...settings, ...changes }));
+      const saved = await API.saveArrTvSettings({ ...settings, ...changes });
+      setSettings(saved);
+      setNetworks(saved?.home_networks || '');
       setError(null);
-    } catch {
-      setError('Could not change the arrTV settings.');
+      setNetworksError(null);
+    } catch (e) {
+      // A network that is not one is said on its field; anything else on the page
+      if ('home_networks' in changes && e?.body?.error) setNetworksError(e.body.error);
+      else setError('Could not change the arrTV settings.');
     }
   };
 
@@ -76,6 +97,46 @@ const ArrTvSettings = () => {
             disabled={!settings.devices}
             onChange={(on) => change({ switch_hints: on })}
           />
+        </Box>
+        <Box>
+          <Text size="sm" fw={500}>
+            Away from home
+          </Text>
+          <Text size="xs" c="dimmed" mb="xs">
+            An arrTV device outside your home networks — on the VPN, or on a phone connection —
+            starts a channel on a stream no better than this, where the channel has one: an FHD
+            stream stutters where an HD one plays. A channel with nothing within it still plays
+            its best. A channel someone is already watching plays the stream it is on; only the
+            device that starts a channel chooses.
+          </Text>
+          <Group align="flex-start" gap="md" wrap="wrap">
+            <TextInput
+              size="xs"
+              label="Home networks"
+              description="Comma separated, for example 192.168.2.0/24. Empty is no limit anywhere."
+              placeholder="192.168.2.0/24"
+              value={networks}
+              error={networksError}
+              onChange={(e) => setNetworks(e.currentTarget.value)}
+              onBlur={() => {
+                if (networks !== (settings.home_networks || '')) change({ home_networks: networks });
+              }}
+              style={{ flex: '1 1 280px' }}
+            />
+            <Select
+              size="xs"
+              label="Away from home, at most"
+              allowDeselect={false}
+              value={settings.outside_max_quality || ''}
+              onChange={(value) => change({ outside_max_quality: value || '' })}
+              data={[
+                { value: '', label: 'No limit' },
+                { value: 'HD', label: 'HD (720p)' },
+                { value: 'SD', label: 'SD' },
+              ]}
+              style={{ width: 180 }}
+            />
+          </Group>
         </Box>
         <Setting
           label="Take problem reports from arrTV"

@@ -228,49 +228,8 @@ first channel.
 Upstream issues: #1694 (the user's own "probation-slots" request), #1600 (configurable retry
 budget, a simpler related idea). CONTRIBUTING.md: PRs target `dev`, need an agreed issue.
 
-**Apps that say who they are** (v197, `app_devices.py`, hand-over for the app:
-`fork/arrTV-integration.md`). Measured on the real server: a SHIELD (arrTV) and a Mac
-(Chrome) on the admin login both arrived through the user's VPN as `192.168.65.3`, so the
-identity (IP + login; the app only counts on LAN subnets) made them one device and Force
-Close closed each one's channel for the other -- 25 times in one evening in the log. The
-user's own app, arrTV, now says which device it is. Two global switches, off
-(`CoreSettings` "app-integration", on Settings → Streaming → arrTV since v202, via
-`/api/core/arrtv/`; they were a box on Diagnostics → Channel switches before, which was the
-wrong place and the wrong name -- only arrTV sends any of this):
-- `devices`: `X-Dispatch-Device` (+ `-Name`) makes the viewer `app|<user id>|<device>` in
-  `server_device` -- the path a media server's named device already takes, so identity,
-  client records and viewer sets need nothing new. Never "guessed" (the 10 s window is for
-  media servers only). `X-Dispatch-Multiview` marks a tile: a tile's request runs no Force
-  Close at all (the full-screen channel it came from carries no session). Names in
-  Diagnostics.
-- `switch_hints`: `X-Dispatch-Previous-Channel` (UUID or the Xtream number id) →
-  `leave_previous_channel` closes that channel at once and holds its slot, only for a
-  declared device and only when it is that device's alone and not being recorded.
-Every header also works as a query parameter (`dm_device` …) for players that cannot set
-headers. `GET /api/core/capabilities/` (any logged-in user; 404 on stock) is how the app
-knows. `record_client_viewer` now also runs for Force Close alone and for declared devices:
-without it a device was never the viewer of its own older channel.
-
-**Error reports from apps** (v198, `app_reports.py`, Settings → arrTV since v202; contract in
-`fork/arrTV-integration.md` §7). `POST /api/core/app-reports/` (any logged-in user, refused
-while the `reports` switch of `app_devices` is off): the app sends the channel, player state
-and error, its measurements and its log; the server adds its own view of that channel at that
-moment -- the streams in order with provider and Stream Check state, `health` readings and
-events, the start phases (`timing`), this device's switches, and 30 minutes of the server log
-about it (`log_center.read`). Credentials are taken out of everything (`_redact`: Xtream
-paths, password/token parameters). Since v204 **every report is kept until an admin deletes
-it** (one, or all after a confirmation), each in a `CoreSettings` row of its own
-(`app-report-<id>`): a report can hold 100,000 characters of log, so one row for all of them
-was rewritten whole per report, and two arriving together lost one. The list reads only the
-fields it shows (JSON key lookups), never the logs. To v203 it was the last 50 in one row
-(`app-reports`); that row is split into rows the first time the list is read, then deleted.
-Admins list, open, copy and delete them on Settings → arrTV.
-
-**Lineup: a suggestion onto a channel you have, and streams on no channel** (v198). A "New"
-row can be put on one of your channels instead (`search_channels`, `apply_plan(into=…)`,
-`ChannelFinder.jsx`): its streams go after that channel's own and before its fallback, and no
-channel is made. The stream search takes `unassigned` (streams no channel has; nothing needs
-typing then) -- stock's Streams page has the same as a filter, the Lineup did not.
+**arrTV's own device identity and channel change** are in §5.11: a device arrTV declares is
+its own viewer whatever its address, and a channel it says it is leaving is closed at once.
 
 ### 5.2 Media Servers (Plex, Jellyfin) — `media_servers.py`, `media_server_views.py`, `media_server_tuner_views.py`
 
@@ -540,6 +499,25 @@ The scripts are in the session scratchpad, not the repo: they download with the 
 key. The user switched on 20 more Digitalizard groups for this (Spectrum, MeTV & ION, HBO Max,
 USA Cinema/Kids/Music/Fox, NL Kids/Music/Sports/ESPN/Cinema/Viaplay, BE Kids-Docum, CA
 Français/Others, FR Divertissement/Enfants, IT Kids/Cinema).
+
+**Lineup: a suggestion onto a channel you have, and streams on no channel** (v198). A "New"
+row can be put on one of your channels instead (`search_channels`, `apply_plan(into=…)`,
+`ChannelFinder.jsx`): its streams go after that channel's own and before its fallback, and no
+channel is made. The stream search takes `unassigned` (streams no channel has; nothing needs
+typing then) -- stock's Streams page has the same as a filter, the Lineup did not.
+
+**Choosing among the new channels** (v199–v201, `ChannelManagerTable.jsx`, `name_from`).
+With a provider's whole playlist in scope the Lineup suggests two thousand new channels, most
+of them something one provider carries once. The toolbar sorts **"Most streams first"** and
+hides rows with fewer than **"At least … streams"** (counted as the row comes out: not the
+fallback, not a stream taken off), and **"From all N providers"** keeps only rows with a
+stream from every login switched on -- every active login, not the levers' providers,
+because with the levers narrowed to one provider "all" would have meant that one. New
+channels are named after `name_from` ("Name them after", New channels section): the first
+provider picked that carries the channel, its best stream; empty is the old rule (preferred
+provider, then best picture), under which the new login's `AT| ATV FHD` won over your
+`┃AT┃ ATV HD` style by being FHD. New channels only hold streams from the providers the levers
+look at, so the levers' Providers must include every login for "From all" to find any.
 
 **Groups can be left alone** (v173, `exclude_channel_groups`). Out of the plan altogether:
 no row, no streams added, nothing combined, and never a home for a new channel either (see
@@ -1590,6 +1568,69 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
+### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
+
+arrTV is the user's own Android / Google TV player, a fork of AerioTV
+(https://github.com/jonzey231/AerioTV-Android) built to work with this server. Everything
+here is on the server; the app side is described for its developer in
+**`fork/arrTV-integration.md`** (support check, device id, headers, channel change,
+multiview, leaving a channel, problem reports, testing with curl, checklist). It lives in
+Settings → Streaming → **arrTV** (`/api/core/arrtv/`, `CoreSettings` "app-integration"),
+every switch off: no other app sends any of it, and off is stock.
+
+**Apps that say who they are** (v197, `app_devices.py`, hand-over for the app:
+`fork/arrTV-integration.md`). Measured on the real server: a SHIELD (arrTV) and a Mac
+(Chrome) on the admin login both arrived through the user's VPN as `192.168.65.3`, so the
+identity (IP + login; the app only counts on LAN subnets) made them one device and Force
+Close closed each one's channel for the other -- 25 times in one evening in the log. The
+user's own app, arrTV, now says which device it is. Two global switches, off
+(`CoreSettings` "app-integration", on Settings → Streaming → arrTV since v202, via
+`/api/core/arrtv/`; they were a box on Diagnostics → Channel switches before, which was the
+wrong place and the wrong name -- only arrTV sends any of this):
+- `devices`: `X-Dispatch-Device` (+ `-Name`) makes the viewer `app|<user id>|<device>` in
+  `server_device` -- the path a media server's named device already takes, so identity,
+  client records and viewer sets need nothing new. Never "guessed" (the 10 s window is for
+  media servers only). `X-Dispatch-Multiview` marks a tile: a tile's request runs no Force
+  Close at all (the full-screen channel it came from carries no session). Names in
+  Diagnostics.
+- `switch_hints`: `X-Dispatch-Previous-Channel` (UUID or the Xtream number id) →
+  `leave_previous_channel` closes that channel at once and holds its slot, only for a
+  declared device and only when it is that device's alone and not being recorded.
+Every header also works as a query parameter (`dm_device` …) for players that cannot set
+headers. `GET /api/core/capabilities/` (any logged-in user; 404 on stock) is how the app
+knows. `record_client_viewer` now also runs for Force Close alone and for declared devices:
+without it a device was never the viewer of its own older channel.
+
+**Error reports from apps** (v198, `app_reports.py`, Settings → arrTV since v202; contract in
+`fork/arrTV-integration.md` §7). `POST /api/core/app-reports/` (any logged-in user, refused
+while the `reports` switch of `app_devices` is off): the app sends the channel, player state
+and error, its measurements and its log; the server adds its own view of that channel at that
+moment -- the streams in order with provider and Stream Check state, `health` readings and
+events, the start phases (`timing`), this device's switches, and 30 minutes of the server log
+about it (`log_center.read`). Credentials are taken out of everything (`_redact`: Xtream
+paths, password/token parameters). Since v204 **every report is kept until an admin deletes
+it** (one, or all after a confirmation), each in a `CoreSettings` row of its own
+(`app-report-<id>`): a report can hold 100,000 characters of log, so one row for all of them
+was rewritten whole per report, and two arriving together lost one. The list reads only the
+fields it shows (JSON key lookups), never the logs. To v203 it was the last 50 in one row
+(`app-reports`); that row is split into rows the first time the list is read, then deleted.
+Admins list, open, copy and delete them on Settings → arrTV.
+
+**Away from home, at most HD** (v206, `app_devices.quality_limit_for` / `ordered_for`). The
+user's network cannot carry FHD to devices outside the house (VPN, phone). With **home
+networks** and **"Away from home, at most"** (HD or SD) set, an arrTV request from an address
+outside the home networks walks the channel's streams with those within the limit first,
+then the better ones (so a channel with nothing else still plays its best), the fallback last
+as ever. Quality is `channel_manager.quality_of` (measured resolution, else the name); a
+stream that says nothing is not held against it. arrTV is a declared device *or* its
+User-Agent (`AerioTV/…-arr.`), so it works before the app sends headers. Applied where a
+channel picks a stream: `Channel.get_stream` (both paths) and the switch code's
+`_channel_candidates` -- not in `_migrate_to_free_profile`, which moves a running channel and
+is nobody's choice. **Limit:** a channel is one upstream for everyone on it; joining a
+channel someone at home watches in FHD is joining that stream. Only who *starts* it chooses.
+Empty home networks limit nothing (everything would be "outside"). Home networks are checked
+when saved (`parse_lan_subnets`, 400 on anything that is not a local network).
+
 **Reports are not settings** (v205). Reports are `CoreSettings` rows (`app-report-<id>`
 since v204, one `app-reports` row before), and stock's `CoreSettingsViewSet` lists and
 retrieves every row there is -- for a *standard* user as well as an admin (streamers are
@@ -1597,6 +1638,12 @@ refused), and the web page fetches that list at every start. So the reports, adm
 their own endpoint, were readable by standard users there, logs and all, and made every page
 load heavier; unbounded since v204. `get_queryset` leaves `app-report*` out; nothing stock
 reads is one of them.
+
+**Server discovery (not built, and nothing needed on the server):** `GET /api/core/version/`
+answers without a login on stock and on this fork (`build` is "Dispatch More vN" here), so
+arrTV can scan its own subnet on port 9191. mDNS (`_dispatcharr._tcp`) would find any port
+at once but needs a responder here (the `zeroconf` package is not a dependency) and host
+networking in Docker. Neither crosses the VPN.
 
 ## 6. Measured on the real installation (do not re-derive)
 
@@ -1776,8 +1823,22 @@ reads is one of them.
 - An animated "no stream" card is not recognised (would need OCR or known-card fingerprints).
 - Plex recording detection (Jellyfin has timers; Plex: `GET /livetv/dvrs/{id}/recordings`
   while recording, not yet looked at).
-- Channel Manager phase 2 ideas: fuzzy matching, East/West, rule sets per group, run after M3U
-  refresh, undo.
+- Channel Manager phase 2 ideas: rule sets per group, run after M3U refresh, undo. (Fuzzy
+  matching of a kind, East/West and local stations were done in v195–v196, as levers.)
+- **Lineup provider filter** ("Missing …" / "Fewer than N providers", v194): it counts a row
+  as it would come out, so a channel the plan fills disappears from "Missing <provider>" --
+  set together with the levers' Providers, "Merge" looked empty (the user's own finding). The
+  fix -- count what a channel has now, and offer every active login, not the levers' -- was
+  written and then stopped by the user; not in. "From all N providers" (v200) already counts
+  every active login.
+- A device identity that always counts the app (not only on LAN subnets), as the fallback for
+  players that do not declare themselves: discussed with the TV/Mac-over-VPN case, not built.
+- `docs/channel-switch-overlap.md` does not mention arrTV's declared devices yet.
+- From Podium (github.com/lpukatch/podium, which ranks streams by measured quality): measuring
+  bitrate during Stream Check's own read, to rank by it; not checking event channels whose
+  match has not started (EPG). Running Podium beside this fork: both reorder streams and both
+  open provider connections -- its "Probe through Dispatcharr" makes its probes visible to
+  Stream Check.
 - Offered earlier, not built: stream reliability ranking, fd-leak check (#1674), channel-death
   notifications, silent-audio and low-framerate checks (the IPTV Checker plugin has both),
   counting viewers' channel opens against a provider's learned limit, and a prebuilt Docker

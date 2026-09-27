@@ -33,7 +33,13 @@ logger = logging.getLogger("live_proxy")
 
 SETTINGS_KEY = "app-integration"
 # reports: an app may send error reports (see app_reports)
-DEFAULTS = {"devices": False, "switch_hints": False, "reports": False}
+# home_networks / outside_max_quality: an arrTV device outside the home networks is given
+# a stream no better than this ("HD", "SD"; "" is no limit) -- see ordered_for
+DEFAULTS = {
+    "devices": False, "switch_hints": False, "reports": False,
+    "home_networks": "", "outside_max_quality": "",
+}
+QUALITY_LIMITS = ("HD", "SD")
 
 # Read on every stream request, so kept for a few seconds rather than asked of the database
 _HELD = {"at": 0.0, "value": None}
@@ -57,6 +63,16 @@ HEADERS = {
 }
 
 
+def _as_kind(key, value):
+    """A setting as the kind its default is: the switches on or off, the rest as text."""
+    if isinstance(DEFAULTS[key], bool):
+        return bool(value)
+    text = str(value or "").strip()
+    if key == "outside_max_quality":
+        return text.upper() if text.upper() in QUALITY_LIMITS else ""
+    return text[:2000]
+
+
 def load_settings():
     now = time.monotonic()
     if _HELD["value"] is not None and now - _HELD["at"] < HELD_SECONDS:
@@ -67,7 +83,7 @@ def load_settings():
 
         stored = CoreSettings.objects.filter(key=SETTINGS_KEY).first()
         if stored and isinstance(stored.value, dict):
-            values.update({k: bool(stored.value[k]) for k in DEFAULTS if k in stored.value})
+            values.update({k: _as_kind(k, stored.value[k]) for k in DEFAULTS if k in stored.value})
     except Exception as e:
         logger.debug(f"App devices: could not read the settings: {e}")
     _HELD.update(at=now, value=dict(values))
@@ -77,7 +93,7 @@ def load_settings():
 def save_settings(given):
     from core.models import CoreSettings
 
-    values = {**load_settings(), **{k: bool(given[k]) for k in DEFAULTS if k in (given or {})}}
+    values = {**load_settings(), **{k: _as_kind(k, given[k]) for k in DEFAULTS if k in (given or {})}}
     CoreSettings.objects.update_or_create(
         key=SETTINGS_KEY, defaults={"name": "App integration", "value": values}
     )
@@ -179,6 +195,86 @@ def device_name(redis_client, key):
         return ""
 
 
+# arrTV's own User-Agent, for requests from a version that does not declare its device yet:
+# "AerioTV/1.4.0-arr. (Android; SHIELD Android TV)" -- the "-arr" is what makes it arrTV
+_ARRTV_AGENT = re.compile(r"arrtv|aeriotv[^ ]*-arr", re.IGNORECASE)
+
+
+def is_arrtv(viewer):
+    """Whether this request is arrTV's: a device it declared, or its User-Agent."""
+    if viewer is None:
+        return False
+    return is_declared(getattr(viewer, "server_device", None)) or bool(
+        _ARRTV_AGENT.search(getattr(viewer, "app", None) or "")
+    )
+
+
+def _at_home(ip, networks_text):
+    import ipaddress
+
+    try:
+        from .probation import parse_lan_subnets
+
+        networks = parse_lan_subnets(networks_text)
+    except Exception:
+        networks = []
+    if not networks:
+        return None
+    try:
+        address = ipaddress.ip_address(ip)
+        if getattr(address, "ipv4_mapped", None):
+            address = address.ipv4_mapped
+    except (TypeError, ValueError):
+        return None
+    return any(address in ipaddress.ip_network(n, strict=False) for n in networks)
+
+
+def quality_limit_for(viewer):
+    """
+    The best quality this viewer should be given ("HD", "SD"), or "" for none: an arrTV
+    device whose address is outside the home networks, when a limit is set. Nothing is
+    limited while the home networks are empty -- without them everything would be outside.
+    """
+    settings = load_settings()
+    limit = settings.get("outside_max_quality") or ""
+    if not limit or not is_arrtv(viewer):
+        return ""
+    at_home = _at_home(getattr(viewer, "ip", ""), settings.get("home_networks"))
+    return limit if at_home is False else ""
+
+
+def ordered_for(viewer, streams):
+    """
+    A channel's streams in the order they are tried for this viewer. For an arrTV device
+    outside the home networks with a limit set, the streams within the limit come first --
+    on a VPN or a phone connection an FHD stream stutters where an HD one plays -- then the
+    better ones, so a channel that has nothing within the limit still plays; and the custom
+    fallback stays last, as always. Everything else: the order as it is.
+    """
+    streams = list(streams)
+    limit = quality_limit_for(viewer)
+    if not limit:
+        return streams
+    from apps.channels.channel_manager import QUALITY_LABELS, quality_of
+
+    most = QUALITY_LABELS.index(limit)
+
+    def within(stream):
+        label, rank, _probed = quality_of(stream.name, stream.stream_stats)
+        # A stream that says nothing about its picture is not held against it
+        return not label or rank >= most
+
+    real = [s for s in streams if not s.is_custom]
+    allowed = [s for s in real if within(s)]
+    if len(allowed) == len(real):
+        return streams
+    logger.info(
+        f"arrTV outside home ({getattr(viewer, 'ip', '')}): {limit} at most, "
+        f"{len(real) - len(allowed)} better stream(s) tried last"
+    )
+    return allowed + [s for s in real if s not in allowed] + [s for s in streams if s.is_custom]
+
+
 def capabilities():
     """What an app may rely on here, for GET /api/core/capabilities/."""
     try:
@@ -194,6 +290,7 @@ def capabilities():
         "multiview": settings["devices"],
         "switch_hints": settings["switch_hints"],
         "reports": settings["reports"],
+        "outside_max_quality": settings["outside_max_quality"],
         "report_url": "/api/core/app-reports/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},

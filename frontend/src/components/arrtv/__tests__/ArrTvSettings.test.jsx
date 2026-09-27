@@ -46,6 +46,23 @@ describe('ArrTvSettings', () => {
     await waitFor(() => expect(hints).not.toBeDisabled());
   });
 
+  it('saves the home networks when the field is left, and says when one is not a network', async () => {
+    API.getArrTvSettings.mockResolvedValue({
+      devices: false, switch_hints: false, reports: false, home_networks: '', outside_max_quality: 'HD',
+    });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.saveArrTvSettings.mockRejectedValueOnce({ body: { error: 'nope is not a valid IP address or subnet' } });
+    draw();
+    const field = await screen.findByPlaceholderText('192.168.2.0/24');
+    fireEvent.change(field, { target: { value: 'nope' } });
+    expect(API.saveArrTvSettings).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    await waitFor(() =>
+      expect(API.saveArrTvSettings).toHaveBeenCalledWith(expect.objectContaining({ home_networks: 'nope' }))
+    );
+    expect(await screen.findByText('nope is not a valid IP address or subnet')).toBeInTheDocument();
+  });
+
   it('lists the reports arrTV sent and opens one whole', async () => {
     API.getArrTvSettings.mockResolvedValue({ devices: true, switch_hints: false, reports: true });
     API.getAppReports.mockResolvedValue({
