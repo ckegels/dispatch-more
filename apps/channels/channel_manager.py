@@ -2332,12 +2332,17 @@ def search_guides(search, limit=SEARCH_PAGE, current=None, source=None):
     return _search(active, matching, (search or "").strip(), found, seen, limit)
 
 
-def _guides_in_reach(source=None):
-    """The guides matched against, and on what terms, narrowed to one source if asked."""
+def _guides_in_reach(source=None, wide=False):
+    """
+    The guides matched against, and on what terms, narrowed to one source if asked. `wide`
+    drops the matching settings' limits: every active guide, whatever its source or country.
+    """
     from apps.epg.models import EPGData
 
     active = EPGData.objects.exclude(epg_source__is_active=False)
     matching = load_matching()
+    if wide:
+        matching = {**matching, "sources": [], "tvg_id_like": "", "country_must_agree": False}
     if source not in (None, "", 0, "0", "all"):
         try:
             matching = {**matching, "sources": [int(source)]}
@@ -2401,7 +2406,8 @@ def _search(active, matching, wanted, found, seen, limit):
     }
 
 
-def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None):
+def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None,
+                     min_score=MIN_GUIDE_SCORE, wide=False):
     """
     The guide entries one channel could be, best first, for the picker on its row.
 
@@ -2422,12 +2428,16 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
 
     With `search`, it is a plain search instead: every guide whose name or tvg-id carries
     what was typed, so a channel the matcher cannot see is still there to be chosen.
+
+    `min_score` and `wide` are for arrTV's list (app_guides), which would rather show a
+    long list of maybes than nothing: a lower bar than MIN_GUIDE_SCORE, and with `wide`
+    none of the matching settings' limits (sources, tvg-id pattern, country) either.
     """
     from apps.epg.models import EPGSource
 
     from . import epg_matching
 
-    active, matching = _guides_in_reach(source)
+    active, matching = _guides_in_reach(None if wide else source, wide=wide)
     try:
         limit = max(1, min(int(limit or 12), 50))
     except (TypeError, ValueError):
@@ -2499,7 +2509,7 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
             score, tier, why = judge_guide(
                 name, country, row, tvg_id, known_calls=known_calls, reference=reference
             )
-            if score < MIN_GUIDE_SCORE:
+            if score < min_score or score <= 0:
                 continue
             entry = _guide_entry(
                 row["id"], row.get("original_tvg_id") or row.get("tvg_id"), row["name"],

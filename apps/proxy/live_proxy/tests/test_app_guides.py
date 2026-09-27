@@ -184,6 +184,43 @@ class GuideChoiceTests(TestCase):
         scores = [g["score"] for g in guides]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
+    def test_with_little_found_it_widens_a_step_at_a_time(self):
+        """A list of maybes rather than none: any confidence, then without the matching
+        settings' limits, then a plain search on the channel's name."""
+        wide = EPGData.objects.create(tvg_id="ORF1.other", name="ORF Eins", epg_source=self.de)
+        found = EPGData.objects.create(tvg_id="orf.search", name="ORF Search", epg_source=self.de)
+        self.airing(wide, "Wide show")
+        self.airing(found, "Search show")
+        calls = []
+
+        def answer(*args, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("search"):
+                return [{"id": found.id, "score": None}]
+            if kwargs.get("wide"):
+                return [{"id": wide.id, "score": 30}]
+            return [{"id": self.wrong.id, "score": 70}]
+
+        with mock.patch("apps.channels.channel_manager.guide_candidates", side_effect=answer):
+            guides = self.ask().json()["guides"]
+        self.assertEqual([g["epg_id"] for g in guides], [wide.id, found.id])
+        self.assertEqual(calls[0]["min_score"], app_guides.ANY_SCORE)
+        self.assertFalse(calls[0]["wide"])
+        self.assertTrue(calls[1]["wide"])
+        self.assertEqual(calls[2]["search"], "orf 1")
+        self.assertEqual(calls[3]["search"], "orf", "then its longest word alone")
+
+    def test_once_the_list_is_full_it_widens_no_further(self):
+        more = []
+        for i in range(25):
+            guide = EPGData.objects.create(tvg_id=f"y{i}", name=f"Y {i}", epg_source=self.de)
+            self.airing(guide, f"Show {i}")
+            more.append({"id": guide.id, "score": 90 - i})
+        with mock.patch("apps.channels.channel_manager.guide_candidates", return_value=more) as matcher:
+            guides = self.ask().json()["guides"]
+        self.assertEqual(len(guides), app_guides.LIST_MOST)
+        self.assertEqual(matcher.call_count, 1)
+
     def test_only_the_chosen_sources_are_offered(self):
         other = EPGData.objects.create(tvg_id="ORF1.at2", name="ORF 1 AT", epg_source=self.at)
         self.airing(other, "Zeit im Bild")
@@ -456,3 +493,18 @@ class PreloadTests(TestCase):
         self.queued.reset_mock()
         app_guides.after_refresh(self.source.id)
         self.queued.assert_called_once()
+
+
+class WideMatchingTests(TestCase):
+    """What "wide" means to the Guides tab's matcher: none of its settings' limits."""
+
+    def test_wide_drops_the_sources_pattern_and_country(self):
+        from apps.channels import channel_manager
+
+        settings = {**channel_manager.MATCHING_DEFAULTS, "sources": [1], "tvg_id_like": ".de",
+                    "country_must_agree": True}
+        with mock.patch("apps.channels.channel_manager.load_matching", return_value=settings):
+            _, narrow = channel_manager._guides_in_reach()
+            _, wide = channel_manager._guides_in_reach(wide=True)
+        self.assertEqual(narrow["sources"], [1])
+        self.assertEqual((wide["sources"], wide["tvg_id_like"], wide["country_must_agree"]), ([], "", False))

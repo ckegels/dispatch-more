@@ -37,9 +37,16 @@ logger = logging.getLogger("live_proxy")
 # ones the refresh's clean-up leaves alone.
 KEPT_KEY = "app-guide-kept"
 # How many guides the list shows, best first across every source, and how far down the
-# matcher's list it looks to find that many with something on now
+# matcher's list each step below looks to find that many with something on now
 LIST_MOST = 20
-LOOK_AT = 40
+LOOK_AT = 50
+# A list of maybes is better than none: until it holds LIST_MOST guides with something on,
+# it widens a step at a time. "matching" is the Guides tab's matcher and settings at any
+# confidence (its own bar is MIN_GUIDE_SCORE); "wide" drops the matching settings' limits
+# (sources, tvg-id pattern, country) -- the TV's own sources setting still holds; "search"
+# is a plain search on the words of the channel's name, then on its longest word alone.
+WIDEN = ("matching", "wide", "search")
+ANY_SCORE = 1
 # How many of each channel's candidates are read ahead of time. The rest (up to LOOK_AT) are
 # read when somebody opens that channel's list: preloading all forty for every channel would
 # come close to reading every guide there is (about 36,000 on the user's server).
@@ -192,23 +199,45 @@ def _offerable(epg_ids):
     return found
 
 
-def candidates(channel, how_many=LOOK_AT):
+def candidates(channel, how_many=LOOK_AT, step="matching"):
     """
-    [(epg id, score)] this channel could be, best first, its current guide left out.
-
-    The Guides tab's own matcher, with the settings the Guides tab has (which sources are
-    matched against at all), and only guides that may be offered.
+    [(epg id, score)] this channel could be, best first, its current guide left out, at one
+    of the WIDEN steps. Only guides that may be offered.
     """
     from apps.channels import channel_manager
 
     current = channel.epg_data_id
-    listed = channel_manager.guide_candidates(
-        channel.name, getattr(channel, "tvg_id", "") or "",
-        limit=min(50, how_many + 1), current=current,
-    )
-    wanted = [(entry["id"], entry.get("score") or 0) for entry in listed if entry["id"] != current]
+    limit = min(50, how_many + 1)
+    if step == "search":
+        listed = []
+        for words in _search_words(channel.name):
+            listed += channel_manager.guide_candidates(channel.name, search=words, limit=limit, current=current)
+    else:
+        listed = channel_manager.guide_candidates(
+            channel.name, getattr(channel, "tvg_id", "") or "",
+            limit=limit, current=current, min_score=ANY_SCORE, wide=(step == "wide"),
+        )
+    wanted, seen = [], set()
+    for entry in listed:
+        if entry["id"] != current and entry["id"] not in seen:
+            seen.add(entry["id"])
+            wanted.append((entry["id"], entry.get("score") or 0))
     offerable = _offerable(epg_id for epg_id, _ in wanted)
     return [(epg_id, score) for epg_id, score in wanted if epg_id in offerable][:how_many]
+
+
+def _search_words(name):
+    """What the last step searches for: the name's words, then its longest word alone."""
+    from apps.channels import channel_manager, epg_matching
+
+    words = epg_matching.normalize_name(channel_manager._strip_country_box(name or "")).split()
+    if not words:
+        return []
+    tries = [" ".join(words)]
+    longest = max(words, key=len)
+    if len(words) > 1 and len(longest) >= 3:
+        tries.append(longest)
+    return tries
 
 
 def choices_for(channel, user=None, start_reading=True):
@@ -220,23 +249,28 @@ def choices_for(channel, user=None, start_reading=True):
     empty: whatever is picked has a title on screen at once. Candidates nobody has read yet
     are read in the background, and `reading` says so, so the app can ask once more.
     """
-    ranked = candidates(channel)
-    ids = [epg_id for epg_id, _ in ranked]
-    about = _offerable(ids)
     current_id = channel.epg_data_id
-    on = now_and_next(ids + ([current_id] if current_id else []))
-
-    guides = []
-    for epg_id, score in ranked:
-        what = on.get(epg_id) or {}
-        if not what.get("now"):
+    on = now_and_next([current_id] if current_id else [])
+    ids, guides = [], []
+    for step in WIDEN:
+        ranked = [(epg_id, score) for epg_id, score in candidates(channel, step=step) if epg_id not in on]
+        if not ranked:
             continue
-        entry = about[epg_id]
-        guides.append({
-            "epg_id": epg_id, "name": entry["name"], "tvg_id": entry["tvg_id"], "score": score,
-            "source": {"id": entry["source_id"], "name": entry["source"]},
-            "now": what["now"], "next": what.get("next"),
-        })
+        ids += [epg_id for epg_id, _ in ranked]
+        about = _offerable(epg_id for epg_id, _ in ranked)
+        on.update(now_and_next([epg_id for epg_id, _ in ranked]))
+        for epg_id, score in ranked:
+            what = on.get(epg_id) or {}
+            if not what.get("now"):
+                continue
+            entry = about[epg_id]
+            guides.append({
+                "epg_id": epg_id, "name": entry["name"], "tvg_id": entry["tvg_id"], "score": score,
+                "source": {"id": entry["source_id"], "name": entry["source"]},
+                "now": what["now"], "next": what.get("next"),
+            })
+            if len(guides) >= LIST_MOST:
+                break
         if len(guides) >= LIST_MOST:
             break
 

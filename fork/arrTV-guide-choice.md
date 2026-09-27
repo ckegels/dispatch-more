@@ -132,8 +132,17 @@ The rules:
 - **How many.** The **20 best in total**, across all sources, by the same score
   `guide_candidates` gives (the Guides tab's ranking, only longer), current guide excluded.
   Candidates are taken in score order and those with nothing on now are skipped until 20
-  with information are found, looking at most at the best **40** candidates; fewer than 20
-  is fine. The user wants a long list to scroll through and find the right one.
+  with information are found, looking at the best **50** candidates of each step below.
+  The user wants a long list to scroll through and find the right one, and almost never
+  an empty one.
+- **Widening (v217).** A list of maybes beats none, so until it holds 20 the list widens a
+  step at a time (`WIDEN` in `app_guides.py`): (1) the Guides tab's matcher and matching
+  settings **at any confidence** (the Guides tab itself stops at `MIN_GUIDE_SCORE`, 55);
+  (2) **wide**: the same without the matching settings' limits (sources, tvg-id pattern,
+  country must agree); the TV's own sources setting (§3.5) still holds; (3) a **plain
+  search** on the words of the channel's name, then on its longest word alone. Each step
+  adds below the ones before it, so the list stays best first. The app keeps asking every
+  5 s while `reading` is true (at most a minute), adding rows as they are read.
 - **Order.** By score, best first, whatever source each comes from.
 - **`reading`.** If some of this channel's candidates have not had their programmes loaded
   yet (§4: a new channel, or the preload not finished), the server starts loading them in the
