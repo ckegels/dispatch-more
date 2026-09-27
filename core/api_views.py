@@ -103,6 +103,13 @@ class CoreSettingsViewSet(viewsets.ModelViewSet):
     queryset = CoreSettings.objects.all()
     serializer_class = CoreSettingsSerializer
 
+    def get_queryset(self):
+        # arrTV's problem reports are rows of this table (apps.proxy.live_proxy.app_reports)
+        # but no setting: this list is what every page loads at start, for any logged-in
+        # user, and each report carries up to a hundred thousand characters of log. They are
+        # read through /api/core/app-reports/, by admins only.
+        return CoreSettings.objects.exclude(key__startswith="app-report")
+
     def get_permissions(self):
         try:
             return [perm() for perm in permission_classes_by_action[self.action]]

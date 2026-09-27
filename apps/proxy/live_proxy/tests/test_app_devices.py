@@ -209,6 +209,27 @@ class AppReportsTests(TestCase):
         self.as_user(self.admin).delete("/api/core/app-reports/?id=nonsense")
         self.assertEqual(len(self.as_user(self.admin).get("/api/core/app-reports/").json()["reports"]), 1)
 
+    def test_the_settings_list_does_not_carry_them(self):
+        """
+        Every page loads the settings list at start, and a standard user may as well as an
+        admin: reports there were readable by users the reports page turns away, logs and
+        all, and made every page load heavier.
+        """
+        from core.models import CoreSettings
+
+        standard = User.objects.create_user(username="standard", password="x", user_level=1)
+        app_devices.save_settings({"reports": True})
+        self.as_user(self.tv).post("/api/core/app-reports/", self.report, format="json")
+        CoreSettings.objects.create(key="app-reports", name="old", value={"reports": []})
+        for user in (standard, self.admin):
+            keys = [row["key"] for row in self.as_user(user).get("/api/core/settings/").json()]
+            self.assertFalse([k for k in keys if k.startswith("app-report")], user.username)
+            # Dispatcharr's own settings are still there
+            self.assertIn("app-integration", keys)
+        # Nor one by its row's own id
+        row = CoreSettings.objects.filter(key__startswith="app-report-").first()
+        self.assertEqual(self.as_user(standard).get(f"/api/core/settings/{row.id}/").status_code, 404)
+
     def test_the_capabilities_say_where_to_send_them(self):
         app_devices.save_settings({"reports": True})
         answer = self.as_user(self.tv).get("/api/core/capabilities/").json()

@@ -1590,6 +1590,14 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
+**Reports are not settings** (v205). Reports are `CoreSettings` rows (`app-report-<id>`
+since v204, one `app-reports` row before), and stock's `CoreSettingsViewSet` lists and
+retrieves every row there is -- for a *standard* user as well as an admin (streamers are
+refused), and the web page fetches that list at every start. So the reports, admin-only on
+their own endpoint, were readable by standard users there, logs and all, and made every page
+load heavier; unbounded since v204. `get_queryset` leaves `app-report*` out; nothing stock
+reads is one of them.
+
 ## 6. Measured on the real installation (do not re-derive)
 
 1. **Plex:** one guide per channel source, the add-channel-source API sequence (in §5.2 and
