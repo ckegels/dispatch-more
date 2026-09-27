@@ -262,9 +262,12 @@ Server switch: `reports` (off by default). Only offer "Report a problem" when ca
 say `"reports": true`.
 
 **Where in arrTV:** holding OK while a channel plays opens the player's options; **"Send a
-report to the server"** is the first entry there. Ask for one optional line of text ("What
-went wrong?"), then send. Show "Sent" with the report id from the answer, or the error
-message.
+report to the server"** is the first entry there. It asks "What went wrong?" with a list of
+choices, not a text field (typing with a remote is slow): Stream doesn't load, Picture
+stutters or freezes, Sound problem, Wrong or missing guide, Wrong channel or picture,
+Something else. One press sends it: the choice's words as `what`, its code as
+`extra.problem` (`no_load`, `stutter`, `sound`, `guide`, `wrong_channel`, `other`). Then
+"Sent" with the report id from the answer, or the error message.
 
 **Kept until deleted.** The server keeps every report, one database row each, with no count
 or age limit, until an admin deletes it (one at a time, or all at once) on Settings → arrTV.
