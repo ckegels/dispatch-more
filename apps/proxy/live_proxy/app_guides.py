@@ -217,14 +217,21 @@ def candidates(channel, how_many=LOOK_AT, step="matching"):
     """
     [(epg id, score)] this channel could be, best first, its current guide left out, at one
     of the WIDEN steps. Only guides that may be offered.
+
+    Below the Guides tab's own bar (MIN_GUIDE_SCORE) -- and in the wide and search steps,
+    all of it -- a guide is only offered when it is related to the channel (`_related`):
+    it shares a word that says which channel it is, or its call sign, and is not from
+    another country. Without that, "any confidence" offered a Belgian channel for "PBS |
+    TOLEDO OHIO | WGTE" (the user's example): a list of maybes has to be maybes.
     """
     from apps.channels import channel_manager
 
     current = channel.epg_data_id
     limit = min(LOOK_MOST, how_many + 1)
+    about = _about(channel)
     if step == "search":
         listed = []
-        for words in _search_words(channel.name):
+        for words in _search_words(channel.name, about):
             listed += channel_manager.guide_candidates(
                 channel.name, search=words, limit=limit, current=current, most=LOOK_MOST
             )
@@ -235,24 +242,116 @@ def candidates(channel, how_many=LOOK_AT, step="matching"):
         )
     wanted, seen = [], set()
     for entry in listed:
-        if entry["id"] != current and entry["id"] not in seen:
-            seen.add(entry["id"])
-            wanted.append((entry["id"], entry.get("score") or 0))
+        if entry["id"] == current or entry["id"] in seen:
+            continue
+        sure = step == "matching" and (entry.get("score") or 0) >= channel_manager.MIN_GUIDE_SCORE
+        if not sure and not _related(entry, about):
+            continue
+        seen.add(entry["id"])
+        wanted.append((entry["id"], entry.get("score") or 0))
     offerable = _offerable(epg_id for epg_id, _ in wanted)
     return [(epg_id, score) for epg_id, score in wanted if epg_id in offerable][:how_many]
 
 
-def _search_words(name):
-    """What the last step searches for: the name's words, then its longest word alone."""
+# Words that say nothing about which channel a name is: shared by half the guides there are
+FILLER_WORDS = {
+    "tv", "hd", "fhd", "uhd", "sd", "4k", "the", "and", "channel", "network", "live", "plus",
+    "de", "la", "le", "el", "of", "news", "east", "west",
+}
+# Countries whose channels are carried in one another's guides often enough to be offered:
+# an American station in a Canadian guide, ORF in a German one, VRT in a Dutch one. Anything
+# else from another country is not this channel (a Belgian guide for an American station).
+NEIGHBOURS = ({"us", "ca"}, {"de", "at", "ch"}, {"nl", "be"}, {"fr", "be", "ch"}, {"gb", "uk", "ie"})
+
+
+def _about(channel):
+    """
+    What a channel's name says about which channel it is: its country (from the name, its
+    group, or an American call sign), its call signs, its network, the parts of its name
+    between the bars, and the words that say which channel it is.
+    """
+    import re
+
+    from apps.channels import channel_manager, logo_library
+
+    name = channel.name or ""
+    group = getattr(getattr(channel, "channel_group", None), "name", "") or ""
+    country = channel_manager._one_country(logo_library.country_of(name) or logo_library.country_of(group))
+    signs = set()
+    if country in channel_manager.CALL_SIGN_COUNTRIES:
+        signs = {s.split("-")[0] for s in channel_manager.call_signs_of(name, country or "us")}
+        if signs and not country:
+            country = "us"
+    plain = channel_manager._strip_country_box(name)
+    parts = [p.strip() for p in re.split(r"[|/┃()\[\]]", plain) if p.strip()]
+    words = {w for w in channel_manager.guide_words(plain) if w not in FILLER_WORDS and (len(w) >= 3 or w.isdigit())}
+    return {
+        "country": country, "signs": signs, "network": channel_manager.network_of(name),
+        "parts": parts, "words": words,
+    }
+
+
+def _same_place(ours, theirs):
+    if not ours or not theirs or ours == theirs:
+        return True
+    return any(ours in pair and theirs in pair for pair in NEIGHBOURS)
+
+
+def _related(entry, about):
+    """A guide that could be this channel: not another country, and something in common."""
+    from apps.channels import channel_manager
+
+    theirs = channel_manager._one_country(channel_manager._country_of_guide(entry))
+    if not _same_place(about["country"], theirs):
+        return False
+    said = set(channel_manager.guide_words(entry.get("name") or ""))
+    said |= set(channel_manager.guide_words((entry.get("tvg_id") or "").rsplit(".", 1)[0]))
+    if about["signs"] & said:
+        return True
+    shared = {w for w in about["words"] & said if not w.isdigit()}
+    # A local station is its town or call sign, not its network: every PBS station shares
+    # "pbs", and PBS Dallas is not WGTE. A number alone ("1") says nothing either.
+    if about["network"] and (about["signs"] or len(about["words"] - {about["network"]}) > 0):
+        shared.discard(about["network"])
+    return bool(shared)
+
+
+def _search_words(name, about=None):
+    """
+    What the last step searches for, the most telling first: the call sign ("wgte"), each
+    part of the name between the bars ("toledo ohio"), the place's first word ("toledo"),
+    the network with it ("pbs toledo"), the whole name's words, then its longest word.
+    """
     from apps.channels import channel_manager, epg_matching
 
+    tries = []
+
+    def add(text):
+        text = " ".join((text or "").lower().split())
+        if len(text) >= 3 and text not in tries:
+            tries.append(text)
+
+    about = about or {"signs": set(), "parts": [], "network": ""}
+    for sign in sorted(about["signs"]):
+        add(sign)
+    network = about.get("network") or ""
+    for part in about["parts"]:
+        words = [w for w in epg_matching.normalize_name(part).split() if w not in FILLER_WORDS]
+        if not words or words == [network] or " ".join(words) in about["signs"]:
+            continue
+        if network and network in words:
+            continue
+        add(" ".join(words))
+        if len(words) > 1:
+            add(words[0])
+        if network:
+            add(f"{network} {words[0]}")
     words = epg_matching.normalize_name(channel_manager._strip_country_box(name or "")).split()
-    if not words:
-        return []
-    tries = [" ".join(words)]
-    longest = max(words, key=len)
-    if len(words) > 1 and len(longest) >= 3:
-        tries.append(longest)
+    if words:
+        add(" ".join(words))
+        longest = max(words, key=len)
+        if len(words) > 1:
+            add(longest)
     return tries
 
 

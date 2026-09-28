@@ -27,6 +27,13 @@ def no_background_jobs(test):
     test.addCleanup(patcher.stop)
 
 URL = "/api/core/app-guide/"
+
+
+def named(entries):
+    """The matcher's entries as it gives them: with each guide's name and tvg-id."""
+    rows = {r["id"]: r for r in EPGData.objects.filter(id__in=[e["id"] for e in entries]).values("id", "name", "tvg_id")}
+    return [{**e, "name": rows.get(e["id"], {}).get("name", ""), "tvg_id": rows.get(e["id"], {}).get("tvg_id", "")}
+            for e in entries]
 DEVICE = "3f2a9c1e-0b7d-4e21-9a55-0f1c2d3e4f50"
 
 
@@ -83,7 +90,7 @@ class GuideChoiceTests(TestCase):
         ]
         patcher = mock.patch(
             "apps.channels.channel_manager.guide_candidates",
-            side_effect=lambda *a, **k: [dict(e) for e in self.matched],
+            side_effect=lambda *a, **k: named([dict(e) for e in self.matched]),
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -174,7 +181,7 @@ class GuideChoiceTests(TestCase):
     def test_at_most_twenty_in_all_by_score(self):
         more = []
         for i in range(30):
-            guide = EPGData.objects.create(tvg_id=f"x{i}", name=f"X {i}", epg_source=self.de)
+            guide = EPGData.objects.create(tvg_id=f"orf1x{i}.at", name=f"ORF 1 Feed {i}", epg_source=self.de)
             self.airing(guide, f"Show {i}")
             more.append({"id": guide.id, "score": 50 - i})
         self.matched = self.matched + more
@@ -196,10 +203,10 @@ class GuideChoiceTests(TestCase):
         def answer(*args, **kwargs):
             calls.append(kwargs)
             if kwargs.get("search"):
-                return [{"id": found.id, "score": None}]
+                return named([{"id": found.id, "score": None}])
             if kwargs.get("wide"):
-                return [{"id": wide.id, "score": 30}]
-            return [{"id": self.wrong.id, "score": 70}]
+                return named([{"id": wide.id, "score": 30}])
+            return named([{"id": self.wrong.id, "score": 70}])
 
         with mock.patch("apps.channels.channel_manager.guide_candidates", side_effect=answer):
             guides = self.ask().json()["guides"]
@@ -213,7 +220,7 @@ class GuideChoiceTests(TestCase):
     def test_once_the_list_is_full_it_widens_no_further(self):
         more = []
         for i in range(25):
-            guide = EPGData.objects.create(tvg_id=f"y{i}", name=f"Y {i}", epg_source=self.de)
+            guide = EPGData.objects.create(tvg_id=f"orf1y{i}.at", name=f"ORF 1 Y {i}", epg_source=self.de)
             self.airing(guide, f"Show {i}")
             more.append({"id": guide.id, "score": 90 - i})
         with mock.patch("apps.channels.channel_manager.guide_candidates", return_value=more) as matcher:
@@ -224,7 +231,7 @@ class GuideChoiceTests(TestCase):
     def test_load_more_gives_the_next_ones_down_until_there_are_none(self):
         more = []
         for i in range(45):
-            guide = EPGData.objects.create(tvg_id=f"z{i}", name=f"Z {i}", epg_source=self.de)
+            guide = EPGData.objects.create(tvg_id=f"orf1z{i}.at", name=f"ORF 1 Z {i}", epg_source=self.de)
             self.airing(guide, f"Show {i}")
             more.append({"id": guide.id, "score": 80 - i})
         self.matched = more
@@ -250,6 +257,31 @@ class GuideChoiceTests(TestCase):
         with mock.patch("apps.channels.channel_manager.guide_candidates", side_effect=answer):
             self.api().get(URL, {"channel": str(self.channel.uuid), "shown": ",".join(str(i) for i in range(1, 41))})
         self.assertEqual(depths[0], app_guides.LOOK_AT + 80 + 1)
+
+    def test_a_guide_with_nothing_in_common_is_not_offered_below_the_bar(self):
+        """The user's case: "any confidence" offered guides from nowhere near the channel."""
+        belgian = EPGData.objects.create(tvg_id="een.be", name="EEN", epg_source=self.de)
+        other_country = EPGData.objects.create(tvg_id="ORF1.it", name="ORF 1 Italia", epg_source=self.de)
+        near = EPGData.objects.create(tvg_id="ORF1.de", name="ORF 1 Deutschland", epg_source=self.de)
+        for guide in (belgian, other_country, near):
+            self.airing(guide, "Something")
+        self.matched = [{"id": belgian.id, "score": 40}, {"id": other_country.id, "score": 40}, {"id": near.id, "score": 40}]
+        ids = [g["epg_id"] for g in self.ask().json()["guides"]]
+        self.assertIn(near.id, ids, "Germany carries Austria's channels")
+        self.assertNotIn(belgian.id, ids, "nothing in common")
+        self.assertNotIn(other_country.id, ids, "another country")
+
+    def test_a_local_station_is_searched_by_call_sign_and_town(self):
+        from types import SimpleNamespace
+
+        about = app_guides._about(SimpleNamespace(name="PBS | TOLEDO OHIO | WGTE", channel_group=None))
+        self.assertEqual(about["country"], "us")
+        self.assertEqual(app_guides._search_words("PBS | TOLEDO OHIO | WGTE", about)[:4],
+                         ["wgte", "toledo ohio", "toledo", "pbs toledo"])
+        self.assertTrue(app_guides._related({"name": "WGTE PBS Toledo", "tvg_id": "WGTE.us"}, about))
+        self.assertTrue(app_guides._related({"name": "PBS Toledo", "tvg_id": "pbs.toledo.ca"}, about), "Canada is next door")
+        self.assertFalse(app_guides._related({"name": "PBS Dallas", "tvg_id": "KERA.us"}, about), "another PBS station")
+        self.assertFalse(app_guides._related({"name": "VRT 1", "tvg_id": "vrt1.be"}, about))
 
     def test_only_the_chosen_sources_are_offered(self):
         other = EPGData.objects.create(tvg_id="ORF1.at2", name="ORF 1 AT", epg_source=self.at)

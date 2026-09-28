@@ -143,6 +143,16 @@ The rules:
   search** on the words of the channel's name, then on its longest word alone. Each step
   adds below the ones before it, so the list stays best first. The app keeps asking every
   5 s while `reading` is true (at most a minute), adding rows as they are read.
+- **Related, or not offered (v221).** "Any confidence" offered guides with nothing to do
+  with the channel (the user's example: "PBS | TOLEDO OHIO | WGTE" got Belgian channels).
+  Below the Guides tab's own bar (55), and for everything the wide and search steps find, a
+  guide must share a word that says which channel it is -- not only the network for a local
+  station (PBS Dallas is not WGTE), not only a number -- or the call sign, and must not be
+  from another country. Neighbours count as one: US/CA, DE/AT/CH, NL/BE, FR/BE/CH, GB/IE. The
+  channel's country comes from its name, its group, or an American call sign. The search
+  step tries the telling parts first: the call sign ("wgte"), each part between the bars
+  ("toledo ohio"), the town's first word ("toledo"), network and town ("pbs toledo"), then
+  the whole name and its longest word.
 - **Load more (v217).** `GET ...&shown=<epg ids, comma-separated>` leaves those out and looks
   deeper down every step (50 candidates, plus 2 per guide already shown, at most 300 a
   step); `"more": true` in the answer says asking again can find more. The app shows a

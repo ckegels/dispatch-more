@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v220** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v221** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1819,7 +1819,12 @@ matcher at any confidence (`guide_candidates(min_score=1)`; the tab itself stops
 search on the channel's name and its longest word -- and **Load more** (`shown=<ids>`, each page
 looking deeper: 50 candidates plus 2 per guide shown, at most 300 a step; `more` in the answer).
 Guides nobody read are found in three lookups for the whole list (`_unread`), not three per
-guide. Tests: `test_app_guides.py`.
+guide. v221, after "PBS | TOLEDO OHIO | WGTE" was offered Belgian channels: below the bar,
+and in the wide and search steps, a guide must be **related** (`_about`, `_related`: a word
+that says which channel it is in common -- not only a local station's network, not only a
+number -- or its call sign, and no other country; US/CA, DE/AT/CH, NL/BE, FR/BE/CH, GB/IE are
+neighbours), and the search tries the call sign, the town and network + town first
+(`_search_words`). Tests: `test_app_guides.py`.
 
 **The apps hear at once that a guide changed** (v219, `app_devices.announce_guides_changed`).
 arrTV keys a channel's programmes by its guide's tvg-id, which it learns from the lineup; the
