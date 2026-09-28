@@ -902,13 +902,31 @@ def changes():
     from apps.channels.models import Channel
 
     channels = {
-        cid: (name, epg_id) for cid, name, epg_id in Channel.objects.filter(
+        cid: (name, epg_id, uuid) for cid, name, epg_id, uuid in Channel.objects.filter(
             id__in=[row["channel"] for row in rows]
-        ).values_list("id", "name", "epg_data_id")
+        ).values_list("id", "name", "epg_data_id", "uuid")
     }
+    # What each guide shows now, and how much it holds: a change is judged against the
+    # picture, and an empty guide has to say so rather than look like a working one
+    from django.db.models import Count
+
+    from apps.epg.models import ProgramData
+
+    guide_ids = {i for row in rows for i in (row.get("epg"), row.get("was")) if i}
+    on = now_and_next(guide_ids)
+    holds = dict(
+        ProgramData.objects.filter(epg_id__in=guide_ids).values("epg_id")
+        .annotate(n=Count("id")).values_list("epg_id", "n")
+    )
     for row in rows:
-        name, on_now = channels.get(row["channel"], ("", None))
+        name, on_now, uuid = channels.get(row["channel"], ("", None, None))
         row["channel_name"] = name
+        row["channel_uuid"] = str(uuid) if uuid else ""
+        for key, epg_id in (("guide", row.get("epg")), ("was", row.get("was"))):
+            what = on.get(epg_id) or {}
+            row[f"{key}_now"] = what.get("now")
+            row[f"{key}_next"] = what.get("next")
+            row[f"{key}_holds"] = holds.get(epg_id, 0) if epg_id else None
         row["guide_name"] = names.get(row.get("epg"), row.get("name") or "")
         row["was_name"] = names.get(row.get("was"), "") if row.get("was") else ""
         # Changed underneath since (the Lineup, Dispatcharr's own matching): putting it back

@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  Collapse,
   Group,
   Loader,
   MultiSelect,
@@ -12,8 +13,13 @@ import {
   Switch,
   Text,
   TextInput,
+  UnstyledButton,
 } from '@mantine/core';
+import { ChevronRight } from 'lucide-react';
 import API from '../../api';
+import useVideoStore from '../../store/useVideoStore';
+import useSettingsStore from '../../store/settings';
+import { getShowVideoUrl } from '../../utils/cards/RecordingCardUtils';
 import useEPGsStore from '../../store/epgs';
 import AppReports from '../diagnostics/AppReports';
 import { copy } from '../diagnostics/copyText';
@@ -64,9 +70,15 @@ const HeldDevices = () => {
           <Text size="xs">
             {h.name}: starts within {h.quality}
             {WHERE[h.where] ? ` ${WHERE[h.where]}` : ''}
-            {h.until ? `, until ${new Date(h.until * 1000).toLocaleString()}` : ''}
+            {h.until
+              ? `, until ${new Date(h.until * 1000).toLocaleString()}`
+              : ''}
           </Text>
-          <Button size="compact-xs" variant="subtle" onClick={() => forget(h.device, h.where)}>
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            onClick={() => forget(h.device, h.where)}
+          >
             Forget
           </Button>
         </Group>
@@ -76,6 +88,56 @@ const HeldDevices = () => {
 };
 
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
+
+// A section that opens on a click: the lists below the settings grow long, and the
+// settings are what the page is mostly opened for
+export const Fold = ({ title, note, children, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Box>
+      <UnstyledButton
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+      >
+        <ChevronRight
+          size={14}
+          style={{
+            transform: open ? 'rotate(90deg)' : 'none',
+            transition: 'transform 120ms',
+          }}
+        />
+        <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+          {title}
+        </Text>
+        {note && (
+          <Text size="xs" c="dimmed">
+            {note}
+          </Text>
+        )}
+      </UnstyledButton>
+      <Collapse in={open}>
+        <Box mt="xs">{children}</Box>
+      </Collapse>
+    </Box>
+  );
+};
+
+const clock = (iso) =>
+  iso
+    ? new Date(iso).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '';
+
+// "Zeit im Bild (17:30–17:50)", or why there is nothing to compare
+const onNow = (now, holds) => {
+  if (now) return `${now.title} (${clock(now.start)}–${clock(now.end)})`;
+  if (holds === 0) return 'holds no programmes';
+  if (holds == null) return '';
+  return 'nothing on right now';
+};
 
 // The programmes loaded ahead of time for the guides arrTV offers, and "Load now". Asked
 // again every few seconds while it loads, so the line moves and ends; a preload that died
@@ -124,7 +186,12 @@ const GuidePreload = () => {
             ? `The last loading stopped before it finished. ${loaded}`
             : loaded}
       </Text>
-      <Button size="compact-xs" variant="subtle" onClick={loadNow} disabled={working}>
+      <Button
+        size="compact-xs"
+        variant="subtle"
+        onClick={loadNow}
+        disabled={working}
+      >
         Load now
       </Button>
     </Group>
@@ -142,6 +209,8 @@ const byWhom = (by) =>
 const GuideChanges = () => {
   const [changes, setChanges] = useState(null);
   const [problem, setProblem] = useState(null);
+  const showVideo = useVideoStore((s) => s.showVideo);
+  const envMode = useSettingsStore((s) => s.environment?.env_mode);
 
   useEffect(() => {
     API.getArrTvGuideChanges()
@@ -167,86 +236,129 @@ const GuideChanges = () => {
   if (!changes) return null;
   return (
     <Box mt="md">
-      <Text size="sm" fw={500}>
-        Guide changes made in arrTV
-      </Text>
-      <Text size="xs" c="dimmed" mb="xs">
-        <b>Put back</b> returns the channel to the guide it had before the change.{' '}
-        <b>Keep</b> says the change was right and takes it off this list; the channel stays
-        on that guide.
-      </Text>
-      {!changes.length && (
-        <Text size="xs" c="dimmed">
-          No channel has been put on another guide from arrTV.
+      <Fold
+        title="Guide changes made in arrTV"
+        note={changes.length ? `(${changes.length})` : '(none)'}
+      >
+        <Text size="xs" c="dimmed" mb="xs">
+          <b>Put back</b> returns the channel to the guide it had before the
+          change. <b>Keep</b> says the change was right and takes it off this
+          list; the channel stays on that guide.
         </Text>
-      )}
-      <Stack gap="xs">
-        {changes.map((change) => (
-          <Box
-            key={change.channel}
-            p="xs"
-            style={{ border: '1px solid #3f3f46', borderRadius: 6 }}
-          >
-            <Text size="sm" fw={600}>
-              {change.channel_name || `Channel ${change.channel}`}
-            </Text>
-            <Text size="xs">Now on: {change.guide_name || 'no guide'}</Text>
-            <Text size="xs">Before: {change.was_name || 'no guide'}</Text>
-            <Text size="xs" c="dimmed">
-              Changed by {byWhom(change.by)}, {when(change.at)}
-            </Text>
-            {(change.confirmed || []).map((c) => (
-              <Text key={`${c.at}-${c.device || c.ip}`} size="xs" c="dimmed">
-                Confirmed as right by {byWhom(c)}, {when(c.at)}
+        {!changes.length && (
+          <Text size="xs" c="dimmed">
+            No channel has been put on another guide from arrTV.
+          </Text>
+        )}
+        <Stack gap="xs">
+          {changes.map((change) => (
+            <Box
+              key={change.channel}
+              p="xs"
+              style={{ border: '1px solid #3f3f46', borderRadius: 6 }}
+            >
+              <Text size="sm" fw={600}>
+                {change.channel_name || `Channel ${change.channel}`}
               </Text>
-            ))}
-            {change.earlier > 0 && (
+              <Text size="xs">
+                Now on: {change.guide_name || 'no guide'}
+                {change.epg
+                  ? ` — ${onNow(change.guide_now, change.guide_holds)}`
+                  : ''}
+              </Text>
+              <Text size="xs">
+                Before: {change.was_name || 'no guide'}
+                {change.was
+                  ? ` — ${onNow(change.was_now, change.was_holds)}`
+                  : ''}
+              </Text>
               <Text size="xs" c="dimmed">
-                {change.earlier} earlier change{change.earlier === 1 ? '' : 's'} in arrTV:
-                putting this back brings the one before it back to this list.
+                Changed by {byWhom(change.by)}, {when(change.at)}
               </Text>
-            )}
-            {change.in_force === false && (
-              <Text size="xs" c="orange">
-                The guide was changed again since, outside arrTV. Putting this back would undo
-                that change, so only taking it off the list is offered.
-              </Text>
-            )}
-            {problem?.channel === change.channel && (
-              <Text size="xs" c="red">
-                {problem.text}
-              </Text>
-            )}
-            <Group gap="xs" mt={6}>
-              {change.in_force !== false && (
+              {(change.confirmed || []).map((c) => (
+                <Text key={`${c.at}-${c.device || c.ip}`} size="xs" c="dimmed">
+                  Confirmed as right by {byWhom(c)}, {when(c.at)}
+                </Text>
+              ))}
+              {change.earlier > 0 && (
+                <Text size="xs" c="dimmed">
+                  {change.earlier} earlier change
+                  {change.earlier === 1 ? '' : 's'} in arrTV: putting this back
+                  brings the one before it back to this list.
+                </Text>
+              )}
+              {change.in_force === false && (
+                <Text size="xs" c="orange">
+                  The guide was changed again since, outside arrTV. Putting this
+                  back would undo that change, so only taking it off the list is
+                  offered.
+                </Text>
+              )}
+              {problem?.channel === change.channel && (
+                <Text size="xs" c="red">
+                  {problem.text}
+                </Text>
+              )}
+              <Group gap="xs" mt={6}>
+                {change.channel_uuid && (
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    style={{ flexShrink: 0 }}
+                    onClick={() =>
+                      showVideo(
+                        getShowVideoUrl({ uuid: change.channel_uuid }, envMode),
+                        'live',
+                        {
+                          name: change.channel_name,
+                          channelId: change.channel,
+                        }
+                      )
+                    }
+                  >
+                    Watch
+                  </Button>
+                )}
+                {change.in_force !== false && (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    style={{ flexShrink: 0 }}
+                    onClick={() => act(API.putBackArrTvGuide, change.channel)}
+                  >
+                    Put back
+                  </Button>
+                )}
                 <Button
                   size="xs"
-                  variant="light"
+                  variant="default"
                   style={{ flexShrink: 0 }}
-                  onClick={() => act(API.putBackArrTvGuide, change.channel)}
+                  onClick={() => act(API.keepArrTvGuide, change.channel)}
                 >
-                  Put back
+                  {change.in_force === false ? 'Take off the list' : 'Keep'}
                 </Button>
-              )}
-              <Button
-                size="xs"
-                variant="default"
-                style={{ flexShrink: 0 }}
-                onClick={() => act(API.keepArrTvGuide, change.channel)}
-              >
-                {change.in_force === false ? 'Take off the list' : 'Keep'}
-              </Button>
-            </Group>
-          </Box>
-        ))}
-      </Stack>
+              </Group>
+            </Box>
+          ))}
+        </Stack>
+      </Fold>
     </Box>
   );
 };
 
 // A whole number, saved when the field is left (not on every key): a wait in seconds, or
 // the days of guide kept
-const Seconds = ({ label, description, value, disabled, onSave, min = 1, max = 60, suffix = ' s', w = 220 }) => {
+const Seconds = ({
+  label,
+  description,
+  value,
+  disabled,
+  onSave,
+  min = 1,
+  max = 60,
+  suffix = ' s',
+  w = 220,
+}) => {
   const [typed, setTyped] = useState(value);
   useEffect(() => setTyped(value), [value]);
   return (
@@ -301,7 +413,8 @@ const ArrTvSettings = () => {
       setNetworksError(null);
     } catch (e) {
       // A network that is not one is said on its field; anything else on the page
-      if ('home_networks' in changes && e?.body?.error) setNetworksError(e.body.error);
+      if ('home_networks' in changes && e?.body?.error)
+        setNetworksError(e.body.error);
       else setError('Could not change the arrTV settings.');
     }
   };
@@ -318,9 +431,10 @@ const ArrTvSettings = () => {
   return (
     <Stack gap="lg">
       <Text size="sm" c="dimmed">
-        arrTV is a player for Android and Google TV made to work with this server. It can tell
-        the server which device it is, which channel it is leaving, and what went wrong. Only
-        arrTV sends this: for any other player these switches change nothing.
+        arrTV is a player for Android and Google TV made to work with this
+        server. It can tell the server which device it is, which channel it is
+        leaving, and what went wrong. Only arrTV sends this: for any other
+        player these switches change nothing.
       </Text>
 
       <Stack gap="md">
@@ -348,7 +462,7 @@ const ArrTvSettings = () => {
             label="Change stream when arrTV stutters"
             description={
               settings.devices
-                ? "arrTV says the moment its picture stops to wait, and the channel moves to its next stream at once, the way it does when a stream fails: never to a better one, never to the fallback, and nothing when there is no other. Stuttering again goes down in quality, and that device starts channels within it for a day (at home and away apart). Never a channel someone else is watching without trouble. Nothing counts against a stream."
+                ? 'arrTV says the moment its picture stops to wait, and the channel moves to its next stream at once, the way it does when a stream fails: never to a better one, never to the fallback, and nothing when there is no other. Stuttering again goes down in quality, and that device starts channels within it for a day (at home and away apart). Never a channel someone else is watching without trouble. Nothing counts against a stream.'
                 : 'Needs "Recognise each arrTV device": only a device that said who it is can say it is the one stuttering.'
             }
             checked={settings.stall_switch}
@@ -362,7 +476,7 @@ const ArrTvSettings = () => {
             label="Faster failover when arrTV starts a channel"
             description={
               settings.devices
-                ? "A stream that connects and sends nothing is left after a few seconds and one check, instead of the start grace (Settings → Streaming) and three checks, at every step of the way while there is another stream to go to: a dead stream no longer costs a viewer a minute. Nowhere to go is never hurried -- no other stream the device can play, or none on a provider with a connection free (someone else watching), and never a stream of its own -- since leaving could only end on the fallback. Only for channels an arrTV device starts; a source that needs longer to lock (a tuner) would be left too soon."
+                ? 'A stream that connects and sends nothing is left after a few seconds and one check, instead of the start grace (Settings → Streaming) and three checks, at every step of the way while there is another stream to go to: a dead stream no longer costs a viewer a minute. Nowhere to go is never hurried -- no other stream the device can play, or none on a provider with a connection free (someone else watching), and never a stream of its own -- since leaving could only end on the fallback. Only for channels an arrTV device starts; a source that needs longer to lock (a tuner) would be left too soon.'
                 : 'Needs "Recognise each arrTV device": only a device that said who it is is given the shorter wait.'
             }
             checked={settings.fast_failover}
@@ -404,11 +518,12 @@ const ArrTvSettings = () => {
             Away from home
           </Text>
           <Text size="xs" c="dimmed" mb="xs">
-            An arrTV device outside your home networks — on the VPN, or on a phone connection —
-            starts a channel on a stream no better than this, where the channel has one: an FHD
-            stream stutters where an HD one plays. A channel with nothing within it still plays
-            its best. A channel someone is already watching plays the stream it is on; only the
-            device that starts a channel chooses.
+            An arrTV device outside your home networks — on the VPN, or on a
+            phone connection — starts a channel on a stream no better than this,
+            where the channel has one: an FHD stream stutters where an HD one
+            plays. A channel with nothing within it still plays its best. A
+            channel someone is already watching plays the stream it is on; only
+            the device that starts a channel chooses.
           </Text>
           <Group align="flex-start" gap="md" wrap="wrap">
             <TextInput
@@ -420,7 +535,8 @@ const ArrTvSettings = () => {
               error={networksError}
               onChange={(e) => setNetworks(e.currentTarget.value)}
               onBlur={() => {
-                if (networks !== (settings.home_networks || '')) change({ home_networks: networks });
+                if (networks !== (settings.home_networks || ''))
+                  change({ home_networks: networks });
               }}
               style={{ flex: '1 1 280px' }}
             />
@@ -467,7 +583,9 @@ const ArrTvSettings = () => {
                 value={String(settings.guide_choice_sources || '')
                   .split(',')
                   .filter(Boolean)}
-                onChange={(ids) => change({ guide_choice_sources: ids.join(',') })}
+                onChange={(ids) =>
+                  change({ guide_choice_sources: ids.join(',') })
+                }
                 clearable
                 searchable
               />
@@ -494,17 +612,14 @@ const ArrTvSettings = () => {
         />
       </Stack>
 
-      <Box>
-        <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
-          Problem reports
-        </Text>
+      <Fold title="Problem reports">
         {copied && (
           <Text size="xs" c="dimmed" mb="xs">
             {copied}
           </Text>
         )}
         <AppReports enabled={settings.reports} onCopy={copyToClipboard} />
-      </Box>
+      </Fold>
     </Stack>
   );
 };

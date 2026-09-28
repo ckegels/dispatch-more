@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v221** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v222** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1824,7 +1824,11 @@ and in the wide and search steps, a guide must be **related** (`_about`, `_relat
 that says which channel it is in common -- not only a local station's network, not only a
 number -- or its call sign, and no other country; US/CA, DE/AT/CH, NL/BE, FR/BE/CH, GB/IE are
 neighbours), and the search tries the call sign, the town and network + town first
-(`_search_words`). Tests: `test_app_guides.py`.
+(`_search_words`). v222: each change on Settings → arrTV says what the new guide and the
+one it replaced have on now (or that one holds no programmes), with a **Watch** button that
+plays the channel in the web player, so a change can be judged against the picture; "Guide
+changes" and "Problem reports" are sections that open on a click (`Fold`). Tests:
+`test_app_guides.py`, `ArrTvSettings.test.jsx`.
 
 **The apps hear at once that a guide changed** (v219, `app_devices.announce_guides_changed`).
 arrTV keys a channel's programmes by its guide's tvg-id, which it learns from the lineup; the

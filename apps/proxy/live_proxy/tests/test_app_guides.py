@@ -485,6 +485,16 @@ class GuideChoiceTests(TestCase):
             "/api/core/arrtv/guide-changes/", {"channel": self.channel.id, "action": "keep"}, format="json"
         ).status_code, 403)
 
+    def test_a_change_says_what_each_guide_has_on_and_how_much_it_holds(self):
+        """The admin judges a change against the picture: an empty guide must say so."""
+        self.assertEqual(self.choose(self.empty).status_code, 409, "nothing on: refused")
+        self.assertEqual(self.choose(self.right).status_code, 200)
+        (change,) = app_guides.changes()
+        self.assertEqual(change["guide_now"]["title"], "Zeit im Bild")
+        self.assertEqual(change["guide_holds"], 2)
+        self.assertEqual(change["was_now"]["title"], "Bundesland heute")
+        self.assertEqual(change["channel_uuid"], str(self.channel.uuid))
+
     def test_a_guides_tab_choice_is_not_an_arrtv_change(self):
         guide_manager.apply({self.channel.id: self.right.id})
         self.assertEqual(app_guides.changes(), [])
