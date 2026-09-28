@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208; latest release v211) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217); latest release v218) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -22,12 +22,12 @@ channel start on one closed the stream on the other.
 The app knows which device it is, so it can say so. It can also say which channel it is
 leaving, so the server does not have to guess that either.
 
-## Where arrTV stands (2026-09-27)
+## Where arrTV stands (2026-09-28)
 
-What the server offers and what arrTV does with it, as of Dispatch More **v212** and arrTV
-**0.5.9-arr.41** (a test build; the published one is arr.29). Every arrTV optimization has a
-switch of its own in the app (Settings → General → **arrTV optimizations**, all on by
-default); switched off, that part does nothing:
+What the server offers and what arrTV does with it, as of Dispatch More **v218** (v217 is the
+one installed on the user's server) and arrTV **0.5.9-arr.63** (a test build; the published
+one is arr.62). Every arrTV optimization has a switch of its own in the app (Settings →
+General → **arrTV optimizations**, all on by default); switched off, that part does nothing:
 
 | Server feature | Server since | In arrTV | This document |
 |---|---|---|---|
@@ -41,11 +41,11 @@ default); switched off, that part does nothing:
 | Stutter report (`POST /api/core/app-stall/`) | v207 | built (arr.37), switch "Tell the server when the picture stutters" | §8.4 |
 | Reopen when a swap inside the connection freezes the picture | — (app only) | built (arr.40), switch "Reopen a frozen stream" | §8.6 |
 | Faster failover when arrTV starts a channel | v212 | nothing to build (device header); the app's own waits are shorter too, switch "Faster switch to the next stream" | §8.7 |
-| How many other streams a channel has (`X-Dispatch-Alternatives`) | v214 | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
+| How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 (two tiers from v214) | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 | Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
 
-The user's server was still on **v205** when the TV report below was taken: install the
-latest release before testing any of §8.
+The TV report below was taken when the user's server was still on v205; it is on v217 now.
+Install the latest release before testing any of §8.
 
 **Why §8.2 and §8.6 matter first** (measured on the user's Chromecast with Google TV HD,
 1.4 GB RAM, Android 14, arrTV arr.36): RTL ZWEI's first stream is 4K. Every tune began on it,
@@ -332,7 +332,7 @@ phase; this device's channel switches and Force Close; and the server's log line
 channel over the last 30 minutes. The admin reads it all on Settings → arrTV → Problem reports,
 and copies it whole to pass on.
 
-## 7a. Wrong guide? Choose another (server v216)
+## 7a. Wrong guide? Choose another (server v216, v217)
 
 Server switch: `guide_choice` (off by default), on Settings → arrTV. Capabilities say
 `"guide_choice": true` and `"guide_choice_url": "/api/core/app-guide/"`. It does **not** need
@@ -385,14 +385,18 @@ and `X-Dispatch-Device` / `-Name` headers.
 **The screen:** "Guide now: ORF1.at — Zeit im Bild (17:30–17:50)" at the top, then one row per
 guide: **the programme on now in large type** (what is compared with the picture), under it the
 guide's name, its source and when the programme ends. The video keeps playing beside or behind
-it. One press on a row chooses it; Back closes without changing anything. Nothing on the list:
-"No other guide has anything on for this channel right now."
+it. One press on a row chooses it; Back closes without changing anything. While `reading` is
+true the list is asked for again every 5 s (at most a minute) and rows are added without moving
+the focus; a **Load more** row at the bottom asks for the next page while `more` is true, and
+the focus goes to the first new row. Only when nothing is being read and nothing more can be
+had: "No other guide has anything on for this channel right now." (arr.60; in the info bar
+style's options row the entry is labelled "Wrong guide?".)
 
 **Choosing:** `POST /api/core/app-guide/` with `{"channel": "<uuid>", "epg_id": 88213}`.
 
 - **200** `{"ok": true, "channel": {…}, "guide": {"epg_id", "name", "source", "now", "next"}}`:
-  close the screen, show "Guide changed to ORF 1 HD" for a few seconds, and put `guide.now` /
-  `guide.next` in the player's now/next at once. Then reload that channel's programmes after
+  arrTV closes the list at the press and sends this in the background, then shows "Guide
+  changed to ORF 1 HD" (or the refusal's message) as a short notice. Then reload that channel's programmes after
   about 5 seconds (the server reads the new guide in the background after the save). The
   guide the channel is already on is answered 200 too: it means "this one is right".
 - **409**: the guide has nothing on any more; show the message and ask for the list again.

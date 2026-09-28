@@ -50,13 +50,30 @@ Everything is off, or only suggests, until you turn it on or apply it.
   into one (matching the way DispatcharrUtils does by default), and new streams suggested as new
   channels: in the group your other channels from that provider group are in, on the next free
   number of that group, with a logo from the collections and your fallback stream last. Take a
-  wrong stream out of a row, change the group, or ignore a suggestion for good.
+  wrong stream out of a row, change the group, or ignore a suggestion for good. With
+  **Remember matched streams** on, every stream on a channel is written down with its
+  provider's stream number, so one the provider renames goes back on its channel after the
+  next playlist refresh instead of dropping off; one you take off stays off.
+- **Channel Manager → Guides** — finds channels on no guide, on a guide that holds nothing, or
+  with a clearly better guide, and suggests the change; the guide's programme on now is shown
+  so the right one can be picked.
+- **Channel Manager → Guide Layout** — drag channels into place, group by group, and the
+  numbers follow; shows numbers used twice across groups.
+- **Channel Manager → EPG Grabber** — runs iptv-org's guide grabber (when it is installed on
+  the server) on a schedule, and only replaces the guide file once the new one has been read
+  back and found to hold channels and programmes.
 - **Channel Manager → Stream Check** — finds the streams on your channels that no longer play:
   dead, refused by the provider, black, frozen, or showing the provider's "no stream" picture
   (a picture fault is looked at again later in the same run before it counts). Never touches a
   provider someone is watching, learns how many streams each provider allows, rechecks failing
   streams by itself, and can park dead ones automatically (autopark) and hide a channel with
   nothing left. Streams can be ignored, and the list cleared.
+- **arrTV** (Settings → Streaming → arrTV) — for [arrTV](https://github.com/ckegels/AerioTV-Android),
+  an Android TV app built for this server: each TV is recognised as its own device (so Force
+  Close never closes another TV's channel), gets streams it can decode, reports problems and
+  stutters, fails over faster, and viewers can pick the right guide for a channel from the
+  player ("Wrong guide? Choose another", recorded with who changed it). Every switch off by
+  default; no other app sends any of it.
 - **Modified build** (Settings → System) — what is installed, and a button to go back to stock.
 
 ## Disadvantages

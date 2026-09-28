@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v211** (2026-09-27). The commit messages on the branch
+Written 2026-09-19, kept current to **release v218** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1186,6 +1186,12 @@ per channel: the guide comes off that channel's list and the next best is offere
 better source added later is still found. Settings and results in CoreSettings
 (`guide-manager`, `guide-manager-suggestions`, `guide-manager-ignored`).
 
+**The sources to match against, all at once** (v215, `GuideManagerTable.jsx`). With twenty
+EPG sources, matching against one meant clicking nineteen away. "Unselect all" turns every
+chip off on screen and the first one clicked is then the only one kept; "Select all" puts them
+back. None is never saved (an empty list means every source), so until a source is clicked the
+matching is what it was, and the page says so.
+
 ### 5.6c Channel Manager: Guide Layout — `apps/channels/guide_layout.py` (+ `guide_layout_views.py`, `GuideLayoutTable.jsx`)
 
 A lineup is an arrangement, not a list, and Dispatcharr has the numbers but nowhere to
@@ -1616,9 +1622,8 @@ here is on the server; the app side is described for its developer in
 multiview, leaving a channel, problem reports, testing with curl, checklist). It lives in
 Settings → Streaming → **arrTV** (`/api/core/arrtv/`, `CoreSettings` "app-integration"),
 every switch off: no other app sends any of it, and off is stock. **What arrTV has built of
-it and what it has not** is the table at the top of that file ("Where arrTV stands"): as of
-v211 the decoding limit, the stutter report, 409 handling and reopening after a frozen swap
-are server-ready and not in the app.
+it** is the table at the top of that file ("Where arrTV stands"): as of 2026-09-28 (arr.63)
+the app has built every part of it, each behind a switch of its own in the app.
 
 **How "quality" is judged** everywhere below (`channel_manager.quality_of`): a measured
 resolution when there is one -- only recorded when a stream plays through ffmpeg, so on the
@@ -1788,6 +1793,29 @@ stores its grace per channel from it (`fast_grace_many` 3 s with two or more, `f
 5 s with one, both editable, 1-60 s; the Redis key moved to `fast_grace:` so v212's `"1"` marks are not
 read as one second); none = no mark. arrTV scales its picture wait by it (contract §8.8).
 Tests: `FastGraceTests`, `AlternativesTests`.
+
+**Wrong guide? Choose another** (v216, `app_guides.py`, `guide_choice` in `app_devices`, off
+by default; design `fork/arrTV-guide-choice.md`, contract §7a). Somebody watching a channel
+whose guide shows the wrong programme picks the right guide from the player: the guides it
+could be that have something on **now**, the programme in large type, so the pick is made by
+comparing it with the picture. Any login that may watch the channel may change it (the user's
+choice), for every viewer, through `guide_manager.apply` -- the Guides tab's own path, so the
+choice counts as "this one is right" there -- and each change is written down with the login,
+the device id and name and the address (Settings → arrTV → "Guide changes", with Put back; also
+on the Guides tab). `guide_choice_sources` limits which sources are offered; dummy sources never
+are. Guides nobody has read yet are read in the background (`read_guide_programmes` with
+`record="app-guide"`, written under `app-guide-kept` so the refresh's clean-up keeps them) and
+the answer says `reading`; a preload reads each channel's top 10 ahead of time
+(`preload_guide_choices`, on switching on; after a source refresh it is redone whole once the
+last is a day old, and otherwise only that source's kept guides are read again, via
+`epg/tasks.py`'s `after_refresh`).
+v217, after the user got empty lists: the list **widens until it holds 20** -- the Guides tab's
+matcher at any confidence (`guide_candidates(min_score=1)`; the tab itself stops at
+`MIN_GUIDE_SCORE` 55), then without the matching settings' limits (`wide=True`), then a plain
+search on the channel's name and its longest word -- and **Load more** (`shown=<ids>`, each page
+looking deeper: 50 candidates plus 2 per guide shown, at most 300 a step; `more` in the answer).
+Guides nobody read are found in three lookups for the whole list (`_unread`), not three per
+guide. Tests: `test_app_guides.py`.
 
 ---
 
@@ -1986,10 +2014,11 @@ Tests: `FastGraceTests`, `AlternativesTests`.
 
 ## 8. Open / possible next
 
-- **arrTV "Wrong guide? Choose another"** (asked for 2026-09-27, designed, not built): the
-  viewer picks another guide for the channel from the player, from guides that have something
-  on now, recorded with user, device and IP. The whole design is in
-  **`fork/arrTV-guide-choice.md`**.
+- **Picture check** (designed 2026-09-28, the user is deciding): confirm or refute that two
+  providers' streams are one channel by sampling both at night (a frame hash a second and the
+  loudness, slid along each other for the providers' delay). Confirmed pairs go into the
+  remembered streams (v218). Connections are no concern at night (the user). The whole design
+  is in **`fork/picture-check.md`**.
 
 - Stream Check has not yet completed a full real round since the speed work (v113+); watch the
   pace and the estimate. The learned provider limits (483 per 101 min, 454 per 186 min) are the
@@ -2029,9 +2058,6 @@ Tests: `FastGraceTests`, `AlternativesTests`.
   head, `output/ts/generator.py`) was designed on 2026-09-27 and not built: it needs nginx's
   buffering off first (the item below), and the user chose the device's own stutter report
   as the trigger instead.
-- **arrTV's side** of v207–v208 (see `fork/arrTV-integration.md`, "Where arrTV stands"): not
-  built in the app yet; the Chromecast still starts RTL ZWEI on 4K until it sends
-  `X-Dispatch-Max-Video`.
 - Still to do for quality (discussed 2026-09-27): a lighter transcoded variant per device
   (`?output_profile=`) when no other stream has a connection free (v208 opens another
   provider's stream when one does) -- depends on the server's CPU/GPU; arrTV reopening the

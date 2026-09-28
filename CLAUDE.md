@@ -24,7 +24,7 @@ the mistakes not to repeat.
   never remove it, insert new streams before it.
 - **Channel Manager defaults reproduce DispatcharrUtils**; anything smarter is a lever.
 - **Comments and commit messages explain *why*, in plain sentences**, like the existing fork
-  code. Commit trailer: `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+  code. Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Every change
 
@@ -37,7 +37,7 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v215 is the latest. Users install one with
+   Releases run from v99; v218 is the latest. Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker.
 
@@ -64,6 +64,9 @@ the mistakes not to repeat.
   command). Only the `fork-*` workflow is enabled there; upstream's are disabled on purpose.
 - `docs/channel-switch-overlap.md` — design of the first feature.
 - Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health,
-  diagnostics) and `apps/channels/` (logo_library, channel_manager, guide_manager,
-  guide_layout, stream_check).
+  diagnostics, and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
+  app_alternatives, app_guides) and `apps/channels/` (logo_library, channel_manager,
+  pairings, guide_manager, guide_layout, epg_grabber, stream_check).
+- `fork/arrTV-integration.md` — the contract with arrTV (the user's Android TV app);
+  `fork/arrTV-guide-choice.md` and `fork/picture-check.md` — designs.
 - `git log bcbb68c4..HEAD` — every change, explained in its message.
