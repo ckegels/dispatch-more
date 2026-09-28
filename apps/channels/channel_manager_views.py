@@ -322,6 +322,27 @@ def channel_manager_ignore(request):
     return JsonResponse({"ignored": entry})
 
 
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def channel_manager_pairings(request):
+    """
+    The remembered streams (pairings.py). GET: how many, and since when. POST
+    {"action": "save"}: write down everything on the channels now; {"action": "forget"}:
+    forget everything remembered.
+    """
+    from . import pairings
+
+    if request.method == "POST":
+        action = request.data.get("action")
+        if action == "save":
+            pairings.sync(how="saved")
+        elif action == "forget":
+            pairings.forget()
+        else:
+            return JsonResponse({"error": f"Unknown action: {action}"}, status=400)
+    return JsonResponse(pairings.summary())
+
+
 @api_view(["PUT"])
 @permission_classes([IsAdmin])
 def channel_manager_settings(request):

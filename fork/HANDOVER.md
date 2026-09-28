@@ -1022,6 +1022,24 @@ suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, 
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
 
+**Remembered streams** (v218, `apps/channels/pairings.py`, lever `remember_pairings`, on).
+There is no public list linking one reseller's streams to another's (looked for: resellers
+publish nothing shared, and IPTVEditor / m3u-editor match each provider to a guide, not to
+each other), so the link a person made is the best evidence there is -- and it used to live
+only in the ChannelStream row. With the stream hash built from the name, a provider renaming
+a stream made a new one; the old went stale, was deleted, and the channel lost it. Now every
+provider stream on a channel is written down (CoreSettings `channel-pairings`) with the
+provider's stream number (`stream_id`), tvg-id and name. After each M3U refresh
+(`apps/m3u/tasks.py`, next to Stream Check's hook) a remembered stream that is stale or gone
+is looked for at the same provider -- the same stream number, else the one stream with that
+tvg-id and name, else that name -- and the one found takes the old one's place. Not found:
+kept with `lost_at` and looked for again for 60 days. Taken off by hand (still there, still
+listed, not on its channel) is forgotten, not put back; parked by Stream Check is left to
+Stream Check. `sync` runs after every Lineup apply and every refresh, so the first one is the
+backfill of everything already matched; the settings also have "Save what is matched now".
+The next step, comparing the pictures of two streams at night to confirm or refute a pair,
+is designed in `fork/picture-check.md` and waits for the user's decision.
+
 ### 5.6b Channel Manager: Guides — `apps/channels/guide_manager.py` (+ `guide_manager_views.py`, `GuideManagerTable.jsx`)
 
 The third tab. Dispatcharr matches a channel to a guide when asked and leaves it there,

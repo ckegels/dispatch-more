@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Button,
   Group,
   MultiSelect,
   NumberInput,
@@ -12,6 +13,40 @@ import {
   TextInput,
 } from '@mantine/core';
 import Section from './SettingsSection';
+import API from '../../api';
+
+// How many streams are remembered on their channels, and a button to write down
+// everything matched now (the first playlist refresh does it anyway)
+const RememberedStreams = ({ on }) => {
+  const [summary, setSummary] = useState(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    API.getChannelManagerPairings()
+      .then(setSummary)
+      .catch(() => setSummary(null));
+  }, []);
+  const save = async () => {
+    setSaving(true);
+    try {
+      setSummary(await API.changeChannelManagerPairings('save'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Group gap="xs" wrap="nowrap">
+      <Text size="xs" c="dimmed" style={{ flex: 1 }}>
+        {summary
+          ? `${summary.streams} streams remembered on ${summary.channels} channels` +
+            (summary.lost ? `, ${summary.lost} waiting to be found again` : '')
+          : 'Nothing remembered yet'}
+      </Text>
+      <Button size="xs" variant="light" loading={saving} disabled={!on} onClick={save}>
+        Save what is matched now
+      </Button>
+    </Group>
+  );
+};
 
 // The levers, in the order a run is thought through: what to look at, how a channel is
 // recognised, how its streams are ordered, what may be changed, and where its guide and
@@ -185,6 +220,14 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
             { value: 'conflict', label: 'Show a conflict and leave it alone' },
           ]}
         />
+        <Switch
+          size="xs"
+          label="Remember matched streams"
+          description="Every stream on a channel is written down with what its provider knows it by: its stream number, tvg-id and name. When a provider renames one (VRT 1 HD becomes VRT 1 FHD), the next playlist refresh finds it again by its number and puts it back where it was, instead of it dropping off and having to be matched again. A stream you take off a channel is forgotten, not put back; one Stream Check parked is left to Stream Check."
+          checked={value.remember_pairings !== false}
+          onChange={(e) => set({ remember_pairings: e.currentTarget.checked })}
+        />
+        <RememberedStreams on={value.remember_pairings !== false} />
         <Switch
           size="xs"
           label="Combine channels that are the same channel"

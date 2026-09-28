@@ -89,6 +89,10 @@ DEFAULTS = {
     # many channels -- every CBS station, an East and a West feed, and on one real setup a
     # Krone stream carrying Euronews' -- and trusting it merged them all
     "match_tvg_id": False,
+    # Every stream on a channel is written down with what identifies it at its provider
+    # (its stream number, tvg-id, name), and one a provider renamed goes back on its channel
+    # after the next playlist refresh (pairings.py). On: it only keeps what was decided.
+    "remember_pairings": True,
     # Words that are about the stream, not the channel, taken off before matching. The two
     # the group merge people ran by hand took off; anything more is theirs to add.
     # "⏺ʳᵉᶜ" is how providers mark a stream they are recording: it says nothing about
@@ -3569,6 +3573,14 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
         f"Channel Manager: {created} channel(s) made, {updated} merged, "
         f"{streams_added} stream(s) added, {combined} duplicate channel(s) deleted"
     )
+    # What was just decided is remembered, and what was taken off forgotten
+    if settings.get("remember_pairings", True):
+        try:
+            from . import pairings
+
+            pairings.sync(how="lineup")
+        except Exception as e:
+            logger.warning(f"Channel Manager: could not remember the streams applied: {e}")
     return {
         "created": created, "updated": updated,
         "streams_added": streams_added, "combined": combined,

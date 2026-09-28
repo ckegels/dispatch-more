@@ -23,6 +23,8 @@ vi.mock('../../../api', () => ({
     applyChannelManager: vi.fn(),
     ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
+    getChannelManagerPairings: vi.fn(() => Promise.resolve({ streams: 0, channels: 0 })),
+    changeChannelManagerPairings: vi.fn(() => Promise.resolve({ streams: 0, channels: 0 })),
     getChannelManagerReading: vi.fn(),
     addChannelGroup: vi.fn(),
     getChannelManagerGuides: vi.fn(),

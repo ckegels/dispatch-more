@@ -102,6 +102,7 @@ urlpatterns = [
     path('guides/settings/', guide_manager_views.guide_manager_settings, name='guide_manager_settings'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
+    path('channel-manager/pairings/', channel_manager_views.channel_manager_pairings, name='channel_manager_pairings'),
     # The EPG grabber (iptv-org/epg), driven from here rather than by hand
     path('epg-grabber/', epg_grabber_views.epg_grabber_page, name='epg_grabber_page'),
     path('epg-grabber/settings/', epg_grabber_views.epg_grabber_settings, name='epg_grabber_settings'),

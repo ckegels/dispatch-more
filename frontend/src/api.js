@@ -3038,6 +3038,18 @@ export default class API {
     });
   }
 
+  // Remembered streams (pairings.py): how many; "save" writes down what is matched now
+  static async getChannelManagerPairings() {
+    return await request(`${host}/api/channels/channel-manager/pairings/`);
+  }
+
+  static async changeChannelManagerPairings(action) {
+    return await request(`${host}/api/channels/channel-manager/pairings/`, {
+      method: 'POST',
+      body: { action },
+    });
+  }
+
   static async saveChannelManagerSettings(settings) {
     return await request(`${host}/api/channels/channel-manager/settings/`, {
       method: 'PUT',

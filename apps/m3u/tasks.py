@@ -3948,6 +3948,14 @@ def _refresh_single_m3u_account_impl(account_id):
         except Exception as e:
             logger.debug(f"Stream Check could not note the refresh of account {account_id}: {e}")
 
+        # Remembered streams: one this provider renamed goes back on its channel
+        try:
+            from apps.channels.pairings import after_refresh as pairings_after_refresh
+
+            pairings_after_refresh(account_id)
+        except Exception as e:
+            logger.warning(f"Remembered streams could not be put back after refreshing account {account_id}: {e}")
+
         # Send final update with complete metrics and explicitly include success status
         send_m3u_update(
             account_id,
