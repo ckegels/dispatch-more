@@ -143,6 +143,10 @@ The rules:
   search** on the words of the channel's name, then on its longest word alone. Each step
   adds below the ones before it, so the list stays best first. The app keeps asking every
   5 s while `reading` is true (at most a minute), adding rows as they are read.
+- **Load more (v217).** `GET ...&shown=<epg ids, comma-separated>` leaves those out and looks
+  deeper down every step (50 candidates, plus 2 per guide already shown, at most 300 a
+  step); `"more": true` in the answer says asking again can find more. The app shows a
+  "Load more" row while it is true.
 - **Order.** By score, best first, whatever source each comes from.
 - **`reading`.** If some of this channel's candidates have not had their programmes loaded
   yet (§4: a new channel, or the preload not finished), the server starts loading them in the

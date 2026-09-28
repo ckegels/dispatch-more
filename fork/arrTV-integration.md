@@ -42,7 +42,7 @@ default); switched off, that part does nothing:
 | Reopen when a swap inside the connection freezes the picture | — (app only) | built (arr.40), switch "Reopen a frozen stream" | §8.6 |
 | Faster failover when arrTV starts a channel | v212 | nothing to build (device header); the app's own waits are shorter too, switch "Faster switch to the next stream" | §8.7 |
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v214 | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
-| Wrong guide? Choose another (`/api/core/app-guide/`) | v216 | not built | §7a |
+| Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
 
 The user's server was still on **v205** when the TV report below was taken: install the
 latest release before testing any of §8.
@@ -362,7 +362,8 @@ and `X-Dispatch-Device` / `-Name` headers.
       "next": {"title": "Wetter", "start": "…"}
     }
   ],
-  "reading": false
+  "reading": false,
+  "more": true
 }
 ```
 
@@ -372,7 +373,12 @@ and `X-Dispatch-Device` / `-Name` headers.
 - `current`: the channel's guide, shown apart as what is being replaced; `null` for a channel
   on no guide; its `now` is `null` when it holds nothing ("Guide now: no information").
 - `reading: true`: some candidates had never been read and are being read now. Show "Looking
-  for more guides…" and ask **once** more after about 10 seconds.
+  for more guides…" and ask again every 5 seconds while it stays true, for at most a minute.
+- v217: the list widens until it holds 20 (any confidence, then without the Guides tab's
+  matching limits, then a plain name search), so `score` goes down the list and may be `0`
+  for a search result.
+- `more` (v217): `GET …&shown=<epg ids, comma-separated>` gives the next page, those left
+  out, looking deeper down. Show "Load more" while `more` is true.
 - 403: switched off (hide the entry until capabilities are read again). 404: this login may
   not watch that channel, or it is gone.
 

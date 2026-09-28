@@ -602,7 +602,8 @@ def app_guide(request):
     arrTV's "Wrong guide? Choose another" (apps.proxy.live_proxy.app_guides).
 
     GET ?channel=<uuid or id>: the channel's guide now, and the guides it could be that hold
-    a programme right now, best first. POST {"channel", "epg_id"}: put the channel on that
+    a programme right now, best first; &shown=<epg ids, comma-separated> for the next page
+    ("more" in the answer says whether there is one). POST {"channel", "epg_id"}: put the channel on that
     guide, for everybody, recorded with who did it. Any logged-in user, for a channel that
     login may watch; refused while switched off.
     """
@@ -617,7 +618,8 @@ def app_guide(request):
     if channel is None:
         return JsonResponse({"error": "That channel or guide no longer exists"}, status=404)
     if request.method == "GET":
-        return JsonResponse(app_guides.choices_for(channel, request.user))
+        shown = [i for i in (request.GET.get("shown") or "").split(",") if i]
+        return JsonResponse(app_guides.choices_for(channel, request.user, shown=shown))
     try:
         return JsonResponse(
             app_guides.choose(channel, (request.data or {}).get("epg_id"), request, request.user)

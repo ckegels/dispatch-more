@@ -2407,7 +2407,7 @@ def _search(active, matching, wanted, found, seen, limit):
 
 
 def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None,
-                     min_score=MIN_GUIDE_SCORE, wide=False):
+                     min_score=MIN_GUIDE_SCORE, wide=False, most=50):
     """
     The guide entries one channel could be, best first, for the picker on its row.
 
@@ -2431,7 +2431,8 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
 
     `min_score` and `wide` are for arrTV's list (app_guides), which would rather show a
     long list of maybes than nothing: a lower bar than MIN_GUIDE_SCORE, and with `wide`
-    none of the matching settings' limits (sources, tvg-id pattern, country) either.
+    none of the matching settings' limits (sources, tvg-id pattern, country) either; `most`
+    lets its "Load more" ask for a longer list than the Guides tab's 50.
     """
     from apps.epg.models import EPGSource
 
@@ -2439,7 +2440,7 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
 
     active, matching = _guides_in_reach(None if wide else source, wide=wide)
     try:
-        limit = max(1, min(int(limit or 12), 50))
+        limit = max(1, min(int(limit or 12), most))
     except (TypeError, ValueError):
         limit = 12
 

@@ -47,6 +47,10 @@ LOOK_AT = 50
 # is a plain search on the words of the channel's name, then on its longest word alone.
 WIDEN = ("matching", "wide", "search")
 ANY_SCORE = 1
+# "Load more": each page looks further down every step (LOOK_AT, plus this many per guide
+# already shown), down to LOOK_MOST candidates a step; past that there is no more
+LOOK_DEEPER_PER_SHOWN = 2
+LOOK_MOST = 300
 # How many of each channel's candidates are read ahead of time. The rest (up to LOOK_AT) are
 # read when somebody opens that channel's list: preloading all forty for every channel would
 # come close to reading every guide there is (about 36,000 on the user's server).
@@ -207,15 +211,17 @@ def candidates(channel, how_many=LOOK_AT, step="matching"):
     from apps.channels import channel_manager
 
     current = channel.epg_data_id
-    limit = min(50, how_many + 1)
+    limit = min(LOOK_MOST, how_many + 1)
     if step == "search":
         listed = []
         for words in _search_words(channel.name):
-            listed += channel_manager.guide_candidates(channel.name, search=words, limit=limit, current=current)
+            listed += channel_manager.guide_candidates(
+                channel.name, search=words, limit=limit, current=current, most=LOOK_MOST
+            )
     else:
         listed = channel_manager.guide_candidates(
             channel.name, getattr(channel, "tvg_id", "") or "",
-            limit=limit, current=current, min_score=ANY_SCORE, wide=(step == "wide"),
+            limit=limit, current=current, min_score=ANY_SCORE, wide=(step == "wide"), most=LOOK_MOST,
         )
     wanted, seen = [], set()
     for entry in listed:
@@ -240,7 +246,7 @@ def _search_words(name):
     return tries
 
 
-def choices_for(channel, user=None, start_reading=True):
+def choices_for(channel, user=None, start_reading=True, shown=()):
     """
     The answer to GET /api/core/app-guide/: this channel's guide now, and the guides it
     could be that hold a programme right now, best first (at most LIST_MOST).
@@ -248,12 +254,20 @@ def choices_for(channel, user=None, start_reading=True):
     A guide with nothing on now is left out, whether it was never read or read and found
     empty: whatever is picked has a title on screen at once. Candidates nobody has read yet
     are read in the background, and `reading` says so, so the app can ask once more.
+
+    `shown` is "Load more": the guides the app already lists. They are left out, each step
+    looks deeper the more there are, and `more` says whether asking again can find more.
     """
+    shown = {int(i) for i in shown or () if str(i).strip().isdigit()}
+    look = min(LOOK_MOST, LOOK_AT + LOOK_DEEPER_PER_SHOWN * len(shown))
     current_id = channel.epg_data_id
     on = now_and_next([current_id] if current_id else [])
     ids, guides = [], []
+    deeper = False
     for step in WIDEN:
-        ranked = [(epg_id, score) for epg_id, score in candidates(channel, step=step) if epg_id not in on]
+        found = candidates(channel, how_many=look, step=step)
+        deeper = deeper or len(found) >= look
+        ranked = [(epg_id, score) for epg_id, score in found if epg_id not in on and epg_id not in shown]
         if not ranked:
             continue
         ids += [epg_id for epg_id, _ in ranked]
@@ -269,10 +283,12 @@ def choices_for(channel, user=None, start_reading=True):
                 "source": {"id": entry["source_id"], "name": entry["source"]},
                 "now": what["now"], "next": what.get("next"),
             })
-            if len(guides) >= LIST_MOST:
+            if len(guides) > LIST_MOST:
                 break
-        if len(guides) >= LIST_MOST:
+        if len(guides) > LIST_MOST:
             break
+    more = len(guides) > LIST_MOST or (deeper and look < LOOK_MOST)
+    guides = guides[:LIST_MOST]
 
     current = None
     if current_id:
@@ -286,34 +302,44 @@ def choices_for(channel, user=None, start_reading=True):
 
     reading = False
     if start_reading and len(guides) < LIST_MOST:
-        unread = [epg_id for epg_id in ids if not (on.get(epg_id) or {}).get("now") and _never_read(epg_id)]
+        record, guides_tab = _record(), _guides_tab_reads()
+        unread = _unread(
+            [epg_id for epg_id in ids if not (on.get(epg_id) or {}).get("now")], record, guides_tab
+        )
         if unread:
-            reading = _read_for(channel, unread)
-    return {"channel": _channel_json(channel), "current": current, "guides": guides, "reading": reading}
+            reading = _read_for(channel, unread, look)
+    return {
+        "channel": _channel_json(channel), "current": current, "guides": guides,
+        "reading": reading, "more": more,
+    }
 
 
-def _never_read(epg_id, record=None, guides_tab=None):
-    """Whether nobody has read this guide's programmes: not arrTV, not the Guides tab, and
-    no channel uses it (Dispatcharr reads those itself)."""
+def _guides_tab_reads():
     from apps.channels import channel_manager
+
+    return channel_manager.reads()
+
+
+def _unread(epg_ids, record, guides_tab):
+    """Of these, the ones nobody has read: not arrTV, not the Guides tab, and no channel
+    uses them (Dispatcharr reads those itself)."""
     from apps.channels.models import Channel
 
-    record = _record() if record is None else record
-    if str(epg_id) in record.get("ids", {}):
-        return False
-    guides_tab = channel_manager.reads() if guides_tab is None else guides_tab
-    if str(epg_id) in guides_tab:
-        return False
-    return not Channel.objects.filter(epg_data_id=epg_id).exists()
+    ids = [epg_id for epg_id in epg_ids
+           if str(epg_id) not in record.get("ids", {}) and str(epg_id) not in guides_tab]
+    used = set(Channel.objects.filter(epg_data_id__in=ids).values_list("epg_data_id", flat=True))
+    return [epg_id for epg_id in ids if epg_id not in used]
 
 
-def _read_for(channel, epg_ids):
-    """Read these of one channel's candidates, once; True while a read is on its way."""
+def _read_for(channel, epg_ids, depth=LOOK_AT):
+    """Read these of one channel's candidates, once per depth ("Load more" looks further
+    down, and reads what it finds there); True while a read is on its way."""
     from core.utils import RedisClient
 
     try:
         redis_client = RedisClient.get_client()
-        if not redis_client.set(READING_KEY.format(channel=channel.id), "1", nx=True, ex=READING_TTL):
+        key = READING_KEY.format(channel=channel.id if depth == LOOK_AT else f"{channel.id}:{depth}")
+        if not redis_client.set(key, "1", nx=True, ex=READING_TTL):
             return True
     except Exception:
         pass

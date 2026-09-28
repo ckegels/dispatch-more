@@ -221,6 +221,36 @@ class GuideChoiceTests(TestCase):
         self.assertEqual(len(guides), app_guides.LIST_MOST)
         self.assertEqual(matcher.call_count, 1)
 
+    def test_load_more_gives_the_next_ones_down_until_there_are_none(self):
+        more = []
+        for i in range(45):
+            guide = EPGData.objects.create(tvg_id=f"z{i}", name=f"Z {i}", epg_source=self.de)
+            self.airing(guide, f"Show {i}")
+            more.append({"id": guide.id, "score": 80 - i})
+        self.matched = more
+        client = self.api()
+        first = client.get(URL, {"channel": str(self.channel.uuid)}).json()
+        self.assertEqual(len(first["guides"]), app_guides.LIST_MOST)
+        self.assertTrue(first["more"])
+        shown = [g["epg_id"] for g in first["guides"]]
+        second = client.get(URL, {"channel": str(self.channel.uuid), "shown": ",".join(map(str, shown))}).json()
+        self.assertEqual([g["epg_id"] for g in second["guides"]], [e["id"] for e in more[20:40]])
+        shown += [g["epg_id"] for g in second["guides"]]
+        third = client.get(URL, {"channel": str(self.channel.uuid), "shown": ",".join(map(str, shown))}).json()
+        self.assertEqual([g["epg_id"] for g in third["guides"]], [e["id"] for e in more[40:]])
+        self.assertFalse(third["more"])
+
+    def test_each_page_looks_deeper(self):
+        depths = []
+
+        def answer(*args, **kwargs):
+            depths.append(kwargs.get("limit"))
+            return []
+
+        with mock.patch("apps.channels.channel_manager.guide_candidates", side_effect=answer):
+            self.api().get(URL, {"channel": str(self.channel.uuid), "shown": ",".join(str(i) for i in range(1, 41))})
+        self.assertEqual(depths[0], app_guides.LOOK_AT + 80 + 1)
+
     def test_only_the_chosen_sources_are_offered(self):
         other = EPGData.objects.create(tvg_id="ORF1.at2", name="ORF 1 AT", epg_source=self.at)
         self.airing(other, "Zeit im Bild")
