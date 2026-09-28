@@ -1308,11 +1308,17 @@ epgshare01 `US_LOCALS1` 75 of 76 checked, 4-5 days; ontvtonight 66; i.mjh.nz `PB
 only ~29 hours ahead; tvtv.us 30; zap2it, tvguide, directv and plex next to none. There is no
 pbs.org site. The user wants more candidates rather than fewer (the right one is often
 missing from a close list), so the channel list built for them is every public-TV entry TV
-Passport has -- 1,653, stations and subchannels, exact HD/SD duplicates left out, radio left
-out -- each `xmltv_id` the entry's call sign (`KAET.us`, `KAET-DT2.us`), which the matcher
-takes as proof of the station. The file is `~/pbs-all.channels.xml` on the user's machine;
-the 88-station `~/pbs-mine.channels.xml` beside it. Twelve of their PBS channels were on
-WNET New York's guide (`pbs13wnet.us`).
+Passport has -- 1,972, stations, subchannels and HD feeds, radio left out -- as TV Passport's
+own lines, **verbatim**. The ids must stay TV Passport's: the user's existing grabber guide
+(EPG source 42) was a grep of the same file, so its entries are TV Passport's `site_id`
+(iptv-org writes the `site_id` when `xmltv_id` is empty), and 22 channels are on them, ten on
+HD feeds. A first cut wrote call signs as ids (`KAET.us`) and left the HD feeds out, which
+would have blanked those channels the moment the guide was pointed at the new list: an entry
+a channel uses is kept when it leaves the file (`parse_channels_only`), but gets no
+programmes after the next refresh. So the list replaces the old one in the same guide, the
+same source and output, and every old entry is still in it. The file is
+`~/pbs-all.channels.xml` on the user's machine; `~/pbs-mine.channels.xml` (98, their stations)
+beside it. Twelve of their PBS channels were on WNET New York's guide (`pbs13wnet.us`).
 
 Off unless switched on, nothing but a `CoreSettings` row, and one beat tick
 (`epg-grab-tick`, beside `stream-check-tick`) which does nothing while it is off. **A grab
