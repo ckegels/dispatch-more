@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217); latest release v218) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219; latest release v219) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -43,6 +43,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | Faster failover when arrTV starts a channel | v212 | nothing to build (device header); the app's own waits are shorter too, switch "Faster switch to the next stream" | §8.7 |
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 (two tiers from v214) | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 | Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
+| A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
@@ -401,6 +402,14 @@ style's options row the entry is labelled "Wrong guide?".)
   guide the channel is already on is answered 200 too: it means "this one is right".
 - **409**: the guide has nothing on any more; show the message and ask for the list again.
 - **403** / **404**: as for the list.
+
+**Every app hears of it** (v219): the server sends Dispatcharr's socket message
+`{"type": "update", "data": {"type": "channels_changed", "source": "guides", "channels": [uuids],
+"guide": true}}` when a guide is put on a channel (here or on the Guides tab), and again with
+`"source": "guide read"` once that guide's programmes have been read. A channel's programmes
+are keyed by its guide's tvg-id, learnt from the lineup, so the app reads the lineup again
+first, then the guide window (arr.64 also does this itself 2 s, 30 s and 90 s after its own
+choice, for servers before v219).
 
 The change is for every viewer (and Plex and Jellyfin), and the server records it with the
 login, the device id and name, and the address it came from; an admin sees it on Settings →

@@ -1000,6 +1000,7 @@ def apply(choices, extra=None):
 
     copy_tvg_id = bool(load_settings().get("copy_tvg_id"))
     changed = 0
+    changed_ids = []
     settled_channels = {}
     done_with = []
     # Putting a guide on a channel from this page is deciding what that channel is on,
@@ -1027,6 +1028,7 @@ def apply(choices, extra=None):
             fields.append("tvg_id")
         channel.save(update_fields=fields)
         done_with.append(str(channel.id))
+        changed_ids.append(channel.id)
         changed += 1
 
     def settle(chosen):
@@ -1039,4 +1041,9 @@ def apply(choices, extra=None):
     change_row(CHOSEN_KEY, "Guides chosen", settle)
     change_row(SUGGESTIONS_KEY, "Guide suggestions", drop)
     logger.info(f"Guides: {changed} channel(s) put on another guide")
+    if changed_ids:
+        # arrTV follows at once rather than at its next lineup check
+        from apps.proxy.live_proxy.app_devices import announce_guides_changed
+
+        announce_guides_changed(changed_ids, "guides")
     return {"changed": changed}

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v218** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v219** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1816,6 +1816,16 @@ search on the channel's name and its longest word -- and **Load more** (`shown=<
 looking deeper: 50 candidates plus 2 per guide shown, at most 300 a step; `more` in the answer).
 Guides nobody read are found in three lookups for the whole list (`_unread`), not three per
 guide. Tests: `test_app_guides.py`.
+
+**The apps hear at once that a guide changed** (v219, `app_devices.announce_guides_changed`).
+arrTV keys a channel's programmes by its guide's tvg-id, which it learns from the lineup; the
+server said nothing when a guide changed, so the app found out at its 10-minute lineup check
+and even then did not fetch the channel's programmes (the user: "the server sees it, the app
+never updates"). `guide_manager.apply` (the Guides tab and Wrong guide? both go through it) and
+`read_guide_programmes` (once a guide's programmes are read) now send the `channels_changed`
+socket message Show Groups already sends, with `"guide": true` and the channels' uuids; arrTV
+(arr.64) reads the lineup again a second later and fetches the guide window. Only while an arrTV
+switch (`devices` or `guide_choice`) is on; never raises.
 
 ---
 

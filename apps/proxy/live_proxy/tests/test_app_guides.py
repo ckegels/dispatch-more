@@ -316,6 +316,22 @@ class GuideChoiceTests(TestCase):
         self.assertEqual(order[-1], self.fallback.id)
         self.assertEqual(len(order), 2)
 
+    def test_the_apps_are_told_at_once_that_the_guide_changed(self):
+        with mock.patch("core.utils.send_websocket_update") as sent:
+            self.assertEqual(self.choose(self.right).status_code, 200)
+        sent.assert_called_once()
+        group, kind, data = sent.call_args[0]
+        self.assertEqual((group, kind, data["type"], data["guide"]), ("updates", "update", "channels_changed", True))
+        self.assertEqual(data["channels"], [str(self.channel.uuid)])
+
+    def test_with_every_arrtv_switch_off_nothing_is_sent(self):
+        from apps.channels import guide_manager as gm
+
+        app_devices.save_settings({"guide_choice": False, "devices": False})
+        with mock.patch("core.utils.send_websocket_update") as sent:
+            gm.apply({str(self.channel.id): self.right.id})
+        sent.assert_not_called()
+
     def test_it_is_saved_the_way_dispatcharrs_signal_watches(self):
         from apps.channels.models import Channel
 

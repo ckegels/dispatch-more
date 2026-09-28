@@ -4850,6 +4850,15 @@ def read_guide_programmes(by_source, tries=0, record="", how=""):
                 logger.info(f"Guide programmes: {epg.tvg_id} has {len(made)} programme(s)")
     if what_was_found:
         written_down(what_was_found)
+        # The channels on a guide just read have programmes now: arrTV fetches them
+        read_now = [epg_id for epg_id, n in what_was_found.items() if n]
+        if read_now:
+            from apps.proxy.live_proxy.app_devices import announce_guides_changed
+
+            announce_guides_changed(
+                Channel.objects.filter(epg_data_id__in=read_now).values_list("id", flat=True),
+                "guide read",
+            )
     say({
         "state": "reading" if waiting else "done",
         "stage": f"waiting on {waiting} more" if waiting else "",

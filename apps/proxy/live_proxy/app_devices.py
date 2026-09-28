@@ -544,3 +544,32 @@ def capabilities():
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
+
+
+def announce_guides_changed(channel_ids, source):
+    """
+    Tell the apps listening on Dispatcharr's socket that these channels' guides changed:
+    the same `channels_changed` message Show Groups sends, with `"guide": true`, so arrTV
+    reloads those channels' guide link and their programmes at once instead of at its
+    10-minute lineup check (which never fetched the programmes of a channel whose guide
+    changed). Sent only while an arrTV switch is on: nothing else listens for it, and off
+    is stock. Never raises: a message that cannot be sent must not undo a guide change.
+    """
+    try:
+        settings = load_settings()
+        if not (settings.get("devices") or settings.get("guide_choice")):
+            return 0
+        from apps.channels.models import Channel
+        from core.utils import send_websocket_update
+
+        uuids = [str(u) for u in Channel.objects.filter(id__in=list(channel_ids)).values_list("uuid", flat=True)]
+        if not uuids:
+            return 0
+        send_websocket_update("updates", "update", {
+            "type": "channels_changed", "source": source, "channels": uuids,
+            "changes": len(uuids), "guide": True,
+        })
+        return len(uuids)
+    except Exception as e:
+        logger.debug(f"App devices: could not announce changed guides: {e}")
+        return 0

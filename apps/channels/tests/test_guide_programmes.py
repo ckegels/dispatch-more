@@ -66,6 +66,20 @@ class ReadGuideProgrammesTests(TestCase):
         self.assertEqual(noting.call_count, 1, "written once, for all of them")
         self.assertEqual(noting.call_args[0][0], {self.one.id: 2, self.two.id: 1})
 
+    def test_the_apps_hear_that_a_channels_guide_now_has_programmes(self):
+        """A channel whose guide was just read shows nothing in arrTV until it is told."""
+        from unittest.mock import patch
+
+        from apps.channels.models import Channel
+
+        channel = Channel.objects.create(name="ORF 1", channel_number=1, epg_data=self.one)
+        Channel.objects.create(name="Nothing read", channel_number=2)
+        with patch("apps.proxy.live_proxy.app_devices.announce_guides_changed") as told:
+            self._read(self.one)
+        told.assert_called_once()
+        self.assertEqual(list(told.call_args[0][0]), [channel.id])
+        self.assertEqual(told.call_args[0][1], "guide read")
+
     def test_every_guide_asked_for_is_read_in_the_one_pass(self):
         self._read(self.one, self.two)
         self.assertEqual(
