@@ -449,9 +449,52 @@ def ready_made(job, settings=None):
             key = (site, url)
             counted[key] = counted.get(key, 0) + many
     return [
-        {"site": site, "url": url, "channels": many}
+        {"site": site, "url": url, "channels": many, "there": file_is_there(url)}
         for (site, url), many in sorted(counted.items())
     ]
+
+
+# Whether a finished file is really where a site's config says it is. iptv-org's lists name
+# files the sites have since renamed or dropped -- epgshare01's US_LOCALS2 answers 404 while
+# US_LOCALS1 is there, rebuilt daily -- and a source made of a missing file is a guide that
+# holds nothing, which looks exactly like one that is working. The page asks for these on
+# every refresh (every few seconds during a grab), so an answer is kept: a file that is
+# there for hours, one that is not for an hour, and a check that could not be made at all
+# only briefly.
+_THERE = {}
+THERE_KEPT = 6 * 3600
+MISSING_KEPT = 3600
+UNKNOWN_KEPT = 300
+THERE_TIMEOUT = 8
+
+
+def file_is_there(url):
+    """True: the site serves it. False: it answers that it has no such file (4xx).
+    None: it could not be asked (no network, a timeout, a server error)."""
+    now = time.monotonic()
+    held = _THERE.get(url)
+    if held:
+        at, there = held
+        kept = THERE_KEPT if there else MISSING_KEPT if there is False else UNKNOWN_KEPT
+        if now - at < kept:
+            return there
+    import requests
+
+    there = None
+    try:
+        answer = requests.head(url, allow_redirects=True, timeout=THERE_TIMEOUT)
+        if answer.status_code in (403, 405, 501):
+            # Some servers refuse HEAD but serve the file: ask for it and read nothing
+            answer = requests.get(url, allow_redirects=True, timeout=THERE_TIMEOUT, stream=True)
+            answer.close()
+        if answer.status_code < 400:
+            there = True
+        elif answer.status_code < 500:
+            there = False
+    except requests.RequestException as e:
+        logger.debug(f"EPG grabber: could not ask whether {url} is there: {e}")
+    _THERE[url] = (now, there)
+    return there
 
 
 _BEHIND = {}
@@ -499,6 +542,12 @@ def add_ready_made(url, name):
     if not url.startswith(("https://", "http://")) or any(c.isspace() for c in url):
         raise ValueError("That is not a web address")
     source = EPGSource.objects.filter(url=url).first()
+    if not source and file_is_there(url) is False:
+        # Asked again rather than trusted from the page: a source of a missing file would
+        # hold nothing and look like it works
+        _THERE.pop(url, None)
+        if file_is_there(url) is False:
+            raise ValueError("That file is not there: the site says it has no such file")
     if source:
         return {"id": source.id, "name": source.name, "made": False}
     name = (name or "").strip() or url.rsplit("/", 1)[-1]

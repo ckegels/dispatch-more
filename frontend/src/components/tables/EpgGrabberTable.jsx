@@ -193,10 +193,22 @@ const Guide = ({
                         {one.site}
                       </Text>{' '}
                       · {one.channels} channel{one.channels === 1 ? '' : 's'} · {one.url}
+                      {one.there == null && (
+                        <Text span size="xs" c="dimmed">
+                          {' '}
+                          (could not check whether it is there)
+                        </Text>
+                      )}
                     </Text>
                     {already ? (
                       <Badge size="xs" variant="light" color="teal">
                         Already a source: {already.name}
+                      </Badge>
+                    ) : one.there === false ? (
+                      // iptv-org's lists name files the sites have since dropped: a source
+                      // made of one would hold nothing and look as though it works
+                      <Badge size="xs" variant="light" color="red">
+                        Not there: the site has no such file
                       </Badge>
                     ) : (
                       <Button

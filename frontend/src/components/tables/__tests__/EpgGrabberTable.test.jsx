@@ -231,8 +231,8 @@ describe('EpgGrabberTable', () => {
       epg_sources: sources,
       ready_made: {
         pbs: [
-          { site: 'i.mjh.nz', url: pbs, channels: 146 },
-          { site: 'epgshare01.online', url: locals, channels: 12 },
+          { site: 'i.mjh.nz', url: pbs, channels: 146, there: true },
+          { site: 'epgshare01.online', url: locals, channels: 12, there: true },
         ],
       },
     });
@@ -279,6 +279,21 @@ describe('EpgGrabberTable', () => {
       expect(
         screen.getByRole('button', { name: `Add ${locals} as an EPG source` })
       ).toBeInTheDocument();
+    });
+
+    it('and says a file the site no longer has is not there, rather than offering it', async () => {
+      const gone = 'https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS2.xml.gz';
+      API.getEpgGrabber.mockResolvedValue({
+        ...page,
+        ready_made: { pbs: [{ site: 'epgshare01.online', url: gone, channels: 654, there: false }] },
+      });
+      draw();
+      expect(
+        await screen.findByText('Not there: the site has no such file')
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: `Add ${gone} as an EPG source` })
+      ).not.toBeInTheDocument();
     });
 
     it('and says nothing about a guide that is scraped', async () => {

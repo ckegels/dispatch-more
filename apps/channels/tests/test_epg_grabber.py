@@ -546,6 +546,13 @@ class ReadyMadeTests(_Setup):
     holds none of them -- so the tab says where the file is instead.
     """
 
+    def setUp(self):
+        super().setUp()
+        # Never the real sites: whether a file is there is asked of a stand-in
+        patcher = mock.patch.object(epg_grabber, "file_is_there", return_value=True)
+        self.there = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _list(self, text, name="mine.channels.xml"):
         path = os.path.join(self.folder, "data", name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -560,9 +567,9 @@ class ReadyMadeTests(_Setup):
             [
                 {"site": "epgshare01.online",
                  "url": "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz",
-                 "channels": 1},
-                {"site": "i.mjh.nz", "url": "https://i.mjh.nz/MeTV/epg.xml.gz", "channels": 1},
-                {"site": "i.mjh.nz", "url": "https://i.mjh.nz/PBS/all.xml.gz", "channels": 2},
+                 "channels": 1, "there": True},
+                {"site": "i.mjh.nz", "url": "https://i.mjh.nz/MeTV/epg.xml.gz", "channels": 1, "there": True},
+                {"site": "i.mjh.nz", "url": "https://i.mjh.nz/PBS/all.xml.gz", "channels": 2, "there": True},
             ],
         )
 
@@ -623,6 +630,54 @@ class ReadyMadeTests(_Setup):
     def test_only_a_web_address_is_made_a_source(self):
         with self.assertRaises(ValueError):
             epg_grabber.add_ready_made("file:///etc/passwd", "no")
+
+    def test_a_file_the_site_does_not_have_is_said_and_never_made_a_source(self):
+        """iptv-org's list names epgshare01's US_LOCALS2, which answers 404."""
+        self.there.return_value = False
+        settings = self._settings(job={"channels": self._list(MJH)})
+        self.assertEqual({one["there"] for one in epg_grabber.ready_made(settings["jobs"][0], settings)}, {False})
+        with self.assertRaises(ValueError) as refused:
+            epg_grabber.add_ready_made("https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS2.xml.gz", "x")
+        self.assertIn("not there", str(refused.exception))
+        self.assertFalse(EPGSource.objects.filter(url__contains="US_LOCALS2").exists())
+
+
+class FileIsThereTests(TestCase):
+    """Whether a finished file is where its site's config says, asked once in a while."""
+
+    def setUp(self):
+        from apps.channels import epg_grabber
+
+        self.grabber = epg_grabber
+        epg_grabber._THERE.clear()
+        self.addCleanup(epg_grabber._THERE.clear)
+
+    def answer(self, status):
+        return mock.Mock(status_code=status)
+
+    def test_there_missing_and_could_not_ask(self):
+        import requests
+
+        with mock.patch("requests.head", return_value=self.answer(200)):
+            self.assertTrue(self.grabber.file_is_there("https://a/one.xml.gz"))
+        with mock.patch("requests.head", return_value=self.answer(404)):
+            self.assertFalse(self.grabber.file_is_there("https://a/two.xml.gz"))
+        with mock.patch("requests.head", side_effect=requests.ConnectionError("no network")):
+            self.assertIsNone(self.grabber.file_is_there("https://a/three.xml.gz"))
+        with mock.patch("requests.head", return_value=self.answer(502)):
+            self.assertIsNone(self.grabber.file_is_there("https://a/four.xml.gz"))
+
+    def test_a_server_that_refuses_head_is_asked_for_the_file(self):
+        with mock.patch("requests.head", return_value=self.answer(405)), \
+                mock.patch("requests.get", return_value=self.answer(200)) as getting:
+            self.assertTrue(self.grabber.file_is_there("https://a/one.xml.gz"))
+        self.assertTrue(getting.call_args.kwargs["stream"])
+
+    def test_the_answer_is_kept_while_the_page_asks_again_and_again(self):
+        with mock.patch("requests.head", return_value=self.answer(200)) as asking:
+            for _ in range(5):
+                self.grabber.file_is_there("https://a/one.xml.gz")
+        self.assertEqual(asking.call_count, 1)
 
 
 class CountingTests(TestCase):

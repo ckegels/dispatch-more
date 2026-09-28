@@ -1294,6 +1294,26 @@ run with `shell=False`, so nothing in the settings can turn into something else.
 dashes (`npm run grab ---`) because npm eats the first pair; that is the project's own
 README form.
 
+**A finished file is offered only if it is there** (v223, `file_is_there`). iptv-org's lists
+name files the sites have since dropped: its epgshare01 list is `US_LOCALS2`, which answers
+404, while `US_LOCALS1` is there and rebuilt daily. A source made of a missing file holds
+nothing and looks as though it works, so each file is asked for with a HEAD (kept 6 h when
+there, 1 h when not, 5 min when it could not be asked, since the page asks every few seconds
+during a grab); a missing one is shown as missing, and `add_ready_made` refuses it.
+
+**PBS, measured 2026-09-28** against the user's 88 PBS stations (call signs from the channel
+names, the 15 without one by city): TV Passport has all 88 (8 days, descriptions, cast,
+ratings, images; ~1.4 s a request; 25 of 25 random entries returned programmes);
+epgshare01 `US_LOCALS1` 75 of 76 checked, 4-5 days; ontvtonight 66; i.mjh.nz `PBS/all` 64 and
+only ~29 hours ahead; tvtv.us 30; zap2it, tvguide, directv and plex next to none. There is no
+pbs.org site. The user wants more candidates rather than fewer (the right one is often
+missing from a close list), so the channel list built for them is every public-TV entry TV
+Passport has -- 1,653, stations and subchannels, exact HD/SD duplicates left out, radio left
+out -- each `xmltv_id` the entry's call sign (`KAET.us`, `KAET-DT2.us`), which the matcher
+takes as proof of the station. The file is `~/pbs-all.channels.xml` on the user's machine;
+the 88-station `~/pbs-mine.channels.xml` beside it. Twelve of their PBS channels were on
+WNET New York's guide (`pbs13wnet.us`).
+
 Off unless switched on, nothing but a `CoreSettings` row, and one beat tick
 (`epg-grab-tick`, beside `stream-check-tick`) which does nothing while it is off. **A grab
 holds one background worker for as long as it runs**, which on a binary install is one of
