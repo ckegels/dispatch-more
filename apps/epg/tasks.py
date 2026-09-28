@@ -1935,7 +1935,13 @@ def parse_programs_for_tvg_id(epg_id, force=False, _defer_retry=0):
             # fails (including a poisoned-connection blip), the transaction rolls back
             # and the previous guide data for this channel is left untouched.
             with transaction.atomic():
-                deleted_count = ProgramData.objects.filter(epg=epg).delete()[0]
+                # The fork keeps the finished programmes of the last few days where the
+                # arrTV settings ask for it (apps.channels.guide_past); otherwise stock's delete
+                from apps.channels.guide_past import delete_replaced, firsts_of
+
+                deleted_count = delete_replaced(
+                    ProgramData.objects.filter(epg=epg), firsts_of(programs_to_create)
+                )
                 if programs_to_create:
                     for i in range(0, len(programs_to_create), _EPG_SWAP_BATCH_SIZE):
                         ProgramData.objects.bulk_create(
@@ -2140,7 +2146,11 @@ def _swap_staged_epg_programs(mapped_epg_ids, epg_source, batch_size=_EPG_SWAP_B
     with connection.cursor() as cursor:
         cursor.execute("SET LOCAL statement_timeout = '10min'")
 
-    deleted_count = ProgramData.objects.filter(epg_id__in=mapped_epg_ids).delete()[0]
+    # The fork keeps a guide's recent past where asked to (apps.channels.guide_past);
+    # otherwise stock's delete
+    from apps.channels.guide_past import delete_replaced_by_staged
+
+    deleted_count = delete_replaced_by_staged(mapped_epg_ids, _EPG_PROGRAM_STAGING_TABLE)
     logger.debug(f"Deleted {deleted_count} existing programs")
 
     _delete_orphaned_epg_programs(epg_source)
@@ -2187,7 +2197,11 @@ def _swap_staged_epg_programs(mapped_epg_ids, epg_source, batch_size=_EPG_SWAP_B
 def _swap_parsed_epg_programs(mapped_epg_ids, epg_source, programs_to_create, batch_size=_EPG_SWAP_BATCH_SIZE):
     """SQLite/dev fallback: atomic delete + bulk insert from an in-memory batch list."""
     with transaction.atomic():
-        deleted_count = ProgramData.objects.filter(epg_id__in=mapped_epg_ids).delete()[0]
+        from apps.channels.guide_past import delete_replaced, firsts_of
+
+        deleted_count = delete_replaced(
+            ProgramData.objects.filter(epg_id__in=mapped_epg_ids), firsts_of(programs_to_create)
+        )
         _delete_orphaned_epg_programs(epg_source)
         for i in range(0, len(programs_to_create), batch_size):
             ProgramData.objects.bulk_create(programs_to_create[i:i + batch_size])

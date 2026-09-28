@@ -1,5 +1,7 @@
 """What a player app says about itself (apps.proxy.live_proxy.app_devices)."""
 
+from unittest import mock
+
 from django.test import RequestFactory, TestCase
 from rest_framework.test import APIClient
 
@@ -83,13 +85,13 @@ class AppDevicesTests(TestCase):
             {"devices": False, "switch_hints": False, "reports": False,
              "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
              "alternatives": False, "fast_grace": 5, "fast_grace_many": 3,
-             "guide_choice": False, "guide_choice_sources": ""},
+             "guide_choice": False, "guide_choice_sources": "", "keep_past_days": 0},
         )
         answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
         self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
                                   "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
              "alternatives": False, "fast_grace": 5, "fast_grace_many": 3,
-             "guide_choice": False, "guide_choice_sources": ""})
+             "guide_choice": False, "guide_choice_sources": "", "keep_past_days": 0})
         # Only an admin changes them
         viewer = User.objects.create_user(username="tv", password="x", user_level=0)
         client.force_authenticate(user=viewer)
@@ -231,9 +233,28 @@ class AppReportsTests(TestCase):
             keys = [row["key"] for row in self.as_user(user).get("/api/core/settings/").json()]
             self.assertFalse([k for k in keys if k.startswith("app-report")], user.username)
             # Dispatcharr's own settings are still there
-            self.assertIn("app-integration", keys)
+            self.assertIn("stream_settings", keys)
         # Nor one by its row's own id
         row = CoreSettings.objects.filter(key__startswith="app-report-").first()
+        self.assertEqual(self.as_user(standard).get(f"/api/core/settings/{row.id}/").status_code, 404)
+
+    def test_the_settings_list_carries_none_of_the_forks_rows(self):
+        """
+        A standard user read the media servers' tokens there, and who changed which guide
+        from which device and address. No fork row is a setting the page reads from it.
+        """
+        from core.api_views import FORK_ROWS
+        from core.models import CoreSettings
+
+        standard = User.objects.create_user(username="standard", password="x", user_level=1)
+        for key in FORK_ROWS:
+            CoreSettings.objects.update_or_create(key=key, defaults={"name": key, "value": {"secret": key}})
+        for user in (standard, self.admin):
+            answer = self.as_user(user).get("/api/core/settings/")
+            keys = [row["key"] for row in answer.json()]
+            self.assertFalse(set(keys) & set(FORK_ROWS), user.username)
+            self.assertIn("stream_settings", keys)
+        row = CoreSettings.objects.get(key="media-servers")
         self.assertEqual(self.as_user(standard).get(f"/api/core/settings/{row.id}/").status_code, 404)
 
     def test_the_capabilities_say_where_to_send_them(self):
@@ -353,49 +374,116 @@ class FastFailoverTests(TestCase):
         app_devices.save_settings({"devices": True, **on})
         app_devices._HELD.update(at=0.0, value=None)
 
+    def manager(self, channel_id="ch1", tried=1, index=0):
+        import types
+
+        from apps.proxy.live_proxy.input.manager import StreamManager
+
+        fake = types.SimpleNamespace(
+            connected=True, channel_id=channel_id,
+            buffer=types.SimpleNamespace(index=index, redis_client=self.redis),
+            tried_stream_ids=set(range(tried)),
+        )
+        fake._fast_start_grace = types.MethodType(StreamManager._fast_start_grace, fake)
+        fake._health_inactivity_threshold = types.MethodType(StreamManager._health_inactivity_threshold, fake)
+        return fake
+
     def test_off_marks_nothing_and_the_stock_grace_applies(self):
         self.switch()
-        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=2)
         self.assertEqual(self.redis.values, {})
         self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch1"))
         self.assertFalse(app_devices.capabilities()["fast_failover"])
 
     def test_on_only_for_a_declared_device(self):
         self.switch(fast_failover=True)
-        app_devices.mark_fast_start(self.redis, self.other, "ch1")
+        app_devices.mark_fast_start(self.redis, self.other, "ch1", alternatives=1)
         self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch1"))
-        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=1)
         self.assertEqual(app_devices.fast_start_grace(self.redis, "ch1"), app_devices.FAST_START_GRACE)
         self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch2"))
         self.assertTrue(app_devices.capabilities()["fast_failover"])
 
     def test_switching_off_ends_it_at_once(self):
         self.switch(fast_failover=True)
-        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=1)
         self.switch(fast_failover=False)
         self.assertIsNone(app_devices.fast_start_grace(self.redis, "ch1"))
 
-    def test_the_stream_manager_waits_the_short_grace_only_before_any_data(self):
-        import types
+    def test_a_request_from_any_other_player_never_reads_the_settings(self):
+        """Every stream request passes the hooks: one without the headers costs a lookup."""
+        with mock.patch.object(app_devices, "load_settings") as reading:
+            app_devices.mark_fast_start(self.redis, self.other, "ch1", alternatives=2)
+            app_devices.declared_device(self.other)
+            app_devices.declared_multiview(self.other)
+            app_devices.declared_previous_channel(self.other)
+            app_devices.declared_max_quality(self.other)
+            self.manager("unmarked")._fast_start_grace()
+        reading.assert_not_called()
 
+    def test_the_stream_manager_waits_the_short_grace_only_before_any_data(self):
         from apps.proxy.live_proxy.config_helper import ConfigHelper
-        from apps.proxy.live_proxy.input.manager import StreamManager
 
         self.switch(fast_failover=True)
-        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1")
-        fake = types.SimpleNamespace(
-            connected=True, channel_id="ch1",
-            buffer=types.SimpleNamespace(index=0, redis_client=self.redis),
-        )
-        fake._fast_start_grace = types.MethodType(StreamManager._fast_start_grace, fake)
-        threshold = types.MethodType(StreamManager._health_inactivity_threshold, fake)
-        self.assertEqual(threshold(), app_devices.FAST_START_GRACE)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=1)
+        fake = self.manager()
+        self.assertEqual(fake._health_inactivity_threshold(), app_devices.FAST_START_GRACE)
         # Once data came, the stock rule for a running stream
         fake.buffer.index = 10
-        self.assertNotEqual(threshold(), app_devices.FAST_START_GRACE)
-        # A channel nobody marked: the stock start grace
-        fake.buffer.index, fake.channel_id = 0, "ch2"
-        self.assertEqual(threshold(), ConfigHelper.channel_init_grace_period())
+        self.assertNotEqual(fake._health_inactivity_threshold(), app_devices.FAST_START_GRACE)
+        # A channel nobody marked: the stock start grace (read through ConfigHelper, which
+        # closes the database connection after reading, so stood in for here)
+        other = self.manager("ch2")
+        with mock.patch.object(ConfigHelper, "channel_init_grace_period", return_value=60):
+            self.assertEqual(other._health_inactivity_threshold(), 60)
+
+    def test_the_walk_is_quick_while_there_are_streams_to_burn_through_and_slower_near_the_end(self):
+        """
+        Three others to go to: the first two leaves at the short wait, the last one left at
+        the normal one (a channel with just a couple is not skipped through too fast), and
+        with none left the stock grace -- only the fallback would come after it.
+        """
+        self.switch(fast_failover=True, fast_grace=5, fast_grace_many=3)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=3)
+        waits = [self.manager(tried=tried)._fast_start_grace() for tried in (1, 2, 3, 4)]
+        self.assertEqual(waits, [3, 3, 5, None])
+
+    def test_the_second_dead_stream_is_left_after_its_own_wait_not_the_30_s_between_actions(self):
+        """Run the real health check once, as the stream manager does after one switch."""
+        import time
+        import types
+
+        from apps.proxy.live_proxy.input.manager import StreamManager
+
+        self.switch(fast_failover=True, fast_grace=5, fast_grace_many=3)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=2)
+
+        def check(connected_ago, marked=True):
+            fake = self.manager("ch1" if marked else "unmarked", tried=2)
+            now = time.time()
+            fake.__dict__.update(
+                running=True, healthy=True, needs_reconnect=False, needs_stream_switch=False,
+                health_check_interval=5, last_data_time=now - 30,
+                connection_start_time=now - connected_ago, last_health_action_time=now - connected_ago,
+            )
+
+            def stop(_seconds):
+                fake.running = False
+
+            # Stock's start grace is read through the proxy's ConfigHelper, which closes the
+            # database connection after reading (right for the proxy's threads, and the end
+            # of this test's connection)
+            with mock.patch("apps.proxy.live_proxy.input.manager.gevent.sleep", side_effect=stop), \
+                    mock.patch("apps.proxy.live_proxy.input.manager.ConfigHelper.channel_init_grace_period",
+                               return_value=60):
+                StreamManager._monitor_health(fake)
+            return fake.needs_stream_switch
+
+        # One stream left to go to: the normal wait (5 s), counted from this stream's connection
+        self.assertFalse(check(connected_ago=4))
+        self.assertTrue(check(connected_ago=6))
+        # Stock, for a channel no arrTV device marked: three checks and 30 s between actions
+        self.assertFalse(check(connected_ago=6, marked=False))
 
 
 class FastGraceTests(TestCase):
@@ -414,16 +502,20 @@ class FastGraceTests(TestCase):
         app_devices.mark_fast_start(self.redis, self.arrtv, "many", alternatives=4)
         app_devices.mark_fast_start(self.redis, self.arrtv, "two", alternatives=2)
         app_devices.mark_fast_start(self.redis, self.arrtv, "one", alternatives=1)
-        app_devices.mark_fast_start(self.redis, self.arrtv, "unknown", alternatives=None)
         self.assertEqual(app_devices.fast_start_grace(self.redis, "many"), 2)
         # Two others already count as several: a channel here has three streams at most
         self.assertEqual(app_devices.fast_start_grace(self.redis, "two"), 2)
         self.assertEqual(app_devices.fast_start_grace(self.redis, "one"), 7)
-        self.assertEqual(app_devices.fast_start_grace(self.redis, "unknown"), 7)
 
     def test_a_channel_with_nowhere_to_go_is_not_hurried(self):
+        """
+        No other stream it can play, or none on a provider with a connection free; and a
+        stream of its own, which has no failover at all and is marked with no count (None).
+        """
         app_devices.mark_fast_start(self.redis, self.arrtv, "none", alternatives=0)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "own", alternatives=None)
         self.assertIsNone(app_devices.fast_start_grace(self.redis, "none"))
+        self.assertIsNone(app_devices.fast_start_grace(self.redis, "own"))
 
     def test_the_seconds_are_whole_and_bounded(self):
         saved = app_devices.save_settings({"fast_grace": "0", "fast_grace_many": "99.7"})
@@ -431,8 +523,9 @@ class FastGraceTests(TestCase):
         saved = app_devices.save_settings({"fast_grace": "rubbish"})
         self.assertEqual(saved["fast_grace"], 5)
 
-    def test_a_mark_from_v212_is_not_read_as_one_second(self):
+    def test_a_mark_from_v212_or_v213_is_not_read_as_a_count(self):
         self.redis.set("live:app_devices:fast_start:old", "1")
+        self.redis.set("live:app_devices:fast_grace:old", "5")
         self.assertIsNone(app_devices.fast_start_grace(self.redis, "old"))
 
 
@@ -485,6 +578,14 @@ class AlternativesTests(TestCase):
         app_devices.save_settings({"alternatives": True})
         stranger = probation.Viewer("192.168.2.40", 1, app="VLC")
         self.assertIsNone(self.count(stranger))
+
+    def test_faster_failover_alone_still_counts_but_tells_arrtv_nothing(self):
+        """Where there is to go decides faster failover's wait, whether or not arrTV is told."""
+        from apps.proxy.live_proxy import app_alternatives
+
+        app_devices.save_settings({"alternatives": False, "fast_failover": True})
+        self.assertEqual(self.count(), 2)
+        self.assertFalse(app_alternatives.enabled())
 
     def test_a_channel_about_to_start(self):
         # 4K, FHD and SD are on the free account; HD's account is full; the fallback never

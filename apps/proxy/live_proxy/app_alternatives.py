@@ -27,8 +27,16 @@ HEADER = "X-Dispatch-Alternatives"
 
 
 def enabled():
+    """Whether the count is sent to arrTV (the X-Dispatch-Alternatives header)."""
     settings = app_devices.load_settings()
     return bool(settings.get("devices") and settings.get("alternatives"))
+
+
+def wanted():
+    """Whether the count is needed at all: sent to arrTV, or deciding faster failover's wait
+    (a channel with nowhere to go is never hurried, whether or not arrTV is told)."""
+    settings = app_devices.load_settings()
+    return bool(settings.get("devices") and (settings.get("alternatives") or settings.get("fast_failover")))
 
 
 def count(redis_client, viewer, channel):
@@ -38,9 +46,10 @@ def count(redis_client, viewer, channel):
     it could not be worked out. Never raises.
     """
     try:
-        if redis_client is None or not hasattr(channel, "uuid") or not enabled():
-            return None
+        # arrTV first (a string check): every stream request passes here
         if not app_devices.is_declared(getattr(viewer, "server_device", None)):
+            return None
+        if redis_client is None or not hasattr(channel, "uuid") or not wanted():
             return None
         from apps.m3u.connection_pool import pool_has_capacity_for_profile
 

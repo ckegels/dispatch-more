@@ -246,7 +246,8 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             proxy_server.redis_client, viewer, channel
         )
         # arrTV's faster failover (off unless switched on): a stream of this channel that
-        # connects and sends nothing is left after seconds, not stock's minute
+        # connects and sends nothing is left after seconds, not stock's minute -- where there
+        # is another stream to go to (a stream of its own has none: alternatives is None)
         app_devices.mark_fast_start(proxy_server.redis_client, request, channel_id, alternatives)
 
         if user:
@@ -939,7 +940,7 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
             streaming_content=generate(), content_type=content_type
         )
         response["Cache-Control"] = "no-cache"
-        if alternatives is not None:
+        if alternatives is not None and app_alternatives.enabled():
             response[app_alternatives.HEADER] = str(alternatives)
         return response
 

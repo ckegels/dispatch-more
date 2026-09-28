@@ -2758,6 +2758,14 @@ export default class API {
     );
   }
 
+  // The change was right: keep it, and take it off the list
+  static async keepArrTvGuide(channel) {
+    return await request(`${host}/api/core/arrtv/guide-changes/`, {
+      method: 'POST',
+      body: { channel, action: 'keep' },
+    });
+  }
+
   // The programmes loaded ahead of time for arrTV's guide lists, and "Load now"
   static async getArrTvGuidePreload() {
     return await request(`${host}/api/core/arrtv/guide-preload/`);

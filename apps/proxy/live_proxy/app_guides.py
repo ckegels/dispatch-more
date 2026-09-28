@@ -64,6 +64,16 @@ FULL_PRELOAD_EVERY_SECONDS = 24 * 3600
 # Where the preload has got to, for the settings page
 PRELOAD_RUN_KEY = "live:app_guides:preload"
 PRELOAD_RUN_TTL = 24 * 3600
+# Held while a preload runs, so there is only ever one: every source's refresh on the daily
+# refresh, "Load now" and the switch all start one, and each ends by reading every source's
+# file. Every batch holds it again; a chain that died (the services restarted in the middle
+# of it) lets go within this long, and the page stops saying it is loading.
+PRELOAD_LOCK_KEY = "live:app_guides:preload:lock"
+PRELOAD_LOCK_TTL = 30 * 60
+# A guide a viewer's list had read is kept this long after it was last asked for, then
+# left to the next full preload to want or not: otherwise every list ever opened adds guides
+# that are kept, and read again at every refresh, for good
+ASKED_KEPT_DAYS = 14
 
 
 def enabled():
@@ -412,10 +422,16 @@ def note_read(found, how="preload"):
             before = ids.get(str(epg_id)) or {}
             # A guide somebody asked for stays "asked" when a preload reads it again, so a
             # later full preload that no longer wants it does not drop what a viewer used
-            ids[str(epg_id)] = {
+            entry = {
                 "found": int(how_many or 0), "at": at,
                 "how": "asked" if "asked" in (how, before.get("how")) else how,
             }
+            # When a viewer's list last asked for it: "at" moves with every re-read after a
+            # refresh, so it cannot say whether anybody still wants the guide
+            asked_at = at if how == "asked" else before.get("asked_at") or (before.get("at") if before.get("how") == "asked" else None)
+            if asked_at:
+                entry["asked_at"] = asked_at
+            ids[str(epg_id)] = entry
         return len(ids)
 
     change_row(KEPT_KEY, "arrTV guides kept", change)
@@ -480,12 +496,56 @@ def after_refresh(source_id):
 # Preloading every channel's best candidates
 # ---------------------------------------------------------------------------------------
 
+def _redis():
+    from core.utils import RedisClient
+
+    return RedisClient.get_client()
+
+
 def start_preload():
-    """Queue a full preload (switched on, "Load now", or a day since the last)."""
+    """
+    Queue a full preload (switched on, "Load now", or a day since the last), unless one is
+    running already. Returns whether one was started.
+    """
+    from django.utils import timezone
+
     from apps.channels.tasks import preload_guide_choices
 
+    try:
+        if not _redis().set(PRELOAD_LOCK_KEY, timezone.now().isoformat(), nx=True, ex=PRELOAD_LOCK_TTL):
+            logger.info("arrTV guides: a preload is running already; not starting another")
+            return False
+    except Exception as e:
+        # Without Redis there is nothing to hold; one more preload is better than none
+        logger.debug(f"arrTV guides: could not hold the preload ({e})")
     _say_preload({"state": "working", "done": 0, "total": 0, "stage": "finding each channel's guides"})
     preload_guide_choices.delay()
+    return True
+
+
+def _hold_preload():
+    """Every batch: still running, so still held."""
+    try:
+        _redis().expire(PRELOAD_LOCK_KEY, PRELOAD_LOCK_TTL)
+    except Exception:
+        pass
+
+
+def end_preload(state="done"):
+    """The preload finished, or stopped because the feature went off: let go of it."""
+    try:
+        _redis().delete(PRELOAD_LOCK_KEY)
+    except Exception:
+        pass
+    if state != "done":
+        _say_preload({"state": state, "stage": ""})
+
+
+def preload_running():
+    try:
+        return bool(_redis().exists(PRELOAD_LOCK_KEY))
+    except Exception:
+        return False
 
 
 def preload_batch(offset, batch, wanted_so_far):
@@ -495,6 +555,7 @@ def preload_batch(offset, batch, wanted_so_far):
     """
     from apps.channels.models import Channel
 
+    _hold_preload()
     channels = list(Channel.objects.order_by("id")[offset:offset + batch])
     wanted = set(wanted_so_far or ())
     for channel in channels:
@@ -521,16 +582,30 @@ def finish_preload(wanted):
     from apps.channels.models import Channel
     from apps.channels.settings_rows import change_row
 
+    from datetime import datetime, timedelta
+
     wanted = {int(i) for i in wanted or ()}
     used = set(Channel.objects.filter(epg_data_id__in=wanted).values_list("epg_data_id", flat=True))
     to_read = sorted(wanted - used)
-    at = timezone.now().isoformat(timespec="seconds")
+    now = timezone.now()
+    at = now.isoformat(timespec="seconds")
+    asked_since = now - timedelta(days=ASKED_KEPT_DAYS)
+
+    def asked_lately(what):
+        if what.get("how") != "asked":
+            return False
+        try:
+            return datetime.fromisoformat(what.get("asked_at") or what.get("at") or "") >= asked_since
+        except (TypeError, ValueError):
+            return False
 
     def change(kept):
         ids = kept.setdefault("ids", {})
         for key in list(ids):
             what = ids[key] or {}
-            if what.get("how") != "asked" and (not key.isdigit() or int(key) not in wanted):
+            if key.isdigit() and int(key) in wanted:
+                continue
+            if not asked_lately(what):
                 del ids[key]
         kept["preloaded_at"] = at
         kept["preloaded"] = len(to_read)
@@ -538,6 +613,7 @@ def finish_preload(wanted):
     change_row(KEPT_KEY, "arrTV guides kept", change)
     asked = read(to_read, how="preload") if to_read else 0
     _say_preload({"state": "done", "done": asked, "total": len(to_read), "stage": ""})
+    end_preload()
     logger.info(f"arrTV guides: reading the programmes of {asked} guide(s) on offer")
     return asked
 
@@ -567,8 +643,12 @@ def preload_state():
         pass
     record = _record()
     ids = record.get("ids", {})
+    said = state.get("state") or ""
+    if said == "working" and not preload_running():
+        # It said it was working and nothing holds it any more: it died part way (a restart)
+        said = "stopped"
     return {
-        "state": state.get("state") or "",
+        "state": said,
         "stage": state.get("stage") or "",
         "done": int(state.get("done") or 0),
         "total": int(state.get("total") or 0),
@@ -613,9 +693,8 @@ def choose(channel, epg_id, request, user):
     if not on.get("now"):
         raise Refused(409, "That guide has nothing on now; choose another")
 
-    was = channel.epg_data_id
     who = author(request, user)
-    guide_manager.apply({channel.id: epg_id}, extra={channel.id: {"was": was, "by": who}})
+    guide_manager.apply({channel.id: epg_id}, extra={channel.id: _record_of_choice(channel, epg_id, who)})
     channel.refresh_from_db()
 
     guide = EPGData.objects.select_related("epg_source").get(id=epg_id)
@@ -633,6 +712,51 @@ def choose(channel, epg_id, request, user):
             "now": on.get("now"), "next": on.get("next"),
         },
     }
+
+
+# How many earlier arrTV changes of one channel are kept, for putting back one at a time
+HISTORY_MOST = 10
+
+
+def _arrtv_entry(channel):
+    """The channel's "chosen" entry when it is an arrTV change still in force, else None."""
+    from apps.channels import guide_manager
+
+    entry = guide_manager.load_chosen().get(str(channel.id)) or {}
+    by = entry.get("by")
+    if not isinstance(by, dict) or by.get("via") != "arrTV":
+        return None
+    if (entry.get("epg") or None) != (channel.epg_data_id or None):
+        # Changed underneath since (the Lineup, Dispatcharr's own matching): not in force
+        return None
+    return entry
+
+
+def _record_of_choice(channel, epg_id, who):
+    """
+    What goes into the channel's "chosen" entry for this choice.
+
+    A new guide: who chose it and the guide it replaced, with the arrTV changes before it
+    kept underneath (newest first), so Put back can go back one change at a time rather
+    than only ever to the last guide.
+
+    The guide it is already on ("this one is right"): the change being confirmed stays as
+    it is -- who made it and what it replaced -- and who confirmed it is added. Before, a
+    confirmation wrote the guide over what it replaced, and the change could no longer be
+    put back.
+    """
+    from django.utils import timezone
+
+    previous = _arrtv_entry(channel)
+    if epg_id == channel.epg_data_id and previous:
+        kept = {k: previous[k] for k in ("at", "was", "by", "history", "confirmed") if k in previous}
+        confirmed = list(previous.get("confirmed") or [])[-(HISTORY_MOST - 1):]
+        kept["confirmed"] = confirmed + [{**who, "at": timezone.now().isoformat(timespec="seconds")}]
+        return kept
+    history = []
+    if previous:
+        history = [{k: v for k, v in previous.items() if k != "history"}] + list(previous.get("history") or [])
+    return {"was": channel.epg_data_id, "by": who, "history": history[:HISTORY_MOST]}
 
 
 def author(request, user):
@@ -678,13 +802,25 @@ def changes():
     )
     from apps.channels.models import Channel
 
-    channel_names = dict(
-        Channel.objects.filter(id__in=[row["channel"] for row in rows]).values_list("id", "name")
-    )
+    channels = {
+        cid: (name, epg_id) for cid, name, epg_id in Channel.objects.filter(
+            id__in=[row["channel"] for row in rows]
+        ).values_list("id", "name", "epg_data_id")
+    }
     for row in rows:
-        row["channel_name"] = channel_names.get(row["channel"], "")
+        name, on_now = channels.get(row["channel"], ("", None))
+        row["channel_name"] = name
         row["guide_name"] = names.get(row.get("epg"), row.get("name") or "")
         row["was_name"] = names.get(row.get("was"), "") if row.get("was") else ""
+        # Changed underneath since (the Lineup, Dispatcharr's own matching): putting it back
+        # would undo that change, not this one, so the page offers only to take it off the list
+        row["in_force"] = (row.get("epg") or None) == (on_now or None)
+        # How many arrTV changes before this one Put back can go on to, one at a time
+        row["earlier"] = len(row.pop("history", None) or [])
+        row["confirmed"] = [
+            {k: c.get(k) for k in ("username", "device_name", "device", "ip", "at")}
+            for c in (row.get("confirmed") or []) if isinstance(c, dict)
+        ]
     rows.sort(key=lambda row: row.get("at") or "", reverse=True)
     return rows
 
@@ -695,11 +831,45 @@ def put_back(channel_id):
     tab's apply, so it is saved the proper way), and the record of the choice goes.
     """
     from apps.channels import guide_manager
+    from apps.channels.models import Channel
 
     entry = guide_manager.load_chosen().get(str(channel_id))
     if not entry or not isinstance(entry.get("by"), dict) or entry["by"].get("via") != "arrTV":
         raise Refused(404, "No guide change from arrTV for that channel")
-    guide_manager.apply({int(channel_id): entry.get("was")})
-    guide_manager.unchoose(int(channel_id))
+    on_now = Channel.objects.filter(id=int(channel_id)).values_list("epg_data_id", flat=True).first()
+    if (entry.get("epg") or None) != (on_now or None):
+        raise Refused(409, "The channel's guide was changed again since; putting this back would undo that")
+    was = entry.get("was")
+    history = list(entry.get("history") or [])
+    earlier = history[0] if history and (history[0].get("epg") or None) == (was or None) else None
+    if earlier:
+        # The guide it goes back to was itself an arrTV change: that one is in force again,
+        # and can be put back in its turn
+        guide_manager.apply({int(channel_id): was}, extra={int(channel_id): {**earlier, "history": history[1:]}})
+    else:
+        guide_manager.apply({int(channel_id): was})
+        guide_manager.unchoose(int(channel_id))
     logger.info(f"Guide: channel {channel_id} put back on the guide it had before arrTV changed it")
+    return {"ok": True}
+
+
+def keep(channel_id):
+    """
+    An admin looked at an arrTV change and it is right: it leaves the list of changes. The
+    channel stays settled on that guide, as any guide chosen on the Guides tab is; only who
+    chose it, and what it replaced, are no longer kept.
+    """
+    from apps.channels import guide_manager
+    from apps.channels.settings_rows import change_row
+
+    def change(chosen):
+        entry = chosen.get(str(channel_id))
+        if not entry or not isinstance(entry.get("by"), dict) or entry["by"].get("via") != "arrTV":
+            return False
+        for key in ("by", "was", "history", "confirmed"):
+            entry.pop(key, None)
+        return True
+
+    if not change_row(guide_manager.CHOSEN_KEY, "Guides chosen", change):
+        raise Refused(404, "No guide change from arrTV for that channel")
     return {"ok": True}

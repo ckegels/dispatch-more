@@ -4973,6 +4973,7 @@ def preload_guide_choices(offset=0, wanted=None):
 
     if not app_guides.enabled():
         logger.info("arrTV guides: switched off, preload stopped")
+        app_guides.end_preload("stopped")
         return "Switched off"
     wanted, more = app_guides.preload_batch(offset, PRELOAD_BATCH_CHANNELS, wanted)
     if more:

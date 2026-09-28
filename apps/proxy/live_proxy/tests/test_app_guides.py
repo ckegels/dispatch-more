@@ -393,6 +393,66 @@ class GuideChoiceTests(TestCase):
         self.assertEqual(self.channel.epg_data_id, self.wrong.id)
         self.assertNotIn(str(self.channel.id), guide_manager.load_chosen())
 
+    def test_confirming_a_change_keeps_what_it_can_be_put_back_to(self):
+        """
+        Alice moves the channel off the wrong guide, Bob says "this one is right". That used
+        to write the guide over what it replaced, so Put back left it where it was.
+        """
+        self.choose(self.right)
+        bob = User.objects.create_user(username="bob", password="x", user_level=1)
+        self.assertEqual(self.choose(self.right, user=bob).status_code, 200)
+        entry = guide_manager.load_chosen()[str(self.channel.id)]
+        self.assertEqual((entry["was"], entry["by"]["username"]), (self.wrong.id, "alice"))
+        self.assertEqual([c["username"] for c in entry["confirmed"]], ["bob"])
+        self.assertEqual(app_guides.changes()[0]["confirmed"][0]["username"], "bob")
+
+        self.api(self.admin).delete(f"/api/core/arrtv/guide-changes/?channel={self.channel.id}")
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.epg_data_id, self.wrong.id)
+
+    def test_two_changes_are_put_back_one_at_a_time(self):
+        third = EPGData.objects.create(tvg_id="ORF1.third", name="ORF 1 third", epg_source=self.de)
+        self.airing(third, "Zeit im Bild 2")
+        self.choose(self.right)
+        self.choose(third)
+        change = app_guides.changes()[0]
+        self.assertEqual((change["was"], change["earlier"]), (self.right.id, 1))
+
+        self.api(self.admin).delete(f"/api/core/arrtv/guide-changes/?channel={self.channel.id}")
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.epg_data_id, self.right.id)
+        # The change before it is on the list again, and goes back in its turn
+        change = app_guides.changes()[0]
+        self.assertEqual((change["epg"], change["was"], change["earlier"]), (self.right.id, self.wrong.id, 0))
+        self.api(self.admin).delete(f"/api/core/arrtv/guide-changes/?channel={self.channel.id}")
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.epg_data_id, self.wrong.id)
+        self.assertEqual(app_guides.changes(), [])
+
+    def test_a_change_made_elsewhere_since_is_not_undone(self):
+        from apps.channels.models import Channel
+
+        self.choose(self.right)
+        Channel.objects.filter(id=self.channel.id).update(epg_data=self.empty)
+        self.assertFalse(app_guides.changes()[0]["in_force"])
+        refused = self.api(self.admin).delete(f"/api/core/arrtv/guide-changes/?channel={self.channel.id}")
+        self.assertEqual(refused.status_code, 409)
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.epg_data_id, self.empty.id)
+
+    def test_keeping_a_change_takes_it_off_the_list_and_leaves_the_guide(self):
+        self.choose(self.right)
+        kept = self.api(self.admin).post(
+            "/api/core/arrtv/guide-changes/", {"channel": self.channel.id, "action": "keep"}, format="json"
+        )
+        self.assertEqual((kept.status_code, kept.json()["changes"]), (200, []))
+        self.channel.refresh_from_db()
+        self.assertEqual(self.channel.epg_data_id, self.right.id)
+        self.assertTrue(guide_manager.settled(self.channel.id, self.right.id))
+        self.assertEqual(self.api(self.alice).post(
+            "/api/core/arrtv/guide-changes/", {"channel": self.channel.id, "action": "keep"}, format="json"
+        ).status_code, 403)
+
     def test_a_guides_tab_choice_is_not_an_arrtv_change(self):
         guide_manager.apply({self.channel.id: self.right.id})
         self.assertEqual(app_guides.changes(), [])
@@ -492,6 +552,9 @@ class PreloadTests(TestCase):
             side_effect=lambda *a, **k: [{"id": g.id, "score": 90 - i} for i, g in enumerate(self.guides)],
         ).start()
         app_devices.save_settings({"guide_choice": True})
+        # Switching it on started one; each test starts from none running
+        app_guides.end_preload()
+        self.queued.reset_mock()
 
     def test_batches_queue_the_next_then_read_what_is_not_in_use_in_one_go(self):
         from apps.channels import tasks
@@ -539,6 +602,66 @@ class PreloadTests(TestCase):
         self.queued.reset_mock()
         app_guides.after_refresh(self.source.id)
         self.queued.assert_called_once()
+
+    def test_only_one_preload_at_a_time(self):
+        """
+        The daily refresh refreshes every source, and each one's refresh used to start a
+        whole preload of its own: several chains at once, each reading every source's file.
+        """
+        other = EPGSource.objects.create(name="Elsewhere", source_type="xmltv")
+        self.queued.reset_mock()
+        app_guides.after_refresh(self.source.id)
+        app_guides.after_refresh(other.id)
+        self.assertFalse(app_guides.start_preload(), "Load now while one runs")
+        self.queued.assert_called_once()
+        # Once it is done, the next may start
+        app_guides.finish_preload(set())
+        self.assertTrue(app_guides.start_preload())
+
+    def test_a_preload_that_died_part_way_is_not_loading_for_a_day(self):
+        app_guides.start_preload()
+        self.assertEqual(app_guides.preload_state()["state"], "working")
+        # The services restarted: no batch holds it any more, and it runs out
+        app_guides._redis().delete(app_guides.PRELOAD_LOCK_KEY)
+        self.assertEqual(app_guides.preload_state()["state"], "stopped")
+        self.assertTrue(app_guides.start_preload())
+
+    def test_switched_off_part_way_it_lets_go(self):
+        from apps.channels import tasks
+
+        app_guides.start_preload()
+        app_devices.save_settings({"guide_choice": False})
+        tasks.preload_guide_choices(0)
+        self.assertFalse(app_guides.preload_running())
+        self.assertEqual(app_guides.preload_state()["state"], "stopped")
+
+    def test_a_guide_a_viewer_asked_for_long_ago_is_let_go(self):
+        """
+        Every list ever opened used to add guides that were kept, and read again at every
+        refresh, for good. Re-reading after a refresh does not count as being asked for.
+        """
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.channels.settings_rows import change_row
+
+        lately = EPGData.objects.create(tvg_id="lately", name="Lately", epg_source=self.source)
+        long_ago = EPGData.objects.create(tvg_id="long", name="Long ago", epg_source=self.source)
+        app_guides.note_read({lately.id: 3, long_ago.id: 3}, how="asked")
+        then = (timezone.now() - timedelta(days=app_guides.ASKED_KEPT_DAYS + 1)).isoformat(timespec="seconds")
+
+        def age(kept):
+            kept["ids"][str(long_ago.id)]["asked_at"] = then
+
+        change_row(app_guides.KEPT_KEY, "arrTV guides kept", age)
+        # A refresh reads both again: that is not a viewer asking
+        app_guides.note_read({lately.id: 3, long_ago.id: 3}, how="preload")
+        self.assertEqual(app_guides._record()["ids"][str(long_ago.id)]["asked_at"], then)
+        app_guides.finish_preload(set())
+        ids = app_guides._record()["ids"]
+        self.assertIn(str(lately.id), ids)
+        self.assertNotIn(str(long_ago.id), ids)
 
 
 class WideMatchingTests(TestCase):

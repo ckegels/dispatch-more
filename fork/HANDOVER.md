@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v219** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v220** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1765,7 +1765,11 @@ retrieves every row there is -- for a *standard* user as well as an admin (strea
 refused), and the web page fetches that list at every start. So the reports, admin-only on
 their own endpoint, were readable by standard users there, logs and all, and made every page
 load heavier; unbounded since v204. `get_queryset` leaves `app-report*` out; nothing stock
-reads is one of them.
+reads is one of them. **Since v220 it leaves out every fork row** (`core/api_views.FORK_ROWS`):
+the review of v212–v218 found a standard login reading the media servers' tokens
+(`media-servers`) and who changed which guide from which device and address
+(`guide-manager-chosen`) there. The page reads none of them from that list; a new fork row
+goes into `FORK_ROWS`.
 
 **Server discovery (not built, and nothing needed on the server):** `GET /api/core/version/`
 answers without a login on stock and on this fork (`build` is "Dispatch More vN" here), so
@@ -1826,6 +1830,51 @@ never updates"). `guide_manager.apply` (the Guides tab and Wrong guide? both go 
 socket message Show Groups already sends, with `"guide": true` and the channels' uuids; arrTV
 (arr.64) reads the lineup again a second later and fetches the guide window. Only while an arrTV
 switch (`devices` or `guide_choice`) is on; never raises.
+
+**The review of v212–v218, and what it changed** (v220). Found by a read of everything since
+the handover's v211 update, with the suspected faults run as tests first:
+- **Faster failover follows where there is to go, at every step.** The mark now holds the
+  number of other streams (`live:app_devices:fast_alternatives:<channel>`, from
+  `app_alternatives.count`, counted whenever faster failover is on even with the header off),
+  and `StreamManager._fast_start_grace` works the wait out again at each step from what is
+  left (`fast_grace_for(alternatives - streams left already)`): two or more left, the short
+  wait; one left, the normal one; none, stock. Each stream's wait is counted from its own
+  connection, and the next step follows after it rather than after the 30 s between health
+  actions stock keeps -- before, only the *first* dead stream was left quickly. The user's
+  rule: nowhere to go is never hurried (no other stream the device can play, none on a
+  provider with a connection free, and never a stream of its own, which has no failover and
+  used to get the 5 s). A channel no arrTV device marked costs one Redis read per start and
+  never reads the settings.
+- **Hooks look at the request before the settings** (`declared_device`, `declared_multiview`,
+  `declared_previous_channel`, `declared_max_quality`, `mark_fast_start`,
+  `app_alternatives.count`): every stream request passes them, and one from any other player
+  is a header lookup now (§7, "a hook meant to cost nothing"; tested with the settings
+  mocked).
+- **Guide changes can be put back one at a time, and confirmed without losing that.** A
+  change keeps the arrTV changes before it (`history`, at most 10); "this one is right" on the
+  guide already chosen adds `confirmed` and keeps who changed it and what it replaced (it
+  used to write the guide over `was`, and Put back then did nothing). Put back refuses (409) a
+  channel whose guide was changed again outside arrTV since. **Keep** (POST
+  `arrtv/guide-changes/` `{"action": "keep"}`) takes a change off the list and leaves the
+  channel settled on it. Each change is a card on Settings → arrTV (the buttons had been
+  squeezed to "Put bac").
+- **One preload at a time** (`PRELOAD_LOCK_KEY`, 30 min, held again by every batch): each
+  source's refresh on the daily refresh used to start a whole preload. A preload that died
+  part way reads "stopped" rather than "Loading" for a day with Load now greyed out, and the
+  page asks again every 5 s while one runs. Guides a viewer's list had read are kept
+  `ASKED_KEPT_DAYS` (14) after they were last asked for (`asked_at`; a re-read after a
+  refresh does not count), then left to the next full preload.
+- **The guide's past** (`apps/channels/guide_past.py`, `keep_past_days` on Settings → arrTV,
+  0 = stock, at most 7). Every guide refresh deleted a guide's programmes and put in the
+  file's, and most files start at today, so arrTV could not scroll back even to this morning.
+  With days set, the three places stock deletes (`parse_programs_for_tvg_id`,
+  `_swap_staged_epg_programs`, `_swap_parsed_epg_programs`) keep the programmes that finished
+  in those days, and delete of them what the new data covers. Sending the past was already
+  stock: the login's "EPG previous days" (`epg_prev_days`) or `?prev_days=`. Schedules Direct
+  deletes its own expired programmes and is not covered.
+- Left open: the arrTV guide list runs the matcher up to four times over every guide in the
+  web workers that also carry streams, and each list opened for a new channel queues a pass
+  over the source files -- to be measured on the server before anything is changed.
 
 ---
 

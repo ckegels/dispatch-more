@@ -17,6 +17,7 @@ vi.mock('../../../api', () => ({
     forgetArrTvHeld: vi.fn(),
     getArrTvGuideChanges: vi.fn(),
     putBackArrTvGuide: vi.fn(),
+    keepArrTvGuide: vi.fn(),
     getArrTvGuidePreload: vi.fn(),
     startArrTvGuidePreload: vi.fn(),
   },
@@ -196,10 +197,70 @@ describe('ArrTvSettings', () => {
     expect(await screen.findByText(/25 of 1360 channels/)).toBeInTheDocument();
 
     expect(await screen.findByText(/by alice on Living room SHIELD \(192\.168\.2\.40\)/)).toBeInTheDocument();
-    expect(screen.getByText(/was ORF1\.at/)).toBeInTheDocument();
+    expect(screen.getByText('Before: ORF1.at')).toBeInTheDocument();
+    expect(screen.getByText('Now on: ORF 1 HD')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
     await waitFor(() => expect(API.putBackArrTvGuide).toHaveBeenCalledWith(7));
     expect(await screen.findByText(/No channel has been put on another guide/)).toBeInTheDocument();
+  });
+
+  it('keeps a change, says who confirmed it, and offers no put back once changed elsewhere', async () => {
+    API.getArrTvSettings.mockResolvedValue({ guide_choice: true });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.getArrTvGuidePreload.mockResolvedValue({ state: 'done', kept: 0, done: 0, total: 0 });
+    API.getArrTvGuideChanges.mockResolvedValue({
+      changes: [
+        {
+          channel: 7, channel_name: '┃AT┃ ORF 1', guide_name: 'ORF 1 HD', was_name: 'ORF1.at',
+          at: '2026-09-27T17:41:02+00:00', in_force: true, earlier: 1,
+          by: { via: 'arrTV', username: 'alice', device_name: 'SHIELD' },
+          confirmed: [{ username: 'bob', device_name: 'Chromecast', at: '2026-09-27T18:00:00+00:00' }],
+        },
+        {
+          channel: 8, channel_name: '┃DE┃ ZDF', guide_name: 'ZDF.de', was_name: '',
+          at: '2026-09-27T17:00:00+00:00', in_force: false, earlier: 0,
+          by: { via: 'arrTV', username: 'alice' },
+        },
+      ],
+    });
+    API.keepArrTvGuide.mockResolvedValue({ changes: [] });
+    draw();
+
+    expect(await screen.findByText(/Confirmed as right by bob on Chromecast/)).toBeInTheDocument();
+    expect(screen.getByText(/1 earlier change in arrTV/)).toBeInTheDocument();
+    expect(screen.getByText(/changed again since, outside arrTV/)).toBeInTheDocument();
+    // One Put back: the change made elsewhere since is only taken off the list
+    expect(screen.getAllByRole('button', { name: 'Put back' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
+    await waitFor(() => expect(API.keepArrTvGuide).toHaveBeenCalledWith(7));
+    expect(await screen.findByText(/No channel has been put on another guide/)).toBeInTheDocument();
+  });
+
+  it('says a preload stopped part way, and lets it be started again', async () => {
+    API.getArrTvSettings.mockResolvedValue({ guide_choice: true });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.getArrTvGuideChanges.mockResolvedValue({ changes: [] });
+    API.getArrTvGuidePreload.mockResolvedValue({ state: 'stopped', kept: 12, done: 0, total: 0 });
+    draw();
+
+    expect(await screen.findByText(/stopped before it finished/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load now' })).not.toBeDisabled();
+  });
+
+  it('says so when a put back is refused, rather than looking as though it worked', async () => {
+    API.getArrTvSettings.mockResolvedValue({ guide_choice: true });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.getArrTvGuidePreload.mockResolvedValue({ state: 'done', kept: 0, done: 0, total: 0 });
+    const change = {
+      channel: 7, channel_name: '┃AT┃ ORF 1', guide_name: 'ORF 1 HD', was_name: 'ORF1.at',
+      at: '2026-09-27T17:41:02+00:00', in_force: true, by: { via: 'arrTV', username: 'alice' },
+    };
+    API.getArrTvGuideChanges.mockResolvedValue({ changes: [change] });
+    API.putBackArrTvGuide.mockRejectedValue({ body: { error: 'The channel\'s guide was changed again since' } });
+    draw();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Put back' }));
+    expect(await screen.findByText(/changed again since/)).toBeInTheDocument();
   });
 
   it('saves the sources to offer as a list of ids', async () => {

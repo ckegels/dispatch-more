@@ -413,7 +413,16 @@ choice, for servers before v219).
 
 The change is for every viewer (and Plex and Jellyfin), and the server records it with the
 login, the device id and name, and the address it came from; an admin sees it on Settings →
-arrTV ("Guide changes", with Put back) and on the Guides tab.
+arrTV ("Guide changes", with Put back and Keep) and on the Guides tab. From v220 choosing the
+guide a channel is already on ("this one is right") is recorded as a confirmation and keeps
+the change it confirms, so it can still be put back.
+
+**The guide's past** (server v220, nothing for the app to send). With "Keep the guide's past"
+set on Settings → arrTV (`keep_past_days`, 0–7), a guide refresh no longer deletes what has
+already been on: the finished programmes of those days stay. The app gets them the way any
+player asks for the past from Dispatcharr: the login's "EPG previous days" (set on the user
+in Dispatcharr), or `prev_days=<days>` on the XMLTV address. The past fills in from the next
+refresh on; nothing from before the setting was on comes back.
 
 ## 8. Picture quality
 
@@ -574,8 +583,13 @@ What to build:
 Server switch: `fast_failover` (needs `devices`; capabilities say `"fast_failover": true`).
 Nothing for the app to send beyond the device header. A channel a declared arrTV device
 starts is marked for two minutes; while its stream is connected and has sent **nothing**, the
-stream manager leaves it after `FAST_START_GRACE` (5 s) and **one** health check, instead of
-the start grace (Settings → Streaming, 60 s) and three. Once data has come, stock rules apply.
+stream manager leaves it after a few seconds and **one** health check, instead of the start
+grace (Settings → Streaming, 60 s) and three. From v220 this holds at **every step** of the
+walk, each stream's wait counted from its own connection: with two or more other streams left,
+`fast_grace_many` (3 s); with one left, `fast_grace` (5 s); with none left, stock's grace. A
+channel with nowhere to go is never hurried -- no other stream the device can play, none on a
+provider with a connection free, or a stream of its own (§8.3), which has no failover. Once
+data has come, stock rules apply.
 Switching it off takes effect at once. IPTV answers within a second or two (the TVs learned
 0.1–3 s); a source that needs longer to lock would be left too soon, which is why it is only
 for arrTV and off by default.
@@ -608,8 +622,10 @@ own, `app_own_streams._pick`). A channel not running yet counts one less (one of
 it starts). No header: switched off, not a declared device, or a stream of its own.
 
 What the server does with it itself: faster failover's wait is `fast_grace_many` (default 3 s)
-with two or more, `fast_grace` (default 5 s) with one, both editable under the switch; a
-channel with **none** is not hurried (leaving its stream could only end on the fallback).
+with two or more left, `fast_grace` (default 5 s) with one, both editable under the switch,
+worked out again at each step from what is left; a channel with **none** is not hurried
+(leaving its stream could only end on the fallback). From v220 the server counts this for
+faster failover whether or not the header is switched on.
 
 What arrTV does (arr.43): the picture wait ("Leave a stream that is slow to start") is the
 channel's usual start time × 1.5 with 2+ others and × 2 with 1, at least 3 s / 5 s, at most

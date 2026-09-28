@@ -77,15 +77,31 @@ const HeldDevices = () => {
 
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
 
-// The programmes loaded ahead of time for the guides arrTV offers, and "Load now"
+// The programmes loaded ahead of time for the guides arrTV offers, and "Load now". Asked
+// again every few seconds while it loads, so the line moves and ends; a preload that died
+// part way (a restart) says so and can be started again, rather than "Loading" for a day
+// with the button greyed out.
+const PRELOAD_POLL_MS = 5000;
+
 const GuidePreload = () => {
   const [state, setState] = useState(null);
+  const working = state?.state === 'working';
 
   useEffect(() => {
     API.getArrTvGuidePreload()
       .then(setState)
       .catch(() => setState(null));
   }, []);
+
+  useEffect(() => {
+    if (!working) return undefined;
+    const timer = setInterval(() => {
+      API.getArrTvGuidePreload()
+        .then(setState)
+        .catch(() => {});
+    }, PRELOAD_POLL_MS);
+    return () => clearInterval(timer);
+  }, [working]);
 
   const loadNow = async () => {
     try {
@@ -96,14 +112,17 @@ const GuidePreload = () => {
   };
 
   if (!state) return null;
-  const working = state.state === 'working';
+  const loaded =
+    `Programmes loaded for ${state.kept} guide${state.kept === 1 ? '' : 's'}` +
+    (state.preloaded_at ? `, last ${when(state.preloaded_at)}` : '');
   return (
     <Group gap="xs" mt="xs" wrap="nowrap">
-      <Text size="xs" c="dimmed">
+      <Text size="xs" c={state.state === 'stopped' ? 'orange' : 'dimmed'}>
         {working
           ? `Loading: ${state.stage || 'working'}${state.total ? ` (${state.done} of ${state.total} channels)` : ''}`
-          : `Programmes loaded for ${state.kept} guide${state.kept === 1 ? '' : 's'}` +
-            (state.preloaded_at ? `, last ${when(state.preloaded_at)}` : '')}
+          : state.state === 'stopped'
+            ? `The last loading stopped before it finished. ${loaded}`
+            : loaded}
       </Text>
       <Button size="compact-xs" variant="subtle" onClick={loadNow} disabled={working}>
         Load now
@@ -116,10 +135,13 @@ const byWhom = (by) =>
   `${by?.username || 'someone'} on ${by?.device_name || by?.device || 'an unknown device'}` +
   (by?.ip ? ` (${by.ip})` : '');
 
-// The guide changes made from arrTV, newest first, each one undoable: anyone may change a
-// guide, so an admin has to be able to see what was changed and put it back
+// The guide changes made from arrTV, newest first. Anyone may change a guide from the
+// player, so an admin has to be able to see what was changed and either put it back or keep
+// it. Each change is a card of its own: on one line with the buttons, the buttons were
+// squeezed until "Put back" read "Put bac".
 const GuideChanges = () => {
   const [changes, setChanges] = useState(null);
+  const [problem, setProblem] = useState(null);
 
   useEffect(() => {
     API.getArrTvGuideChanges()
@@ -127,58 +149,116 @@ const GuideChanges = () => {
       .catch(() => setChanges([]));
   }, []);
 
-  const putBack = async (channel) => {
+  const act = async (doing, channel) => {
+    setProblem(null);
     try {
-      const given = await API.putBackArrTvGuide(channel);
+      const given = await doing(channel);
       setChanges(given?.changes || []);
-    } catch {
-      // Left as it is: the list still says what was changed
+    } catch (e) {
+      // Said on the card rather than swallowed: a change that was not undone must not
+      // look as though it was
+      setProblem({ channel, text: e?.body?.error || 'That did not work' });
+      API.getArrTvGuideChanges()
+        .then((given) => setChanges(given?.changes || []))
+        .catch(() => {});
     }
   };
 
   if (!changes) return null;
   return (
-    <Box mt="xs">
-      <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb={4}>
-        Guide changes
+    <Box mt="md">
+      <Text size="sm" fw={500}>
+        Guide changes made in arrTV
+      </Text>
+      <Text size="xs" c="dimmed" mb="xs">
+        <b>Put back</b> returns the channel to the guide it had before the change.{' '}
+        <b>Keep</b> says the change was right and takes it off this list; the channel stays
+        on that guide.
       </Text>
       {!changes.length && (
         <Text size="xs" c="dimmed">
           No channel has been put on another guide from arrTV.
         </Text>
       )}
-      <Stack gap={4}>
+      <Stack gap="xs">
         {changes.map((change) => (
-          <Group key={change.channel} gap="xs" wrap="nowrap" align="flex-start">
-            <Text size="xs">
-              <b>{change.channel_name || `Channel ${change.channel}`}</b>: {change.guide_name || 'no guide'}
-              {change.was_name ? `, was ${change.was_name}` : ', had no guide'} — by {byWhom(change.by)},{' '}
-              {when(change.at)}
+          <Box
+            key={change.channel}
+            p="xs"
+            style={{ border: '1px solid #3f3f46', borderRadius: 6 }}
+          >
+            <Text size="sm" fw={600}>
+              {change.channel_name || `Channel ${change.channel}`}
             </Text>
-            <Button size="compact-xs" variant="subtle" onClick={() => putBack(change.channel)}>
-              Put back
-            </Button>
-          </Group>
+            <Text size="xs">Now on: {change.guide_name || 'no guide'}</Text>
+            <Text size="xs">Before: {change.was_name || 'no guide'}</Text>
+            <Text size="xs" c="dimmed">
+              Changed by {byWhom(change.by)}, {when(change.at)}
+            </Text>
+            {(change.confirmed || []).map((c) => (
+              <Text key={`${c.at}-${c.device || c.ip}`} size="xs" c="dimmed">
+                Confirmed as right by {byWhom(c)}, {when(c.at)}
+              </Text>
+            ))}
+            {change.earlier > 0 && (
+              <Text size="xs" c="dimmed">
+                {change.earlier} earlier change{change.earlier === 1 ? '' : 's'} in arrTV:
+                putting this back brings the one before it back to this list.
+              </Text>
+            )}
+            {change.in_force === false && (
+              <Text size="xs" c="orange">
+                The guide was changed again since, outside arrTV. Putting this back would undo
+                that change, so only taking it off the list is offered.
+              </Text>
+            )}
+            {problem?.channel === change.channel && (
+              <Text size="xs" c="red">
+                {problem.text}
+              </Text>
+            )}
+            <Group gap="xs" mt={6}>
+              {change.in_force !== false && (
+                <Button
+                  size="xs"
+                  variant="light"
+                  style={{ flexShrink: 0 }}
+                  onClick={() => act(API.putBackArrTvGuide, change.channel)}
+                >
+                  Put back
+                </Button>
+              )}
+              <Button
+                size="xs"
+                variant="default"
+                style={{ flexShrink: 0 }}
+                onClick={() => act(API.keepArrTvGuide, change.channel)}
+              >
+                {change.in_force === false ? 'Take off the list' : 'Keep'}
+              </Button>
+            </Group>
+          </Box>
         ))}
       </Stack>
     </Box>
   );
 };
 
-// A wait in whole seconds, saved when the field is left (not on every key)
-const Seconds = ({ label, description, value, disabled, onSave }) => {
+// A whole number, saved when the field is left (not on every key): a wait in seconds, or
+// the days of guide kept
+const Seconds = ({ label, description, value, disabled, onSave, min = 1, max = 60, suffix = ' s', w = 220 }) => {
   const [typed, setTyped] = useState(value);
   useEffect(() => setTyped(value), [value]);
   return (
     <NumberInput
       size="xs"
-      w={220}
+      w={w}
       label={label}
       description={description}
       value={typed}
-      min={1}
-      max={60}
-      suffix=" s"
+      min={min}
+      max={max}
+      suffix={suffix}
       allowDecimal={false}
       disabled={disabled}
       onChange={setTyped}
@@ -282,7 +362,7 @@ const ArrTvSettings = () => {
             label="Faster failover when arrTV starts a channel"
             description={
               settings.devices
-                ? "A stream that connects and sends nothing is left after 5 seconds and one check, instead of the start grace (Settings → Streaming) and three checks: a dead stream no longer costs a viewer a minute. Only for channels an arrTV device starts; IPTV answers within a second or two, a source that needs longer to lock (a tuner) would be left too soon."
+                ? "A stream that connects and sends nothing is left after a few seconds and one check, instead of the start grace (Settings → Streaming) and three checks, at every step of the way while there is another stream to go to: a dead stream no longer costs a viewer a minute. Nowhere to go is never hurried -- no other stream the device can play, or none on a provider with a connection free (someone else watching), and never a stream of its own -- since leaving could only end on the fallback. Only for channels an arrTV device starts; a source that needs longer to lock (a tuner) would be left too soon."
                 : 'Needs "Recognise each arrTV device": only a device that said who it is is given the shorter wait.'
             }
             checked={settings.fast_failover}
@@ -293,19 +373,14 @@ const ArrTvSettings = () => {
             <Group mt="xs" gap="md" align="flex-start">
               <Seconds
                 label="Wait"
-                description="With one other stream to go to"
+                description="With one other stream left to go to"
                 value={settings.fast_grace}
                 onSave={(s) => change({ fast_grace: s })}
               />
               <Seconds
                 label="Wait with two or more"
-                description={
-                  settings.alternatives
-                    ? 'When at least two other streams are usable now'
-                    : 'Needs "Tell arrTV how many other streams a channel has"'
-                }
+                description="While at least two other streams are left to go to"
                 value={settings.fast_grace_many}
-                disabled={!settings.alternatives}
                 onSave={(s) => change({ fast_grace_many: s })}
               />
             </Group>
@@ -316,7 +391,7 @@ const ArrTvSettings = () => {
             label="Tell arrTV how many other streams a channel has"
             description={
               settings.devices
-                ? "With each stream, arrTV is told how many of the channel's other streams it could be moved to now: ones it can play, on an account with a connection free, never the fallback. arrTV gives up on a slow stream sooner where there are several, and waits a little longer where one is left; faster failover uses it too, and does not hurry a channel with none."
+                ? "With each stream, arrTV is told how many of the channel's other streams it could be moved to now: ones it can play, on an account with a connection free, never the fallback. arrTV gives up on a slow stream sooner where there are several, and waits a little longer where one is left. (Faster failover counts them itself, whether or not arrTV is told.)"
                 : 'Needs "Recognise each arrTV device": only a device that said who it is can be counted for.'
             }
             checked={settings.alternatives}
@@ -401,6 +476,16 @@ const ArrTvSettings = () => {
             </Box>
           )}
         </Box>
+        <Seconds
+          label="Keep the guide's past"
+          w={420}
+          min={0}
+          max={7}
+          suffix=" days"
+          description="Each guide refresh throws away what has already been on, and most guide files start at today, so the TV cannot scroll back even to this morning. Set 3 to keep three days of finished programmes (0 keeps none, as Dispatcharr does). arrTV shows them once its login has “EPG previous days” set to the same number (Users → edit the user). The past fills in from the next refresh on."
+          value={settings.keep_past_days ?? 0}
+          onSave={(days) => change({ keep_past_days: days })}
+        />
         <Setting
           label="Take problem reports from arrTV"
           description="Someone with a problem on a channel sends a report from arrTV's player settings. It arrives below with what arrTV saw and what the server knew about that channel at that moment: its streams and providers, its readings, how it started, the channel switches and the log. Logins and passwords are taken out."

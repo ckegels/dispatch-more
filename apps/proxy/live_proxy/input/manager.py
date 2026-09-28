@@ -1607,12 +1607,25 @@ class StreamManager:
         """
         arrTV's faster failover (app_devices, off unless switched on): the short start grace
         while a channel an arrTV device started has had no data yet, else None.
+
+        Worked out again at every step of the walk from how many other streams are left to
+        go to (app_devices.fast_grace_for), so the second dead stream is left as quickly as
+        the first when there are enough to burn through, and not when only one is left.
+        Whether an arrTV device marked the channel is read from Redis once per start;
+        a channel nobody marked never reads the settings.
         """
         if not (self.connected and getattr(self.buffer, 'index', 0) == 0):
             return None
         from apps.proxy.live_proxy import app_devices
 
-        return app_devices.fast_start_grace(getattr(self.buffer, "redis_client", None), self.channel_id)
+        if not hasattr(self, "_fast_alternatives"):
+            self._fast_alternatives = app_devices.fast_start_alternatives(
+                getattr(self.buffer, "redis_client", None), self.channel_id
+            )
+        if not self._fast_alternatives:
+            return None
+        left_already = max(0, len(self.tried_stream_ids) - 1)
+        return app_devices.fast_grace_for(self._fast_alternatives - left_already)
 
     def _health_inactivity_threshold(self):
         """How long without data before marking the stream unhealthy."""
@@ -1632,6 +1645,13 @@ class StreamManager:
                 now = time.time()
                 inactivity_duration = now - self.last_data_time
                 timeout_threshold = self._health_inactivity_threshold()
+                # arrTV's faster failover: each stream of the walk gets its own wait, counted
+                # from its own connection (last_data_time is from before the first, since none
+                # has sent anything), and the next step may follow after that wait rather than
+                # after the 30 s between actions stock keeps
+                fast = self._fast_start_grace()
+                if fast is not None:
+                    inactivity_duration = now - max(self.last_data_time, getattr(self, 'connection_start_time', 0) or 0)
 
                 if inactivity_duration > timeout_threshold and self.connected:
                     if self.healthy:
@@ -1643,9 +1663,10 @@ class StreamManager:
                     # Only set flags if enough time has passed since last action. A stream
                     # an arrTV device started that never sent anything moves on after one
                     # check with faster failover on (its grace already waited)
-                    needed_checks = 1 if self._fast_start_grace() is not None else max_unhealthy_checks
+                    needed_checks = 1 if fast is not None else max_unhealthy_checks
+                    cooldown = fast if fast is not None else action_cooldown
                     if (consecutive_unhealthy_checks >= needed_checks and
-                        now - self.last_health_action_time > action_cooldown):
+                        now - self.last_health_action_time > cooldown):
 
                         # Calculate stability to decide on action type
                         connection_start_time = getattr(self, 'connection_start_time', 0)

@@ -94,6 +94,22 @@ class OutputProfileViewSet(viewsets.ModelViewSet):
             return [Authenticated()]
 
 
+# The CoreSettings rows this build keeps its own state in (it has no tables of its own). None
+# is read through the settings list below; "stream-recovery" is a removed feature's row, left
+# in place since nothing is migrated.
+FORK_ROWS = (
+    "app-integration", "app-guide-kept", "app-reports",
+    "channel-health", "channel-manager", "channel-manager-ignored", "channel-pairings",
+    "epg-grabber",
+    "guide-manager", "guide-manager-chosen", "guide-manager-ignored",
+    "guide-manager-suggestions", "guide-matching", "guide-reads",
+    "logo-library-sources", "media-servers",
+    "stream-check", "stream-check-hidden", "stream-check-ignored", "stream-check-parked",
+    "stream-check-providers", "stream-check-recheck", "stream-check-results",
+    "stream-recovery",
+)
+
+
 class CoreSettingsViewSet(viewsets.ModelViewSet):
     """
     API endpoint for editing core settings.
@@ -104,11 +120,12 @@ class CoreSettingsViewSet(viewsets.ModelViewSet):
     serializer_class = CoreSettingsSerializer
 
     def get_queryset(self):
-        # arrTV's problem reports are rows of this table (apps.proxy.live_proxy.app_reports)
-        # but no setting: this list is what every page loads at start, for any logged-in
-        # user, and each report carries up to a hundred thousand characters of log. They are
-        # read through /api/core/app-reports/, by admins only.
-        return CoreSettings.objects.exclude(key__startswith="app-report")
+        # This list is what every page loads at start, for any logged-in user, standard
+        # users included. The fork keeps its own state in rows of this table, and none of it
+        # is a setting stock reads: the media servers' tokens, who changed which guide from
+        # which device and address, arrTV's problem reports with their logs, and records of
+        # thousands of entries. Each is read through its own endpoint, by admins only.
+        return CoreSettings.objects.exclude(key__startswith="app-report").exclude(key__in=FORK_ROWS)
 
     def get_permissions(self):
         try:
@@ -628,22 +645,29 @@ def app_guide(request):
         return JsonResponse({"error": refused.message}, status=refused.status)
 
 
-@api_view(["GET", "DELETE"])
+@api_view(["GET", "POST", "DELETE"])
 @permission_classes([IsAdmin])
 def arrtv_guide_changes(request):
     """
     The guide changes made from arrTV, newest first; DELETE ?channel=<id> puts one back on the
-    guide it had before (app_guides.put_back).
+    guide it had before (app_guides.put_back); POST {"channel", "action": "keep"} keeps it and
+    takes it off the list (app_guides.keep).
     """
     from django.http import JsonResponse
 
     from apps.proxy.live_proxy import app_guides
 
-    if request.method == "DELETE":
-        try:
+    try:
+        if request.method == "DELETE":
             app_guides.put_back(request.GET.get("channel"))
-        except (app_guides.Refused, TypeError, ValueError) as e:
-            return JsonResponse({"error": getattr(e, "message", "No such change")}, status=404)
+        elif request.method == "POST":
+            if (request.data or {}).get("action") != "keep":
+                return JsonResponse({"error": "Unknown action"}, status=400)
+            app_guides.keep(int((request.data or {}).get("channel")))
+    except (app_guides.Refused, TypeError, ValueError) as e:
+        return JsonResponse(
+            {"error": getattr(e, "message", "No such change")}, status=getattr(e, "status", 404)
+        )
     return JsonResponse({"changes": app_guides.changes()})
 
 

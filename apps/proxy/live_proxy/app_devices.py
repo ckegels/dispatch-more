@@ -52,6 +52,8 @@ SETTINGS_KEY = "app-integration"
 # for it right now (app_alternatives, X-Dispatch-Alternatives), so it waits less where there
 # are several; fast_grace / fast_grace_many: faster failover's wait in seconds with one usable
 # alternative, and with two or more (a channel with none keeps the stock grace)
+# keep_past_days: a guide refresh keeps the finished programmes of this many days (0-7),
+# which it otherwise deletes with the rest (see apps.channels.guide_past); 0 is stock
 # guide_choice: whoever watches a channel in arrTV may put it on another guide, from the
 # guides that have something on now (see app_guides); guide_choice_sources: the EPG source
 # ids to offer from, comma separated ("" is every active one that is not a dummy)
@@ -61,14 +63,15 @@ DEFAULTS = {
     "own_stream": False, "fast_failover": False, "alternatives": False,
     "fast_grace": 5, "fast_grace_many": 3,
     "guide_choice": False, "guide_choice_sources": "",
+    "keep_past_days": 0,
 }
 # The seconds settings: whole seconds within these bounds
 GRACE_BOUNDS = (1, 60)
 
-# Faster failover: which channels an arrTV device started, and the wait each was given, for
-# the start phase only
-# (v212 wrote "1" under fast_start:, meaning its fixed 5 s; this key holds the grace itself)
-FAST_START_KEY = "live:app_devices:fast_grace:{channel}"
+# Faster failover: which channels an arrTV device started, and how many other streams each
+# could switch to, for the start phase only. (v212 wrote "1" under fast_start:, v213 the grace
+# under fast_grace:; this key holds the count, so neither is read as one.)
+FAST_START_KEY = "live:app_devices:fast_alternatives:{channel}"
 FAST_START_TTL = 120
 # The default of fast_grace, for the tests and the documentation
 FAST_START_GRACE = 5
@@ -104,6 +107,14 @@ def _as_kind(key, value):
     """A setting as the kind its default is: the switches on or off, the rest as text."""
     if isinstance(DEFAULTS[key], bool):
         return bool(value)
+    if key == "keep_past_days":
+        # Days of finished programmes a guide refresh keeps (apps.channels.guide_past)
+        from apps.channels.guide_past import MOST_DAYS
+
+        try:
+            return max(0, min(MOST_DAYS, int(float(value or 0))))
+        except (TypeError, ValueError):
+            return 0
     if isinstance(DEFAULTS[key], int):
         try:
             return max(GRACE_BOUNDS[0], min(GRACE_BOUNDS[1], int(float(value))))
@@ -156,6 +167,9 @@ def save_settings(given):
                 app_guides.start_preload()
             else:
                 app_guides.forget_kept()
+                # A preload still going stops at its next batch; switched on again before
+                # then, a new one is not refused because of it
+                app_guides.end_preload("stopped")
         except Exception as e:
             logger.warning(f"arrTV guides: could not start or stop keeping guides: {e}")
     return values
@@ -173,62 +187,94 @@ def _said(request, what):
 
 
 def declared_device(request):
-    """The device the app says it is, or "" -- only while devices are switched on."""
-    if not load_settings()["devices"]:
-        return ""
+    """
+    The device the app says it is, or "" -- only while devices are switched on.
+
+    The request is looked at before the settings: every stream request asks this, and
+    one that carries no device (every player but arrTV) should cost a header lookup and
+    nothing more (HANDOVER §7, the hook meant to cost nothing).
+    """
     device = _said(request, "device")
+    if not device or not load_settings()["devices"]:
+        return ""
     return device if _DEVICE_ID.match(device) else ""
 
 
 def declared_multiview(request):
     """The multiview session a tile says it belongs to, or ""."""
-    if not load_settings()["devices"]:
-        return ""
     session = _said(request, "multiview")
+    if not session or not load_settings()["devices"]:
+        return ""
     return session if _SESSION_ID.match(session) else ""
 
 
 def mark_fast_start(redis_client, request, channel_id, alternatives=None):
     """
     An arrTV device (declared) starts this channel with "faster failover" on: mark the
-    channel for FAST_START_TTL seconds, so while its stream has sent nothing yet the stream
-    manager moves on after the grace written here (fast_start_grace): fast_grace_many when
-    [alternatives] (app_alternatives.count) says two or more streams are usable,
-    fast_grace otherwise. IPTV answers within a second or two; stock's 60 s start grace is
-    sized for sources that need to lock first, and a dead stream cost a viewer over a minute.
-    A channel with no usable alternative is not hurried: leaving its stream could only end on
-    the fallback. Nothing is written when switched off.
+    channel for FAST_START_TTL seconds with how many other streams it could switch to
+    (app_alternatives.count), so that while its stream has sent nothing the stream manager
+    moves on after a few seconds rather than stock's minute (fast_grace_for). IPTV answers
+    within a second or two; stock's 60 s start grace is sized for sources that need to lock
+    first, and a dead stream cost a viewer over a minute.
+
+    Nowhere to go is never hurried (the user's rule): no other stream it can play, or none
+    on a provider with a connection free -- another viewer holding them -- and a stream of
+    its own, which has no failover at all (alternatives None). Leaving a stream then could
+    only end on the fallback. Other streams of the provider the channel is on count: the
+    channel's own connection moves with it. Nothing is written when switched off.
     """
-    settings = load_settings()
-    if redis_client is None or not settings.get("fast_failover") or not declared_device(request):
+    # arrTV first: a header lookup, before the settings (every stream request passes here)
+    if redis_client is None or not alternatives or not declared_device(request):
         return
-    if alternatives == 0:
+    if not load_settings().get("fast_failover"):
         return
-    grace = settings["fast_grace_many"] if (alternatives or 0) >= MANY_ALTERNATIVES else settings["fast_grace"]
     try:
-        redis_client.set(FAST_START_KEY.format(channel=channel_id), str(grace), ex=FAST_START_TTL)
+        redis_client.set(FAST_START_KEY.format(channel=channel_id), str(int(alternatives)), ex=FAST_START_TTL)
     except Exception as e:
         logger.debug(f"Faster failover: could not mark {channel_id}: {e}")
 
 
-def fast_start_grace(redis_client, channel_id):
+def fast_start_alternatives(redis_client, channel_id):
     """
-    The start grace for a channel an arrTV device started with "faster failover" on, or
-    None: the stock grace applies. Asked by the stream manager only while a connected stream
-    has sent nothing; switching the setting off takes effect at once (the mark is ignored).
+    How many other streams the arrTV device that started this channel could switch to, as
+    marked by mark_fast_start, or None: not marked, the stock grace applies. One Redis read,
+    no settings: the stream manager asks it once per start, for every channel.
     """
-    if redis_client is None or not load_settings().get("fast_failover"):
+    if redis_client is None:
         return None
     try:
         value = redis_client.get(FAST_START_KEY.format(channel=channel_id))
-        if value is not None:
-            text = value.decode() if isinstance(value, bytes) else str(value)
-            return max(GRACE_BOUNDS[0], min(GRACE_BOUNDS[1], int(float(text))))
-    except (TypeError, ValueError):
-        return FAST_START_GRACE
+        if value is None:
+            return None
+        return int(float(value.decode() if isinstance(value, bytes) else value))
     except Exception as e:
         logger.debug(f"Faster failover: could not read {channel_id}: {e}")
-    return None
+        return None
+
+
+def fast_grace_for(remaining):
+    """
+    The wait before leaving a stream that has sent nothing, with this many other streams
+    still left to go to, or None for stock's grace. Asked again at every step of the walk:
+    with two or more left the shorter wait (fast_grace_many), with one left the longer
+    (fast_grace) -- a channel with just a couple of streams is not skipped through too fast
+    -- and with none left, stock's. The settings are read here, so switching it off or
+    changing a wait takes effect at once.
+    """
+    if remaining is None or remaining <= 0:
+        return None
+    settings = load_settings()
+    if not settings.get("fast_failover"):
+        return None
+    return settings["fast_grace_many"] if remaining >= MANY_ALTERNATIVES else settings["fast_grace"]
+
+
+def fast_start_grace(redis_client, channel_id, left_already=0):
+    """The wait for this channel's start, having left `left_already` streams, or None."""
+    alternatives = fast_start_alternatives(redis_client, channel_id)
+    if alternatives is None:
+        return None
+    return fast_grace_for(alternatives - left_already)
 
 
 def declared_previous_channel(request):
@@ -237,9 +283,9 @@ def declared_previous_channel(request):
     are on. Given as the UUID (the /proxy/ts/stream/<uuid> links) or as the channel's number
     id (the Xtream /live/<user>/<pass>/<id> links, where that id is all the app has).
     """
-    if not load_settings()["switch_hints"]:
-        return ""
     channel = _said(request, "previous")
+    if not channel or not load_settings()["switch_hints"]:
+        return ""
     if not _CHANNEL_ID.match(channel):
         return ""
     if channel.isdigit():
@@ -259,9 +305,9 @@ def declared_max_quality(request):
     for no limit. Given as the height it can play ("1080") or as the quality itself: a
     Chromecast HD says 1080, and a 4K stream is then nothing it can use.
     """
-    if not load_settings()["devices"]:
-        return ""
     said = _said(request, "max_video").upper().rstrip("P")
+    if not said or not load_settings()["devices"]:
+        return ""
     if said in QUALITY_LIMITS:
         return said
     if not said.isdigit():
