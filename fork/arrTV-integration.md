@@ -391,7 +391,10 @@ true the list is asked for again every 5 s (at most a minute) and rows are added
 the focus; a **Load more** row at the bottom asks for the next page while `more` is true, and
 the focus goes to the first new row. Only when nothing is being read and nothing more can be
 had: "No other guide has anything on for this channel right now." (arr.60; in the info bar
-style's options row the entry is labelled "Wrong guide?".)
+style's options row the entry is labelled "Wrong guide?".) The channel's name is under the title
+(arr.65), and **"Could not find the guide"** beside Close sends a problem report (§7) with
+`extra.problem: "guide"` and `extra.from: "guide list: could not find the guide"` -- the same
+as the report menu's "Wrong or missing guide" -- so an admin sees it among the reports.
 
 **Choosing:** `POST /api/core/app-guide/` with `{"channel": "<uuid>", "epg_id": 88213}`.
 
