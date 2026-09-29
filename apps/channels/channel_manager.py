@@ -2875,6 +2875,41 @@ def _which_to_keep(records, group_id):
     return sorted(records, key=order)[0]
 
 
+# Where a preview has got to, for the page's progress bar: {"stage", "done", "total", "at"}
+PROGRESS_KEY = "channel-manager:progress"
+
+
+class _Progress:
+    """Writes where the plan has got to at most a few times a second (the page polls it)."""
+
+    def __init__(self):
+        import time
+
+        self._time = time.monotonic
+        self._last = 0.0
+
+    def __call__(self, stage, done=0, total=0, force=False):
+        now = self._time()
+        if not force and now - self._last < 0.3:
+            return
+        self._last = now
+        try:
+            from django.core.cache import cache
+
+            cache.set(PROGRESS_KEY, {"stage": stage, "done": done, "total": total, "at": now}, 120)
+        except Exception:
+            pass
+
+
+def load_progress():
+    try:
+        from django.core.cache import cache
+
+        return cache.get(PROGRESS_KEY) or {}
+    except Exception:
+        return {}
+
+
 def build_plan(settings):
     """
     Every channel as it would come out: what goes into it, and what it would look like.
@@ -2885,6 +2920,8 @@ def build_plan(settings):
     """
     from .models import ChannelGroup
 
+    say = _Progress()
+    say("Reading the streams and your channels", force=True)
     aliases = _alias_map(settings)
     streams = _stream_rows(settings)
     by_id = {s["id"]: s for s in streams}
@@ -2944,7 +2981,8 @@ def build_plan(settings):
     conflicts = {}
     homeless = {}
     same_country = bool(settings.get("same_country"))
-    for stream in streams:
+    for n, stream in enumerate(streams):
+        say("Matching streams to channels", n, len(streams))
         record, tied = None, None
         give_all = settings.get("several_matches") != "conflict"
         if stream["key"]:
@@ -3014,6 +3052,7 @@ def build_plan(settings):
         from . import meaning
 
         waiting = [s for group in homeless.values() for s in group]
+        say(f"Asking the language model about {len(waiting)} streams", force=True)
         for stream, record, score in meaning.place(waiting, list(existing.values()), settings):
             stream["meaning"] = round(score, 2)
             if stream["id"] not in record["stream_ids"]:
@@ -3072,7 +3111,8 @@ def build_plan(settings):
                 combining[record["channel"].id] = set_key
 
     # ── Channels there already are ──
-    for channel_id, record in existing.items():
+    for n, (channel_id, record) in enumerate(existing.items()):
+        say("Working out each channel", n, len(existing))
         if channel_id in combining and clusters[combining[channel_id]]["keeper"] is not record:
             # Folded into another channel, and deleted with it: its own row would say what
             # it is about to gain, moments before it stops existing
@@ -3204,6 +3244,7 @@ def build_plan(settings):
 
     # ── Channels there are not, yet ──
     if settings.get("create_new"):
+        say("Suggesting new channels", force=True)
         homes_here = homes()
         target = settings.get("target_group")
         number = settings.get("number_start")
@@ -3292,6 +3333,7 @@ def build_plan(settings):
     summary["streams"] = len(streams)
     summary["streams_added"] = sum(r["adds"] for r in rows)
     summary["ignored"] = len(ignored)
+    say("Done", 1, 1, force=True)
     return {
         "rows": rows,
         "summary": summary,

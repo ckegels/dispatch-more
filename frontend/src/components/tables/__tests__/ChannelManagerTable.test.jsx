@@ -24,6 +24,7 @@ vi.mock('../../../api', () => ({
     ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
     getChannelManagerPairings: vi.fn(() => Promise.resolve({ streams: 0, channels: 0 })),
+    getChannelManagerProgress: vi.fn(() => Promise.resolve({ stage: 'Matching streams to channels', done: 5, total: 10 })),
     changeChannelManagerPairings: vi.fn(() => Promise.resolve({ streams: 0, channels: 0 })),
     getChannelManagerReading: vi.fn(),
     addChannelGroup: vi.fn(),
@@ -363,15 +364,24 @@ describe('ChannelManagerTable', () => {
     await waitFor(() => expect(API.ignoreChannelManager).toHaveBeenLastCalledWith('clear'));
   });
 
+  it('shows where a preview has got to while it is worked out', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    API.previewChannelManager.mockReturnValueOnce(new Promise(() => {}));
+    fireEvent.click(screen.getByRole('button', { name: /Preview/ }));
+    expect(await screen.findByText('Matching streams to channels')).toBeInTheDocument();
+    expect(await screen.findByText('5 of 10')).toBeInTheDocument();
+  });
+
   it('asks for a fresh preview before applying after the levers move', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('input[type=checkbox]'));
-    fireEvent.click(screen.getByRole('button', { name: 'Levers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open What the Lineup may suggest' }));
     fireEvent.click(screen.getByRole('switch', { name: /Suggest new channels/ }));
 
-    expect(await screen.findByText(/The levers have changed/)).toBeInTheDocument();
+    expect(await screen.findByText(/The settings have changed/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Apply/ })).toBeDisabled();
   });
 
@@ -383,7 +393,7 @@ describe('ChannelManagerTable', () => {
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Levers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open Recognising a channel' }));
     // Custom: the switches under Advanced are open
     expect(screen.getByRole('switch', { name: /Trust tvg-id first/ })).toBeChecked();
@@ -758,7 +768,7 @@ describe('ChannelManagerTable', () => {
     await pickOption('Which group', 'Cooking');
 
     expect(
-      await screen.findByText(/not one the levers are looking at/)
+      await screen.findByText(/not one the settings are looking at/)
     ).toBeInTheDocument();
   });
 

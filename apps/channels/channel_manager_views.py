@@ -343,6 +343,13 @@ def channel_manager_pairings(request):
     return JsonResponse(pairings.summary())
 
 
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def channel_manager_progress(request):
+    """Where a preview being worked out has got to, for the page's progress bar."""
+    return JsonResponse(channel_manager.load_progress())
+
+
 @api_view(["PUT"])
 @permission_classes([IsAdmin])
 def channel_manager_settings(request):

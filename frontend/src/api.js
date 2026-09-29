@@ -3051,6 +3051,10 @@ export default class API {
     return await request(`${host}/api/channels/channel-manager/pairings/`);
   }
 
+  static async getChannelManagerProgress() {
+    return await request(`${host}/api/channels/channel-manager/progress/`);
+  }
+
   static async changeChannelManagerPairings(action) {
     return await request(`${host}/api/channels/channel-manager/pairings/`, {
       method: 'POST',

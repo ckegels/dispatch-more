@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v226** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v227** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,11 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**Settings, and a progress bar** (v227). The Lineup's "Levers" are called Settings on the
+page. A preview reports its stages (reading, matching n of m, the language model, each channel
+n of m, new channels) to the cache under `PROGRESS_KEY` at most every 0.3 s; the page polls
+`channel-manager/progress/` every half second while it waits and shows a bar in the overlay.
 
 **A local station is not its network** (v226, `_tvg_contradicted`). With Thorough the tvg-id
 rule is on, and "US| FOX 05 (WNYW) NEW YORK" went onto "┃USA┃ FOX HD" because TiviBridge

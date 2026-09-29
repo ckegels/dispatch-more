@@ -29,6 +29,7 @@ import {
   Center,
   Group,
   LoadingOverlay,
+  Progress,
   NativeSelect,
   NumberInput,
   Pagination,
@@ -540,7 +541,23 @@ const ChannelManagerTable = () => {
   const [clearing, setClearing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Where the preview being worked out has got to (the server's stages)
+  const [progress, setProgress] = useState(null);
   const tableRef = useRef(null);
+
+  useEffect(() => {
+    if (!loading) {
+      setProgress(null);
+      return undefined;
+    }
+    const ask = () =>
+      API.getChannelManagerProgress()
+        .then((p) => p && p.stage && setProgress(p))
+        .catch(() => {});
+    const timer = setInterval(ask, 500);
+    ask();
+    return () => clearInterval(timer);
+  }, [loading]);
 
   // The plan is worked out on the server and only when asked: it reads every stream, and
   // a lever moved should not set it off on every keystroke
@@ -1620,7 +1637,7 @@ const ChannelManagerTable = () => {
                   size="xs"
                   onClick={() => setShowLevers(!showLevers)}
                 >
-                  {showLevers ? 'Hide Levers' : 'Levers'}
+                  {showLevers ? 'Hide settings' : 'Settings'}
                 </Button>
                 <Button
                   leftSection={<Play size={16} />}
@@ -1679,8 +1696,8 @@ const ChannelManagerTable = () => {
                 {error && <Alert color="red">{error}</Alert>}
                 {leversChanged && (
                   <Alert color="blue">
-                    The levers have changed. Preview again to see what they come
-                    to before applying anything.
+                    The settings have changed. Preview again to see what they
+                    come to before applying anything.
                   </Alert>
                 )}
               </Stack>
@@ -1724,7 +1741,37 @@ const ChannelManagerTable = () => {
             >
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
                 <div style={{ minWidth: 760 }}>
-                  <LoadingOverlay visible={loading} />
+                  <LoadingOverlay
+                    visible={loading}
+                    loaderProps={{
+                      children: (
+                        <Stack gap={6} align="center" w={320}>
+                          <Text size="sm">
+                            {progress?.stage || 'Working out the channels'}
+                          </Text>
+                          <Progress
+                            w="100%"
+                            size="lg"
+                            animated={!progress?.total}
+                            striped={!progress?.total}
+                            value={
+                              progress?.total
+                                ? Math.round(
+                                    (100 * progress.done) / progress.total
+                                  )
+                                : 100
+                            }
+                            aria-label="Preview progress"
+                          />
+                          {progress?.total > 0 && (
+                            <Text size="xs" c="dimmed">
+                              {progress.done} of {progress.total}
+                            </Text>
+                          )}
+                        </Stack>
+                      ),
+                    }}
+                  />
                   {show === 'ignored' ? (
                     <Stack gap={6} p="sm">
                       <Group justify="space-between" wrap="wrap">
@@ -1795,7 +1842,7 @@ const ChannelManagerTable = () => {
                         {!plan
                           ? ''
                           : groupIsOutOfScope
-                            ? 'This group is not one the levers are looking at: it is either left out of "Channel groups" or named in "Channel groups to leave alone". Change that under Levers and preview again.'
+                            ? 'This group is not one the settings are looking at: it is either left out of "Channel groups" or named in "Channel groups to leave alone". Change that under Settings and preview again.'
                             : 'Nothing to show.'}
                       </Text>
                     </Center>

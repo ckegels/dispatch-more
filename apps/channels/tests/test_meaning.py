@@ -121,3 +121,12 @@ class LocalStationTests(TestCase):
         self.assertTrue(channel_manager._tvg_contradicted(wnyw, fox))
         local = {"channel": Channel(name="FOX 5 | NEW YORK | WNYW"), "country": "us"}
         self.assertFalse(channel_manager._tvg_contradicted(wnyw, local), "the station itself")
+
+
+class ProgressTests(TestCase):
+    def test_a_preview_says_where_it_has_got_to(self):
+        from django.core.cache import cache
+
+        cache.delete(channel_manager.PROGRESS_KEY)
+        channel_manager.build_plan(settings())
+        self.assertEqual(channel_manager.load_progress()["stage"], "Done")
