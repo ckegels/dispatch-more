@@ -71,6 +71,21 @@ const draw = () =>
 
 const rowOf = (text) => screen.getAllByText(text)[0].closest('.tr');
 
+// The settings, and every section of them open (they open a section at a time)
+const openSettings = () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  [
+    'What to look at',
+    'What to suggest',
+    'Recognising a guide',
+    'When a guide is put on',
+    'What it remembers',
+  ].forEach((title) => {
+    const button = screen.queryByRole('button', { name: `Open ${title}` });
+    if (button) fireEvent.click(button);
+  });
+};
+
 describe('GuideManagerTable', () => {
   beforeEach(() => {
     API.getGuideManager.mockResolvedValue(page);
@@ -159,7 +174,7 @@ describe('GuideManagerTable', () => {
   it('keeps a setting changed, so the page opens the way it was left', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
     fireEvent.click(
       await screen.findByRole('switch', { name: /A better match than the one it is on/ })
     );
@@ -167,6 +182,23 @@ describe('GuideManagerTable', () => {
     await waitFor(() =>
       expect(API.saveGuideManagerSettings).toHaveBeenCalledWith(
         expect.objectContaining({ suggest_better: false })
+      )
+    );
+  });
+
+  it('shows the settings that had no control, in their sections', async () => {
+    API.getGuideManager.mockResolvedValue({
+      ...page,
+      settings: { ...page.settings, must_be_fresh: true, fresh_hours: 6 },
+    });
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    openSettings();
+    expect(await screen.findByDisplayValue('6 hours')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: /Only a guide that holds programmes/ }));
+    await waitFor(() =>
+      expect(API.saveGuideManagerSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ only_if_it_holds_something: false })
       )
     );
   });
@@ -702,7 +734,7 @@ describe('GuideManagerTable', () => {
   it('finds guides by meaning too, says how far the index is, and builds it on asking', async () => {
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
     expect(await screen.findByRole('switch', { name: /Also by what the name means/ })).toBeChecked();
     expect(await screen.findByText(/What 94789 guides mean, worked out/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Build now' }));
@@ -720,7 +752,7 @@ describe('GuideManagerTable', () => {
     });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
 
     // Every source is on to begin with; clicking one takes it out, which is the way
     // round somebody wants it -- they know the source they do not trust
@@ -740,7 +772,7 @@ describe('GuideManagerTable', () => {
     });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
 
     const box = await screen.findByRole('textbox', { name: /Only tvg-ids like/ });
     fireEvent.change(box, { target: { value: '.uk' } });
@@ -769,7 +801,7 @@ describe('GuideManagerTable', () => {
     });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
 
     // Clicking the last one back on means all of them, which is kept as nothing chosen,
     // so a source added later is matched against too
@@ -794,7 +826,7 @@ describe('GuideManagerTable', () => {
     });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Unselect all' }));
     // Nothing is saved yet: an empty list means every source, never none
@@ -823,7 +855,7 @@ describe('GuideManagerTable', () => {
     });
     draw();
     await screen.findByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    openSettings();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Select all' }));
     await waitFor(() =>

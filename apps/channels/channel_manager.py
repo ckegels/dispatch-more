@@ -1720,7 +1720,7 @@ def source_countries():
     try:
         from apps.epg.models import EPGData, EPGSource
 
-        for source_id, name in EPGSource.objects.values_list("id", "name"):
+        for source_id, name, kind in EPGSource.objects.values_list("id", "name", "source_type"):
             words = re.findall(r"[a-z]+", (name or "").lower())
             codes = [
                 w for w in words
@@ -1729,6 +1729,11 @@ def source_countries():
             ]
             if codes:
                 found[source_id] = _one_country(codes[-1])
+                continue
+            if kind == "schedules_direct":
+                # North American listings, numbered: its "HGTV" said no country and was
+                # offered to "┃DE┃ HGTV" as certain (the user's find, 2026-09-29)
+                found[source_id] = "us"
                 continue
             said = Counter()
             total = 0
@@ -1763,7 +1768,24 @@ LIKELY_SCORE = 80
 TVG_NEEDS_NAME = 55
 
 
+# The most a match can be when the channel says its country and the guide's cannot be
+# told: likely, never certain -- the user's rule (2026-09-29), after "┃DE┃ HGTV" was given a
+# North American HGTV at a certain 100 %
+UNKNOWN_COUNTRY_MOST = 85
+
+
 def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=None):
+    """judge_guide_as_named, and no certainty where the guide's country cannot be told."""
+    score, tier, why = _judge_guide(name, country, entry, tvg_id, known_calls, reference)
+    if score and country and not _country_of_guide(entry):
+        if tier == CERTAIN or score > UNKNOWN_COUNTRY_MOST:
+            tier = LIKELY if tier == CERTAIN else tier
+            score = min(score, UNKNOWN_COUNTRY_MOST)
+            why = f"{why}; the guide's country is unknown" if why else "the guide's country is unknown"
+    return score, tier, why
+
+
+def _judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=None):
     """
     How good a match this guide is for this channel, and what kind of match it is.
 
@@ -1805,6 +1827,13 @@ def judge_guide(name, country, entry, tvg_id="", known_calls=None, reference=Non
     my_names, their_names = _names_in(mine_words), _names_in(their_words)
     if my_names and their_names and not (my_names & their_names):
         said = f"{sorted(my_names)[0].upper()} is not {sorted(their_names)[0].upper()}"
+        return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
+    # And the networks by name: "ABC" has a vowel too many to be read as a name above, so
+    # "┃CA EN┃ ABC WEST" took "CA - CBS WEST" as certain by the id its provider had
+    # stamped on it (the user's find, 2026-09-29)
+    my_network, their_network = network_of(name), network_of(theirs)
+    if my_network and their_network and my_network != their_network:
+        said = f"{my_network.upper()} is not {their_network.upper()}"
         return 0, GUESS, f"{said} (whatever its tvg-id says)" if same_id else said
 
     # Each side's identity read in its own country, since a call sign is only a call

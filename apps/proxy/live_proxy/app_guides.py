@@ -383,9 +383,13 @@ def choices_for(channel, user=None, start_reading=True, shown=()):
         ids += [epg_id for epg_id, _ in ranked]
         about = _offerable(epg_id for epg_id, _ in ranked)
         on.update(now_and_next([epg_id for epg_id, _ in ranked]))
+        from apps.channels.guide_manager import is_a_dead_guide
+
         for epg_id, score in ranked:
             what = on.get(epg_id) or {}
-            if not what.get("now"):
+            if not what.get("now") or is_a_dead_guide(what["now"].get("title")):
+                # Nothing on, or a notice that the channel is gone ("Channel No Longer
+                # Available"): nothing to compare the picture with
                 continue
             entry = about[epg_id]
             guides.append({

@@ -51,3 +51,38 @@ class SourceCountryTests(TestCase):
         gb = EPGSource.objects.create(name="epg.pw gb", source_type="xmltv")
         entry = {"name": "Nat Geo Wild", "tvg_id": "NatGeoWild.ie", "epg_source_id": gb.id}
         self.assertEqual(channel_manager._country_of_guide(entry), "ie")
+
+    def test_one_network_is_not_another_whatever_the_id_says(self):
+        """The user's find: ┃CA EN┃ ABC WEST took CA - CBS WEST as certain."""
+        cbs = {"name": "CA - CBS WEST", "tvg_id": "CBSKIRO-West.ca"}
+        score, _, why = channel_manager.judge_guide("┃CA EN┃ ABC WEST", "ca", cbs, "CBSKIRO-West.ca")
+        self.assertEqual(score, 0)
+        self.assertIn("ABC is not CBS", why)
+        abc = {"name": "CA - ABC WEST", "tvg_id": "ABCKOMO-West.ca"}
+        self.assertGreater(channel_manager.judge_guide("┃CA EN┃ ABC WEST", "ca", abc)[0], 0)
+
+    def test_schedules_direct_is_north_american(self):
+        """The user's find: ┃DE┃ HGTV took Schedules Direct's HGTV as certain."""
+        sd = EPGSource.objects.create(name="Schedules direct", source_type="schedules_direct")
+        hgtv = {"name": "HGTV", "tvg_id": "21257", "epg_source_id": sd.id}
+        self.assertEqual(channel_manager._country_of_guide(hgtv), "us")
+        self.assertLess(channel_manager.judge_guide("┃DE┃ HGTV", "de", hgtv)[0], channel_manager.MIN_GUIDE_SCORE)
+
+    def test_a_guide_saying_the_channel_is_gone_is_dead(self):
+        from apps.channels.guide_manager import is_a_dead_guide
+
+        for gone in ("Channel No Longer Available", "This channel is not available", "Station no longer broadcasting"):
+            self.assertTrue(is_a_dead_guide(gone), gone)
+        for fine in ("Available Light", "Zeit im Bild", "", None):
+            self.assertFalse(is_a_dead_guide(fine), fine)
+
+    def test_without_the_guides_country_nothing_is_certain(self):
+        """The user's rule: if the countries cannot be matched it cannot be 100 %."""
+        nowhere = EPGSource.objects.create(name="epg ripper ALL", source_type="xmltv")
+        hgtv = {"name": "HGTV", "tvg_id": "hgtv", "epg_source_id": nowhere.id}
+        score, tier, why = channel_manager.judge_guide("┃DE┃ HGTV", "de", hgtv)
+        self.assertLessEqual(score, channel_manager.UNKNOWN_COUNTRY_MOST)
+        self.assertNotEqual(tier, channel_manager.CERTAIN)
+        self.assertIn("country is unknown", why)
+        known = {"name": "HGTV", "tvg_id": "HGTV.de"}
+        self.assertEqual(channel_manager.judge_guide("┃DE┃ HGTV", "de", known)[1], channel_manager.CERTAIN)

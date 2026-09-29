@@ -1417,14 +1417,14 @@ class JudgingGuidesTests(TestCase):
         carry one.
         """
         for theirs in ("CNN HD", "CNN FHD", "CNN 1080p", "CNN"):
-            score, tier, _ = self.judge("┃USA┃ CNN", theirs)
+            score, tier, _ = self.judge("┃USA┃ CNN", theirs, "cnn.us")
             self.assertEqual((score, tier), (100, channel_manager.CERTAIN), theirs)
         self.assertEqual(channel_manager.guide_words("┃AT┃ ORF 1 FHD"), ["orf", "1"])
 
     def test_words_written_as_one_come_apart(self):
         self.assertEqual(channel_manager.guide_words("FoxSports1"), ["fox", "sports", "1"])
         self.assertEqual(channel_manager.guide_words("PBSKids"), ["pbs", "kids"])
-        score, tier, _ = self.judge("┃USA┃ FOX SPORTS 1", "FoxSports1")
+        score, tier, _ = self.judge("┃USA┃ FOX SPORTS 1", "FoxSports1", "foxsports1.us")
         self.assertEqual((score, tier), (100, channel_manager.CERTAIN))
 
     def test_the_same_letters_parted_differently_are_the_same_name(self):
@@ -1445,7 +1445,7 @@ class JudgingGuidesTests(TestCase):
         self.assertGreaterEqual(score, 90)
         self.assertIn("WHYY", why)
         # ...and written the way a guide writes it, in brackets after the network
-        self.assertEqual(self.judge("┃USA┃ ABC (WABC)", "WABC")[1], channel_manager.CERTAIN)
+        self.assertEqual(self.judge("┃USA┃ ABC (WABC)", "WABC", "wabc.us")[1], channel_manager.CERTAIN)
 
     def test_but_two_different_call_signs_are_still_two_stations(self):
         self.assertEqual(self.judge("┃USA┃ PBS WHYY", "KQED-DT")[0], 0)
@@ -1977,7 +1977,8 @@ class GuideChoiceTests(_Setup):
         guide = EPGData.objects.create(tvg_id="dreamworks", name="DreamWorks", epg_source=self.big)
         (best,) = channel_manager.guide_candidates("┃NL┃ DREAMWORKS")
         self.assertEqual(best["id"], guide.id)
-        self.assertGreaterEqual(best["score"], 90)
+        # Judged on its name alone -- but never certain without the guide's country (v228)
+        self.assertEqual(best["score"], channel_manager.UNKNOWN_COUNTRY_MOST)
 
     def test_what_is_on_each_guide_is_on_the_plan_for_both_sides(self):
         from django.utils import timezone

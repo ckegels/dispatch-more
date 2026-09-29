@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v228** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v229** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,21 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**Nothing certain without the countries, networks told apart, dead guides left out**
+(v229, the user's finds on the Guides tab). "┃CA EN┃ ABC WEST" was offered "CA - CBS WEST"
+as certain: its provider had stamped CBS's id on it, and the check for two broadcasters only
+knew names by their letters ("ABC" has a vowel too many); `judge_guide` now also refuses two
+different `network_of`s. "┃DE┃ HGTV" was offered Schedules Direct's HGTV as certain: a
+Schedules Direct source is North American now (`source_countries`), its guides being
+numbered. And the user's rule: **if the countries cannot be matched it cannot be 100 %** --
+`judge_guide` (the old one is `_judge_guide`) makes a match against a guide whose country
+cannot be told at most likely and `UNKNOWN_COUNTRY_MOST` (85), saying so. A guide whose
+programme on now says the channel is gone ("Channel No Longer Available", `DEAD_GUIDE`) is
+not suggested, nor offered in arrTV's list. The Guides settings are in sections now (what to
+look at, what to suggest, recognising a guide, when a guide is put on, what it remembers),
+with the two that had no control (`only_if_it_holds_something`, `fresh_hours`); the Lineup's
+progress is a strip at the top of the table, as the Guides page shows its run.
 
 **A guide's country from its source, and far countries ruled out** (v228). "┃BE┃ NGC WILD"
 was offered epg.pw gb's Nat Geo Wild as certain, 100 % (the user's find): epg.pw numbers

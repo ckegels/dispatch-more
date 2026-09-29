@@ -39,6 +39,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import API from '../../api';
+import Section from '../forms/SettingsSection';
 import useVideoStore from '../../store/useVideoStore';
 import useSettingsStore from '../../store/settings';
 import { buildLiveStreamUrl } from '../../utils/components/FloatingVideoUtils.js';
@@ -1149,43 +1150,149 @@ const GuideManagerTable = () => {
 
             {showSettings && levers && (
               <Box p="md" style={{ borderBottom: '1px solid #3f3f46' }}>
-                <Stack gap="sm">
-                  <Group gap="lg" wrap="wrap">
-                    <Switch
-                      size="xs"
-                      label="Channels on no guide"
-                      checked={!!levers.suggest_none}
-                      onChange={(event) =>
-                        saveLevers({
-                          ...levers,
-                          suggest_none: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <Switch
-                      size="xs"
-                      label="Guides that hold nothing"
-                      checked={!!levers.suggest_empty}
-                      onChange={(event) =>
-                        saveLevers({
-                          ...levers,
-                          suggest_empty: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <Switch
-                      size="xs"
-                      label="A better match than the one it is on"
-                      checked={!!levers.suggest_better}
-                      onChange={(event) =>
-                        saveLevers({
-                          ...levers,
-                          suggest_better: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                  </Group>
-                  <Group gap="lg" wrap="wrap">
+                <Stack gap="xs">
+                  <Section
+                    title="What to look at"
+                    about="which of your channels a run looks for a guide for"
+                    openAtFirst
+                  >
+                    <Group gap="lg" wrap="wrap" align="flex-end">
+                      <MultiSelect
+                        size="xs"
+                        label="Only these groups"
+                        placeholder="Every channel"
+                        data={(page?.channel_groups || []).map((one) => ({
+                          value: String(one.id),
+                          label: `${one.name} (${one.count})`,
+                        }))}
+                        value={(levers.channel_groups || []).map(String)}
+                        onChange={(value) =>
+                          saveLevers({
+                            ...levers,
+                            channel_groups: value.map(Number),
+                          })
+                        }
+                        searchable
+                        clearable
+                        style={{ width: 240 }}
+                      />
+                      <MultiSelect
+                        size="xs"
+                        label="Except these groups"
+                        description="Left alone, whatever they are on"
+                        placeholder="None"
+                        data={(page?.all_groups || []).map((one) => ({
+                          value: String(one.id),
+                          label: one.name,
+                        }))}
+                        value={(levers.exclude_channel_groups || []).map(
+                          String
+                        )}
+                        onChange={(value) =>
+                          saveLevers({
+                            ...levers,
+                            exclude_channel_groups: value.map(Number),
+                          })
+                        }
+                        searchable
+                        clearable
+                        style={{ width: 240 }}
+                      />
+                      <MultiSelect
+                        size="xs"
+                        label="Only channels now on"
+                        description="The guide they are on today"
+                        placeholder="Any guide"
+                        data={[
+                          { value: 'none', label: 'No guide at all' },
+                          ...(sources || []).map((one) => ({
+                            value: String(one.id),
+                            label: `${one.name} (${one.channels} channel${
+                              one.channels === 1 ? '' : 's'
+                            })`,
+                          })),
+                        ]}
+                        value={(levers.on_sources || []).map(String)}
+                        onChange={(value) =>
+                          saveLevers({
+                            ...levers,
+                            on_sources: value.map((one) =>
+                              one === 'none' ? 'none' : Number(one)
+                            ),
+                          })
+                        }
+                        searchable
+                        clearable
+                        style={{ width: 260 }}
+                      />
+                    </Group>
+                  </Section>
+
+                  <Section
+                    title="What to suggest"
+                    about="the three kinds of change, and how good a guide has to be"
+                  >
+                    <Group gap="lg" wrap="wrap">
+                      <Switch
+                        size="xs"
+                        label="Channels on no guide"
+                        checked={!!levers.suggest_none}
+                        onChange={(event) =>
+                          saveLevers({
+                            ...levers,
+                            suggest_none: event.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <Switch
+                        size="xs"
+                        label="Guides that hold nothing"
+                        checked={!!levers.suggest_empty}
+                        onChange={(event) =>
+                          saveLevers({
+                            ...levers,
+                            suggest_empty: event.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <Switch
+                        size="xs"
+                        label="A better match than the one it is on"
+                        checked={!!levers.suggest_better}
+                        onChange={(event) =>
+                          saveLevers({
+                            ...levers,
+                            suggest_better: event.currentTarget.checked,
+                          })
+                        }
+                      />
+                    </Group>
+                    <Group gap="lg" wrap="wrap" align="flex-end">
+                      <NumberInput
+                        size="xs"
+                        label="Good enough to suggest"
+                        description="Out of a hundred"
+                        min={0}
+                        max={100}
+                        value={levers.min_score}
+                        onChange={(value) =>
+                          saveLevers({ ...levers, min_score: value })
+                        }
+                        style={{ width: 170 }}
+                      />
+                      <NumberInput
+                        size="xs"
+                        label="Better by at least"
+                        description="Before a guide that works is replaced"
+                        min={1}
+                        max={100}
+                        value={levers.better_by}
+                        onChange={(value) =>
+                          saveLevers({ ...levers, better_by: value })
+                        }
+                        style={{ width: 210 }}
+                      />
+                    </Group>
                     <Switch
                       size="xs"
                       label="Only certain matches"
@@ -1195,6 +1302,19 @@ const GuideManagerTable = () => {
                         saveLevers({
                           ...levers,
                           only_certain: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Switch
+                      size="xs"
+                      label="Only a guide that holds programmes"
+                      description="A channel on an empty guide is only offered one that holds something. A guide nobody uses holds nothing because it has not been read yet, so it is still offered."
+                      checked={levers.only_if_it_holds_something !== false}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          only_if_it_holds_something:
+                            event.currentTarget.checked,
                         })
                       }
                     />
@@ -1210,9 +1330,29 @@ const GuideManagerTable = () => {
                         })
                       }
                     />
-                    {/* Off, as stock and the plugins that do this: putting a guide on
-                        sets the guide. The channel's tvg-id is what the Lineup's "Trust
-                        tvg-id" matches streams by. */}
+                    {levers.must_be_fresh && (
+                      <NumberInput
+                        size="xs"
+                        label="Something on in the next"
+                        suffix=" hours"
+                        min={1}
+                        max={168}
+                        value={levers.fresh_hours || 12}
+                        onChange={(value) =>
+                          saveLevers({
+                            ...levers,
+                            fresh_hours: Number(value) || 12,
+                          })
+                        }
+                        style={{ width: 200 }}
+                      />
+                    )}
+                  </Section>
+
+                  <Section
+                    title="Recognising a guide"
+                    about="the language model, which sources may answer, and the channel reference"
+                  >
                     <Switch
                       size="xs"
                       label="Also by what the name means"
@@ -1225,6 +1365,198 @@ const GuideManagerTable = () => {
                         })
                       }
                     />
+                    {levers.use_language_model !== false && <GuideMeanings />}
+                    {matching && (
+                      <>
+                        <Group gap="lg" wrap="wrap" align="flex-start">
+                          {/* One to click, not a list to add things to. Every source is
+                            on by default, and clicking one takes it out of the matching --
+                            which is the way round somebody wants it: they know the source
+                            they do not trust, not the twelve they do. */}
+                          <Box>
+                            <Text size="xs" fw={500}>
+                              Match against these sources
+                            </Text>
+                            <Text size="xs" c="dimmed" mb={6}>
+                              All of them unless you click some away. One left
+                              out is still read, and still used by the channels
+                              already on it.
+                            </Text>
+                            {sources.length > 1 && (
+                              <Group gap={6} mb={6}>
+                                <Button
+                                  size="compact-xs"
+                                  variant="subtle"
+                                  onClick={() => {
+                                    setNoSources(false);
+                                    saveMatching({ ...matching, sources: [] });
+                                  }}
+                                >
+                                  Select all
+                                </Button>
+                                <Button
+                                  size="compact-xs"
+                                  variant="subtle"
+                                  onClick={() => setNoSources(true)}
+                                >
+                                  Unselect all
+                                </Button>
+                                {noSources && (
+                                  <Text size="xs" c="orange">
+                                    Now click the ones to match against. Until
+                                    you do, every source is still matched.
+                                  </Text>
+                                )}
+                              </Group>
+                            )}
+                            <Group gap={6} wrap="wrap">
+                              {sources.length === 0 && (
+                                <Text size="xs" c="dimmed">
+                                  No EPG sources yet.
+                                </Text>
+                              )}
+                              {sources.map((one) => {
+                                // Nothing chosen means every source, so a chip is on when
+                                // the list is empty as well as when it names this one
+                                const some =
+                                  (matching.sources || []).length > 0;
+                                const on =
+                                  !noSources &&
+                                  (!some || matching.sources.includes(one.id));
+                                return (
+                                  <Tooltip
+                                    key={one.id}
+                                    label={`${one.holds} guides · ${one.channels} channel${
+                                      one.channels === 1 ? '' : 's'
+                                    } on it${
+                                      one.active
+                                        ? ''
+                                        : ' · switched off in Dispatcharr'
+                                    }`}
+                                  >
+                                    <Badge
+                                      size="lg"
+                                      variant={on ? 'filled' : 'outline'}
+                                      color={on ? 'blue' : 'gray'}
+                                      style={{
+                                        cursor: 'pointer',
+                                        textTransform: 'none',
+                                        opacity: on ? 1 : 0.55,
+                                      }}
+                                      role="button"
+                                      aria-label={`${on ? 'Leave out' : 'Match against'} ${one.name}`}
+                                      onClick={() => {
+                                        // After "Unselect all" the first one clicked is
+                                        // the only one on
+                                        if (noSources) {
+                                          setNoSources(false);
+                                          saveMatching({
+                                            ...matching,
+                                            sources:
+                                              sources.length === 1
+                                                ? []
+                                                : [one.id],
+                                          });
+                                          return;
+                                        }
+                                        // Starting from "all of them", clicking one off
+                                        // means naming the others. Kept as what is on
+                                        // rather than what is off, and emptied again when
+                                        // they are all on, so a source added later is
+                                        // matched against -- which is what anyone expects.
+                                        const now = some
+                                          ? matching.sources
+                                          : sources.map((s) => s.id);
+                                        const next = now.includes(one.id)
+                                          ? now.filter((id) => id !== one.id)
+                                          : [...now, one.id];
+                                        saveMatching({
+                                          ...matching,
+                                          sources:
+                                            next.length === sources.length
+                                              ? []
+                                              : next,
+                                        });
+                                      }}
+                                    >
+                                      {one.name}
+                                    </Badge>
+                                  </Tooltip>
+                                );
+                              })}
+                            </Group>
+                          </Box>
+                          <TextInput
+                            size="xs"
+                            label="Only tvg-ids like"
+                            description='Plain text, or a pattern with * and ?. Try ".uk".'
+                            placeholder="Any tvg-id"
+                            value={matching.tvg_id_like || ''}
+                            onChange={(event) =>
+                              setMatching({
+                                ...matching,
+                                tvg_id_like: event.currentTarget.value,
+                              })
+                            }
+                            onBlur={() => saveMatching(matching)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') saveMatching(matching);
+                            }}
+                            style={{ width: 190 }}
+                          />
+                          <Switch
+                            size="xs"
+                            mt={22}
+                            label="Refuse another country's guide"
+                            checked={!!matching.country_must_agree}
+                            onChange={(event) =>
+                              saveMatching({
+                                ...matching,
+                                country_must_agree: event.currentTarget.checked,
+                              })
+                            }
+                          />
+                        </Group>
+                        {/* What the matching knows besides the two names in front of it */}
+                        <Group gap="sm" wrap="wrap" align="center">
+                          <Text size="xs" c="dimmed">
+                            {reference?.names
+                              ? `${reference.names.toLocaleString()} channels known by every name they go by`
+                              : 'Only the two names are being compared.'}
+                            {reference?.call_signs
+                              ? ` · ${reference.call_signs} call signs found in your guides`
+                              : ''}
+                          </Text>
+                          <Button
+                            size="compact-xs"
+                            variant="default"
+                            loading={building}
+                            onClick={buildReference}
+                          >
+                            {reference?.names
+                              ? 'Update the channel reference'
+                              : 'Download the channel reference'}
+                          </Button>
+                          <Text
+                            size="xs"
+                            c="dimmed"
+                            style={{ flexBasis: '100%' }}
+                          >
+                            A public list of what channels are called, including
+                            the other names they go by, so &quot;NGC Wild&quot;
+                            and &quot;Nat Geo Wild&quot; are one channel without
+                            anybody writing that down here. Nothing is sent; one
+                            file is read.
+                          </Text>
+                        </Group>
+                      </>
+                    )}
+                  </Section>
+
+                  <Section
+                    title="When a guide is put on"
+                    about="what else changes on the channel"
+                  >
                     <Switch
                       size="xs"
                       label="Also give the channel the guide's tvg-id"
@@ -1237,342 +1569,59 @@ const GuideManagerTable = () => {
                         })
                       }
                     />
-                  </Group>
-                  {levers.use_language_model !== false && <GuideMeanings />}
-                  <Group gap="lg" wrap="wrap" align="flex-end">
-                    <NumberInput
-                      size="xs"
-                      label="Good enough to suggest"
-                      description="Out of a hundred"
-                      min={0}
-                      max={100}
-                      value={levers.min_score}
-                      onChange={(value) =>
-                        saveLevers({ ...levers, min_score: value })
-                      }
-                      style={{ width: 170 }}
-                    />
-                    <NumberInput
-                      size="xs"
-                      label="Better by at least"
-                      description="Before a guide that works is replaced"
-                      min={1}
-                      max={100}
-                      value={levers.better_by}
-                      onChange={(value) =>
-                        saveLevers({ ...levers, better_by: value })
-                      }
-                      style={{ width: 210 }}
-                    />
-                    <MultiSelect
-                      size="xs"
-                      label="Only these groups"
-                      placeholder="Every channel"
-                      data={(page?.channel_groups || []).map((one) => ({
-                        value: String(one.id),
-                        label: `${one.name} (${one.count})`,
-                      }))}
-                      value={(levers.channel_groups || []).map(String)}
-                      onChange={(value) =>
-                        saveLevers({
-                          ...levers,
-                          channel_groups: value.map(Number),
-                        })
-                      }
-                      searchable
-                      clearable
-                      style={{ width: 240 }}
-                    />
-                    <MultiSelect
-                      size="xs"
-                      label="Except these groups"
-                      description="Left alone, whatever they are on"
-                      placeholder="None"
-                      data={(page?.all_groups || []).map((one) => ({
-                        value: String(one.id),
-                        label: one.name,
-                      }))}
-                      value={(levers.exclude_channel_groups || []).map(String)}
-                      onChange={(value) =>
-                        saveLevers({
-                          ...levers,
-                          exclude_channel_groups: value.map(Number),
-                        })
-                      }
-                      searchable
-                      clearable
-                      style={{ width: 240 }}
-                    />
-                    {/* The other half of the matching chips below: this says which
-                        channels are asked about, they say which guides may answer. The
-                        pair of them is "take everything on the source that went stale and
-                        find it on the new one". */}
-                    <MultiSelect
-                      size="xs"
-                      label="Only channels now on"
-                      description="The guide they are on today"
-                      placeholder="Any guide"
-                      data={[
-                        { value: 'none', label: 'No guide at all' },
-                        ...(sources || []).map((one) => ({
-                          value: String(one.id),
-                          label: `${one.name} (${one.channels} channel${
-                            one.channels === 1 ? '' : 's'
-                          })`,
-                        })),
-                      ]}
-                      value={(levers.on_sources || []).map(String)}
-                      onChange={(value) =>
-                        saveLevers({
-                          ...levers,
-                          on_sources: value.map((one) =>
-                            one === 'none' ? 'none' : Number(one)
-                          ),
-                        })
-                      }
-                      searchable
-                      clearable
-                      style={{ width: 260 }}
-                    />
-                  </Group>
-                  {matching && (
-                    <>
-                      <Divider
-                        my={4}
-                        label="Which guides may be suggested"
-                        labelPosition="left"
-                      />
-                      <Text size="xs" c="dimmed">
-                        The other half of &quot;Only channels now on&quot;
-                        above: that says which channels are asked about, this
-                        says which guides may answer. Together they are
-                        &quot;take everything on one source and find it on
-                        another&quot;. These are shared with the guide window on
-                        a Lineup row, so a source left out here is left out
-                        there too.
-                      </Text>
-                      <Group gap="lg" wrap="wrap" align="flex-start">
-                        {/* One to click, not a list to add things to. Every source is
-                            on by default, and clicking one takes it out of the matching --
-                            which is the way round somebody wants it: they know the source
-                            they do not trust, not the twelve they do. */}
-                        <Box>
-                          <Text size="xs" fw={500}>
-                            Match against these sources
-                          </Text>
-                          <Text size="xs" c="dimmed" mb={6}>
-                            All of them unless you click some away. One left out
-                            is still read, and still used by the channels
-                            already on it.
-                          </Text>
-                          {sources.length > 1 && (
-                            <Group gap={6} mb={6}>
-                              <Button
-                                size="compact-xs"
-                                variant="subtle"
-                                onClick={() => {
-                                  setNoSources(false);
-                                  saveMatching({ ...matching, sources: [] });
-                                }}
-                              >
-                                Select all
-                              </Button>
-                              <Button
-                                size="compact-xs"
-                                variant="subtle"
-                                onClick={() => setNoSources(true)}
-                              >
-                                Unselect all
-                              </Button>
-                              {noSources && (
-                                <Text size="xs" c="orange">
-                                  Now click the ones to match against. Until you
-                                  do, every source is still matched.
-                                </Text>
-                              )}
-                            </Group>
-                          )}
-                          <Group gap={6} wrap="wrap">
-                            {sources.length === 0 && (
-                              <Text size="xs" c="dimmed">
-                                No EPG sources yet.
-                              </Text>
-                            )}
-                            {sources.map((one) => {
-                              // Nothing chosen means every source, so a chip is on when
-                              // the list is empty as well as when it names this one
-                              const some = (matching.sources || []).length > 0;
-                              const on =
-                                !noSources &&
-                                (!some || matching.sources.includes(one.id));
-                              return (
-                                <Tooltip
-                                  key={one.id}
-                                  label={`${one.holds} guides · ${one.channels} channel${
-                                    one.channels === 1 ? '' : 's'
-                                  } on it${
-                                    one.active
-                                      ? ''
-                                      : ' · switched off in Dispatcharr'
-                                  }`}
-                                >
-                                  <Badge
-                                    size="lg"
-                                    variant={on ? 'filled' : 'outline'}
-                                    color={on ? 'blue' : 'gray'}
-                                    style={{
-                                      cursor: 'pointer',
-                                      textTransform: 'none',
-                                      opacity: on ? 1 : 0.55,
-                                    }}
-                                    role="button"
-                                    aria-label={`${on ? 'Leave out' : 'Match against'} ${one.name}`}
-                                    onClick={() => {
-                                      // After "Unselect all" the first one clicked is
-                                      // the only one on
-                                      if (noSources) {
-                                        setNoSources(false);
-                                        saveMatching({
-                                          ...matching,
-                                          sources:
-                                            sources.length === 1
-                                              ? []
-                                              : [one.id],
-                                        });
-                                        return;
-                                      }
-                                      // Starting from "all of them", clicking one off
-                                      // means naming the others. Kept as what is on
-                                      // rather than what is off, and emptied again when
-                                      // they are all on, so a source added later is
-                                      // matched against -- which is what anyone expects.
-                                      const now = some
-                                        ? matching.sources
-                                        : sources.map((s) => s.id);
-                                      const next = now.includes(one.id)
-                                        ? now.filter((id) => id !== one.id)
-                                        : [...now, one.id];
-                                      saveMatching({
-                                        ...matching,
-                                        sources:
-                                          next.length === sources.length
-                                            ? []
-                                            : next,
-                                      });
-                                    }}
-                                  >
-                                    {one.name}
-                                  </Badge>
-                                </Tooltip>
-                              );
-                            })}
-                          </Group>
-                        </Box>
-                        <TextInput
-                          size="xs"
-                          label="Only tvg-ids like"
-                          description='Plain text, or a pattern with * and ?. Try ".uk".'
-                          placeholder="Any tvg-id"
-                          value={matching.tvg_id_like || ''}
-                          onChange={(event) =>
-                            setMatching({
-                              ...matching,
-                              tvg_id_like: event.currentTarget.value,
-                            })
-                          }
-                          onBlur={() => saveMatching(matching)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') saveMatching(matching);
-                          }}
-                          style={{ width: 190 }}
-                        />
-                        <Switch
-                          size="xs"
-                          mt={22}
-                          label="Refuse another country's guide"
-                          checked={!!matching.country_must_agree}
-                          onChange={(event) =>
-                            saveMatching({
-                              ...matching,
-                              country_must_agree: event.currentTarget.checked,
-                            })
-                          }
-                        />
-                      </Group>
-                      {/* What the matching knows besides the two names in front of it */}
-                      <Group gap="sm" wrap="wrap" align="center">
+                  </Section>
+
+                  <Section
+                    title="What it remembers"
+                    about="channels decided, and suggestions waved away"
+                  >
+                    {!(page?.chosen || []).length &&
+                      !(page?.ignored || []).length && (
                         <Text size="xs" c="dimmed">
-                          {reference?.names
-                            ? `${reference.names.toLocaleString()} channels known by every name they go by`
-                            : 'Only the two names are being compared.'}
-                          {reference?.call_signs
-                            ? ` · ${reference.call_signs} call signs found in your guides`
-                            : ''}
+                          Nothing decided or waved away yet.
+                        </Text>
+                      )}
+                    {(page?.chosen || []).length > 0 && (
+                      <Group gap="sm">
+                        <Text size="xs" c="dimmed">
+                          {page.chosen.length} channel
+                          {page.chosen.length === 1 ? ' is' : 's are'} chosen
+                          already, and nothing is suggested for{' '}
+                          {page.chosen.length === 1 ? 'it' : 'them'}.
                         </Text>
                         <Button
                           size="compact-xs"
-                          variant="default"
-                          loading={building}
-                          onClick={buildReference}
+                          variant="subtle"
+                          leftSection={<RotateCcw size={12} />}
+                          onClick={async () => {
+                            await API.chooseGuideManager('clear');
+                            reload();
+                          }}
                         >
-                          {reference?.names
-                            ? 'Update the channel reference'
-                            : 'Download the channel reference'}
+                          Suggest for them again
                         </Button>
-                        <Text
-                          size="xs"
-                          c="dimmed"
-                          style={{ flexBasis: '100%' }}
-                        >
-                          A public list of what channels are called, including
-                          the other names they go by, so &quot;NGC Wild&quot;
-                          and &quot;Nat Geo Wild&quot; are one channel without
-                          anybody writing that down here. Nothing is sent; one
-                          file is read.
-                        </Text>
                       </Group>
-                    </>
-                  )}
-                  {(page?.chosen || []).length > 0 && (
-                    <Group gap="sm">
-                      <Text size="xs" c="dimmed">
-                        {page.chosen.length} channel
-                        {page.chosen.length === 1 ? ' is' : 's are'} chosen
-                        already, and nothing is suggested for{' '}
-                        {page.chosen.length === 1 ? 'it' : 'them'}.
-                      </Text>
-                      <Button
-                        size="compact-xs"
-                        variant="subtle"
-                        leftSection={<RotateCcw size={12} />}
-                        onClick={async () => {
-                          await API.chooseGuideManager('clear');
-                          reload();
-                        }}
-                      >
-                        Suggest for them again
-                      </Button>
-                    </Group>
-                  )}
-                  {(page?.ignored || []).length > 0 && (
-                    <Group gap="sm">
-                      <Text size="xs" c="dimmed">
-                        {page.ignored.length} suggestion
-                        {page.ignored.length === 1 ? '' : 's'} waved away.
-                      </Text>
-                      <Button
-                        size="compact-xs"
-                        variant="subtle"
-                        leftSection={<RotateCcw size={12} />}
-                        onClick={async () => {
-                          await API.ignoreGuideManager('clear');
-                          reload();
-                        }}
-                      >
-                        Suggest them again
-                      </Button>
-                    </Group>
-                  )}
+                    )}
+                    {(page?.ignored || []).length > 0 && (
+                      <Group gap="sm">
+                        <Text size="xs" c="dimmed">
+                          {page.ignored.length} suggestion
+                          {page.ignored.length === 1 ? '' : 's'} waved away.
+                        </Text>
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          leftSection={<RotateCcw size={12} />}
+                          onClick={async () => {
+                            await API.ignoreGuideManager('clear');
+                            reload();
+                          }}
+                        >
+                          Suggest them again
+                        </Button>
+                      </Group>
+                    )}
+                  </Section>
                 </Stack>
               </Box>
             )}

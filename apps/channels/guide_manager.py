@@ -28,6 +28,7 @@ would hold up every M3U and EPG refresh behind it.
 """
 
 import logging
+import re
 
 from . import channel_manager, known_channels, logo_library
 from .settings_rows import change_row
@@ -513,6 +514,19 @@ def _score_against(name, catalogue, sources, counts, used, playing, limit=6,
     ]
 
 
+# What a guide shows when the channel it was for is gone: never worth suggesting ("┃DE┃
+# HGTV" was offered a guide whose programme on now was "Channel No Longer Available")
+DEAD_GUIDE = re.compile(
+    r"(channel|station|service|programming)\s+(is\s+)?(no\s+longer|not)\s+available"
+    r"|no\s+longer\s+(available|broadcasting|on\s+air)|has\s+(closed|ceased)",
+    re.IGNORECASE,
+)
+
+
+def is_a_dead_guide(now_title):
+    return bool(now_title) and bool(DEAD_GUIDE.search(str(now_title)))
+
+
 def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     """
     Which of the guides found is worth suggesting for this channel, and why -- or nothing.
@@ -537,7 +551,7 @@ def _worth_suggesting(channel, found, settings, counts, catalogue_scores):
     )
     worth = [
         one for one in found
-        if one["score"] >= least and one.get("tier") in tiers
+        if one["score"] >= least and one.get("tier") in tiers and not is_a_dead_guide(one.get("now"))
     ]
     if settings.get("must_be_fresh"):
         # A guide with nothing on tonight is no use whatever it holds altogether. Only

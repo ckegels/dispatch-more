@@ -1731,6 +1731,40 @@ const ChannelManagerTable = () => {
               </Box>
             )}
 
+            {/* Where a preview has got to, at the top of the table, as the Guides page
+                shows its run */}
+            {loading && (
+              <Box
+                style={{
+                  padding: '8px 16px',
+                  borderBottom: '1px solid #3f3f46',
+                }}
+              >
+                <Group justify="space-between" gap="xs" wrap="wrap">
+                  <Text size="xs" c="dimmed">
+                    {progress?.stage || 'Working out the channels'}
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    {progress?.total > 0
+                      ? `${progress.done} of ${progress.total}`
+                      : ''}
+                  </Text>
+                </Group>
+                <Progress
+                  mt={6}
+                  size="sm"
+                  animated={!progress?.total}
+                  striped={!progress?.total}
+                  value={
+                    progress?.total
+                      ? Math.round((100 * progress.done) / progress.total)
+                      : 100
+                  }
+                  aria-label="Preview progress"
+                />
+              </Box>
+            )}
+
             {/* Table container */}
             <Box
               style={{
@@ -1741,36 +1775,11 @@ const ChannelManagerTable = () => {
             >
               <Box style={{ overflow: 'auto', height: 'calc(100vh - 200px)' }}>
                 <div style={{ minWidth: 760 }}>
+                  {/* Dims the table while it is worked out; where it has got to is the
+                      strip above, as on the Guides page */}
                   <LoadingOverlay
                     visible={loading}
-                    loaderProps={{
-                      children: (
-                        <Stack gap={6} align="center" w={320}>
-                          <Text size="sm">
-                            {progress?.stage || 'Working out the channels'}
-                          </Text>
-                          <Progress
-                            w="100%"
-                            size="lg"
-                            animated={!progress?.total}
-                            striped={!progress?.total}
-                            value={
-                              progress?.total
-                                ? Math.round(
-                                    (100 * progress.done) / progress.total
-                                  )
-                                : 100
-                            }
-                            aria-label="Preview progress"
-                          />
-                          {progress?.total > 0 && (
-                            <Text size="xs" c="dimmed">
-                              {progress.done} of {progress.total}
-                            </Text>
-                          )}
-                        </Stack>
-                      ),
-                    }}
+                    loaderProps={{ children: ' ' }}
                   />
                   {show === 'ignored' ? (
                     <Stack gap={6} p="sm">
