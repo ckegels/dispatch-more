@@ -22,7 +22,9 @@ the mistakes not to repeat.
   fork can have — it has happened, more than once (handover §7).
 - **Every channel ends in a custom fallback stream** ("Could Not Dispatch"): keep it last,
   never remove it, insert new streams before it.
-- **Channel Manager defaults reproduce DispatcharrUtils**; anything smarter is a lever.
+- **Channel Manager recognition is one choice, "How hard to look"**: Thorough (every rule and
+  Dispatcharr's language model) by default -- the user's decision, 2026-09-29 -- with Exact
+  still reproducing DispatcharrUtils. Other Lineup defaults still follow DispatcharrUtils.
 - **Comments and commit messages explain *why*, in plain sentences**, like the existing fork
   code. Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
@@ -37,7 +39,7 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v224 is the latest. Users install one with
+   Releases run from v99; v225 is the latest. Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker.
 

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v224** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v225** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,21 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**How hard to look** (v225, `RECOGNITION`, `with_recognition`, setting `recognition`). The
+recognition switches had grown to nine beside the word lists, a memory setting and an action
+in one section. They are one choice now: **Exact** (as DispatcharrUtils), **Normal** (every
+rule measured on the user's lineup: loose names within one country, the country however
+written, call signs and towns, East by default, filler left out, tvg-id where the names do not
+contradict it), **Thorough** (Normal and the language model) and **Custom** (the switches as
+set). A level sets the switches on the server (`load_settings` and `settings_from` both pass
+through `with_recognition`), so saved switch positions no longer count unless the level is
+Custom. **Thorough is the default -- the user's decision after v224** -- which ends "defaults
+reproduce DispatcharrUtils" for recognition. The page's sections now go: what to look at;
+recognising a channel (the level, with the switches, "Several channels of that name" and the
+word lists under Advanced, where touching one makes the level Custom); what the Lineup may
+suggest (new channels, combining, removing, reordering); stream order; what it remembers;
+guide and logo.
 
 **By meaning** (v224, `apps/channels/meaning.py`, lever `use_language_model`, off). A stream
 none of the rules could place is compared with the channels of its country by what its name

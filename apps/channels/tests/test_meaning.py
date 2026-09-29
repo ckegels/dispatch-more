@@ -94,3 +94,20 @@ class MeaningTests(TestCase):
         with patch("apps.channels.epg_matching.get_sentence_transformer", return_value=(None, None)):
             plan = channel_manager.build_plan(settings(use_language_model=True))
         self.assertEqual(self.added(plan, self.discovery), {})
+
+
+class RecognitionLevelTests(TestCase):
+    """How hard to look, as one choice, with the language model by default (the user's)."""
+
+    def test_thorough_by_default_with_the_language_model(self):
+        values = channel_manager.load_settings()
+        self.assertEqual(values["recognition"], "thorough")
+        self.assertTrue(values["use_language_model"])
+        self.assertTrue(values["country_any_way"] and values["match_call_signs"] and values["same_country"])
+
+    def test_a_level_sets_the_levers_and_custom_leaves_them(self):
+        exact = channel_manager.settings_from({"recognition": "exact", "use_language_model": True})
+        self.assertFalse(exact["use_language_model"], "the level wins over a single lever")
+        custom = channel_manager.settings_from({"recognition": "custom", "use_language_model": True, "match_call_signs": False})
+        self.assertTrue(custom["use_language_model"])
+        self.assertFalse(custom["match_call_signs"])

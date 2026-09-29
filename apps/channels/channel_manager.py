@@ -68,6 +68,12 @@ DEFAULTS = {
     "profiles": "like_its_group",
     "profiles_group_more_than": 10,
     # ── Recognition ──
+    # How hard to look, as one choice (RECOGNITION): "exact", "normal", "thorough" or
+    # "custom". Every level but "custom" sets the recognition levers below; "custom" leaves
+    # them as they are. Thorough by default -- the user's choice (2026-09-29), after the
+    # language model placed 87 % of what the rules missed on their lineup -- and no longer
+    # DispatcharrUtils', which "exact" still is.
+    "recognition": "thorough",
     # "exact": the whole name, country box and punctuation and all, with only the quality,
     # the words to ignore and the rules taken off, and case ignored. What DispatcharrUtils
     # and the group merge people ran by hand do, and so the default: it is what they trust.
@@ -200,6 +206,31 @@ QUALITY_WORDS = {
 NOISE_WORDS = ("hevc", "h265", "h.265", "h264", "h.264", "hdr", "hdr10", "50fps", "60fps", "25fps")
 
 
+# What each level of "recognition" sets. Normal is every rule measured on the user's lineup
+# (v195-v196: 1,142 pairs, none found wrong); thorough adds the language model (v224).
+RECOGNITION = {
+    "exact": {
+        "name_matching": "exact", "match_tvg_id": False, "same_country": False,
+        "country_any_way": False, "match_call_signs": False, "east_is_default": False,
+        "leave_out_filler": False, "use_language_model": False,
+    },
+    "normal": {
+        "name_matching": "loose", "match_tvg_id": True, "same_country": True,
+        "country_any_way": True, "match_call_signs": True, "east_is_default": True,
+        "leave_out_filler": True, "use_language_model": False,
+    },
+}
+RECOGNITION["thorough"] = {**RECOGNITION["normal"], "use_language_model": True}
+
+
+def with_recognition(values):
+    """The recognition levers as the chosen level says; "custom" leaves them be."""
+    level = RECOGNITION.get(values.get("recognition"))
+    if level:
+        values.update(level)
+    return values
+
+
 def load_settings():
     from core.models import CoreSettings
 
@@ -225,7 +256,7 @@ def load_settings():
             })
     except Exception as e:
         logger.debug(f"Could not read the channel manager settings: {e}")
-    return values
+    return with_recognition(values)
 
 
 def save_settings(values):
@@ -243,7 +274,7 @@ def settings_from(given):
     """The settings to run with: what was given, over what is saved, over the defaults."""
     values = load_settings()
     values.update({k: v for k, v in (given or {}).items() if k in DEFAULTS})
-    return values
+    return with_recognition(values)
 
 
 # ── Recognising a channel in a name ──────────────────────────────────────────

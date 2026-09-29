@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
+  Collapse,
   Group,
   MultiSelect,
   NumberInput,
@@ -69,6 +70,42 @@ const toOptions = (items, withCount) =>
   }));
 
 const ids = (values) => (values || []).map((value) => Number(value));
+
+// What each level of "How hard to look" sets: the server's RECOGNITION (channel_manager.py),
+// written here too so the switches under Advanced show what the level does
+const NORMAL = {
+  name_matching: 'loose',
+  match_tvg_id: true,
+  same_country: true,
+  country_any_way: true,
+  match_call_signs: true,
+  east_is_default: true,
+  leave_out_filler: true,
+  use_language_model: false,
+};
+const RECOGNITION = {
+  exact: {
+    name_matching: 'exact',
+    match_tvg_id: false,
+    same_country: false,
+    country_any_way: false,
+    match_call_signs: false,
+    east_is_default: false,
+    leave_out_filler: false,
+    use_language_model: false,
+  },
+  normal: NORMAL,
+  thorough: { ...NORMAL, use_language_model: true },
+};
+const LEVEL_ABOUT = {
+  thorough:
+    "Every rule below, and for what they cannot place, Dispatcharr's language model: DE| DISCOVERY CHANNEL is ┃DE┃ DISCOVERY. What the model places is marked “by meaning” with its score.",
+  normal:
+    'Names compared loosely within one country, the country however it is written, American locals by call sign and town, East where a feed does not say, TV and Channel left out, and tvg-ids the names do not contradict.',
+  exact:
+    'Names compared as they are written, apart from the quality and case: what DispatcharrUtils does.',
+  custom: 'The switches under Advanced, as you set them.',
+};
 const asStrings = (values) => (values || []).map((value) => String(value));
 
 // Rules and aliases are edited as text, one per line, and kept as the structures the
@@ -116,6 +153,13 @@ const textToAliases = (text) =>
 // are then shown as reset, and the sections stay as open as they were
 const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
   const set = (changes) => onChange({ ...value, ...changes });
+  // A recognition lever changed by hand: the level is then the user's own
+  const setCustom = (changes) => set({ ...changes, recognition: 'custom' });
+  const level = value.recognition || 'thorough';
+  // The recognition levers as the level sets them: what the switches under Advanced show
+  const shown =
+    level === 'custom' ? value : { ...value, ...(RECOGNITION[level] || {}) };
+  const [advanced, setAdvanced] = useState(level === 'custom');
   // Kept as typed until it is valid, so a half-typed line is not thrown away
   const [rulesText, setRulesText] = useState(rulesToText(value.regex_rules));
   const [aliasText, setAliasText] = useState(aliasesToText(value.aliases));
@@ -189,209 +233,185 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
 
       <Section
         title="Recognising a channel"
-        about="how a stream is known to be one of your channels"
+        about="how hard to look for the channel a stream is"
       >
         <Select
           size="xs"
-          label="Match names"
-          description="How close a stream's name has to be to a channel's."
+          label="How hard to look"
+          description={LEVEL_ABOUT[level]}
           allowDeselect={false}
-          value={value.name_matching || 'exact'}
-          onChange={(mode) => mode && set({ name_matching: mode })}
+          value={level}
+          onChange={(chosen) =>
+            chosen &&
+            set({ recognition: chosen, ...(RECOGNITION[chosen] || {}) })
+          }
           data={[
+            {
+              value: 'thorough',
+              label: 'Thorough: every rule and the language model',
+            },
+            { value: 'normal', label: 'Normal: every rule, no language model' },
             {
               value: 'exact',
-              label:
-                'Exactly, apart from a quality at the end and case (as DispatcharrUtils)',
+              label: 'Exact: names as written (as DispatcharrUtils)',
             },
-            {
-              value: 'loose',
-              label:
-                'Loosely: letters and digits only, accents folded, quality anywhere',
-            },
+            { value: 'custom', label: 'Custom: the switches under Advanced' },
           ]}
         />
-        <Select
+        <Button
           size="xs"
-          label="Several channels of that name"
-          description="When more than one of your channels is the one a stream belongs to."
-          allowDeselect={false}
-          value={value.several_matches || 'all'}
-          onChange={(mode) => mode && set({ several_matches: mode })}
-          data={[
-            {
-              value: 'all',
-              label: 'Give it to each of them (as DispatcharrUtils)',
-            },
-            { value: 'conflict', label: 'Show a conflict and leave it alone' },
-          ]}
-        />
-        <Switch
-          size="xs"
-          label="Remember matched streams"
-          description="Every stream on a channel is written down with what its provider knows it by: its stream number, tvg-id and name. When a provider renames one (VRT 1 HD becomes VRT 1 FHD), the next playlist refresh finds it again by its number and puts it back where it was, instead of it dropping off and having to be matched again. A stream you take off a channel is forgotten, not put back; one Stream Check parked is left to Stream Check."
-          checked={value.remember_pairings !== false}
-          onChange={(e) => set({ remember_pairings: e.currentTarget.checked })}
-        />
-        <RememberedStreams on={value.remember_pairings !== false} />
-        <Switch
-          size="xs"
-          label="Combine channels that are the same channel"
-          description="Where you have one channel twice — the same channel in two of your groups — the streams of all of them go on the one kept and the rest are deleted. The one kept is the lowest-numbered already in the group suggested for it, and the group can be chosen on the row. Channels of two different countries are never combined, whatever names they share. Off by default: this is the only thing here that deletes a channel, and a deleted channel is gone until a backup is restored."
-          checked={!!value.combine_duplicates}
-          onChange={(e) => set({ combine_duplicates: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="Trust tvg-id first"
-          description="A stream whose name finds none of your channels is the channel with its tvg-id — unless the names say otherwise: another call sign, network, station, town, country, East or West, or names nothing alike. Not an id the provider gives to several of its own channels (every ORF 2 region is orf2.at), nor one that points at several of yours. Off in DispatcharrUtils: providers give one tvg-id to channels that are not the same."
-          checked={!!value.match_tvg_id}
-          onChange={(e) => set({ match_tvg_id: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="Same country only"
-          description="Only put a stream on a channel of the same country. One that does not say is not a different country. Off in DispatcharrUtils, where the country box in the name already decides it."
-          checked={!!value.same_country}
-          onChange={(e) => set({ same_country: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="The country however it is written"
-          description="┃AT┃, AT|, AT:, [AT] and ┃AUT┃ are one country, and ┃USA┃ is US| — for a provider that writes the country its own way and so matches nothing by name. Only where the letters are a country, so a package such as GO: or VIP| is left alone. Names stay as they are written. Off in DispatcharrUtils, which compares the name as written."
-          checked={!!value.country_any_way}
-          onChange={(e) => set({ country_any_way: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="American local stations"
-          description="When a name matches nothing: by call sign (ABC 10 | ALBANY | WTEN and US| ABC 10 (WTEN) ALBANY), or by network, number and town where one side has no call sign (NBC 46 | SIOUX FALLS IA and US| NBC 46 (KDLT) SIOUX FALLS). Both must say the same network; a subchannel (WLOX-DT2) is a station of its own, and Wichita is not Wichita Falls. Off in DispatcharrUtils, which only compares names."
-          checked={!!value.match_call_signs}
-          onChange={(e) => set({ match_call_signs: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="Use Dispatcharr's language model"
-          description="For streams nothing above could place: their names are compared by what they mean with your channels of the same country, using the small model Dispatcharr ships for its EPG matching — DE| DISCOVERY CHANNEL is ┃DE┃ DISCOVERY, BE| Plug RTL is ┃BE┃ RTL PLUG. Only where the names do not contradict it (another number, a +, East or West, a call sign or network, a word the channel does not have), and marked “by meaning” with its score. Needs sentence-transformers, which Dispatcharr installs; the model is loaded for the run and let go after it."
-          checked={!!value.use_language_model}
-          onChange={(e) => set({ use_language_model: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="A feed that does not say is the East one"
-          description="FYI HD is FYI HD [EAST], as American playlists write it: the West feed always says so."
-          checked={!!value.east_is_default}
-          onChange={(e) => set({ east_is_default: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="Leave out words like TV, Channel and Network"
-          description="PARAMOUNT NETWORK is Paramount, LAFF TV is Laff, WDR FERNSEHEN is WDR — only where that still names exactly one of your channels, so a word that tells two apart is never left out."
-          checked={!!value.leave_out_filler}
-          onChange={(e) => set({ leave_out_filler: e.currentTarget.checked })}
-        />
-        <TextInput
-          size="xs"
-          label="Words to ignore"
-          description="About the stream, not the channel. Comma separated, taken off wherever they are. A quality (HD, FHD, 4K, 1080p…) at the end of a name is always ignored."
-          value={value.ignore_tags || ''}
-          onChange={(e) => set({ ignore_tags: e.currentTarget.value })}
-        />
-        <Textarea
-          size="xs"
-          label="Find and replace"
-          description="One per line, as  find => replace  (regular expressions, applied first). For a provider that writes names its own way."
-          placeholder={'^AT:\\s* => ┃AT┃ \n\\s*\\(Backup\\) => '}
-          autosize
-          minRows={2}
-          value={rulesText}
-          onChange={(e) => {
-            setRulesText(e.currentTarget.value);
-            set({ regex_rules: textToRules(e.currentTarget.value) });
-          }}
-        />
-        <Textarea
-          size="xs"
-          label="Other names"
-          description="One channel per line, as  Name = another, another. For channels known by more than one name."
-          placeholder="National Geographic = NGC, Nat Geo"
-          autosize
-          minRows={2}
-          value={aliasText}
-          onChange={(e) => {
-            setAliasText(e.currentTarget.value);
-            set({ aliases: textToAliases(e.currentTarget.value) });
-          }}
-        />
-      </Section>
-
-      <Section
-        title="A channel's streams"
-        about="the order they are tried in, and which are left out or taken off"
-      >
-        <Select
-          size="xs"
-          label="Put first"
-          description="What decides the order the streams are tried in."
-          allowDeselect={false}
-          value={value.order}
-          onChange={(order) => order && set({ order })}
-          data={[
-            {
-              value: 'quality',
-              label: 'The best picture, then the preferred provider',
-            },
-            {
-              value: 'provider',
-              label:
-                'The preferred provider, then the best picture (as DispatcharrUtils)',
-            },
-          ]}
-        />
-        <Switch
-          size="xs"
-          label="Reorder what channels already have"
-          description="Put their existing streams in that order too. Off, what is added goes after what is there."
-          checked={!!value.reorder_existing}
-          onChange={(e) => set({ reorder_existing: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="Leave out SD where there is better"
-          checked={!!value.drop_sd_when_hd}
-          onChange={(e) => set({ drop_sd_when_hd: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          label="Skip streams the provider dropped"
-          checked={!!value.skip_stale}
-          onChange={(e) => set({ skip_stale: e.currentTarget.checked })}
-        />
-        <Switch
-          size="xs"
-          color="orange"
-          label="Remove streams that are not this channel"
-          description="From channels you have, streams whose name is another channel. Never empties a channel, and never touches a provider or group not looked at."
-          checked={!!value.replace_streams}
-          onChange={(e) => set({ replace_streams: e.currentTarget.checked })}
-        />
-        {value.replace_streams && (
-          <Alert color="orange" p="xs">
-            <Text size="xs">
-              Removed streams are shown struck through on each channel before
-              anything is applied.
+          variant="subtle"
+          onClick={() => setAdvanced((open) => !open)}
+          style={{ alignSelf: 'flex-start' }}
+        >
+          {advanced ? 'Hide the advanced settings' : 'Advanced settings'}
+        </Button>
+        <Collapse in={advanced}>
+          <Stack gap="xs">
+            <Text size="xs" c="dimmed">
+              Changing one of these makes the level Custom.
             </Text>
-          </Alert>
-        )}
-        <Text size="xs" c="dimmed">
-          A custom stream on a channel — a fallback such as a &ldquo;could not
-          play&rdquo; screen — always stays last, after everything added.
-        </Text>
+            <Select
+              size="xs"
+              label="Match names"
+              description="How close a stream's name has to be to a channel's."
+              allowDeselect={false}
+              value={shown.name_matching || 'exact'}
+              onChange={(mode) => mode && setCustom({ name_matching: mode })}
+              data={[
+                {
+                  value: 'exact',
+                  label:
+                    'Exactly, apart from a quality at the end and case (as DispatcharrUtils)',
+                },
+                {
+                  value: 'loose',
+                  label:
+                    'Loosely: letters and digits only, accents folded, quality anywhere',
+                },
+              ]}
+            />
+            <Select
+              size="xs"
+              label="Several channels of that name"
+              description="When more than one of your channels is the one a stream belongs to."
+              allowDeselect={false}
+              value={value.several_matches || 'all'}
+              onChange={(mode) => mode && set({ several_matches: mode })}
+              data={[
+                {
+                  value: 'all',
+                  label: 'Give it to each of them (as DispatcharrUtils)',
+                },
+                {
+                  value: 'conflict',
+                  label: 'Show a conflict and leave it alone',
+                },
+              ]}
+            />
+            <Switch
+              size="xs"
+              label="Trust tvg-id first"
+              description="A stream whose name finds none of your channels is the channel with its tvg-id — unless the names say otherwise: another call sign, network, station, town, country, East or West, or names nothing alike. Not an id the provider gives to several of its own channels (every ORF 2 region is orf2.at), nor one that points at several of yours. Off in DispatcharrUtils: providers give one tvg-id to channels that are not the same."
+              checked={!!shown.match_tvg_id}
+              onChange={(e) =>
+                setCustom({ match_tvg_id: e.currentTarget.checked })
+              }
+            />
+            <Switch
+              size="xs"
+              label="Same country only"
+              description="Only put a stream on a channel of the same country. One that does not say is not a different country. Off in DispatcharrUtils, where the country box in the name already decides it."
+              checked={!!shown.same_country}
+              onChange={(e) =>
+                setCustom({ same_country: e.currentTarget.checked })
+              }
+            />
+            <Switch
+              size="xs"
+              label="The country however it is written"
+              description="┃AT┃, AT|, AT:, [AT] and ┃AUT┃ are one country, and ┃USA┃ is US| — for a provider that writes the country its own way and so matches nothing by name. Only where the letters are a country, so a package such as GO: or VIP| is left alone. Names stay as they are written. Off in DispatcharrUtils, which compares the name as written."
+              checked={!!shown.country_any_way}
+              onChange={(e) =>
+                setCustom({ country_any_way: e.currentTarget.checked })
+              }
+            />
+            <Switch
+              size="xs"
+              label="American local stations"
+              description="When a name matches nothing: by call sign (ABC 10 | ALBANY | WTEN and US| ABC 10 (WTEN) ALBANY), or by network, number and town where one side has no call sign (NBC 46 | SIOUX FALLS IA and US| NBC 46 (KDLT) SIOUX FALLS). Both must say the same network; a subchannel (WLOX-DT2) is a station of its own, and Wichita is not Wichita Falls. Off in DispatcharrUtils, which only compares names."
+              checked={!!shown.match_call_signs}
+              onChange={(e) =>
+                setCustom({ match_call_signs: e.currentTarget.checked })
+              }
+            />
+            <Switch
+              size="xs"
+              label="Use Dispatcharr's language model"
+              description="For streams nothing above could place: their names are compared by what they mean with your channels of the same country, using the small model Dispatcharr ships for its EPG matching — DE| DISCOVERY CHANNEL is ┃DE┃ DISCOVERY, BE| Plug RTL is ┃BE┃ RTL PLUG. Only where the names do not contradict it (another number, a +, East or West, a call sign or network, a word the channel does not have), and marked “by meaning” with its score. Needs sentence-transformers, which Dispatcharr installs; the model is loaded for the run and let go after it."
+              checked={!!shown.use_language_model}
+              onChange={(e) =>
+                setCustom({ use_language_model: e.currentTarget.checked })
+              }
+            />
+            <Switch
+              size="xs"
+              label="A feed that does not say is the East one"
+              description="FYI HD is FYI HD [EAST], as American playlists write it: the West feed always says so."
+              checked={!!shown.east_is_default}
+              onChange={(e) =>
+                setCustom({ east_is_default: e.currentTarget.checked })
+              }
+            />
+            <Switch
+              size="xs"
+              label="Leave out words like TV, Channel and Network"
+              description="PARAMOUNT NETWORK is Paramount, LAFF TV is Laff, WDR FERNSEHEN is WDR — only where that still names exactly one of your channels, so a word that tells two apart is never left out."
+              checked={!!shown.leave_out_filler}
+              onChange={(e) =>
+                setCustom({ leave_out_filler: e.currentTarget.checked })
+              }
+            />
+            <TextInput
+              size="xs"
+              label="Words to ignore"
+              description="About the stream, not the channel. Comma separated, taken off wherever they are. A quality (HD, FHD, 4K, 1080p…) at the end of a name is always ignored."
+              value={value.ignore_tags || ''}
+              onChange={(e) => set({ ignore_tags: e.currentTarget.value })}
+            />
+            <Textarea
+              size="xs"
+              label="Find and replace"
+              description="One per line, as  find => replace  (regular expressions, applied first). For a provider that writes names its own way."
+              placeholder={'^AT:\\s* => ┃AT┃ \n\\s*\\(Backup\\) => '}
+              autosize
+              minRows={2}
+              value={rulesText}
+              onChange={(e) => {
+                setRulesText(e.currentTarget.value);
+                set({ regex_rules: textToRules(e.currentTarget.value) });
+              }}
+            />
+            <Textarea
+              size="xs"
+              label="Other names"
+              description="One channel per line, as  Name = another, another. For channels known by more than one name."
+              placeholder="National Geographic = NGC, Nat Geo"
+              autosize
+              minRows={2}
+              value={aliasText}
+              onChange={(e) => {
+                setAliasText(e.currentTarget.value);
+                set({ aliases: textToAliases(e.currentTarget.value) });
+              }}
+            />
+          </Stack>
+        </Collapse>
       </Section>
 
       <Section
-        title="New channels"
-        about="whether streams no channel has become channels, and where they go"
+        title="What the Lineup may suggest"
+        about="new channels, combining duplicates, and taking wrong streams off"
       >
         <Switch
           size="xs"
@@ -577,6 +597,91 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
             />
           </>
         )}
+        <Switch
+          size="xs"
+          label="Combine channels that are the same channel"
+          description="Where you have one channel twice — the same channel in two of your groups — the streams of all of them go on the one kept and the rest are deleted. The one kept is the lowest-numbered already in the group suggested for it, and the group can be chosen on the row. Channels of two different countries are never combined, whatever names they share. Off by default: this is the only thing here that deletes a channel, and a deleted channel is gone until a backup is restored."
+          checked={!!value.combine_duplicates}
+          onChange={(e) => set({ combine_duplicates: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          color="orange"
+          label="Remove streams that are not this channel"
+          description="From channels you have, streams whose name is another channel. Never empties a channel, and never touches a provider or group not looked at."
+          checked={!!value.replace_streams}
+          onChange={(e) => set({ replace_streams: e.currentTarget.checked })}
+        />
+        {value.replace_streams && (
+          <Alert color="orange" p="xs">
+            <Text size="xs">
+              Removed streams are shown struck through on each channel before
+              anything is applied.
+            </Text>
+          </Alert>
+        )}
+        <Switch
+          size="xs"
+          label="Reorder what channels already have"
+          description="Put their existing streams in that order too. Off, what is added goes after what is there."
+          checked={!!value.reorder_existing}
+          onChange={(e) => set({ reorder_existing: e.currentTarget.checked })}
+        />
+      </Section>
+
+      <Section
+        title="Stream order"
+        about="the order a channel's streams are tried in, and which are left out"
+      >
+        <Select
+          size="xs"
+          label="Put first"
+          description="What decides the order the streams are tried in."
+          allowDeselect={false}
+          value={value.order}
+          onChange={(order) => order && set({ order })}
+          data={[
+            {
+              value: 'quality',
+              label: 'The best picture, then the preferred provider',
+            },
+            {
+              value: 'provider',
+              label:
+                'The preferred provider, then the best picture (as DispatcharrUtils)',
+            },
+          ]}
+        />
+        <Switch
+          size="xs"
+          label="Leave out SD where there is better"
+          checked={!!value.drop_sd_when_hd}
+          onChange={(e) => set({ drop_sd_when_hd: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
+          label="Skip streams the provider dropped"
+          checked={!!value.skip_stale}
+          onChange={(e) => set({ skip_stale: e.currentTarget.checked })}
+        />
+        <Text size="xs" c="dimmed">
+          A custom stream on a channel — a fallback such as a &ldquo;could not
+          play&rdquo; screen — always stays last, after everything added.
+        </Text>
+      </Section>
+
+      <Section
+        title="What it remembers"
+        about="streams matched to channels, kept through a provider's renames"
+      >
+        <Switch
+          size="xs"
+          label="Remember matched streams"
+          description="Every stream on a channel is written down with what its provider knows it by: its stream number, tvg-id and name. When a provider renames one (VRT 1 HD becomes VRT 1 FHD), the next playlist refresh finds it again by its number and puts it back where it was, instead of it dropping off and having to be matched again. A stream you take off a channel is forgotten, not put back; one Stream Check parked is left to Stream Check."
+          checked={value.remember_pairings !== false}
+          onChange={(e) => set({ remember_pairings: e.currentTarget.checked })}
+        />
+        <RememberedStreams on={value.remember_pairings !== false} />
       </Section>
 
       <Section

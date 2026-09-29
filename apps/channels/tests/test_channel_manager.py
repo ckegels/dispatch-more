@@ -2509,14 +2509,14 @@ class ViewTests(_Setup):
             }},
         )
         loaded = channel_manager.load_settings()
-        self.assertFalse(loaded["match_tvg_id"])
-        self.assertFalse(loaded["same_country"])
+        # Recognition now comes from the level, thorough by default (v225)
+        self.assertEqual(loaded["recognition"], "thorough")
         self.assertEqual(loaded["order"], "provider")
         self.assertEqual(loaded["channel_groups"], [self.austria.id])
 
         # Saved again, they are the person's own and are kept as they are
-        channel_manager.save_settings({**loaded, "match_tvg_id": True})
-        self.assertTrue(channel_manager.load_settings()["match_tvg_id"])
+        channel_manager.save_settings({**loaded, "recognition": "custom", "match_tvg_id": False})
+        self.assertFalse(channel_manager.load_settings()["match_tvg_id"])
 
     def test_nothing_chosen_is_refused(self):
         response = self.client_api.post(

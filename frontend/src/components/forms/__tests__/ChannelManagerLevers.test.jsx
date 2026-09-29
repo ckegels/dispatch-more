@@ -28,22 +28,50 @@ const draw = (overrides = {}, onChange = vi.fn(), resetKey = 0) => {
 // The sections open one at a time, as Stream Check's do
 const open = (...titles) =>
   titles.forEach((title) => fireEvent.click(screen.getByRole('button', { name: `Open ${title}` })));
+// The single recognition switches and the word lists are under Advanced
+const advanced = () => {
+  open('Recognising a channel');
+  // Already open when the level is Custom
+  const button = screen.queryByRole('button', { name: 'Advanced settings' });
+  if (button) fireEvent.click(button);
+};
 
 describe('ChannelManagerLevers', () => {
   it('opens a section at a time, what is looked at first', () => {
     draw();
     expect(screen.getByText(/Where streams are taken from/)).toBeInTheDocument();
-    expect(screen.queryByText('Match names')).not.toBeInTheDocument();
-    expect(screen.getByText('how a stream is known to be one of your channels')).toBeInTheDocument();
+    expect(screen.queryByText('How hard to look')).not.toBeInTheDocument();
+    expect(screen.getByText('how hard to look for the channel a stream is')).toBeInTheDocument();
     open('Recognising a channel');
-    expect(screen.getByText('Match names')).toBeInTheDocument();
+    expect(screen.getByText('How hard to look')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close Recognising a channel' }));
-    expect(screen.queryByText('Match names')).not.toBeInTheDocument();
+    expect(screen.queryByText('How hard to look')).not.toBeInTheDocument();
+  });
+
+  it('is thorough unless told otherwise, and a level sets the switches under it', () => {
+    const onChange = draw();
+    advanced();
+    expect(screen.getByDisplayValue(/Thorough: every rule and the language model/)).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /language model/ })).toBeChecked();
+    fireEvent.click(screen.getByRole('textbox', { name: 'How hard to look' }));
+    fireEvent.click(screen.getByRole('option', { name: /Exact: names as written/, hidden: true }));
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ recognition: 'exact', use_language_model: false, country_any_way: false })
+    );
+  });
+
+  it('makes the level Custom when a switch is changed by hand', () => {
+    const onChange = draw({ recognition: 'normal' });
+    advanced();
+    fireEvent.click(screen.getByRole('switch', { name: /language model/ }));
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ recognition: 'custom', use_language_model: true })
+    );
   });
 
   it('shows the rules as they were reset, and stays open', () => {
     const onChange = draw();
-    open('Recognising a channel');
+    advanced();
     onChange.view.rerender(
       <MantineProvider theme={theme}>
         <ChannelManagerLevers
@@ -56,8 +84,8 @@ describe('ChannelManagerLevers', () => {
   });
 
   it('reads the country however it is written, and stations by call sign, when asked', () => {
-    const onChange = draw();
-    open('Recognising a channel');
+    const onChange = draw({ recognition: 'custom' });
+    advanced();
     fireEvent.click(screen.getByRole('switch', { name: /The country however it is written/ }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ country_any_way: true }));
     fireEvent.click(screen.getByRole('switch', { name: /American local stations/ }));
@@ -70,14 +98,14 @@ describe('ChannelManagerLevers', () => {
 
   it('shows rules and other names as lines of text', () => {
     draw();
-    open('Recognising a channel');
+    advanced();
     expect(screen.getByDisplayValue(/\^AT: => ┃AT┃/)).toBeInTheDocument();
     expect(screen.getByDisplayValue(/National Geographic = NGC, Nat Geo/)).toBeInTheDocument();
   });
 
   it('turns typed rules back into what the server wants', () => {
     const onChange = draw();
-    open('Recognising a channel');
+    advanced();
     fireEvent.change(screen.getByDisplayValue(/\^AT: => ┃AT┃/), {
       target: { value: '^BE: => ┃BE┃ \n\\s*\\(Backup\\) => ' },
     });
@@ -88,7 +116,7 @@ describe('ChannelManagerLevers', () => {
 
   it('turns typed names back into a map', () => {
     const onChange = draw();
-    open('Recognising a channel');
+    advanced();
     fireEvent.change(screen.getByDisplayValue(/National Geographic/), {
       target: { value: 'Eén = Een, VRT 1' },
     });
@@ -99,14 +127,14 @@ describe('ChannelManagerLevers', () => {
 
   it('shows the settings for new channels only when making them', () => {
     draw();
-    open('New channels');
+    open('What the Lineup may suggest');
     expect(screen.getByRole('switch', { name: /Suggest new channels/ })).toBeInTheDocument();
     expect(screen.queryByText('Into group')).not.toBeInTheDocument();
   });
 
   it('puts a new channel where its group is, with how many said', () => {
     const onChange = draw({ create_new: true, profiles: 'like_its_group' });
-    open('New channels');
+    open('What the Lineup may suggest');
     expect(screen.getByDisplayValue('The ones its group is in')).toBeInTheDocument();
     const more = screen.getByLabelText('Where its group has more than');
     expect(more).toHaveValue('10');
@@ -118,14 +146,14 @@ describe('ChannelManagerLevers', () => {
 
   it('names new channels after the providers picked', () => {
     draw({ create_new: true, name_from: [2] });
-    open('New channels');
+    open('What the Lineup may suggest');
     expect(screen.getByText(/Whose stream names a new channel is called by/)).toBeInTheDocument();
     expect(screen.getAllByText('B').length).toBeGreaterThan(0);
   });
 
   it('and asks for no number for the other choices', () => {
     draw({ create_new: true, profiles: 'all' });
-    open('New channels');
+    open('What the Lineup may suggest');
     expect(
       screen.queryByLabelText('Where its group has more than')
     ).not.toBeInTheDocument();
@@ -133,7 +161,7 @@ describe('ChannelManagerLevers', () => {
 
   it('says a new provider group gives no new channels until it is picked', () => {
     draw({ create_new: true, stream_groups: [] });
-    open('New channels');
+    open('What the Lineup may suggest');
     expect(
       screen.getByText(/new channels then only come from the groups your channels already use/)
     ).toBeInTheDocument();
@@ -142,13 +170,13 @@ describe('ChannelManagerLevers', () => {
 
   it('warns before streams are removed', () => {
     draw({ replace_streams: true });
-    open("A channel's streams");
+    open('What the Lineup may suggest');
     expect(screen.getByText(/Removed streams are shown struck through/)).toBeInTheDocument();
   });
 
   it('says the fallback stays last', () => {
     draw();
-    open("A channel's streams");
+    open('Stream order');
     expect(screen.getByText(/always stays last/)).toBeInTheDocument();
   });
 });
