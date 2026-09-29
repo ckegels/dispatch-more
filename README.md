@@ -59,7 +59,8 @@ Everything is off, or only suggests, until you turn it on or apply it.
   channel it means, marked "by meaning" with its score.
 - **Channel Manager → Guides** — finds channels on no guide, on a guide that holds nothing, or
   with a clearly better guide, and suggests the change; the guide's programme on now is shown
-  so the right one can be picked.
+  so the right one can be picked. Guides are also found by what their names mean, with Dispatcharr's own
+  language model, from an index worked out in the background after each guide refresh.
 - **Channel Manager → Guide Layout** — drag channels into place, group by group, and the
   numbers follow; shows numbers used twice across groups.
 - **Channel Manager → EPG Grabber** — runs iptv-org's guide grabber (when it is installed on

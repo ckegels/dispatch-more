@@ -1861,6 +1861,19 @@ def _by_country(country, entry):
     return -OTHER_COUNTRY
 
 
+def with_meaning(score, why, how_close):
+    """
+    A guide's score and reason once what its name means is counted: the higher of the name's
+    score and the model's (meaning_index), and the reason says which one it is.
+    """
+    if how_close is None:
+        return score, why
+    meant = int(round(how_close * 100))
+    if meant > score:
+        return meant, f"by meaning {meant} %" + (f" ({why})" if why else "")
+    return score, why
+
+
 def _guide_entry(epg_id, tvg_id, name, source, how, score=None):
     entry = {
         "id": epg_id,
@@ -2455,6 +2468,15 @@ def _search(active, matching, wanted, found, seen, limit):
     }
 
 
+def _guides_use_meaning():
+    try:
+        from . import guide_manager
+
+        return bool(guide_manager.load_settings().get("use_language_model"))
+    except Exception:
+        return False
+
+
 def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=None,
                      min_score=MIN_GUIDE_SCORE, wide=False, most=50):
     """
@@ -2548,6 +2570,18 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
             _, _, candidates, _ = epg_matching.stream_fuzzy_epg_scan(
                 normalized, None, candidate_limit=how_many
             )
+        # And what the name means (meaning_index), when the Guides settings ask for it:
+        # judged like the rest, so a contradiction still ends it
+        meant = {}
+        if _guides_use_meaning():
+            from . import meaning_index
+
+            meant = dict(meaning_index.similar_guides(name, country, limit=how_many))
+            scanned = {row["id"] for _, row in candidates}
+            missing = [epg_id for epg_id in meant if epg_id not in scanned]
+            if missing:
+                for values_row in epg_matching._active_epg_fuzzy_queryset().filter(id__in=missing):
+                    candidates.append((0, epg_matching._row_from_epg_values(values_row)))
         # The matcher works in source ids; the page shows which source an entry is from
         sources = dict(EPGSource.objects.values_list("id", "name"))
         judged = []
@@ -2559,7 +2593,10 @@ def guide_candidates(name, tvg_id="", search="", limit=12, current=None, source=
             score, tier, why = judge_guide(
                 name, country, row, tvg_id, known_calls=known_calls, reference=reference
             )
-            if score < min_score or score <= 0:
+            if score <= 0:
+                continue
+            score, why = with_meaning(score, why, meant.get(row["id"]))
+            if score < min_score:
                 continue
             entry = _guide_entry(
                 row["id"], row.get("original_tvg_id") or row.get("tvg_id"), row["name"],

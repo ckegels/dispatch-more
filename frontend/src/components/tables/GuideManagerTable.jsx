@@ -117,6 +117,47 @@ const WatchChannel = ({ channel }) => {
   );
 };
 
+// How far the index of what guides' names mean has got, and a button to build it now: it
+// is built in the background after each guide refresh, only for what changed
+const GuideMeanings = () => {
+  const [state, setState] = useState(null);
+  const ask = () =>
+    API.getGuideMeanings()
+      .then(setState)
+      .catch(() => setState(null));
+  useEffect(() => {
+    ask();
+  }, []);
+  useEffect(() => {
+    if (!state?.building) return undefined;
+    const timer = setInterval(ask, 5000);
+    return () => clearInterval(timer);
+  }, [state?.building]);
+  return (
+    <Group gap="xs" wrap="nowrap">
+      <Text size="xs" c="dimmed" style={{ flex: 1 }}>
+        {state?.building
+          ? 'Working out what every guide means…'
+          : state?.built_at
+            ? `What ${state.guides} guides mean, worked out ${new Date(state.built_at).toLocaleString()}`
+            : 'Not worked out yet: guides are found by name only until it is'}
+      </Text>
+      <Button
+        size="xs"
+        variant="light"
+        disabled={!!state?.building}
+        onClick={() =>
+          API.buildGuideMeanings()
+            .then(setState)
+            .catch(() => {})
+        }
+      >
+        Build now
+      </Button>
+    </Group>
+  );
+};
+
 const GuideManagerTable = () => {
   const [page, setPage] = useState(null);
   const [levers, setLevers] = useState(null);
@@ -178,7 +219,10 @@ const GuideManagerTable = () => {
   // starting a run, and every three seconds while one went on -- so the list emptied
   // itself under whoever was working down it. Everything that asks again asks this.
   const everyChannel = ['all', 'chosen', 'waved'].includes(why);
-  const reload = useCallback(() => look(true, everyChannel), [look, everyChannel]);
+  const reload = useCallback(
+    () => look(true, everyChannel),
+    [look, everyChannel]
+  );
 
   // The view being changed is what loads, rather than the view being changed and then
   // something else having to be poked to make it happen. "Every channel" needs the rows
@@ -258,7 +302,10 @@ const GuideManagerTable = () => {
     return [
       ...(without ? [{ value: 'none', label: `No guide (${without})` }] : []),
       ...[...counted.entries()]
-        .map(([name, how_many]) => ({ value: name, label: `${name} (${how_many})` }))
+        .map(([name, how_many]) => ({
+          value: name,
+          label: `${name} (${how_many})`,
+        }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     ];
   }, [page]);
@@ -699,9 +746,13 @@ const GuideManagerTable = () => {
               {one.chosen && one.chosen_by?.via === 'arrTV' && (
                 <Text size="xs" c="dimmed">
                   chosen in arrTV by {one.chosen_by.username || 'someone'} on{' '}
-                  {one.chosen_by.device_name || one.chosen_by.device || 'an unknown device'}
+                  {one.chosen_by.device_name ||
+                    one.chosen_by.device ||
+                    'an unknown device'}
                   {one.chosen_by.ip ? ` (${one.chosen_by.ip})` : ''}
-                  {one.chosen_at ? `, ${new Date(one.chosen_at).toLocaleString()}` : ''}
+                  {one.chosen_at
+                    ? `, ${new Date(one.chosen_at).toLocaleString()}`
+                    : ''}
                 </Text>
               )}
               {/* What the two scores came to, where that is what "better" rests on */}
@@ -1164,6 +1215,18 @@ const GuideManagerTable = () => {
                         tvg-id" matches streams by. */}
                     <Switch
                       size="xs"
+                      label="Also by what the name means"
+                      description="Dispatcharr's language model, from an index of every guide worked out in the background"
+                      checked={levers.use_language_model !== false}
+                      onChange={(event) =>
+                        saveLevers({
+                          ...levers,
+                          use_language_model: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Switch
+                      size="xs"
                       label="Also give the channel the guide's tvg-id"
                       description="Changes what the Lineup's Trust tvg-id matches streams by"
                       checked={!!levers.copy_tvg_id}
@@ -1175,6 +1238,7 @@ const GuideManagerTable = () => {
                       }
                     />
                   </Group>
+                  {levers.use_language_model !== false && <GuideMeanings />}
                   <Group gap="lg" wrap="wrap" align="flex-end">
                     <NumberInput
                       size="xs"
@@ -1210,7 +1274,10 @@ const GuideManagerTable = () => {
                       }))}
                       value={(levers.channel_groups || []).map(String)}
                       onChange={(value) =>
-                        saveLevers({ ...levers, channel_groups: value.map(Number) })
+                        saveLevers({
+                          ...levers,
+                          channel_groups: value.map(Number),
+                        })
                       }
                       searchable
                       clearable
@@ -1276,11 +1343,13 @@ const GuideManagerTable = () => {
                         labelPosition="left"
                       />
                       <Text size="xs" c="dimmed">
-                        The other half of &quot;Only channels now on&quot; above: that says
-                        which channels are asked about, this says which guides may answer.
-                        Together they are &quot;take everything on one source and find it
-                        on another&quot;. These are shared with the guide window on a
-                        Lineup row, so a source left out here is left out there too.
+                        The other half of &quot;Only channels now on&quot;
+                        above: that says which channels are asked about, this
+                        says which guides may answer. Together they are
+                        &quot;take everything on one source and find it on
+                        another&quot;. These are shared with the guide window on
+                        a Lineup row, so a source left out here is left out
+                        there too.
                       </Text>
                       <Group gap="lg" wrap="wrap" align="flex-start">
                         {/* One to click, not a list to add things to. Every source is
@@ -1317,8 +1386,8 @@ const GuideManagerTable = () => {
                               </Button>
                               {noSources && (
                                 <Text size="xs" c="orange">
-                                  Now click the ones to match against. Until you do,
-                                  every source is still matched.
+                                  Now click the ones to match against. Until you
+                                  do, every source is still matched.
                                 </Text>
                               )}
                             </Group>
@@ -1366,7 +1435,9 @@ const GuideManagerTable = () => {
                                         saveMatching({
                                           ...matching,
                                           sources:
-                                            sources.length === 1 ? [] : [one.id],
+                                            sources.length === 1
+                                              ? []
+                                              : [one.id],
                                         });
                                         return;
                                       }
@@ -1524,11 +1595,12 @@ const GuideManagerTable = () => {
                           ? 'Nothing is chosen yet. Putting a guide on a channel from here chooses it, and nothing is suggested for it afterwards; the padlock on a row chooses the guide it is already on.'
                           : group && !why
                             ? `Nothing to change in ${
-                                groups.find((one) => one.value === group)?.label || 'this group'
+                                groups.find((one) => one.value === group)
+                                  ?.label || 'this group'
                               } from the last run. A group made since then has not been looked at yet: "Look for guides" goes through it, and "Every channel" under What to change lists its channels now.`
                             : page?.suggestions?.length
-                            ? 'Nothing matches what is being looked at.'
-                            : 'Nothing to change. Press "Look for guides" to go through every channel: the ones on no guide, the ones whose guide holds no programmes, and the ones something matches better.'}
+                              ? 'Nothing matches what is being looked at.'
+                              : 'Nothing to change. Press "Look for guides" to go through every channel: the ones on no guide, the ones whose guide holds no programmes, and the ones something matches better.'}
                       </Text>
                     </Center>
                   ) : (

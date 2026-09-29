@@ -1022,6 +1022,22 @@ suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, 
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
 
+**Guides by meaning** (v227, `apps/channels/meaning_index.py`, Guides setting
+`use_language_model`, on). Measured on the user's server (1,377 channels with a guide,
+94,789 guides, a sample of 250 asked of today's matcher too): first choice right 70 % against
+52 %, in the first five 78 % against 62 %. The model found American locals written another
+way and names with a quality in them; the matcher kept a few it missed ("US - PBS WBIQ
+Birmingham AL"), so both are used: the model's picks go through `judge_guide` like the rest
+(a contradiction scores 0 and drops them) and take the higher of the two scores
+(`with_meaning`), the reason saying "by meaning". Working out 94,789 names took 113 s, so
+`tasks.build_meaning_index` does it in Celery after each guide refresh (and on "Build now"
+in the Guides settings), keeping every vector under the text it came from so a rebuild
+only encodes what changed, and storing each channel's 60 closest guides of its country in
+`/data/models/meanings/index.json`: `similar_guides` is a dict lookup, and the web processes
+never load torch. A channel renamed since the last build has no picks until the next one.
+Used by the Guides run (`_score_against`, `by_meaning`), the per-channel picker and arrTV's
+guide list (`guide_candidates`).
+
 **Settings, and a progress bar** (v227). The Lineup's "Levers" are called Settings on the
 page. A preview reports its stages (reading, matching n of m, the language model, each channel
 n of m, new channels) to the cache under `PROGRESS_KEY` at most every 0.3 s; the page polls

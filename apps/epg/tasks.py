@@ -461,6 +461,15 @@ def refresh_epg_data(source_id, force=False, _file_defer_retry=0):
             app_guides.after_refresh(source_id)
         except Exception as e:
             logger.debug(f"Could not refresh the guides arrTV keeps: {e}")
+        # What the guides' names mean, for finding a channel's guide by meaning: only the
+        # new and renamed ones are worked out again (nothing while that is switched off)
+        try:
+            from apps.channels import guide_manager, meaning_index
+
+            if guide_manager.load_settings().get("use_language_model"):
+                meaning_index.queue_build()
+        except Exception as e:
+            logger.debug(f"Could not queue the guide meanings: {e}")
         return result
     except Exception as e:
         logger.error(

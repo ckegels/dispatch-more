@@ -138,3 +138,22 @@ def guide_manager_settings(request):
     except ValueError as e:
         return JsonResponse({"error": str(e)}, status=400)
     return JsonResponse({"settings": saved})
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def guide_manager_meanings(request):
+    """
+    The index of what guides' names mean (meaning_index): GET how far it is, POST to have
+    it built now in the background.
+    """
+    from django.core.cache import cache
+
+    from . import meaning_index
+
+    queued = meaning_index.queue_build() if request.method == "POST" else False
+    return JsonResponse({
+        **meaning_index.status(),
+        "building": bool(cache.get(meaning_index.BUILDING_KEY)),
+        "queued": queued,
+    })

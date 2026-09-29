@@ -24,6 +24,8 @@ vi.mock('../../../api', () => ({
     ignoreGuideManager: vi.fn(),
     chooseGuideManager: vi.fn(),
     saveGuideManagerSettings: vi.fn(),
+    getGuideMeanings: vi.fn(() => Promise.resolve({ built_at: '2026-09-29T15:00:00Z', guides: 94789 })),
+    buildGuideMeanings: vi.fn(() => Promise.resolve({ building: true })),
     loadChannelManagerGuide: vi.fn(),
     getChannelManagerGuides: vi.fn(),
     getGuideMatching: vi.fn(),
@@ -697,6 +699,17 @@ describe('GuideManagerTable', () => {
 
   // Which guides are matched against at all: the same settings the window on a Lineup row
   // obeys, so one of them cannot offer what the other has been told to leave out
+  it('finds guides by meaning too, says how far the index is, and builds it on asking', async () => {
+    draw();
+    await screen.findByText('┃AT┃ ORF 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await screen.findByRole('switch', { name: /Also by what the name means/ })).toBeChecked();
+    expect(await screen.findByText(/What 94789 guides mean, worked out/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Build now' }));
+    expect(await screen.findByText(/Working out what every guide means/)).toBeInTheDocument();
+    expect(API.buildGuideMeanings).toHaveBeenCalled();
+  });
+
   it('lets a source be clicked out of the matching without switching it off', async () => {
     API.getGuideMatching.mockResolvedValue({
       matching: { sources: [], tvg_id_like: '', country_must_agree: false },

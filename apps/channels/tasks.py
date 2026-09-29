@@ -4981,3 +4981,17 @@ def preload_guide_choices(offset=0, wanted=None):
         return f"Looked at channels {offset} to {offset + PRELOAD_BATCH_CHANNELS}"
     asked = app_guides.finish_preload(wanted)
     return f"Reading {asked} guide(s)"
+
+
+@shared_task
+def build_meaning_index():
+    """What every guide's and channel's name means, for finding guides by meaning
+    (apps.channels.meaning_index). Only new and renamed names are worked out again."""
+    from django.core.cache import cache
+
+    from apps.channels import meaning_index
+
+    try:
+        return meaning_index.build()
+    finally:
+        cache.delete(meaning_index.BUILDING_KEY)

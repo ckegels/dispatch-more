@@ -3158,6 +3158,15 @@ export default class API {
     });
   }
 
+  // What guides' names mean (meaning_index): how far the index is; POST builds it now
+  static async getGuideMeanings() {
+    return await request(`${host}/api/channels/guides/meanings/`);
+  }
+
+  static async buildGuideMeanings() {
+    return await request(`${host}/api/channels/guides/meanings/`, { method: 'POST' });
+  }
+
   static async saveGuideManagerSettings(settings) {
     return await request(`${host}/api/channels/guides/settings/`, {
       method: 'PUT',
