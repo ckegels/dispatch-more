@@ -36,6 +36,12 @@ def settings(**overrides):
 
 class MeaningTests(TestCase):
     def setUp(self):
+        # Each test from nothing remembered, and no model let go ten minutes on
+        meaning._MEANINGS.clear()
+        self.addCleanup(meaning._MEANINGS.clear)
+        later = patch.object(meaning, "_let_go_later")
+        later.start()
+        self.addCleanup(later.stop)
         patcher = patch("apps.channels.epg_matching.get_sentence_transformer", return_value=(WordsModel(), None))
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -94,6 +100,24 @@ class MeaningTests(TestCase):
         with patch("apps.channels.epg_matching.get_sentence_transformer", return_value=(None, None)):
             plan = channel_manager.build_plan(settings(use_language_model=True))
         self.assertEqual(self.added(plan, self.discovery), {})
+
+
+class RememberedMeaningTests(TestCase):
+    def setUp(self):
+        from apps.channels import meaning as m
+
+        m._MEANINGS.clear()
+        self.addCleanup(m._MEANINGS.clear)
+
+    def test_a_second_preview_asks_the_model_about_nothing_it_has_seen(self):
+        model = WordsModel()
+        with patch("apps.channels.epg_matching.get_sentence_transformer", return_value=(model, None)) as loaded, \
+                patch.object(meaning, "_let_go_later"):
+            meaning.meanings(["discovery", "vrt 1"])
+            meaning.meanings(["discovery", "vrt 1"])
+            self.assertEqual(loaded.call_count, 1, "loaded once, for what was new")
+            meaning.meanings(["discovery", "orf 1"])
+            self.assertEqual(loaded.call_count, 2, "and again only for the new name")
 
 
 class RecognitionLevelTests(TestCase):

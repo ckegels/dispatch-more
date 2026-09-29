@@ -1023,7 +1023,11 @@ you have only those streams, so a stream added later is still suggested), with a
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
 
 **The Guides table a page at a time** (v230): page size 25 / 50 / 100 / 250 / 500 and page
-buttons at the bottom, as the Lineup; ticking every row still ticks every row there is.
+buttons at the bottom, as the Lineup; ticking every row still ticks every row there is. And the Lineup no
+longer works out every name's meaning again on each preview (the user: it reloaded after every
+apply): `meaning._MEANINGS` keeps each text's vector for the life of the process, so only new
+names go to the model, which is loaded only then and let go ten minutes after its last use
+(`RELEASE_AFTER_SECONDS`) instead of straight after each run.
 
 **Nothing certain without the countries, networks told apart, dead guides left out**
 (v229, the user's finds on the Guides tab). "┃CA EN┃ ABC WEST" was offered "CA - CBS WEST"

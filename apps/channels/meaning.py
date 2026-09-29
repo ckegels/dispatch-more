@@ -19,8 +19,9 @@ station and town), the same numbers, and no word in the stream's name that says 
 the channel's.
 
 Only for streams the rules left without a channel, and only as a suggestion: the row says
-the stream came "by meaning" and with what score. The model is loaded for the run and let go
-after it, as stock does.
+the stream came "by meaning" and with what score. What each name means is remembered, so a
+preview after an apply works out only what is new, and the model is let go ten minutes after
+it was last used.
 """
 
 import logging
@@ -74,6 +75,50 @@ def agrees(stream, record, settings):
     return True
 
 
+# What each name means, by its text, for as long as the process lives: a preview after an
+# apply asks about the same names again, and working them all out anew -- with the model
+# loaded from disk first -- made every apply wait for it (the user's find, 2026-09-29)
+_MEANINGS = {}
+_MEANINGS_MOST = 100_000
+# The model is let go this long after it was last used, not straight after each run
+RELEASE_AFTER_SECONDS = 600
+_release = {"timer": None}
+
+
+def _let_go_later():
+    import threading
+
+    from . import epg_matching
+
+    timer = _release["timer"]
+    if timer is not None:
+        timer.cancel()
+    timer = threading.Timer(RELEASE_AFTER_SECONDS, epg_matching.release_ml_models)
+    timer.daemon = True
+    timer.start()
+    _release["timer"] = timer
+
+
+def meanings(texts):
+    """
+    {text: vector} for these texts: the ones worked out before from memory, the rest by the
+    model (loaded only when something is new). None when the model cannot be loaded.
+    """
+    from . import epg_matching
+
+    new = [t for t in dict.fromkeys(texts) if t not in _MEANINGS]
+    if new:
+        model, _ = epg_matching.get_sentence_transformer()
+        if model is None:
+            return None
+        if len(_MEANINGS) + len(new) > _MEANINGS_MOST:
+            _MEANINGS.clear()
+        for text, vector in zip(new, model.encode(new, normalize_embeddings=True, batch_size=256)):
+            _MEANINGS[text] = vector
+        _let_go_later()
+    return {t: _MEANINGS[t] for t in texts}
+
+
 def place(streams, records, settings):
     """
     [(stream, record, score)]: the channel each of these streams most likely is, where the
@@ -81,39 +126,38 @@ def place(streams, records, settings):
     """
     if not streams or not records:
         return []
-    from . import channel_manager, epg_matching
+    import numpy as np
 
-    model, _ = epg_matching.get_sentence_transformer()
-    if model is None:
+    from . import channel_manager
+
+    def text(name):
+        return " ".join(_words(name, settings))
+
+    records = [r for r in records if r["channel"] is not None]
+    record_texts = [text(r["channel"].name) for r in records]
+    stream_texts = [text(s["name"]) for s in streams]
+    known = meanings(record_texts + stream_texts)
+    if known is None:
         logger.warning("Lineup: Dispatcharr's language model could not be loaded; placed nothing by meaning")
         return []
-    try:
-        import numpy as np
-
-        def text(name):
-            return " ".join(_words(name, settings))
-
-        records = [r for r in records if r["channel"] is not None]
-        wanted = model.encode([text(r["channel"].name) for r in records], normalize_embeddings=True, batch_size=256)
-        given = model.encode([text(s["name"]) for s in streams], normalize_embeddings=True, batch_size=256)
-        countries = [channel_manager._one_country(r["country"] or "") for r in records]
-        placed = []
-        for k, stream in enumerate(streams):
-            theirs = channel_manager._one_country(stream["country"] or "")
-            candidates = [i for i, mine in enumerate(countries) if not theirs or not mine or mine == theirs]
-            if not candidates:
-                continue
-            scores = wanted[candidates] @ given[k]
-            order = np.argsort(-scores)
-            for j in order[:3]:
-                score = float(scores[j])
-                if score < MIN_SCORE:
-                    break
-                record = records[candidates[j]]
-                if agrees(stream, record, settings):
-                    placed.append((stream, record, score))
-                    break
-        logger.info(f"Lineup: {len(placed)} of {len(streams)} unplaced streams placed by meaning")
-        return placed
-    finally:
-        epg_matching.release_ml_models()
+    wanted = np.array([known[t] for t in record_texts])
+    given = np.array([known[t] for t in stream_texts])
+    countries = [channel_manager._one_country(r["country"] or "") for r in records]
+    placed = []
+    for k, stream in enumerate(streams):
+        theirs = channel_manager._one_country(stream["country"] or "")
+        candidates = [i for i, mine in enumerate(countries) if not theirs or not mine or mine == theirs]
+        if not candidates:
+            continue
+        scores = wanted[candidates] @ given[k]
+        order = np.argsort(-scores)
+        for j in order[:3]:
+            score = float(scores[j])
+            if score < MIN_SCORE:
+                break
+            record = records[candidates[j]]
+            if agrees(stream, record, settings):
+                placed.append((stream, record, score))
+                break
+    logger.info(f"Lineup: {len(placed)} of {len(streams)} unplaced streams placed by meaning")
+    return placed
