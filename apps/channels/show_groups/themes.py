@@ -12,7 +12,7 @@ the owner switches one on (the rule that every addition has an off switch).
 
 import re
 
-from .matching import fold
+from .matching import VAGUE_WORDS, fold
 
 SETTINGS_KEY = "show-groups"
 
@@ -35,6 +35,11 @@ DEFAULTS = {
     # How far ahead the plan looks, for "coming up"
     "plan_hours": 24,
     "online_lookups": False,
+    # A programme filed only under words like these ("Entertainment", "Lifestyle") is decided
+    # by the next layer: another guide, then the online databases. Off: the guide's word
+    # decides, as the plugin did.
+    "look_past_vague": True,
+    "vague_categories": VAGUE_WORDS,
     "wikipedia_languages": "en, nl, de, fr",
     "tmdb_key": "",
 }
@@ -246,7 +251,7 @@ def save(settings=None, groups=None):
             values["first_number"] = max(1, values["first_number"])
         except (TypeError, ValueError):
             raise ValueError("Numbers only, please")
-        for key in ("live", "announce_changes", "online_lookups"):
+        for key in ("live", "announce_changes", "online_lookups", "look_past_vague"):
             values[key] = bool(values[key])
         values["source_groups"] = _ids(values["source_groups"])
         values["profile_name"] = str(values["profile_name"] or "").strip() or "Show Groups"

@@ -1456,6 +1456,22 @@ switched off (or deleted) while live is on has its copies and channel group remo
 nobody watches; "Remove everything" (live off only) deletes all of it but keeps the online
 answers.
 
+**Vague categories and the Shows comparison** (v232). The plugin let the first layer that
+knew *anything* answer, so a cooking show a guide filed under "Entertainment" was "not
+cooking" and TVmaze was never asked: on the user's server, of the 203 shows Cooking took on
+2026-09-29 not one came from the online databases, which only ever saw titles with no
+category at all. Now a category made only of vague words (`matching.VAGUE_WORDS`:
+entertainment, lifestyle, reality, magazine, general, unterhaltung...; every word of it
+vague, so "Competition Reality" still tells) does not decide: other guides, then the
+databases, are asked, and only when nobody knows more does the vague word answer (as before).
+Such titles are queued for the lookups too. Off switch: Settings → "Look past vague
+categories" (`look_past_vague`), with the word list editable (`vague_categories`).
+`compare.py` + the tab's **Shows in the guide** panel: every show in the plan's window
+(`shows.json`, written with the plan) with the guides' categories, each database's answer
+(not asked / does not know / its genres) and the groups that take it; filters All, Taken,
+Databases know, They disagree (guides alone vs databases alone give a group different
+answers), Nobody knows; "Ask now" asks every database about one title at once.
+
 **Whole channels** (`kinds.py`, v232; the group's "Whole channels" tab): iptv-org's channel
 database files each channel under kinds (cooking, travel, movies, documentary, kids, sports,
 news, music, comedy, science, outdoor...), mapped onto the ready-made groups in

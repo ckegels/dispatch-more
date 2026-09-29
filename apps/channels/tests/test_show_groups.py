@@ -383,3 +383,58 @@ class WholeChannels(Api):
         next(g for g in groups if g["id"] == "science")["on"] = True
         themes.save(None, groups)
         self.assertEqual(self.kinds("science")["channels"], [])
+
+
+class Comparison(Api):
+    """The tab's Shows: every show in the guide next to what the databases say."""
+
+    def setUp(self):
+        super().setUp()
+        self.airs(self.pbs_guide, "Cake Boss", 10, 30, ["Entertainment"])
+        self.airs(self.tlc_guide, "Chopped", 10, 30, ["Cooking"])
+        self.airs(self.tlc_guide, "Mystery Show", 40, 30, [])
+        store.merge_lookups({"cake boss": {"tvmaze": {"name": "Cake Boss", "genres": ["Reality", "Food"],
+                                                      "asked": "2026-09-22T17:00:00+00:00"}},
+                             "chopped": {"tvmaze": {"name": "Chopped", "genres": ["Drama"],
+                                                    "asked": "2026-09-22T17:00:00+00:00"}}})
+        self.switch_on("cooking")
+        live.work_out(themes.load_settings(), themes.load_groups(), NOW)
+
+    def shows(self, **query):
+        from urllib.parse import urlencode
+
+        return self.client.get("/api/channels/show-groups/shows/?" + urlencode(query)).json()
+
+    def test_every_show_with_what_each_says(self):
+        found = self.shows()
+        self.assertEqual(found["count"], 3)
+        boss = next(s for s in found["shows"] if s["title"] == "Cake Boss")
+        self.assertEqual(boss["guide"], ["Entertainment"])
+        self.assertTrue(boss["vague"])
+        self.assertEqual(boss["sources"]["tvmaze"]["genres"], ["Reality", "Food"])
+        self.assertIsNone(boss["sources"]["wikidata"], "not asked yet")
+        self.assertEqual([t["group"] for t in boss["takes"]], ["cooking"], "past the vague guide")
+
+    def test_where_they_disagree(self):
+        found = self.shows(only="disagree")
+        self.assertEqual([s["title"] for s in found["shows"]], ["Cake Boss", "Chopped"])
+        chopped = found["shows"][1]
+        self.assertEqual(chopped["disagree"], [{"group": "cooking", "guides": True, "databases": False}])
+
+    def test_the_vague_ones_are_queued_for_the_databases(self):
+        queued = [written for _, written, _ in plans.load()["unknown"]]
+        self.assertIn("Cake Boss", queued)
+        self.assertIn("Mystery Show", queued)
+        self.assertNotIn("Chopped", queued)
+        self.assertEqual([s["title"] for s in self.shows(only="unknown")["shows"]], ["Mystery Show"])
+
+    def test_ask_now(self):
+        with mock.patch("apps.channels.show_groups.lookups.ask",
+                        side_effect=lambda source, title, settings: {"name": title, "genres": ["Mystery"]}
+                        if source == "tvmaze" else None):
+            found = self.client.post("/api/channels/show-groups/shows/", {"title": "Mystery Show"},
+                                     format="json").json()
+        mystery = found["shows"][0]
+        self.assertEqual(mystery["sources"]["tvmaze"]["genres"], ["Mystery"])
+        self.assertEqual(mystery["sources"]["wikidata"], {"name": "", "genres": []}, "asked, did not know")
+        self.assertEqual(self.redis.get(live.REBUILD_KEY), "1", "the plan is made again")

@@ -3195,6 +3195,20 @@ export default class API {
     );
   }
 
+  // Every show in the guide next to what TVmaze, Wikidata, Wikipedia and TMDB say
+  static async getShowGroupShows({ q = '', only = 'all', offset = 0 } = {}) {
+    const query = new URLSearchParams({ q, only, offset: String(offset) });
+    return await request(`${host}/api/channels/show-groups/shows/?${query}`);
+  }
+
+  // Ask the databases about one title now
+  static async askShowGroupShow(title) {
+    return await request(`${host}/api/channels/show-groups/shows/`, {
+      method: 'POST',
+      body: { title },
+    });
+  }
+
   // action: 'update', 'plan', 'remove' or 'take_over'
   static async runShowGroups(action) {
     return await request(`${host}/api/channels/show-groups/run/`, {

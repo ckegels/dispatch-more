@@ -6,6 +6,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   SlidersHorizontal,
   Trash2,
   Tv,
@@ -22,8 +23,10 @@ import {
   MultiSelect,
   NumberInput,
   Paper,
+  SegmentedControl,
   SimpleGrid,
   Stack,
+  Tooltip,
   Switch,
   Table,
   Tabs,
@@ -674,6 +677,239 @@ const GroupDetail = ({ group, channels, onSave, onDelete, onReset, busy }) => {
   );
 };
 
+const SOURCE_NAMES = {
+  tvmaze: 'TVmaze',
+  wikidata: 'Wikidata',
+  wikipedia: 'Wikipedia',
+  tmdb: 'TMDB',
+};
+
+const FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'taken', label: 'Taken' },
+  { value: 'databases', label: 'Databases know' },
+  { value: 'disagree', label: 'They disagree' },
+  { value: 'unknown', label: 'Nobody knows' },
+];
+
+const Said = ({ answer }) => {
+  if (answer === null || answer === undefined) {
+    return (
+      <Text size="xs" c="dimmed">
+        not asked
+      </Text>
+    );
+  }
+  if (!answer.genres.length) {
+    return (
+      <Text size="xs" c="dimmed">
+        does not know it
+      </Text>
+    );
+  }
+  return (
+    <Text size="xs" lineClamp={2} title={answer.genres.join(', ')}>
+      {answer.genres.join(', ')}
+    </Text>
+  );
+};
+
+// Every show in the guide next to what the online databases say it is, and which groups
+// take it: where a guide and the databases disagree is where a group goes wrong
+const ShowsComparison = ({ groups: known }) => {
+  const [query, setQuery] = useState('');
+  const [only, setOnly] = useState('all');
+  const [found, setFound] = useState(null);
+  const [error, setError] = useState(null);
+  const [asking, setAsking] = useState('');
+
+  const look = useCallback(
+    async (offset = 0) => {
+      try {
+        const answer = await API.getShowGroupShows({ q: query, only, offset });
+        setFound((before) =>
+          offset && before
+            ? { ...answer, shows: [...before.shows, ...answer.shows] }
+            : answer
+        );
+        setError(null);
+      } catch (e) {
+        setError(e?.body?.error || 'The shows could not be read.');
+      }
+    },
+    [query, only]
+  );
+
+  useEffect(() => {
+    const soon = setTimeout(() => look(0), 300);
+    return () => clearTimeout(soon);
+  }, [look]);
+
+  const ask = async (title) => {
+    setAsking(title);
+    try {
+      await API.askShowGroupShow(title);
+      await look(0);
+    } catch (e) {
+      setError(e?.body?.error || 'The databases could not be asked.');
+    } finally {
+      setAsking('');
+    }
+  };
+
+  const names = Object.fromEntries(
+    (found?.groups || known || []).map((one) => [one.id, one.name])
+  );
+  const sources = found?.sources || ['tvmaze', 'wikidata', 'wikipedia'];
+
+  return (
+    <Paper style={PANEL}>
+      <Box
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 8,
+          padding: '12px 16px',
+          borderBottom: '1px solid #3f3f46',
+        }}
+      >
+        <Group gap="sm">
+          <Text fw={600}>Shows in the guide</Text>
+          <TextInput
+            size="xs"
+            placeholder="Find a show..."
+            aria-label="Find a show"
+            leftSection={<Search size={14} />}
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            style={{ width: 220 }}
+          />
+        </Group>
+        <SegmentedControl
+          size="xs"
+          aria-label="Which shows"
+          value={only}
+          onChange={setOnly}
+          data={FILTERS}
+        />
+      </Box>
+      <Box p="md">
+        {error && <Alert color="red">{error}</Alert>}
+        {!found && !error && (
+          <Text size="sm" c="dimmed">
+            Reading…
+          </Text>
+        )}
+        {found && !found.made && (
+          <Text size="sm" c="dimmed">
+            Not worked out yet: switch a group on and press “Work it out”.
+          </Text>
+        )}
+        {found?.made && (
+          <Stack gap="xs">
+            <Text size="xs" c="dimmed">
+              {found.total} of {found.count} shows in the hours ahead. Each
+              database is asked about a show once; “Ask now” asks again.
+            </Text>
+            <Table striped verticalSpacing={4} fz="sm">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Show</Table.Th>
+                  <Table.Th>Your guides say</Table.Th>
+                  {sources.map((source) => (
+                    <Table.Th key={source}>{SOURCE_NAMES[source]}</Table.Th>
+                  ))}
+                  <Table.Th>Groups</Table.Th>
+                  <Table.Th />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {found.shows.map((one) => (
+                  <Table.Tr key={one.key}>
+                    <Table.Td>
+                      <Text size="sm">{one.title}</Text>
+                      <Text size="xs" c="dimmed">
+                        {one.airings}× on
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="xs" lineClamp={2}>
+                        {one.guide.join(', ') ||
+                          (one.elsewhere.length
+                            ? `elsewhere: ${one.elsewhere.join(', ')}`
+                            : '—')}
+                      </Text>
+                      {one.vague && (
+                        <Badge size="xs" color="gray" variant="light">
+                          vague
+                        </Badge>
+                      )}
+                    </Table.Td>
+                    {sources.map((source) => (
+                      <Table.Td key={source}>
+                        <Said answer={one.sources[source]} />
+                      </Table.Td>
+                    ))}
+                    <Table.Td>
+                      <Group gap={4}>
+                        {one.takes.map((take) => (
+                          <Tooltip
+                            key={take.group}
+                            label={`${take.layer}: ${take.why}`}
+                            multiline
+                            maw={320}
+                          >
+                            <Badge size="xs" variant="light">
+                              {names[take.group] || take.group}
+                            </Badge>
+                          </Tooltip>
+                        ))}
+                        {one.disagree.map((odd) => (
+                          <Tooltip
+                            key={`odd-${odd.group}`}
+                            label={`Your guides say ${
+                              odd.guides ? 'yes' : 'no'
+                            }, the databases say ${odd.databases ? 'yes' : 'no'}`}
+                          >
+                            <Badge size="xs" color="orange" variant="light">
+                              {names[odd.group] || odd.group}?
+                            </Badge>
+                          </Tooltip>
+                        ))}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        loading={asking === one.title}
+                        onClick={() => ask(one.title)}
+                      >
+                        Ask now
+                      </Button>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+            {found.shows.length < found.total && (
+              <Button
+                size="xs"
+                variant="default"
+                onClick={() => look(found.shows.length)}
+              >
+                Show more
+              </Button>
+            )}
+          </Stack>
+        )}
+      </Box>
+    </Paper>
+  );
+};
+
 const ShowGroupsTable = () => {
   const [page, setPage] = useState(null);
   const [error, setError] = useState(null);
@@ -1039,6 +1275,31 @@ const ShowGroupsTable = () => {
                         {lookups.waiting} waiting
                       </Text>
                     )}
+                    <Switch
+                      size="xs"
+                      label="Look past vague categories"
+                      description="A show a guide only files under words like these is decided by your other guides, then the databases"
+                      checked={settings.look_past_vague !== false}
+                      onChange={(event) =>
+                        saveSettings({
+                          look_past_vague: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Textarea
+                      size="xs"
+                      aria-label="Vague words"
+                      defaultValue={settings.vague_categories}
+                      disabled={settings.look_past_vague === false}
+                      autosize
+                      minRows={2}
+                      onBlur={(event) => {
+                        const value = event.currentTarget.value;
+                        if (value !== settings.vague_categories) {
+                          saveSettings({ vague_categories: value });
+                        }
+                      }}
+                    />
                   </Stack>
                   <Stack gap="xs">
                     <TextInput
@@ -1156,6 +1417,8 @@ const ShowGroupsTable = () => {
             </Text>
           )
         )}
+
+        {page && <ShowsComparison groups={groups} />}
 
         {page?.activity?.length > 0 && (
           <Section title="Activity" about="every join and leave, and why">

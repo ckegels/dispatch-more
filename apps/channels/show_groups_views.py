@@ -109,6 +109,30 @@ def show_groups_page(request):
     return JsonResponse(_page())
 
 
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def show_groups_shows(request):
+    """GET ?q=&only=all|taken|databases|disagree|unknown&offset=: every show in the guide next
+    to what the online databases say. POST {title}: ask the databases about it now."""
+    from .show_groups import compare
+
+    if request.method == "POST":
+        title = str(request.data.get("title") or "").strip()
+        try:
+            compare.ask_now(title)
+        except ValueError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+        return JsonResponse(compare.shows(query=title, only="all"))
+    only = request.GET.get("only") or "all"
+    if only not in compare.FILTERS:
+        return JsonResponse({"error": f"Unknown filter: {only}"}, status=400)
+    try:
+        offset = max(0, int(request.GET.get("offset") or 0))
+    except ValueError:
+        offset = 0
+    return JsonResponse(compare.shows(query=request.GET.get("q") or "", only=only, offset=offset))
+
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def show_groups_kinds(request):

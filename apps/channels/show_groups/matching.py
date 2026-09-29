@@ -82,11 +82,40 @@ class Group:
     use_disqualifiers: bool = False
     always: set = field(default_factory=set)
     never: set = field(default_factory=set)
+    # Words that say nothing about what a programme is ("Entertainment", "Lifestyle"): a
+    # category made of nothing else does not decide, the next layer is asked (telling())
+    vague: frozenset = frozenset()
 
 
-def group_from_theme(theme):
-    """One show group as the Show Groups tab defines it (themes.py)."""
+# The words guides file everything under. A cooking competition is "Entertainment" in one
+# guide and "Reality" in another, and answering "not cooking" from that kept the online
+# databases from ever being asked about it.
+VAGUE_WORDS = ("entertainment, lifestyle, reality, magazine, magazin, general, other, others, "
+               "misc, miscellaneous, variety, unterhaltung, amusement, divertissement, "
+               "intrattenimento, entretenimiento, entretenimento, infotainment, leisure, "
+               "tv, television, shows, series, programmes, programs")
+# Joining words, never telling on their own
+_GLUE = {"and", "en", "und", "et", "e", "y", "of", "the"}
+
+
+def vague_words(text):
+    return frozenset(word for part in re.split(r"[,\n]", str(text or ""))
+                     for word in _flat(part).split())
+
+
+def telling(categories, vague):
+    """The categories that say something: a category is vague when every word of it is."""
+    if not vague:
+        return list(categories)
+    return [c for c in categories
+            if not all(w in vague or w in STRUCTURAL or w in _GLUE for w in _flat(c).split())]
+
+
+def group_from_theme(theme, vague=frozenset()):
+    """One show group as the Show Groups tab defines it (themes.py); vague as vague_words()
+    gives it, from the settings shared by every group."""
     return Group(
+        vague=vague,
         name=str(theme.get("name") or "").strip() or "Show group",
         category_words=word_list(theme.get("category_words")),
         title_words=word_list(theme.get("title_words")),
@@ -122,10 +151,10 @@ def _hit(words, text):
     return ""
 
 
-def _answer(group, layer, categories):
+def _answer(group, layer, categories, besides=()):
     folded = [_flat(c) for c in categories]
     matched = next((c for c, f in zip(categories, folded) if _hit(group.category_words, f)), "")
-    shown = ", ".join(categories)
+    shown = ", ".join(categories) + (f" (the guide only says {', '.join(besides)})" if besides else "")
     if not matched:
         return Verdict(False, layer, f"not {group.name.lower()}: {shown}")
     spoiler = next((c for c, f in zip(categories, folded) if _hit(group.disqualifiers, f)), "")
@@ -151,14 +180,20 @@ def judge(group, title, own_categories=(), from_guides=None, from_online=None):
         return Verdict(True, PIN, "pinned: always")
 
     own = real_categories(own_categories)
-    if own:
+    if telling(own, group.vague):
         return _answer(group, GUIDE, own)
     elsewhere = real_categories((from_guides or {}).get(key))
-    if elsewhere:
+    if telling(elsewhere, group.vague):
         return _answer(group, OTHER_GUIDE, elsewhere)
     online = (from_online or {}).get(key) or {}
     if online.get("genres"):
-        return _answer(group, online.get("source") or "online", real_categories(online["genres"]))
+        return _answer(group, online.get("source") or "online", real_categories(online["genres"]),
+                       besides=own or elsewhere)
+    # Only vague words known, and nobody else knows more: they answer after all
+    if own:
+        return _answer(group, GUIDE, own)
+    if elsewhere:
+        return _answer(group, OTHER_GUIDE, elsewhere)
 
     word = _hit(group.title_words, key)
     if word and not _hit(group.title_exclusions, key):

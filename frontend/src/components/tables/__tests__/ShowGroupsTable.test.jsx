@@ -19,6 +19,8 @@ vi.mock('../../../api', () => ({
     saveShowGroups: vi.fn(),
     runShowGroups: vi.fn(),
     getShowGroupKinds: vi.fn(),
+    getShowGroupShows: vi.fn(),
+    askShowGroupShow: vi.fn(),
   },
 }));
 
@@ -130,6 +132,31 @@ const page = (changes = {}) => ({
   ...changes,
 });
 
+const shows = {
+  made: '2026-09-29T18:00:00Z',
+  total: 1,
+  count: 120,
+  groups: [{ id: 'cooking', name: 'Cooking' }],
+  sources: ['tvmaze', 'wikidata', 'wikipedia'],
+  shows: [
+    {
+      key: 'cake boss',
+      title: 'Cake Boss',
+      airings: 3,
+      guide: ['Entertainment'],
+      elsewhere: [],
+      vague: true,
+      sources: {
+        tvmaze: { name: 'Cake Boss', genres: ['Reality', 'Food'] },
+        wikidata: { name: '', genres: [] },
+        wikipedia: null,
+      },
+      takes: [{ group: 'cooking', layer: 'tvmaze', why: 'Reality, Food' }],
+      disagree: [{ group: 'cooking', guides: false, databases: true }],
+    },
+  ],
+};
+
 const draw = () =>
   render(
     <MantineProvider theme={theme}>
@@ -142,6 +169,8 @@ describe('ShowGroupsTable', () => {
     vi.clearAllMocks();
     API.getShowGroups.mockResolvedValue(page());
     API.saveShowGroups.mockImplementation(() => Promise.resolve(page()));
+    API.getShowGroupShows.mockResolvedValue(shows);
+    API.askShowGroupShow.mockResolvedValue(shows);
   });
 
   it('shows a card per group with what is in it now', async () => {
@@ -268,5 +297,26 @@ describe('ShowGroupsTable', () => {
       (one) => one.id === 'cooking'
     );
     expect(sent.permanent).toEqual([7, 8]);
+  });
+
+  it('compares the shows with what the databases say', async () => {
+    draw();
+    expect(await screen.findByText('Reality, Food')).toBeInTheDocument();
+    expect(screen.getByText('does not know it')).toBeInTheDocument();
+    expect(screen.getByText('not asked')).toBeInTheDocument();
+    expect(screen.getByText('vague')).toBeInTheDocument();
+    expect(screen.getByText('Cooking?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'They disagree' }));
+    await waitFor(() =>
+      expect(API.getShowGroupShows).toHaveBeenLastCalledWith({
+        q: '',
+        only: 'disagree',
+        offset: 0,
+      })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Ask now' }));
+    await waitFor(() =>
+      expect(API.askShowGroupShow).toHaveBeenCalledWith('Cake Boss')
+    );
   });
 });

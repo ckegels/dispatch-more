@@ -17,6 +17,8 @@ from django.utils import timezone
 from . import matching, store
 
 PLAN = "plan.json"
+# Every show in the plan's window, for the tab's comparison with the online databases
+SHOWS = "shows.json"
 MAX_AGE = timedelta(minutes=30)
 # Titles no guide knows, kept for the online lookups, busiest first
 UNKNOWN_KEPT = 1000
@@ -75,19 +77,28 @@ def titles_from_guides():
 def settings_key(settings, groups):
     """What the plan depends on; a change means working it out again."""
     wanted = {k: settings.get(k) for k in ("join_ahead", "leave_after", "linger", "min_length",
-                                            "source_groups", "plan_hours")}
+                                            "source_groups", "plan_hours", "look_past_vague",
+                                            "vague_categories")}
     wanted["groups"] = [{k: v for k, v in g.items() if k not in ("permanent", "channel_kinds")}
                         for g in groups if g.get("on")]
     return hashlib.sha1(json.dumps(wanted, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+def vague_of(settings):
+    if not settings.get("look_past_vague", True):
+        return frozenset()
+    return matching.vague_words(settings.get("vague_categories"))
+
+
 def compute(settings, groups, now=None, exclude_ids=()):
-    """The plan for every group that is on, as the dict plan.json holds."""
+    """The plan for every group that is on, as the dict plan.json holds. Every show in the
+    window is written to shows.json on the way."""
     from apps.epg.models import ProgramData
 
     now = now or timezone.now()
     on = [g for g in groups if g.get("on")]
-    judges = {g["id"]: matching.group_from_theme(g) for g in on}
+    vague = vague_of(settings)
+    judges = {g["id"]: matching.group_from_theme(g, vague) for g in on}
     hours = float(settings.get("plan_hours") or 24)
     join_ahead = float(settings.get("join_ahead") or 0)
     leave_after = float(settings.get("leave_after") or 0)
@@ -111,15 +122,23 @@ def compute(settings, groups, now=None, exclude_ids=()):
     titles = defaultdict(dict)  # group id -> plain title -> {"title", "airings", "taken", "why"}
     unknown = Counter()
     written = {}
+    shows = {}  # plain title -> {"title", "airings", "categories"}
     for epg_id, title, start, end, props in programmes.iterator(chunk_size=5000):
         key = matching.plain(title)
         if not key:
             continue
         own = tuple(matching.real_categories((props or {}).get("categories")))
         counted = start < window_end and end > now
-        if counted and not own and key not in from_guides:
+        # Worth asking the online databases about: nothing but vague words anywhere
+        if counted and not matching.telling(own, vague) and not matching.telling(
+                matching.real_categories(from_guides.get(key)), vague):
             unknown[key] += 1
             written.setdefault(key, title)
+        if counted:
+            show = shows.setdefault(key, {"title": matching.show_name(title), "airings": 0,
+                                          "categories": [], "elsewhere": from_guides.get(key) or []})
+            show["airings"] += 1
+            show["categories"] = sorted(set(show["categories"]) | set(own))
         short = (end - start).total_seconds() / 60 < min_length
         for gid, group in judges.items():
             verdict = judged.get((gid, key, own))
@@ -135,6 +154,7 @@ def compute(settings, groups, now=None, exclude_ids=()):
                 row["airings"] += 1
                 row["taken"] += 0 if short else 1
 
+    store.write_text(SHOWS, json.dumps({"made": now.isoformat(), "shows": shows}))
     plan = {"made": now.isoformat(), "key": settings_key(settings, groups), "groups": {},
             "unknown": [[n, written[k], k] for k, n in unknown.most_common(UNKNOWN_KEPT)]}
     for gid in judges:

@@ -268,3 +268,40 @@ class NewDefaults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VagueCategories(unittest.TestCase):
+    """A guide that files a cooking show under "Entertainment" does not get to say it is not
+    cooking while a database knows better."""
+
+    vague = matching.vague_words(matching.VAGUE_WORDS)
+
+    def group(self):
+        return matching.group_from_theme(themes.preset("cooking"), self.vague)
+
+    def test_the_databases_answer_past_a_vague_guide(self):
+        online = {"cake boss": {"source": "tvmaze", "genres": ["Reality", "Food"]}}
+        verdict = matching.judge(self.group(), "Cake Boss", ["Entertainment"], {}, online)
+        self.assertTrue(verdict.taken)
+        self.assertEqual(verdict.layer, "tvmaze")
+        self.assertIn("the guide only says Entertainment", verdict.reason)
+
+    def test_another_guide_that_says_more_answers_first(self):
+        verdict = matching.judge(self.group(), "Cake Boss", ["Lifestyle"], {"cake boss": ["Cooking"]}, {})
+        self.assertEqual((verdict.taken, verdict.layer), (True, matching.OTHER_GUIDE))
+
+    def test_vague_and_nobody_knows_more_the_guide_still_answers(self):
+        verdict = matching.judge(self.group(), "Cake Boss", ["Entertainment"], {}, {})
+        self.assertEqual((verdict.taken, verdict.layer), (False, matching.GUIDE))
+
+    def test_a_telling_word_beside_a_vague_one_decides(self):
+        online = {"cake boss": {"source": "tvmaze", "genres": ["Food"]}}
+        verdict = matching.judge(self.group(), "Cake Boss", ["Entertainment", "Drama"], {}, online)
+        self.assertEqual((verdict.taken, verdict.layer), (False, matching.GUIDE))
+        self.assertEqual(matching.telling(["Reality TV", "Competition Reality"], self.vague),
+                         ["Competition Reality"])
+
+    def test_switched_off_the_guide_decides_as_before(self):
+        group = matching.group_from_theme(themes.preset("cooking"))
+        online = {"cake boss": {"source": "tvmaze", "genres": ["Food"]}}
+        self.assertFalse(matching.judge(group, "Cake Boss", ["Entertainment"], {}, online).taken)
