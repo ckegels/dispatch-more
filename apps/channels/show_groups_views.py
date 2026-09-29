@@ -29,7 +29,7 @@ def _page():
     plan = plans.load()
     ours = live.own_copy_ids(state)
     enabled = set(ChannelProfileMembership.objects.filter(
-        channel_profile_id=state.get("profile_id") or 0, channel_id__in=list(ours), enabled=True)
+        channel_profile_id=live.profile_id(settings, state) or 0, channel_id__in=list(ours), enabled=True)
         .values_list("channel_id", flat=True))
     copies = {c["id"]: c for c in Channel.objects.filter(id__in=list(ours)).values(
         "id", "name", "channel_number", "uuid")}

@@ -231,6 +231,17 @@ class TakeOver(Base):
         with self.assertRaises(live.Refused):
             self.run_at(0)
 
+    def test_a_record_without_the_profile_still_shows_who_is_in(self):
+        record = json.loads(open(store.path_of("live.json")).read())
+        del record["profile_id"]
+        store.write_text("live.json", json.dumps(record))
+        live.take_over()
+        self.assertEqual(live.load_state()["profile_id"], ChannelProfile.objects.get(name="Show Groups").id)
+        from apps.channels.show_groups_views import _page
+
+        cooking = next(g for g in _page()["groups"] if g["id"] == "cooking")
+        self.assertEqual([m["name"] for m in cooking["in_group"]], ["TLC"], "before the first minute too")
+
     def test_taken_over(self):
         taken = live.take_over()
         self.assertEqual(taken, {"group": "cooking", "copies": 1})

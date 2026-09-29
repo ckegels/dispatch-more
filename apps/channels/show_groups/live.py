@@ -71,6 +71,17 @@ def save_state(state):
     store.write_text(STATE, json.dumps(state, indent=1, sort_keys=True))
 
 
+def profile_id(settings, state):
+    """The profile the copies are in: by the id kept, or else by its name. The plugin's record
+    did not always keep the id (versions before it did knew the profile by name only)."""
+    from apps.channels.models import ChannelProfile
+
+    if state.get("profile_id"):
+        return state["profile_id"]
+    name = settings.get("profile_name") or "Show Groups"
+    return ChannelProfile.objects.filter(name=name).values_list("id", flat=True).first()
+
+
 def own_copy_ids(state):
     return {int(c["id"]) for entry in state["groups"].values() for c in entry["copies"].values()}
 
@@ -416,6 +427,7 @@ def take_over():
             taken = len(theirs["copies"])
         if theirs.get("profile_id"):
             state["profile_id"] = theirs["profile_id"]
+        state["profile_id"] = profile_id(settings, state)
         save_state(state)
         # Out of the plugin's reach: were it switched on again, it would start afresh instead of
         # switching these copies off under Show Groups
