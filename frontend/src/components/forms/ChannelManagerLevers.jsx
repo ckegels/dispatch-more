@@ -41,7 +41,13 @@ const RememberedStreams = ({ on }) => {
             (summary.lost ? `, ${summary.lost} waiting to be found again` : '')
           : 'Nothing remembered yet'}
       </Text>
-      <Button size="xs" variant="light" loading={saving} disabled={!on} onClick={save}>
+      <Button
+        size="xs"
+        variant="light"
+        loading={saving}
+        disabled={!on}
+        onClick={save}
+      >
         Save what is matched now
       </Button>
     </Group>
@@ -265,6 +271,13 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
         />
         <Switch
           size="xs"
+          label="Use Dispatcharr's language model"
+          description="For streams nothing above could place: their names are compared by what they mean with your channels of the same country, using the small model Dispatcharr ships for its EPG matching — DE| DISCOVERY CHANNEL is ┃DE┃ DISCOVERY, BE| Plug RTL is ┃BE┃ RTL PLUG. Only where the names do not contradict it (another number, a +, East or West, a call sign or network, a word the channel does not have), and marked “by meaning” with its score. Needs sentence-transformers, which Dispatcharr installs; the model is loaded for the run and let go after it."
+          checked={!!value.use_language_model}
+          onChange={(e) => set({ use_language_model: e.currentTarget.checked })}
+        />
+        <Switch
+          size="xs"
           label="A feed that does not say is the East one"
           description="FYI HD is FYI HD [EAST], as American playlists write it: the West feed always says so."
           checked={!!value.east_is_default}
@@ -418,7 +431,9 @@ const ChannelManagerLevers = ({ options, value, onChange, resetKey = 0 }) => {
               label="Name them after"
               description="Whose stream names a new channel is called by: one provider writes ┃AT┃ ATV as the rest of your lineup does, another AT| ATV. The first provider picked that carries the channel names it; none picked is the preferred provider's best picture, as before."
               data={toOptions(
-                (options.accounts || []).filter((a) => a.active && a.name !== 'custom')
+                (options.accounts || []).filter(
+                  (a) => a.active && a.name !== 'custom'
+                )
               )}
               value={asStrings(value.name_from)}
               onChange={(picked) => set({ name_from: ids(picked) })}

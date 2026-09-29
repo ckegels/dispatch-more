@@ -93,6 +93,10 @@ DEFAULTS = {
     # (its stream number, tvg-id, name), and one a provider renamed goes back on its channel
     # after the next playlist refresh (pairings.py). On: it only keeps what was decided.
     "remember_pairings": True,
+    # A stream the rules above could not place is compared, by what its name means, with
+    # the channels of its country, using the language model Dispatcharr ships for its own
+    # EPG matching (meaning.py). Off, as in DispatcharrUtils, which only compares names.
+    "use_language_model": False,
     # Words that are about the stream, not the channel, taken off before matching. The two
     # the group merge people ran by hand took off; anything more is theirs to add.
     # "⏺ʳᵉᶜ" is how providers mark a stream they are recording: it says nothing about
@@ -1040,6 +1044,8 @@ def _stream_summary(stream, added=False, removed=False):
         "logo_url": stream["logo_url"],
         "added": added,
         "removed": removed,
+        # Placed by the language model (meaning.py), with its score; absent otherwise
+        **({"meaning": stream["meaning"]} if stream.get("meaning") is not None else {}),
     }
 
 
@@ -2962,6 +2968,21 @@ def build_plan(settings):
             continue
         if stream["key"] and stream["id"] not in belongs:
             homeless.setdefault((stream["country"], stream["key"]), []).append(stream)
+
+    # Last, for what nothing above could place: what the name means (meaning.py). A stream
+    # placed this way says so ("meaning" and its score), and is no longer a new channel.
+    if settings.get("use_language_model") and homeless:
+        from . import meaning
+
+        waiting = [s for group in homeless.values() for s in group]
+        for stream, record, score in meaning.place(waiting, list(existing.values()), settings):
+            stream["meaning"] = round(score, 2)
+            if stream["id"] not in record["stream_ids"]:
+                additions.setdefault(record["channel"].id, []).append(stream)
+            key = (stream["country"], stream["key"])
+            homeless[key] = [s for s in homeless.get(key, []) if s["id"] != stream["id"]]
+            if not homeless[key]:
+                del homeless[key]
 
     wants_collections = "collections" in (settings.get("logo"), settings.get("new_logo", "collections"))
     index = logo_library.load_index() if wants_collections else None

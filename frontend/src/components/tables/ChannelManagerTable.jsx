@@ -153,6 +153,14 @@ const StreamLine = ({ stream, move, onDrop }) => (
         <Badge size="xs" variant="outline" color="gray">
           {stream.account}
         </Badge>
+        {stream.meaning != null && (
+          // Placed by Dispatcharr's language model, not by a rule: a suggestion to look at
+          <Tooltip label="Its name matches no channel; the language model says it means this one">
+            <Badge size="xs" variant="light" color="violet">
+              by meaning {Math.round(stream.meaning * 100)}%
+            </Badge>
+          </Tooltip>
+        )}
         {stream.group && (
           <Text size="xs" c="dimmed" style={{ wordBreak: 'break-word' }}>
             {stream.group}
@@ -197,7 +205,8 @@ const movable = (stream) => !stream.removed && !stream.custom;
 // channel that is how many copies of it the providers carry, which is what says whether it
 // is worth making.
 const streamCount = (row) =>
-  (row.streams || []).filter((s) => !s.custom && !s.removed && !s.dropped).length;
+  (row.streams || []).filter((s) => !s.custom && !s.removed && !s.dropped)
+    .length;
 
 // A provider is a login: every M3U account is one, two logins at the same provider
 // included, since each carries streams of its own. The fallback is nobody's -- counted, it
@@ -453,7 +462,9 @@ const Expanded = ({
                   leftSection={<CornerDownRight size={12} />}
                   onClick={() => onPlace(row.key)}
                 >
-                  {row.into ? `On ${row.into.name}: change…` : 'Put on a channel you have…'}
+                  {row.into
+                    ? `On ${row.into.name}: change…`
+                    : 'Put on a channel you have…'}
                 </Button>
               </Group>
             )}
@@ -1292,7 +1303,9 @@ const ChannelManagerTable = () => {
                   {row.original.into && (
                     <Text size="xs" c="teal" style={{ flexShrink: 0 }}>
                       → onto {row.original.into.name}
-                      {row.original.into.number != null ? ` (${row.original.into.number})` : ''}
+                      {row.original.into.number != null
+                        ? ` (${row.original.into.number})`
+                        : ''}
                       , no new channel
                     </Text>
                   )}
@@ -1347,7 +1360,11 @@ const ChannelManagerTable = () => {
               {streams.slice(0, 7).map((stream) => (
                 <Tooltip
                   key={stream.id}
-                  label={`${stream.name} · ${stream.account}${stream.added ? ' · added' : ''}`}
+                  label={`${stream.name} · ${stream.account}${stream.added ? ' · added' : ''}${
+                    stream.meaning != null
+                      ? ` · by meaning ${Math.round(stream.meaning * 100)}%`
+                      : ''
+                  }`}
                 >
                   <Badge
                     size="xs"

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v222** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v224** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,22 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**By meaning** (v224, `apps/channels/meaning.py`, lever `use_language_model`, off). A stream
+none of the rules could place is compared with the channels of its country by what its name
+means, using the model Dispatcharr ships for its EPG matching (`all-MiniLM-L6-v2`, via
+`epg_matching.get_sentence_transformer`, released after the run). Measured on the user's
+lineup (5,031 streams on channels): first choice right for 94 %; for the 1,099 whose names
+differ from their channel's, 87 % right at a score of 0.80 with the checks, and most of the
+rest were the other copy of a channel the lineup has twice (UK Discovery, German Discovery,
+E!, ID, Nick Jr, WNET) or a stream on the wrong channel (TV Noord on RTV Utrecht). Its own
+mistakes were numbers, a "+", and a longer name onto a shorter one (Ziggo Sport Golf, SWR
+BW), so a placement also has to pass `_tvg_contradicted`, the same numbers (III is 3) and no
+word on the stream's side the channel lacks (filler and words written together aside:
+ZDFINFO is ZDF INFO). A stream placed this way carries `meaning` (its score) and shows "by
+meaning 93 %" on the row. The measurement scripts are in the session scratchpad (they
+download the lineup with the user's API key). A "channels that look like the same channel"
+check from the same model was offered, not built.
 
 **Remembered streams** (v218, `apps/channels/pairings.py`, lever `remember_pairings`, on).
 There is no public list linking one reseller's streams to another's (looked for: resellers

@@ -53,7 +53,10 @@ Everything is off, or only suggests, until you turn it on or apply it.
   wrong stream out of a row, change the group, or ignore a suggestion for good. With
   **Remember matched streams** on, every stream on a channel is written down with its
   provider's stream number, so one the provider renames goes back on its channel after the
-  next playlist refresh instead of dropping off; one you take off stays off.
+  next playlist refresh instead of dropping off; one you take off stays off. With **Use
+  Dispatcharr's language model** on, a stream whose name matches none of your channels is
+  compared by what it means (DE| DISCOVERY CHANNEL is ┃DE┃ DISCOVERY) and suggested onto the
+  channel it means, marked "by meaning" with its score.
 - **Channel Manager → Guides** — finds channels on no guide, on a guide that holds nothing, or
   with a clearly better guide, and suggests the change; the guide's programme on now is shown
   so the right one can be picked.
