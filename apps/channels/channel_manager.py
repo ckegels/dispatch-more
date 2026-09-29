@@ -1289,6 +1289,18 @@ MIN_GUIDE_SCORE = 55
 # country it says it is not from falls below every candidate that could still be right.
 SAME_COUNTRY = 10
 OTHER_COUNTRY = 30
+# Any other country than a neighbour's costs more: the Belgian "NGC WILD" was offered a
+# British Nat Geo Wild at 100, and at 70 once its country was known -- still over the Guides
+# tab's bar (the user's find, 2026-09-29). At 60 even a perfect name ends below every bar.
+FAR_COUNTRY = 60
+# Countries whose channels are carried in one another's guides often enough to be right:
+# an American station in a Canadian guide, ORF in a German one, VRT in a Dutch one
+NEIGHBOURS = ({"us", "ca"}, {"de", "at", "ch"}, {"nl", "be"}, {"fr", "be", "ch"}, {"gb", "ie"})
+
+
+def neighbours(one, other):
+    one, other = _one_country(one), _one_country(other)
+    return any(one in pair and other in pair for pair in NEIGHBOURS)
 # The other ways one country gets written. A playlist's box says "UK", "USA", "GER";
 # an XMLTV tvg-id says ".uk", ".us", ".de". Without this a British channel is penalised
 # against a British guide and an American one against an American guide -- and since the
@@ -1677,7 +1689,65 @@ def _country_of_guide(entry):
     found = re.findall(r"\.([A-Za-z]{2})(?![A-Za-z])", entry.get("tvg_id") or "")
     if found:
         return found[-1].lower()
-    return logo_library.country_of(entry.get("name") or "")
+    said = logo_library.country_of(entry.get("name") or "")
+    if said:
+        return said
+    # Neither says: the source may. "epg.pw gb" numbers its guides ("9300" is NatGeoWild
+    # HD), so none of them said a country, and its Nat Geo Wild was offered to "┃BE┃ NGC
+    # WILD" as certain (the user's find, 2026-09-29).
+    return source_countries().get(entry.get("epg_source_id"), "")
+
+
+# A word in a source's name that is a country code and is not one: "PBS TV" is not Tuvalu
+NOT_A_SOURCE_COUNTRY = {"tv", "all"}
+_SOURCE_COUNTRIES = {"at": 0.0, "value": {}}
+
+
+def source_countries():
+    """
+    {EPG source id: its country, or ""}: from its name ("epg.pw gb", "free-epg.de be",
+    "iptv-epg.org DE" -- the last country code in it, so the ".de" of a site's address gives
+    way to the "be" after it), else from its guides when nearly all that say one say the same
+    ("github be", 261 of 261). Worked out once every ten minutes per process.
+    """
+    import time
+    from collections import Counter
+
+    now = time.monotonic()
+    if now - _SOURCE_COUNTRIES["at"] < 600:
+        return _SOURCE_COUNTRIES["value"]
+    found = {}
+    try:
+        from apps.epg.models import EPGData, EPGSource
+
+        for source_id, name in EPGSource.objects.values_list("id", "name"):
+            words = re.findall(r"[a-z]+", (name or "").lower())
+            codes = [
+                w for w in words
+                if w not in NOT_A_SOURCE_COUNTRY
+                and (w in logo_library.ISO_COUNTRIES or w in logo_library.THREE_LETTER_COUNTRIES)
+            ]
+            if codes:
+                found[source_id] = _one_country(codes[-1])
+                continue
+            said = Counter()
+            total = 0
+            for tvg_id, guide_name in EPGData.objects.filter(epg_source_id=source_id).values_list("tvg_id", "name"):
+                total += 1
+                ends = re.findall(r"\.([A-Za-z]{2})(?![A-Za-z])", tvg_id or "")
+                country = ends[-1].lower() if ends else logo_library.country_of(guide_name or "")
+                if country:
+                    said[_one_country(country)] += 1
+            if said:
+                country, n = said.most_common(1)[0]
+                # Nearly all of what says, and most of it says: a source of one country
+                if n >= 0.9 * sum(said.values()) and sum(said.values()) >= 0.5 * total:
+                    found[source_id] = country
+    except Exception as e:
+        logger.debug(f"Could not work out the sources' countries: {e}")
+        return _SOURCE_COUNTRIES["value"]
+    _SOURCE_COUNTRIES.update(at=now, value=found)
+    return found
 
 
 # What a match is, rather than only how alike two names look. Taken from how the
@@ -1858,7 +1928,7 @@ def _by_country(country, entry):
         return 0
     if _one_country(country) == _one_country(theirs):
         return SAME_COUNTRY
-    return -OTHER_COUNTRY
+    return -OTHER_COUNTRY if neighbours(country, theirs) else -FAR_COUNTRY
 
 
 def with_meaning(score, why, how_close):

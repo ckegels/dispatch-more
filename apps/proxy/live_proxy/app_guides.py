@@ -262,6 +262,7 @@ FILLER_WORDS = {
 # an American station in a Canadian guide, ORF in a German one, VRT in a Dutch one. Anything
 # else from another country is not this channel (a Belgian guide for an American station).
 NEIGHBOURS = ({"us", "ca"}, {"de", "at", "ch"}, {"nl", "be"}, {"fr", "be", "ch"}, {"gb", "uk", "ie"})
+# (the same pairs as channel_manager.NEIGHBOURS, which the guides' scores use)
 
 
 def _about(channel):

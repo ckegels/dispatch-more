@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v227** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v228** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,17 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**A guide's country from its source, and far countries ruled out** (v228). "┃BE┃ NGC WILD"
+was offered epg.pw gb's Nat Geo Wild as certain, 100 % (the user's find): epg.pw numbers
+its guides ("9300"), so none of its 756 said a country. `_country_of_guide` now falls back
+to `source_countries()`: the last country code in the source's name ("free-epg.de be" is
+be, "PBS TV" is not Tuvalu), else the country nearly all of its guides say (90 % of those
+that say, and at least half say). On the user's server that gave 89,194 of 94,789 guides a
+country, against 63,551. And a guide from another country costs 60 (`FAR_COUNTRY`), not
+30, unless the two are neighbours (`NEIGHBOURS`: US/CA, DE/AT/CH, NL/BE, FR/BE/CH, GB/IE),
+so a far country's guide ends below every bar however well its name reads. 8 of the user's
+channels were on a far country's guide (mostly international channels, one plainly wrong).
 
 **Guides by meaning** (v227, `apps/channels/meaning_index.py`, Guides setting
 `use_language_model`, on). Measured on the user's server (1,377 channels with a guide,

@@ -60,10 +60,12 @@ def _hash(text):
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
-def _country(name, tvg_id):
+def _country(name, tvg_id, source_id=None):
     from . import channel_manager
 
-    return channel_manager._one_country(channel_manager._country_of_guide({"name": name, "tvg_id": tvg_id}))
+    return channel_manager._one_country(
+        channel_manager._country_of_guide({"name": name, "tvg_id": tvg_id, "epg_source_id": source_id})
+    )
 
 
 def status():
@@ -88,10 +90,10 @@ def build(say=None):
     guides = list(
         EPGData.objects.exclude(epg_source__is_active=False)
         .exclude(epg_source__source_type="dummy")
-        .values_list("id", "name", "tvg_id")
+        .values_list("id", "name", "tvg_id", "epg_source_id")
     )
     channels = list(Channel.objects.values_list("id", "name"))
-    g_texts = [guide_text(name, tvg) for _, name, tvg in guides]
+    g_texts = [guide_text(name, tvg) for _, name, tvg, _ in guides]
     c_texts = [channel_text(name) for _, name in channels]
 
     # What was worked out last time, by text: most of it has not changed
@@ -135,8 +137,8 @@ def build(say=None):
     # with no vectors read by the web processes at all
     from . import logo_library
 
-    countries = np.array([_country(name, tvg) for _, name, tvg in guides])
-    guide_ids = np.array([gid for gid, _, _ in guides])
+    countries = np.array([_country(name, tvg, src) for _, name, tvg, src in guides])
+    guide_ids = np.array([gid for gid, _, _, _ in guides])
     g_matrix = np.load(os.path.join(INDEX_DIR, "guides.npy")).astype(np.float32)
     c_matrix = np.load(os.path.join(INDEX_DIR, "channels.npy")).astype(np.float32)
     tops = {}
@@ -162,8 +164,8 @@ def build(say=None):
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "guides": len(guides), "channels": len(channels), "encoded": len(wanted),
         "seconds": round(time.monotonic() - started, 1),
-        "guide_ids": [gid for gid, _, _ in guides],
-        "guide_countries": [_country(name, tvg) for _, name, tvg in guides],
+        "guide_ids": [gid for gid, _, _, _ in guides],
+        "guide_countries": countries.tolist(),
         "guides_hashes": [_hash(t) for t in g_texts],
         "channel_top": tops,
         "channels_hashes": [_hash(t) for t in c_texts],
