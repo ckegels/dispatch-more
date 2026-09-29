@@ -69,7 +69,8 @@ Everything is off, or only suggests, until you turn it on or apply it.
 - **Channel Manager → Show Groups** — groups of channels by what is on them right now:
   Cooking, Travel, Movies, Documentaries, Sport, Kids and more ready-made, and any you add.
   A group holds a copy of every channel airing its kind of show and lets it go when the show
-  is over (never while someone watches it); channels can be kept in a group for good. Off
+  is over (never while someone watches it); channels can be kept in a group for good, and
+  iptv-org's channel database suggests which of yours are that kind as a whole. Off
   until switched on; takes over the Show Groups plugin's group if you had it.
 - **Channel Manager → Stream Check** — finds the streams on your channels that no longer play:
   dead, refused by the provider, black, frozen, or showing the provider's "no stream" picture

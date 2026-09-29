@@ -3188,6 +3188,13 @@ export default class API {
     });
   }
 
+  // Your channels iptv-org files under a group's kinds (cooking, travel...)
+  static async getShowGroupKinds(group) {
+    return await request(
+      `${host}/api/channels/show-groups/kinds/?group=${encodeURIComponent(group)}`
+    );
+  }
+
   // action: 'update', 'plan', 'remove' or 'take_over'
   static async runShowGroups(action) {
     return await request(`${host}/api/channels/show-groups/run/`, {

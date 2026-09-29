@@ -295,3 +295,91 @@ class Api(Base):
     def test_a_refusal_is_said(self):
         answer = self.client.post("/api/channels/show-groups/run/", {"action": "take_over"}, format="json")
         self.assertEqual(answer.status_code, 409)
+
+
+IPTV_ORG = [
+    {"id": "24Kitchen.us", "name": "24Kitchen", "country": "US", "categories": ["cooking"]},
+    {"id": "FoodNetwork.uk", "name": "Food Network", "country": "UK", "categories": ["cooking"]},
+    {"id": "FoodNetwork.ca", "name": "Food Network", "country": "CA", "categories": ["cooking"]},
+    {"id": "Travelxp.in", "name": "Travelxp", "country": "IN", "categories": ["travel"]},
+    {"id": "BonGusto.de", "name": "BonGusto", "country": "DE", "categories": []},
+    {"id": "BBCFood.uk", "name": "BBC Food", "country": "UK", "categories": ["cooking"],
+     "closed": "2008-12-26"},
+    {"id": "NatGeo.nl", "name": "National Geographic", "alt_names": ["Nat Geo"], "country": "NL",
+     "categories": ["documentary"]},
+]
+
+
+class WholeChannels(Api):
+    """Channels iptv-org files under a group's kind, offered to keep in the group."""
+
+    def setUp(self):
+        super().setUp()
+        from django.core.cache import cache
+
+        from apps.channels.show_groups import kinds
+
+        cache.delete(kinds.INDEX_KEY)
+        self.addCleanup(cache.delete, kinds.INDEX_KEY)
+        patcher = mock.patch("apps.channels.logo_library._get_json", return_value=IPTV_ORG)
+        self.download = patcher.start()
+        self.addCleanup(patcher.stop)
+        for number, name in ((1, "┃BE┃ 24KITCHEN"), (2, "┃UK┃ FOOD NETWORK HD"), (3, "┃DE┃ BON GUSTO"),
+                             (4, "┃UK┃ BBC FOOD"), (5, "┃NL┃ NAT GEO"), (6, "┃UK┃ BBC ONE")):
+            Channel.objects.create(name=name, channel_number=number, channel_group=self.public)
+
+    def kinds(self, group):
+        return self.client.get(f"/api/channels/show-groups/kinds/?group={group}").json()
+
+    def test_cooking_channels_in_their_own_country_first_else_where_listed(self):
+        found = self.kinds("cooking")
+        self.assertEqual([c["name"] for c in found["channels"]], ["┃BE┃ 24KITCHEN", "┃UK┃ FOOD NETWORK HD"])
+        self.assertEqual(found["channels"][0]["listed_as"], "24Kitchen (US)", "only listed in the US")
+        self.assertEqual(found["channels"][1]["listed_as"], "Food Network (GB)", "its own country's")
+        self.assertEqual(found["kinds"], ["cooking"])
+
+    def test_by_another_name_and_by_tvg_id(self):
+        self.assertEqual([c["name"] for c in self.kinds("documentaries")["channels"]], ["┃NL┃ NAT GEO"])
+        Channel.objects.filter(name="┃UK┃ BBC ONE").update(tvg_id="Travelxp.in")
+        self.assertEqual([c["name"] for c in self.kinds("travel")["channels"]], ["┃UK┃ BBC ONE"])
+
+    def test_downloaded_once(self):
+        self.kinds("cooking")
+        self.kinds("travel")
+        self.assertEqual(self.download.call_count, 1)
+
+    def test_kept_in_the_group_and_said_so(self):
+        groups = themes.load_groups()
+        kitchen = Channel.objects.get(name="┃BE┃ 24KITCHEN")
+        groups[0]["permanent"] = [kitchen.id]
+        themes.save(None, groups)
+        found = self.kinds("cooking")["channels"]
+        self.assertEqual([c["always"] for c in found], [True, False])
+
+    def test_a_group_of_your_own_starts_with_no_kinds(self):
+        groups = themes.load_groups() + [{"id": "my-f1", "name": "F1", "category_words": "f1"}]
+        themes.save(None, groups)
+        self.assertEqual(self.kinds("my-f1")["channels"], [])
+        groups[-1]["channel_kinds"] = ["cooking"]
+        themes.save(None, groups)
+        self.assertEqual(len(self.kinds("my-f1")["channels"]), 2)
+
+    def test_abroad_only_by_its_own_name_and_not_when_home_has_one(self):
+        from django.core.cache import cache
+
+        from apps.channels.show_groups import kinds
+
+        more = IPTV_ORG + [
+            {"id": "CanThoTV2.vn", "name": "Can Tho TV 2", "alt_names": ["HGTV"], "country": "VN",
+             "categories": ["science"]},
+            {"id": "TV8.it", "name": "TV8", "country": "IT", "categories": []},
+            {"id": "TV8.md", "name": "TV8", "country": "MD", "categories": ["science"]},
+        ]
+        cache.delete(kinds.INDEX_KEY)
+        self.download.return_value = more
+        Channel.objects.create(name="┃UK┃ HGTV", channel_number=7, channel_group=self.public)
+        Channel.objects.create(name="┃IT┃ TV 8", channel_number=8, channel_group=self.public)
+        groups = themes.load_groups()
+        next(g for g in groups if g["id"] == "science")["on"] = True
+        themes.save(None, groups)
+        self.assertEqual(self.kinds("science")["channels"], [])

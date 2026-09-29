@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v231** (2026-09-29). The commit messages on the branch
+Written 2026-09-19, kept current to **release v232** (2026-09-29). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1455,6 +1455,22 @@ groups carry on); each copy keeps its number (from 20000). **Off switches:** "Sh
 switched off (or deleted) while live is on has its copies and channel group removed once
 nobody watches; "Remove everything" (live off only) deletes all of it but keeps the online
 answers.
+
+**Whole channels** (`kinds.py`, v232; the group's "Whole channels" tab): iptv-org's channel
+database files each channel under kinds (cooking, travel, movies, documentary, kids, sports,
+news, music, comedy, science, outdoor...), mapped onto the ready-made groups in
+`PRESET_KINDS` (a group of your own picks its own). The tab lists your channels of the group's
+kinds; ticked ones go into `permanent`. **Never added by itself.** Matching: the channel's
+tvg-id when it is an iptv-org id (final, even when that entry has no kind), else the whole
+name (`logo_library.match_key`) in the channel's own country; another country only when yours
+has no channel of that name at all, and then only by the entry's own name, never an alt name.
+Both rules came from the user's channels: without them "┃UK┃ HGTV" was a Vietnamese channel
+whose alt name is HGTV, "┃BE┃ NICKELODEON" was comedy through Nick/Comedy Central +1, and
+"┃IT┃ TV 8" took other countries' TV8s. iptv-org writes the UK as "UK"; it is folded to "gb"
+as `country_of` answers. Measured 2026-09-29: 463 of the user's 1,432 channels known;
+cooking = 24Kitchen, Njam!, Cooking Channel, Food Network (BE/NL/CA/UK copies). BonGusto has no
+kind there (the guide catches it). The index is kept a week in the cache
+(`show-groups:iptv-org-kinds`), downloaded on the first ask.
 
 **The plugin.** The same folder (`/data/show_groups`), so the online answers it spent hours
 gathering carry over. While the plugin is enabled and live, Show Groups refuses to go live

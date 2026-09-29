@@ -109,6 +109,26 @@ def show_groups_page(request):
     return JsonResponse(_page())
 
 
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def show_groups_kinds(request):
+    """?group=<id>: your channels iptv-org files under that group's kinds, to keep in it for
+    good. The first ask downloads iptv-org's channels (kept a week)."""
+    from .show_groups import kinds
+
+    group = next((g for g in themes.load_groups() if g["id"] == request.GET.get("group")), None)
+    if group is None:
+        return JsonResponse({"error": "No such group"}, status=404)
+    try:
+        found = kinds.suggestions(group, exclude_ids=live.own_copy_ids(live.load_state()))
+    except Exception as e:
+        logger.warning(f"Show Groups: iptv-org's channels could not be read: {e}")
+        return JsonResponse({"error": "iptv-org's channel list could not be downloaded; try again later."},
+                            status=502)
+    return JsonResponse({"kinds": group.get("channel_kinds") or [], "all_kinds": kinds.CATEGORIES,
+                         "channels": found})
+
+
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def show_groups_run(request):

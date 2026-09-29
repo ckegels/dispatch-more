@@ -76,7 +76,7 @@ def settings_key(settings, groups):
     """What the plan depends on; a change means working it out again."""
     wanted = {k: settings.get(k) for k in ("join_ahead", "leave_after", "linger", "min_length",
                                             "source_groups", "plan_hours")}
-    wanted["groups"] = [{k: v for k, v in g.items() if k not in ("permanent",)}
+    wanted["groups"] = [{k: v for k, v in g.items() if k not in ("permanent", "channel_kinds")}
                         for g in groups if g.get("on")]
     return hashlib.sha1(json.dumps(wanted, sort_keys=True, default=str).encode()).hexdigest()[:16]
 

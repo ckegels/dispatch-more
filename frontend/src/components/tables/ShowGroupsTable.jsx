@@ -8,6 +8,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Trash2,
+  Tv,
   Users,
 } from 'lucide-react';
 import {
@@ -15,6 +16,7 @@ import {
   Badge,
   Box,
   Button,
+  Checkbox,
   Group,
   Modal,
   MultiSelect,
@@ -84,6 +86,7 @@ const EDITABLE = [
   'never',
   'permanent',
   'one_per_airing',
+  'channel_kinds',
 ];
 
 const GroupCard = ({ group, chosen, onChoose, onSwitch, live }) => {
@@ -171,6 +174,152 @@ const GroupCard = ({ group, chosen, onChoose, onSwitch, live }) => {
         </Group>
       </UnstyledButton>
     </Paper>
+  );
+};
+
+// Whole channels of the group's kind, as iptv-org's channel database files them: a
+// suggestion to tick, never added by itself
+const WholeChannels = ({ group, onSave, busy }) => {
+  const [found, setFound] = useState(null);
+  const [error, setError] = useState(null);
+  const [ticked, setTicked] = useState(new Set());
+  const kinds = (group.channel_kinds || []).join(',');
+
+  useEffect(() => {
+    let gone = false;
+    setFound(null);
+    setError(null);
+    setTicked(new Set());
+    API.getShowGroupKinds(group.id)
+      .then((answer) => !gone && setFound(answer))
+      .catch(
+        (e) =>
+          !gone && setError(e?.body?.error || 'iptv-org could not be asked.')
+      );
+    return () => {
+      gone = true;
+    };
+  }, [group.id, kinds]);
+
+  const open = (found?.channels || []).filter((one) => !one.always);
+  const tick = (id, on) => {
+    const next = new Set(ticked);
+    if (on) next.add(id);
+    else next.delete(id);
+    setTicked(next);
+  };
+
+  return (
+    <Stack gap="sm">
+      <Text size="xs" c="dimmed">
+        Channels that are this kind as a whole, from iptv-org&apos;s channel
+        database. Tick them to keep them in the group all the time, whatever is
+        on. Nothing is added until you do.
+      </Text>
+      <MultiSelect
+        size="xs"
+        label="iptv-org kinds"
+        placeholder="None"
+        data={found?.all_kinds || group.channel_kinds || []}
+        value={group.channel_kinds || []}
+        onChange={(value) => onSave({ ...group, channel_kinds: value })}
+        disabled={busy}
+        searchable
+        clearable
+        style={{ maxWidth: 420 }}
+      />
+      {error && <Alert color="red">{error}</Alert>}
+      {!found && !error && (
+        <Text size="sm" c="dimmed">
+          Asking iptv-org…
+        </Text>
+      )}
+      {found && found.channels.length === 0 && (
+        <Text size="sm" c="dimmed">
+          {found.kinds.length
+            ? 'None of your channels is filed under these kinds.'
+            : 'Pick a kind to see your channels of it.'}
+        </Text>
+      )}
+      {found && found.channels.length > 0 && (
+        <>
+          <Group gap="sm">
+            <Button
+              size="xs"
+              disabled={!ticked.size || busy}
+              leftSection={<Pin size={14} />}
+              onClick={() =>
+                onSave({
+                  ...group,
+                  permanent: [...(group.permanent || []), ...ticked],
+                })
+              }
+            >
+              Keep {ticked.size || ''} always in
+            </Button>
+            <Button
+              size="xs"
+              variant="default"
+              disabled={!open.length}
+              onClick={() =>
+                setTicked(
+                  ticked.size === open.length
+                    ? new Set()
+                    : new Set(open.map((one) => one.id))
+                )
+              }
+            >
+              {ticked.size === open.length && open.length
+                ? 'Untick all'
+                : `Tick all ${open.length}`}
+            </Button>
+          </Group>
+          <Table striped verticalSpacing={2} fz="sm">
+            <Table.Tbody>
+              {found.channels.map((one) => (
+                <Table.Tr key={one.id}>
+                  <Table.Td w={30}>
+                    <Checkbox
+                      size="xs"
+                      aria-label={`Keep ${one.name}`}
+                      checked={one.always || ticked.has(one.id)}
+                      disabled={one.always}
+                      onChange={(event) =>
+                        tick(one.id, event.currentTarget.checked)
+                      }
+                    />
+                  </Table.Td>
+                  <Table.Td>{one.number}</Table.Td>
+                  <Table.Td>
+                    {one.name}
+                    {one.always && (
+                      <Badge ml={6} size="xs" variant="light">
+                        always in
+                      </Badge>
+                    )}
+                    {one.hidden && (
+                      <Badge ml={6} size="xs" color="gray" variant="light">
+                        hidden
+                      </Badge>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c="dimmed">
+                      {one.group}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c="dimmed">
+                      {one.kinds.join(', ')} · {one.listed_as}
+                    </Text>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </>
+      )}
+    </Stack>
   );
 };
 
@@ -263,6 +412,9 @@ const GroupDetail = ({ group, channels, onSave, onDelete, onReset, busy }) => {
           </Tabs.Tab>
           <Tabs.Tab value="titles" leftSection={<Eye size={14} />}>
             Shows it takes
+          </Tabs.Tab>
+          <Tabs.Tab value="whole" leftSection={<Tv size={14} />}>
+            Whole channels
           </Tabs.Tab>
           <Tabs.Tab value="rules" leftSection={<SlidersHorizontal size={14} />}>
             What it takes
@@ -409,6 +561,10 @@ const GroupDetail = ({ group, channels, onSave, onDelete, onReset, busy }) => {
               </Table>
             </Stack>
           )}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="whole" p="md">
+          <WholeChannels group={group} onSave={onSave} busy={busy} />
         </Tabs.Panel>
 
         <Tabs.Panel value="rules" p="md">

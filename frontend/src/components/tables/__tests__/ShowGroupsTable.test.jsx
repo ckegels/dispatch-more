@@ -18,6 +18,7 @@ vi.mock('../../../api', () => ({
     getShowGroups: vi.fn(),
     saveShowGroups: vi.fn(),
     runShowGroups: vi.fn(),
+    getShowGroupKinds: vi.fn(),
   },
 }));
 
@@ -225,5 +226,47 @@ describe('ShowGroupsTable', () => {
       expect(API.runShowGroups).toHaveBeenCalledWith('take_over')
     );
     expect(await screen.findByText('Took it over')).toBeInTheDocument();
+  });
+
+  it('offers whole channels of the kind, and keeps the ticked ones in', async () => {
+    API.getShowGroupKinds.mockResolvedValue({
+      kinds: ['cooking'],
+      all_kinds: ['cooking', 'travel'],
+      channels: [
+        {
+          id: 7,
+          name: 'Food Network',
+          number: 41,
+          group: 'US',
+          hidden: false,
+          kinds: ['cooking'],
+          listed_as: 'Food Network (US)',
+          always: true,
+        },
+        {
+          id: 8,
+          name: '┃BE┃ 24KITCHEN',
+          number: 12,
+          group: 'BE',
+          hidden: false,
+          kinds: ['cooking'],
+          listed_as: '24Kitchen (US)',
+          always: false,
+        },
+      ],
+    });
+    draw();
+    fireEvent.click(await screen.findByLabelText('Show Cooking'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Whole channels' }));
+    expect(await screen.findByText('┃BE┃ 24KITCHEN')).toBeInTheDocument();
+    expect(API.getShowGroupKinds).toHaveBeenCalledWith('cooking');
+    expect(screen.getByLabelText('Keep Food Network')).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Keep ┃BE┃ 24KITCHEN'));
+    fireEvent.click(screen.getByRole('button', { name: /Keep 1 always in/ }));
+    await waitFor(() => expect(API.saveShowGroups).toHaveBeenCalled());
+    const sent = API.saveShowGroups.mock.calls[0][0].groups.find(
+      (one) => one.id === 'cooking'
+    );
+    expect(sent.permanent).toEqual([7, 8]);
   });
 });

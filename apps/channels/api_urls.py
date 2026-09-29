@@ -105,6 +105,7 @@ urlpatterns = [
     # Groups of channels by what is on them now: Cooking, Travel, Movies... (see show_groups)
     path('show-groups/', show_groups_views.show_groups_page, name='show_groups_page'),
     path('show-groups/run/', show_groups_views.show_groups_run, name='show_groups_run'),
+    path('show-groups/kinds/', show_groups_views.show_groups_kinds, name='show_groups_kinds'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),
     path('channel-manager/pairings/', channel_manager_views.channel_manager_pairings, name='channel_manager_pairings'),

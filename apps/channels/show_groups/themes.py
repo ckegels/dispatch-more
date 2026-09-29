@@ -54,6 +54,8 @@ GROUP_FIELDS = {
     # Channel ids with a copy in the group all the time, whatever is on them
     "permanent": [],
     "one_per_airing": True,
+    # iptv-org's categories whose channels are offered as "always in" (kinds.py)
+    "channel_kinds": [],
 }
 
 # The ready-made groups. The words are matched inside the guide's categories, folded (lower
@@ -151,10 +153,13 @@ PRESET_IDS = [p["id"] for p in PRESETS]
 
 
 def preset(group_id):
+    from .kinds import PRESET_KINDS
+
     found = next((p for p in PRESETS if p["id"] == group_id), None)
     if found is None:
         return None
-    return {**GROUP_FIELDS, **found, "preset": True}
+    return {**GROUP_FIELDS, "channel_kinds": list(PRESET_KINDS.get(group_id, [])), **found,
+            "preset": True}
 
 
 def _load():
@@ -199,6 +204,8 @@ def _clean(group):
             clean[key] = bool(clean[key])
     if "permanent" in clean:
         clean["permanent"] = _ids(clean["permanent"])
+    if "channel_kinds" in clean:
+        clean["channel_kinds"] = [str(k) for k in clean["channel_kinds"] or () if str(k).strip()]
     if "name" in clean:
         clean["name"] = str(clean["name"] or "").strip()[:60]
     return clean
