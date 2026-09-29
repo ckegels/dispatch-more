@@ -3174,6 +3174,28 @@ export default class API {
     });
   }
 
+  // ── Show Groups: groups of channels by what is on them now (see show_groups) ──
+
+  static async getShowGroups() {
+    return await request(`${host}/api/channels/show-groups/`);
+  }
+
+  // settings and groups are both optional: only what is sent is saved
+  static async saveShowGroups({ settings, groups } = {}) {
+    return await request(`${host}/api/channels/show-groups/`, {
+      method: 'PUT',
+      body: { settings, groups },
+    });
+  }
+
+  // action: 'update', 'plan', 'remove' or 'take_over'
+  static async runShowGroups(action) {
+    return await request(`${host}/api/channels/show-groups/run/`, {
+      method: 'POST',
+      body: { action },
+    });
+  }
+
   // ── The EPG grabber: iptv-org/epg, driven from Dispatcharr (see epg_grabber) ──
 
   static async getEpgGrabber() {

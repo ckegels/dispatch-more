@@ -66,6 +66,11 @@ Everything is off, or only suggests, until you turn it on or apply it.
 - **Channel Manager → EPG Grabber** — runs iptv-org's guide grabber (when it is installed on
   the server) on a schedule, and only replaces the guide file once the new one has been read
   back and found to hold channels and programmes.
+- **Channel Manager → Show Groups** — groups of channels by what is on them right now:
+  Cooking, Travel, Movies, Documentaries, Sport, Kids and more ready-made, and any you add.
+  A group holds a copy of every channel airing its kind of show and lets it go when the show
+  is over (never while someone watches it); channels can be kept in a group for good. Off
+  until switched on; takes over the Show Groups plugin's group if you had it.
 - **Channel Manager → Stream Check** — finds the streams on your channels that no longer play:
   dead, refused by the provider, black, frozen, or showing the provider's "no stream" picture
   (a picture fault is looked at again later in the same run before it counts). Never touches a

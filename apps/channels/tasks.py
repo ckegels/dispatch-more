@@ -4995,3 +4995,37 @@ def build_meaning_index():
         return meaning_index.build()
     finally:
         cache.delete(meaning_index.BUILDING_KEY)
+
+
+@shared_task
+def show_groups_tick():
+    """
+    Every minute: bring each show group in line with what is on now (show_groups.live). Does
+    nothing while Show Groups is off and nothing was ever made.
+    """
+    from .show_groups import live
+
+    try:
+        return live.run_once()
+    except live.Refused as e:
+        logger.warning(f"Show Groups: {e}")
+        return str(e)
+
+
+@shared_task
+def show_groups_look_up():
+    """Ask the online databases about titles no guide knows, a minute at a time."""
+    from django.core.cache import cache
+
+    from .show_groups import live, themes
+
+    settings = themes.load_settings()
+    if not settings.get("online_lookups") or not themes.active(settings, themes.load_groups()):
+        return "off"
+    if not cache.add(live.LOOKUP_KEY, 1, 150):
+        return "already asking"
+    try:
+        asked, waiting = live.look_up(settings, budget=60)
+        return f"{asked} asked, {waiting} waiting"
+    finally:
+        cache.delete(live.LOOKUP_KEY)

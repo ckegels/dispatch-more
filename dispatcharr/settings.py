@@ -468,6 +468,16 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.channels.tasks.epg_grab_tick",
         "schedule": 300.0,  # Every 5 minutes
     },
+    # Show Groups: bring each group in line with what is on now; nothing while it is off
+    "show-groups-tick": {
+        "task": "apps.channels.tasks.show_groups_tick",
+        "schedule": 60.0,
+    },
+    # ...and ask the online databases about titles no guide knows; nothing while that is off
+    "show-groups-look-up": {
+        "task": "apps.channels.tasks.show_groups_look_up",
+        "schedule": 120.0,
+    },
 }
 
 MEDIA_ROOT = BASE_DIR / "media"

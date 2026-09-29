@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v230** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v231** (2026-09-29). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1417,6 +1417,52 @@ Off unless switched on, nothing but a `CoreSettings` row, and one beat tick
 holds one background worker for as long as it runs**, which on a binary install is one of
 the Celery worker's children -- hence the window (`window_from`/`window_to`) and the
 give-up-after.
+
+### 5.6e Channel Manager: Show Groups — `apps/channels/show_groups/` (+ `show_groups_views.py`, `ShowGroupsTable.jsx`)
+
+The seventh tab (v231). Groups of channels by what is on them right now: a Cooking group holds
+a copy of every channel airing a cooking show and lets it go when the show is over. It was the
+Show Groups plugin (github.com/ckegels/show-groups, one group per install); the user asked for
+it in the fork instead, with many groups ("travel, cooking, movies... selectable and addable")
+and channels kept in a group for good. **The plugin's HANDOVER.md holds the measurements
+behind every matching layer; read it before changing `matching.py`.**
+
+- `matching.py`, `lookups.py`, `store.py`: the plugin's, unchanged but for
+  `group_from_theme`. Layers: pins, the programme's own guide category, the same title's
+  category in any other guide, online answers (TVmaze, Wikidata, Wikipedia, TMDB with a key),
+  then title words (off by default, marked a guess). Substring words, folded, because Dutch
+  and German compound (Kochsendung, Reisreportage).
+- `themes.py`: 14 ready-made groups (Cooking, Travel, Movies, Documentaries, Sport, Kids,
+  Nature, Music, Comedy, History, Science & Tech, Home & Garden, Crime, News) plus the
+  owner's own (`my-<name>`). One CoreSettings row, `show-groups`. A ready-made group exactly
+  as it comes is **not** stored, so new ones and better words reach everyone who did not
+  change them. Each group: words, always/never titles, title words, refusing categories,
+  one channel per airing, and `permanent` (channel ids always in it).
+- `plan.py`: one pass over the guide judges every programme for every group that is on;
+  the result is `/data/show_groups/plan.json`, made again every 30 min, after every guide
+  refresh (`epg/tasks.py` asks), and whenever the settings it depends on change.
+- `live.py`: the minute pass, a Celery beat task (`show-groups-tick`, 60 s) instead of the
+  plugin's thread in every worker. Copies live in a channel group per show group, switched
+  on/off in one shared profile ("Show Groups", created empty) and hidden from output while
+  off. `show-groups-look-up` (120 s, 60 s budget) asks the online sources about titles no
+  guide knows, busiest first.
+
+What it promises (tested in `test_show_groups.py`): never takes a channel from someone
+watching (plus `viewer_grace`); only touches copies listed in `groups.json` in groups it made;
+refuses a group name that is already one of your channel groups (said on the card, the other
+groups carry on); each copy keeps its number (from 20000). **Off switches:** "Show Groups"
+(live) off switches every copy off and keeps them; each group has its own switch, and a group
+switched off (or deleted) while live is on has its copies and channel group removed once
+nobody watches; "Remove everything" (live off only) deletes all of it but keeps the online
+answers.
+
+**The plugin.** The same folder (`/data/show_groups`), so the online answers it spent hours
+gathering carry over. While the plugin is enabled and live, Show Groups refuses to go live
+(two owners of one profile). "Take it over" switches the plugin off, takes its words, pins
+and settings into the group of the same name (Cooking) and its copies with their numbers, and
+moves its `live.json` aside so a re-enabled plugin would start afresh rather than switch the
+copies off. On the user's server the plugin (0.3.1) was live with online lookups on when this
+was built.
 
 ### 5.7 Channel Manager: Stream Check — `apps/channels/stream_check.py` (+ `stream_check_views.py`, `StreamCheckTable.jsx`, `StreamCheckSettings.jsx`, `ProviderLimits.jsx`)
 

@@ -16,6 +16,7 @@ import EpgGrabberTable from '../components/tables/EpgGrabberTable';
 import GuideLayoutTable from '../components/tables/GuideLayoutTable';
 import GuideManagerTable from '../components/tables/GuideManagerTable';
 import LogoLibraryTable from '../components/tables/LogoLibraryTable';
+import ShowGroupsTable from '../components/tables/ShowGroupsTable';
 import StreamCheckTable from '../components/tables/StreamCheckTable';
 
 // One sentence per tab, saying what the page is for. On its own line under the tabs, so
@@ -31,6 +32,8 @@ const BLURB = {
     'The logo each channel has now, next to the ones the public collections would give it. Tick the ones you want and apply.',
   layout:
     'What order your channels come in and which numbers they are on. Drag one to move it, within a group or into another.',
+  shows:
+    'Groups of channels by what is on them right now: a Cooking group holds every channel airing a cooking show, and lets it go when the show is over. Switch on the ones you want, or add your own, and pick channels that are always in one.',
   grabber:
     'The iptv-org/epg grabber that is installed on this machine, run from here: where it is, what to grab, and when. The guide it writes is read straight off disk, and the one you have is only replaced once the new one has been read back and found to hold something.',
 };
@@ -75,6 +78,7 @@ const ChannelManagerPage = () => {
               <TabsTab value="logos">Logos</TabsTab>
               <TabsTab value="layout">Guide Layout</TabsTab>
               <TabsTab value="grabber">EPG Grabber</TabsTab>
+              <TabsTab value="shows">Show Groups</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -119,6 +123,7 @@ const ChannelManagerPage = () => {
       {activeTab === 'logos' && <LogoLibraryTable />}
       {activeTab === 'layout' && <GuideLayoutTable />}
       {activeTab === 'grabber' && <EpgGrabberTable />}
+      {activeTab === 'shows' && <ShowGroupsTable />}
     </Box>
   );
 };

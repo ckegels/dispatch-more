@@ -414,6 +414,13 @@ are keyed by its guide's tvg-id, learnt from the lineup, so the app reads the li
 first, then the guide window (arr.64 also does this itself 2 s, 30 s and 90 s after its own
 choice, for servers before v219).
 
+**Show Groups** (v231, Channel Manager → Show Groups) sends the same message with
+`"source": "show_groups"`, `"profile": "<its profile>"` and the copies that joined or left,
+whenever channels come into or go out of a show group (Cooking, Travel, ...). The copies are
+ordinary channels in the "Show Groups" profile, in a channel group per show group, hidden from
+output while out of their group; an app reads the lineup again on the message, as arr.64 does.
+The Show Groups plugin sent the same message, so nothing changes for the app.
+
 The change is for every viewer (and Plex and Jellyfin), and the server records it with the
 login, the device id and name, and the address it came from; an admin sees it on Settings →
 arrTV ("Guide changes", with Put back and Keep) and on the Guides tab. From v220 choosing the

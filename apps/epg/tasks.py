@@ -470,6 +470,13 @@ def refresh_epg_data(source_id, force=False, _file_defer_retry=0):
                 meaning_index.queue_build()
         except Exception as e:
             logger.debug(f"Could not queue the guide meanings: {e}")
+        # Show Groups works out what is on again at its next minute
+        try:
+            from apps.channels.show_groups import live as show_groups
+
+            show_groups.ask_rebuild()
+        except Exception as e:
+            logger.debug(f"Could not ask Show Groups to look again: {e}")
         return result
     except Exception as e:
         logger.error(
