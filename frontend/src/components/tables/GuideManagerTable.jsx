@@ -27,7 +27,9 @@ import {
   Group,
   LoadingOverlay,
   MultiSelect,
+  NativeSelect,
   NumberInput,
+  Pagination,
   Paper,
   Progress,
   SegmentedControl,
@@ -50,6 +52,8 @@ import useAskAgainWhenNowChanges from '../../hooks/useAskAgainWhenNowChanges';
 
 // The Lineup's third of a set: laid out the same way, a panel with a toolbar over a table.
 // A row here is one channel whose guide is worth changing, next to what it is on now.
+
+const PAGE_SIZES = ['25', '50', '100', '250', '500'];
 
 const WHY = {
   none: { label: 'On no guide', color: 'orange' },
@@ -856,9 +860,26 @@ const GuideManagerTable = () => {
     []
   );
 
+  // A page at a time, as the Lineup and the other tables: a run over a whole lineup lists
+  // hundreds of channels, and every row is drawn with its guides and buttons
+  const [pageSize, setPageSize] = useState(50);
+  const [pageIndex, setPageIndex] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  // What is on show can shrink under you -- a guide taken, a filter typed, a smaller page
+  useEffect(() => {
+    if (pageIndex > pageCount - 1) setPageIndex(pageCount - 1);
+  }, [pageCount, pageIndex]);
+  const paginatedRows = useMemo(
+    () => rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
+    [rows, pageIndex, pageSize]
+  );
+  const first = rows.length ? pageIndex * pageSize + 1 : 0;
+  const last = Math.min((pageIndex + 1) * pageSize, rows.length);
+
   const table = useTable({
     columns,
-    data: rows,
+    data: paginatedRows,
+    // Ticking every row ticks every row there is, not only the ones on this page
     allRowIds: rows.map((one) => one.id),
     enablePagination: false,
     enableRowSelection: true,
@@ -1656,6 +1677,45 @@ const GuideManagerTable = () => {
                     <CustomTable table={table} />
                   )}
                 </div>
+              </Box>
+
+              {/* Pagination Controls, as on the Lineup */}
+              <Box
+                style={{
+                  position: 'sticky',
+                  bottom: 0,
+                  zIndex: 3,
+                  backgroundColor: '#27272A',
+                  borderTop: '1px solid #3f3f46',
+                }}
+              >
+                <Group gap={5} justify="center" style={{ padding: 8 }}>
+                  <Text size="xs">Page Size</Text>
+                  <NativeSelect
+                    size="xxs"
+                    value={String(pageSize)}
+                    data={PAGE_SIZES}
+                    aria-label="Page size"
+                    onChange={(event) => {
+                      setPageSize(parseInt(event.target.value, 10));
+                      setPageIndex(0);
+                    }}
+                    style={{ paddingRight: 20 }}
+                  />
+                  <Pagination
+                    total={pageCount}
+                    value={pageIndex + 1}
+                    onChange={(to) => setPageIndex(to - 1)}
+                    size="xs"
+                    withEdges
+                    style={{ paddingRight: 20 }}
+                  />
+                  <Text size="xs">
+                    {rows.length
+                      ? `${first} to ${last} of ${rows.length}`
+                      : '0 channels'}
+                  </Text>
+                </Group>
               </Box>
             </Box>
           </Paper>

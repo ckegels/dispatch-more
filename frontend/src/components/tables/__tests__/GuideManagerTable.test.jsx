@@ -203,6 +203,21 @@ describe('GuideManagerTable', () => {
     );
   });
 
+  it('shows a page at a time, with a page size to choose, as the other tables', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      ...onNothing,
+      channel: 1000 + i,
+      channel_name: `┃AT┃ CHANNEL ${i}`,
+    }));
+    API.getGuideManager.mockResolvedValue({ ...page, suggestions: many });
+    draw();
+    expect(await screen.findByText('1 to 50 of 60')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Page size' }), {
+      target: { value: '100' },
+    });
+    expect(await screen.findByText('1 to 60 of 60')).toBeInTheDocument();
+  });
+
   it('says what to press when nothing has been looked at yet', async () => {
     API.getGuideManager.mockResolvedValue({ ...page, suggestions: [] });
     draw();

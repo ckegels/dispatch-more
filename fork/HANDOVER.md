@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v229** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v230** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,9 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**The Guides table a page at a time** (v230): page size 25 / 50 / 100 / 250 / 500 and page
+buttons at the bottom, as the Lineup; ticking every row still ticks every row there is.
 
 **Nothing certain without the countries, networks told apart, dead guides left out**
 (v229, the user's finds on the Guides tab). "┃CA EN┃ ABC WEST" was offered "CA - CBS WEST"
