@@ -111,3 +111,13 @@ class RecognitionLevelTests(TestCase):
         custom = channel_manager.settings_from({"recognition": "custom", "use_language_model": True, "match_call_signs": False})
         self.assertTrue(custom["use_language_model"])
         self.assertFalse(custom["match_call_signs"])
+
+
+class LocalStationTests(TestCase):
+    def test_a_local_station_is_not_its_network_whatever_id_they_share(self):
+        """The user's find: US| FOX 05 (WNYW) NEW YORK went onto ┃USA┃ FOX HD by foxwnyw.us."""
+        fox = {"channel": Channel(name="┃USA┃ FOX HD"), "country": "us"}
+        wnyw = {"name": "US| FOX 05 (WNYW) NEW YORK", "country": "us"}
+        self.assertTrue(channel_manager._tvg_contradicted(wnyw, fox))
+        local = {"channel": Channel(name="FOX 5 | NEW YORK | WNYW"), "country": "us"}
+        self.assertFalse(channel_manager._tvg_contradicted(wnyw, local), "the station itself")

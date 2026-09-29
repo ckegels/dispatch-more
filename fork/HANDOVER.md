@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v225** (2026-09-28). The commit messages on the branch
+Written 2026-09-19, kept current to **release v226** (2026-09-28). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1021,6 +1021,13 @@ out of a row (`drops` on apply: not added, or off the channel; never the fallbac
 suggestion ignored (`channel-manager-ignored`: a new channel or conflict whole, for a channel
 you have only those streams, so a stream added later is still suggested), with an Ignored view
 and Clear ignored list. Expand all opens every row (`expandAll` on the shared table).
+
+**A local station is not its network** (v226, `_tvg_contradicted`). With Thorough the tvg-id
+rule is on, and "US| FOX 05 (WNYW) NEW YORK" went onto "┃USA┃ FOX HD" because TiviBridge
+stamps WNYW's id, foxwnyw.us, on its FOX HD (the user's find). The check compared call signs
+only when both names had one; now a name that is a local station (a call sign, or network +
+number + town) and one that is not are two channels. The model's placements pass the same
+check.
 
 **How hard to look** (v225, `RECOGNITION`, `with_recognition`, setting `recognition`). The
 recognition switches had grown to nine beside the word lists, a memory setting and an action

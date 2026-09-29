@@ -565,6 +565,14 @@ def _tvg_contradicted(stream, record):
     calls_c, calls_s = call_signs_of(channel, mine or "us"), call_signs_of(stream["name"], theirs or "us")
     if calls_c and calls_s:
         return not calls_c & calls_s
+    local_c = bool(calls_c) or bool(local_station_of(channel, mine or "us"))
+    local_s = bool(calls_s) or bool(local_station_of(stream["name"], theirs or "us"))
+    if local_c != local_s:
+        # One names a local station and the other only the network: "US| FOX 05 (WNYW) NEW
+        # YORK" carried the id "foxwnyw.us" that one provider also stamps on its "FOX HD",
+        # and went onto it (the user's find, 2026-09-29). A network's name is not one of
+        # its stations.
+        return True
     if network_of(channel) != network_of(stream["name"]):
         return True
     if _is_west(channel) != _is_west(stream["name"]) or _is_plus(channel) != _is_plus(stream["name"]):
