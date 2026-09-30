@@ -1281,6 +1281,17 @@ const ShowGroupsTable = () => {
                     )}
                     <Switch
                       size="xs"
+                      label="Trust other guides for the same show"
+                      description="A show its own guide files elsewhere joins when most of its airings in your other guides are filed under the group's words"
+                      checked={settings.combine_guides !== false}
+                      onChange={(event) =>
+                        saveSettings({
+                          combine_guides: event.currentTarget.checked,
+                        })
+                      }
+                    />
+                    <Switch
+                      size="xs"
                       label="Look past vague categories"
                       description="A show a guide only files under words like these is decided by your other guides, then the databases"
                       checked={settings.look_past_vague !== false}

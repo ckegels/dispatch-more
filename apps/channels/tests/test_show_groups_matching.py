@@ -305,3 +305,39 @@ class VagueCategories(unittest.TestCase):
         group = matching.group_from_theme(themes.preset("cooking"))
         online = {"cake boss": {"source": "tvmaze", "genres": ["Food"]}}
         self.assertFalse(matching.judge(group, "Cake Boss", ["Entertainment"], {}, online).taken)
+
+
+class WhatTheUsersGuidesMissed(unittest.TestCase):
+    """Cooking shows the user's Cooking group did not hold (2026-09-30), and why."""
+
+    vague = matching.vague_words(matching.VAGUE_WORDS)
+
+    def group(self, combine=True):
+        return matching.group_from_theme(themes.preset("cooking"), self.vague, combine)
+
+    def test_german_cooking_categories(self):
+        for category in ("Kochmagazin", "Kochsoap", "Kochshow", "Kochdoku", "Grillshow"):
+            self.assertTrue(matching.judge(self.group(), "Something", [category]).taken, category)
+
+    def test_another_guide_that_mostly_says_cooking_overrules_its_own(self):
+        others = {"krautergarten": ["Kochen", "Kräutermagazin"]}
+        shares = {"krautergarten": {"Kochen": 0.9, "Kräutermagazin": 1.0}}
+        verdict = matching.judge(self.group(), "Kräutergarten", ["Kräutermagazin"], others, {}, shares)
+        self.assertTrue(verdict.taken)
+        self.assertIn("its own guide says Kräutermagazin", verdict.reason)
+
+    def test_one_episode_filed_under_cooking_does_not(self):
+        others = {"fixer upper": ["Cooking", "Home improvement", "Reality"]}
+        shares = {"fixer upper": {"Cooking": 0.05, "Home improvement": 0.9, "Reality": 1.0}}
+        self.assertFalse(matching.judge(self.group(), "Fixer Upper", ["Home improvement", "Reality"],
+                                        others, {}, shares).taken)
+
+    def test_switched_off_its_own_guide_decides(self):
+        others = {"genuss weltweit": ["Kochen"]}
+        self.assertFalse(matching.judge(self.group(combine=False), "Genuss Weltweit", ["Doku"], others,
+                                        {}, {"genuss weltweit": {"Kochen": 1.0}}).taken)
+
+    def test_french_reality_is_vague(self):
+        online = {"cauchemar en cuisine": {"source": "tvdb", "genres": ["Reality", "Food"]}}
+        self.assertTrue(matching.judge(self.group(), "Cauchemar en cuisine",
+                                       ["Entertainment", "Reality", "Téléréalité"], {}, online).taken)

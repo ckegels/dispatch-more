@@ -521,3 +521,21 @@ class Queue(Base):
         self.switch_on("cooking")
         made = plans.compute(themes.load_settings(), themes.load_groups(), NOW)
         self.assertEqual([written for _, written, _ in made["unknown"]], ["Mystery Show"])
+
+
+class OldDefaults(Base):
+    def test_the_plugins_words_follow_the_new_default(self):
+        groups = themes.load_groups()
+        groups[0]["category_words"] = ("cooking, food, culin, baking, gastronom, kookprogramma, kochen, "
+                                       "kochsendung, kulinar, essen und trinken")
+        groups[0]["never"] = "Télématin"
+        themes.save(None, groups)
+        cooking = themes.load_groups()[0]
+        self.assertIn("koch,", cooking["category_words"])
+        self.assertEqual(cooking["never"], "Télématin", "the owner's own changes are kept")
+
+    def test_words_of_your_own_are_kept(self):
+        groups = themes.load_groups()
+        groups[0]["category_words"] = "cooking, my word"
+        themes.save(None, groups)
+        self.assertEqual(themes.load_groups()[0]["category_words"], "cooking, my word")

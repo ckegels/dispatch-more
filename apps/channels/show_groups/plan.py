@@ -76,26 +76,36 @@ def _label(channel):
     return f"{name} (#{number:g})" if number is not None else name
 
 
-def titles_from_guides():
+def titles_from_guides(with_shares=False):
     """Every category any guide gives a title, over the whole guide loaded: a title categorised
-    on Saturday teaches the guide that airs it uncategorised on Tuesday."""
+    on Saturday teaches the guide that airs it uncategorised on Tuesday. With with_shares, also
+    how many of the title's airings carry each category ({title: {category: 0..1}}): one
+    Fixer Upper episode filed under Cooking is not Fixer Upper being a cooking show."""
     from apps.epg.models import ProgramData
 
-    found = defaultdict(set)
+    found = defaultdict(Counter)
+    aired = Counter()
     rows = ProgramData.objects.filter(custom_properties__has_key="categories").values_list(
         "title", "custom_properties")
     for title, props in rows.iterator(chunk_size=5000):
         categories = matching.real_categories((props or {}).get("categories"))
         if categories:
-            found[matching.plain(title)].update(categories)
-    return {key: sorted(categories) for key, categories in found.items()}
+            key = matching.plain(title)
+            found[key].update(categories)
+            aired[key] += 1
+    listed = {key: sorted(categories) for key, categories in found.items()}
+    if not with_shares:
+        return listed
+    shares = {key: {c: round(n / aired[key], 2) for c, n in categories.items()}
+              for key, categories in found.items()}
+    return listed, shares
 
 
 def settings_key(settings, groups):
     """What the plan depends on; a change means working it out again."""
     wanted = {k: settings.get(k) for k in ("join_ahead", "leave_after", "linger", "min_length",
                                             "source_groups", "plan_hours", "look_past_vague",
-                                            "vague_categories")}
+                                            "vague_categories", "combine_guides")}
     wanted["groups"] = [{k: v for k, v in g.items() if k not in ("permanent", "channel_kinds")}
                         for g in groups if g.get("on")]
     return hashlib.sha1(json.dumps(wanted, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -115,7 +125,8 @@ def compute(settings, groups, now=None, exclude_ids=()):
     now = now or timezone.now()
     on = [g for g in groups if g.get("on")]
     vague = vague_of(settings)
-    judges = {g["id"]: matching.group_from_theme(g, vague) for g in on}
+    combine = settings.get("combine_guides", True) is not False
+    judges = {g["id"]: matching.group_from_theme(g, vague, combine) for g in on}
     hours = float(settings.get("plan_hours") or 24)
     join_ahead = float(settings.get("join_ahead") or 0)
     leave_after = float(settings.get("leave_after") or 0)
@@ -125,7 +136,7 @@ def compute(settings, groups, now=None, exclude_ids=()):
     by_guide = source_channels(settings, exclude_ids)
     fillers = set(FILLERS) | {matching.plain(_bare(c["effective_name"])) for channels in by_guide.values()
                               for c in channels}
-    from_guides = titles_from_guides() if on else {}
+    from_guides, shares = titles_from_guides(with_shares=True) if on else ({}, {})
     from_online = store.online_answers(store.load_lookups()) if on else {}
 
     horizon = now + timedelta(hours=hours) + timedelta(minutes=join_ahead + leave_after + linger)
@@ -156,14 +167,15 @@ def compute(settings, groups, now=None, exclude_ids=()):
             written.setdefault(key, title)
         if counted:
             show = shows.setdefault(key, {"title": matching.show_name(title), "airings": 0,
-                                          "categories": [], "elsewhere": from_guides.get(key) or []})
+                                          "categories": [], "elsewhere": from_guides.get(key) or [],
+                                          "shares": shares.get(key) or {}})
             show["airings"] += 1
             show["categories"] = sorted(set(show["categories"]) | set(own))
         short = (end - start).total_seconds() / 60 < min_length
         for gid, group in judges.items():
             verdict = judged.get((gid, key, own))
             if verdict is None:
-                verdict = matching.judge(group, title, own, from_guides, from_online)
+                verdict = matching.judge(group, title, own, from_guides, from_online, shares)
                 judged[(gid, key, own)] = verdict
             if verdict.taken and not short:
                 airings[gid].append((title, start, end, verdict, by_guide[epg_id]))

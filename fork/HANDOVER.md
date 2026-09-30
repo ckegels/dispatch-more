@@ -1499,6 +1499,24 @@ Programming", "Dauerwerbesendung"), one-off documentaries, films under a local t
 and titles that are a channel's own name are no longer queued (`plan.FILLERS`), since busiest
 first put them at the head of every run.
 
+**Cooking shows it missed, looked at by hand** (v234, 2026-09-30, on the user's 9,019 shows).
+The cooking channels were right (24Kitchen, Food Network CA, Njam, Gusto: every programme or
+all but one) except **BonGusto: 50 of 54 missed**, and the misses elsewhere had the same
+causes: (1) German guides write Kochmagazin / Kochsoap / Kochshow / Kochdoku / Grillshow,
+and the words had "kochen" and "kochsendung" but not "koch" -- now "koch" and grill/backen/
+rezept/cuisine words; (2) the programme's own guide won even when the user's other guides
+file the same title under Kochen (Kräutergarten "Kräutermagazin", Genuss Weltweit "Doku,
+Reportage", WineFirst, La meilleure cuisine régionale) -- now another guide overrules it
+when **at least half** of the title's airings there carry the group's word
+(`matching.COMBINE_SHARE`, `plan.titles_from_guides(with_shares=True)`, switch
+`combine_guides`); the share is what keeps Fixer Upper and NZZ Format out, where one episode
+among many was filed under Cooking; (3) "Téléréalité" was not a vague word (Cauchemar en
+cuisine); (4) the take-over copied the plugin's words into the stored Cooking group, where
+a better default never arrives -- `themes.OLD_DEFAULTS` makes a setting still at an old
+default follow the new one. Re-judged offline with the user's own Cooking group: 25 more
+shows (68 airings), none lost; not measured: the shares, which only the server has.
+Left: titles only the title tells (Gute Küche, Celebrity Chef) need "title words", off.
+
 **Whole channels** (`kinds.py`, v232; the group's "Whole channels" tab): iptv-org's channel
 database files each channel under kinds (cooking, travel, movies, documentary, kids, sports,
 news, music, comedy, science, outdoor...), mapped onto the ready-made groups in

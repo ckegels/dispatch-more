@@ -85,6 +85,9 @@ class Group:
     # Words that say nothing about what a programme is ("Entertainment", "Lifestyle"): a
     # category made of nothing else does not decide, the next layer is asked (telling())
     vague: frozenset = frozenset()
+    # When the programme's own guide does not call it this kind of show but another guide
+    # does for the same title, the other guide's word takes it (judge())
+    combine: bool = False
 
 
 # The words guides file everything under. A cooking competition is "Entertainment" in one
@@ -93,6 +96,7 @@ class Group:
 VAGUE_WORDS = ("entertainment, lifestyle, reality, magazine, magazin, general, other, others, "
                "misc, miscellaneous, variety, unterhaltung, amusement, divertissement, "
                "intrattenimento, entretenimiento, entretenimento, infotainment, leisure, "
+               "telerealite, realite, realityshow, realitysoap, showbiz, "
                "tv, television, shows, series, programmes, programs")
 # Joining words, never telling on their own
 _GLUE = {"and", "en", "und", "et", "e", "y", "of", "the"}
@@ -111,11 +115,12 @@ def telling(categories, vague):
             if not all(w in vague or w in STRUCTURAL or w in _GLUE for w in _flat(c).split())]
 
 
-def group_from_theme(theme, vague=frozenset()):
+def group_from_theme(theme, vague=frozenset(), combine=False):
     """One show group as the Show Groups tab defines it (themes.py); vague as vague_words()
-    gives it, from the settings shared by every group."""
+    gives it and combine, from the settings shared by every group."""
     return Group(
         vague=vague,
+        combine=combine,
         name=str(theme.get("name") or "").strip() or "Show group",
         category_words=word_list(theme.get("category_words")),
         title_words=word_list(theme.get("title_words")),
@@ -163,7 +168,12 @@ def _answer(group, layer, categories, besides=()):
     return Verdict(True, layer, shown, disqualifier=spoiler)
 
 
-def judge(group, title, own_categories=(), from_guides=None, from_online=None):
+# How many of a title's airings in the other guides must carry the group's category before
+# they overrule the programme's own guide (combine)
+COMBINE_SHARE = 0.5
+
+
+def judge(group, title, own_categories=(), from_guides=None, from_online=None, shares=None):
     """Whether a programme belongs in the group, and which layer said so.
 
     The first layer that knows anything about the programme answers, including when it says
@@ -180,9 +190,21 @@ def judge(group, title, own_categories=(), from_guides=None, from_online=None):
         return Verdict(True, PIN, "pinned: always")
 
     own = real_categories(own_categories)
-    if telling(own, group.vague):
-        return _answer(group, GUIDE, own)
     elsewhere = real_categories((from_guides or {}).get(key))
+    if telling(own, group.vague):
+        verdict = _answer(group, GUIDE, own)
+        # A guide filing a cooking show under "Doku" or "Kräutermagazin" while another files
+        # the same title under "Kochen" (the user's BonGusto: 50 of 54 programmes missed)
+        if (not verdict.taken and not verdict.disqualifier and group.combine
+                and telling(elsewhere, group.vague)):
+            other = _answer(group, OTHER_GUIDE, elsewhere)
+            # ...only when most of those airings say so, not one episode among many
+            share = max((((shares or {}).get(key) or {}).get(c, 0) for c in elsewhere
+                         if _hit(group.category_words, _flat(c))), default=0)
+            if other.taken and (shares is None or share >= COMBINE_SHARE):
+                return Verdict(True, OTHER_GUIDE, f"{other.reason} (its own guide says "
+                               f"{', '.join(own)})", disqualifier=other.disqualifier)
+        return verdict
     if telling(elsewhere, group.vague):
         return _answer(group, OTHER_GUIDE, elsewhere)
     online = (from_online or {}).get(key) or {}

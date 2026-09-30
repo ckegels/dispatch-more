@@ -39,6 +39,9 @@ DEFAULTS = {
     # by the next layer: another guide, then the online databases. Off: the guide's word
     # decides, as the plugin did.
     "look_past_vague": True,
+    # A programme its own guide files elsewhere joins when another guide files the same title
+    # under the group's words (matching.judge). Off: its own guide decides, as the plugin did.
+    "combine_guides": True,
     "vague_categories": VAGUE_WORDS,
     "wikipedia_languages": "en, nl, de, fr",
     # The keys for TMDB, TheTVDB, Trakt and OMDb are not here: they are shared by everything
@@ -71,8 +74,11 @@ GROUP_FIELDS = {
 PRESETS = [
     {
         "id": "cooking", "name": "Cooking",
-        "category_words": "cooking, food, culin, baking, gastronom, kookprogramma, kochen, "
-                          "kochsendung, kulinar, essen und trinken",
+        # "koch" and not only "kochen": German guides write Kochmagazin, Kochsoap, Kochshow
+        # and Kochdoku, none of which holds "kochen"; the user's BonGusto missed 50 of 54
+        "category_words": "cooking, food, culin, baking, gastronom, kookprogramma, koch, "
+                          "kulinar, essen und trinken, grillshow, grillen, barbecue, bbq, backen, "
+                          "backshow, rezept, cuisine, gastro, culinaire, kookshow, bakprogramma",
         "title_words": "kitchen, keuken, kuchen, kuche, kochen, kocht, kook, bakt, bakes, baking, "
                        "recipe, recept, chef, cuisine, cook, grill, bbq, restaurant, menu, dinner, "
                        "diner, tafel, smaak",
@@ -156,6 +162,16 @@ PRESETS = [
     },
 ]
 PRESET_IDS = [p["id"] for p in PRESETS]
+# A ready-made group's setting still at an earlier default follows the new one: the take-over
+# copied the plugin's words into the stored Cooking group, where a better default would never
+# have reached them
+OLD_DEFAULTS = {
+    "cooking": {"category_words": {
+        "cooking, food, culin, baking, gastronom, kookprogramma, kochen, kochsendung, kulinar, "
+        "essen und trinken",
+        "cooking, food, culinary, baking, gastronom, kookprogramma, kochen, kulinar",
+    }},
+}
 
 
 def preset(group_id):
@@ -196,8 +212,11 @@ def load_groups():
     stored = {g.get("id"): g for g in _load().get("groups") or [] if isinstance(g, dict)}
     groups = []
     for pid in PRESET_IDS:
-        mine = stored.pop(pid, None)
-        groups.append({**preset(pid), **_clean(mine)} if mine else preset(pid))
+        mine = _clean(stored.pop(pid, None))
+        for key, old in OLD_DEFAULTS.get(pid, {}).items():
+            if mine.get(key) in old:
+                del mine[key]
+        groups.append({**preset(pid), **mine})
     for gid, mine in stored.items():
         groups.append({**GROUP_FIELDS, **_clean(mine), "id": gid, "preset": False})
     return groups
@@ -252,7 +271,8 @@ def save(settings=None, groups=None):
             values["first_number"] = max(1, values["first_number"])
         except (TypeError, ValueError):
             raise ValueError("Numbers only, please")
-        for key in ("live", "announce_changes", "online_lookups", "look_past_vague"):
+        for key in ("live", "announce_changes", "online_lookups", "look_past_vague",
+                    "combine_guides"):
             values[key] = bool(values[key])
         values["source_groups"] = _ids(values["source_groups"])
         values["profile_name"] = str(values["profile_name"] or "").strip() or "Show Groups"

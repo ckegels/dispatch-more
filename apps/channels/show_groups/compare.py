@@ -37,12 +37,14 @@ def row(key, show, answers, judges, vague=frozenset()):
     online = store.online_answers({key: answers}).get(key)
     takes, disagree = [], []
     for gid, group in judges.items():
-        verdict = matching.judge(group, show["title"], own, {key: elsewhere}, {key: online} if online else {})
+        shares = {key: show.get("shares") or {}}
+        verdict = matching.judge(group, show["title"], own, {key: elsewhere}, {key: online} if online else {},
+                                 shares)
         if verdict.taken:
             takes.append({"group": gid, "layer": verdict.layer, "why": verdict.reason})
         if online and verdict.layer != matching.PIN:
             # What the databases alone would say, against what the guides alone would
-            by_guides = matching.judge(group, show["title"], own, {key: elsewhere}, {})
+            by_guides = matching.judge(group, show["title"], own, {key: elsewhere}, {}, shares)
             by_them = matching._answer(group, online["source"], matching.real_categories(online["genres"]))
             if by_guides.layer in (matching.GUIDE, matching.OTHER_GUIDE) and by_guides.taken != by_them.taken:
                 disagree.append({"group": gid, "guides": by_guides.taken, "databases": by_them.taken})
@@ -61,7 +63,8 @@ def shows(query="", only="all", offset=0, limit=50):
     settings, groups = service_keys.with_keys(themes.load_settings()), themes.load_groups()
     chosen = [g for g in groups if g.get("on")] or groups
     vague = plans.vague_of(settings)
-    judges = {g["id"]: matching.group_from_theme(g, vague) for g in chosen}
+    combine = settings.get("combine_guides", True) is not False
+    judges = {g["id"]: matching.group_from_theme(g, vague, combine) for g in chosen}
     data = load_shows()
     everything = data.get("shows") or {}
     answers = store.load_lookups()
