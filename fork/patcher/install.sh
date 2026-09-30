@@ -116,6 +116,7 @@ UNIT
       fi
       systemctl start $SERVICES
       echo "Restarted: $SERVICES"
+      [ -f "$STATE/dvr-worker-off" ] || bash "$HERE/dvr-worker.sh" running "$STATE" "$SLUG" || true
     else
       echo "No dispatcharr services found to restart: restart Dispatcharr yourself."
     fi

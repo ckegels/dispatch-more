@@ -9,13 +9,32 @@ import {
   Table,
   Text,
 } from '@mantine/core';
-import { RefreshCw } from 'lucide-react';
+import { Copy, RefreshCw } from 'lucide-react';
 import API from '../../api';
 
 // Every Dispatcharr process and the memory it really holds (shared pages divided among the
 // processes sharing them), and which ones have the language model's libraries loaded. Read
 // on request only: a look costs a pass over /proc, which is cheap, but not every 5 seconds.
-const MemoryUse = () => {
+// The breakdown as plain text, for pasting into a message
+export const memoryAsText = (found) =>
+  [
+    `Dispatcharr: ${Math.round(found.total_mb)} MB in ${found.processes.length} processes; ` +
+      `machine ${found.system.used_mb} of ${found.system.total_mb} MB used (${found.system.percent} %)`,
+    '',
+    ...found.kinds.map(
+      (kind) =>
+        `${String(Math.round(kind.mb)).padStart(6)} MB  ${kind.processes}x  ${kind.kind}` +
+        (kind.torch ? `  (language model in ${kind.torch})` : '')
+    ),
+    '',
+    ...found.processes.map(
+      (one) =>
+        `${String(one.pid).padStart(7)} ${String(Math.round(one.mb)).padStart(6)} MB` +
+        `${one.exact ? '' : ' (RSS)'}${one.torch ? ' [language model]' : ''}  ${one.kind}  ${one.command}`
+    ),
+  ].join('\n');
+
+const MemoryUse = ({ onCopy, copied }) => {
   const [found, setFound] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -48,15 +67,32 @@ const MemoryUse = () => {
           {found.system.used_mb} of {found.system.total_mb} MB used (
           {found.system.percent} %).
         </Text>
-        <Button
-          size="xs"
-          variant="default"
-          leftSection={<RefreshCw size={14} />}
-          onClick={look}
-          loading={busy}
-        >
-          Look again
-        </Button>
+        <Group gap="xs">
+          {copied && (
+            <Text size="xs" c="dimmed">
+              {copied}
+            </Text>
+          )}
+          {onCopy && (
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<Copy size={14} />}
+              onClick={() => onCopy(memoryAsText(found))}
+            >
+              Copy as text
+            </Button>
+          )}
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<RefreshCw size={14} />}
+            onClick={look}
+            loading={busy}
+          >
+            Look again
+          </Button>
+        </Group>
       </Group>
       <Table striped verticalSpacing={4} fz="sm">
         <Table.Thead>

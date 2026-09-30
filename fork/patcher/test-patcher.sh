@@ -147,6 +147,7 @@ echo "\$*" >> "$T/systemctl.log"
 case "\$1" in
   list-units) for f in "$UNITS"/dispatcharr*.service; do echo "\$(basename "\$f") loaded active running x"; done ;;
   show) echo "$UNITS/\${@: -1}" ;;
+  is-active) [ -e "$T/dvr-dead" ] && exit 3 ;;
 esac
 exit 0
 FAKE
@@ -161,6 +162,15 @@ check "...the stock service untouched" "grep -q 'worker -l info$' '$UNITS/dispat
 out="$(dvr add)"
 check "added again (an update) it is the same one, not a copy of itself" \
   "[ \$(grep -c -- '-Q dvr' '$UNITS/dispatcharr-celery-dvr.service') = 1 ]"
+out="$(dvr running)"
+check "started after the restart, and the drop-in kept while it runs" \
+  "echo \"\$out\" | grep -q 'is running' && grep -q 'restart dispatcharr-celery-dvr.service' '$T/systemctl.log' && [ -f '$UNITS/dispatcharr-celery.service.d/$SLUG-dvr.conf' ]"
+touch "$T/dvr-dead"
+out="$(dvr running)"
+check "one that does not start takes its drop-in back: the normal worker runs recordings" \
+  "echo \"\$out\" | grep -q 'did not start' && [ ! -e '$UNITS/dispatcharr-celery.service.d' ] && grep -q '^restart dispatcharr-celery.service' '$T/systemctl.log'"
+rm -f "$T/dvr-dead"
+out="$(dvr add)"
 out="$(dvr remove)"
 check "removed, nothing of it is left" \
   "[ ! -e '$UNITS/dispatcharr-celery-dvr.service' ] && [ ! -e '$UNITS/dispatcharr-celery.service.d' ] && [ ! -e '$T/dvr-state/dvr-worker' ]"

@@ -135,7 +135,9 @@ const Diagnostics = ({ active }) => {
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
       {tab === 'logs' && <LogViewer />}
-      {tab === 'memory' && <MemoryUse />}
+      {tab === 'memory' && (
+        <MemoryUse onCopy={copyToClipboard} copied={copied} />
+      )}
 
       {tab === 'health' && (
         <ChannelHealth
@@ -147,7 +149,9 @@ const Diagnostics = ({ active }) => {
         />
       )}
 
-      {tab !== 'logs' && (
+      {/* Keeping, refreshing and copying are the channel lists'; the logs and the memory
+          view have their own */}
+      {tab !== 'logs' && tab !== 'memory' && (
         <Group gap="xs" align="center">
           <Text size="xs" c="dimmed">
             Keep for

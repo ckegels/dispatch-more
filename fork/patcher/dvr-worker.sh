@@ -68,8 +68,29 @@ add() {
   echo "Added a worker of its own for recordings ($DVR, up to 20 at once)."
 }
 
+# After the services are (re)started: the recordings worker is started, and when it does not
+# run the drop-in goes again, so the normal worker keeps running recordings. Without this a
+# worker that was added but never started (systemd does not list a unit that was just
+# created among the ones install.sh restarts) left recordings with nobody to run them.
+running() {
+  [ -f "$MARK" ] || return 0
+  systemctl restart "$DVR.service" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    systemctl is-active --quiet "$DVR.service" && { echo "The recordings worker ($DVR) is running."; return 0; }
+    sleep 1
+  done
+  CELERY="$(cat "$MARK")"
+  rm -f "$UNITS/$CELERY.d/$SLUG-dvr.conf"
+  rmdir "$UNITS/$CELERY.d" 2>/dev/null || true
+  systemctl daemon-reload || true
+  systemctl restart "$CELERY" >/dev/null 2>&1 || true
+  echo "Note: the recordings worker ($DVR) did not start; the normal worker runs recordings."
+  echo "      See: journalctl -u $DVR"
+}
+
 case "$ACTION" in
   add) add ;;
   remove) remove ;;
+  running) running ;;
   *) echo "Unknown action: $ACTION"; exit 2 ;;
 esac
