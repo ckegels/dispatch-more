@@ -186,12 +186,22 @@ const plan = {
   rows: [mergeRow, conflictRow],
 };
 
-const draw = () =>
+// Opened, then Preview pressed, as a user does: the page works nothing out by itself
+const open = () =>
   render(
     <MantineProvider theme={theme}>
       <ChannelManagerTable />
     </MantineProvider>
   );
+const draw = () => {
+  const drawn = open();
+  waitFor(() =>
+    expect(screen.getByRole('button', { name: /Preview/ })).not.toBeDisabled()
+  ).then(() =>
+    fireEvent.click(screen.getByRole('button', { name: /Preview/ }))
+  );
+  return drawn;
+};
 
 const rowOf = (text) => screen.getAllByText(text)[0].closest('.tr');
 
@@ -316,6 +326,28 @@ describe('ChannelManagerTable', () => {
       'live',
       { name: '┃AT┃ ORF 1 FHD' }
     );
+  });
+
+  it('works nothing out until Preview is pressed', async () => {
+    open();
+    expect(
+      await screen.findByText(/Press Preview to work out your channels/)
+    ).toBeInTheDocument();
+    expect(API.previewChannelManager).not.toHaveBeenCalled();
+  });
+
+  it('takes the applied rows off after an apply, without working everything out again', async () => {
+    draw();
+    await screen.findAllByText('┃AT┃ ORF 1');
+    expect(API.previewChannelManager).toHaveBeenCalledTimes(1);
+    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('input[type=checkbox]'));
+    fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText(/Applied 1 channel/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText('┃AT┃ ORF 1')).not.toBeInTheDocument()
+    );
+    expect(API.previewChannelManager).toHaveBeenCalledTimes(1);
   });
 
   it('applies only the channels ticked, after asking', async () => {

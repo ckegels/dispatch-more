@@ -597,6 +597,8 @@ const ChannelManagerTable = () => {
   const [busy, setBusy] = useState(false);
   // Where the preview being worked out has got to (the server's stages)
   const [progress, setProgress] = useState(null);
+  // What the last apply did, said above the rows that are left (see apply)
+  const [applied, setApplied] = useState(null);
   const tableRef = useRef(null);
 
   useEffect(() => {
@@ -621,6 +623,7 @@ const ChannelManagerTable = () => {
     try {
       const result = await API.previewChannelManager(withLevers);
       setPlan(result);
+      setApplied(null);
       setPreviewed(JSON.stringify(withLevers));
       setTicked(new Set());
       setOrders({});
@@ -646,7 +649,8 @@ const ChannelManagerTable = () => {
         const data = await API.getChannelManagerOptions();
         setOptions(data);
         setLevers(data.settings);
-        await preview(data.settings);
+        // Not worked out on opening (the user's ask): it reads every stream, so it waits for
+        // Preview, as a changed setting already did
       } catch (e) {
         setError(e?.body?.error || 'Could not load the Channel Manager.');
       }
@@ -1017,7 +1021,7 @@ const ChannelManagerTable = () => {
           .filter((key) => intoChoice[key])
           .map((key) => [key, intoChoice[key].id])
       );
-      await API.applyChannelManager(
+      const result = await API.applyChannelManager(
         levers,
         tickedKeys,
         given,
@@ -1028,7 +1032,22 @@ const ChannelManagerTable = () => {
         put,
         placed
       );
-      await preview(levers);
+      // Not worked out again: the server worked out each applied row again itself (so what
+      // it applied was true at that moment), and the others are as they were. The applied
+      // rows go; Preview gives a fresh list when wanted (the user's ask: every apply used to
+      // read every stream again)
+      const done = new Set(tickedKeys);
+      setPlan((before) =>
+        before
+          ? {
+              ...before,
+              rows: (before.rows || []).filter((r) => !done.has(r.key)),
+            }
+          : before
+      );
+      setTicked(new Set());
+      tableRef.current?.setSelectedTableIds?.([]);
+      setApplied({ count: done.size, result: result || {} });
     } catch (e) {
       setError(e?.body?.error || 'Could not apply those channels.');
     } finally {
@@ -1744,20 +1763,40 @@ const ChannelManagerTable = () => {
                     } channels gain ${(summary.streams_added || 0).toLocaleString()} streams · ${
                       summary.new || 0
                     } new · ${summary.conflict || 0} conflicts · ${summary.unchanged || 0} unchanged`
-                  : 'Working out the channels…'}
+                  : loading
+                    ? 'Working out the channels…'
+                    : 'Press Preview to work out your channels: it reads every stream, so it is only done when you ask.'}
                 {' — '}
                 Open a row to see every stream before and after. Nothing changes
                 until channels are ticked and applied.
               </Text>
             </Box>
 
-            {(error || leversChanged) && (
+            {(error || applied || leversChanged) && (
               <Stack
                 gap="xs"
                 p="md"
                 style={{ borderBottom: '1px solid #3f3f46' }}
               >
                 {error && <Alert color="red">{error}</Alert>}
+                {applied && (
+                  <Alert
+                    color="green"
+                    withCloseButton
+                    onClose={() => setApplied(null)}
+                  >
+                    Applied {applied.count} channel
+                    {applied.count === 1 ? '' : 's'}
+                    {applied.result.created
+                      ? ` · ${applied.result.created} new`
+                      : ''}
+                    {applied.result.streams_added
+                      ? ` · ${applied.result.streams_added} streams added`
+                      : ''}
+                    . The rows left are as they were worked out; Preview gives a
+                    fresh list.
+                  </Alert>
+                )}
                 {leversChanged && (
                   <Alert color="blue">
                     The settings have changed. Preview again to see what they
