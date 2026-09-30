@@ -2937,9 +2937,12 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
     except Exception as e:
         logger.debug(f"Unable to finalize Recording metadata: {e}")
 
-    # Optionally run comskip post-process
+    # Optionally run comskip post-process. Dispatch More: also when the recording itself asked
+    # for it -- arrTV sends custom_properties.comskip = true with "Remove commercials", and
+    # stock read only the server-wide switch, so the app's choice did nothing with it off.
+    # With the switch on, every recording is still processed, as in stock.
     try:
-        if CoreSettings.get_dvr_comskip_enabled():
+        if CoreSettings.get_dvr_comskip_enabled() or comskip_asked_for(recording_id):
             comskip_process_recording.delay(recording_id)
     except Exception:
         pass
@@ -3201,6 +3204,19 @@ _COMSKIP_HW_ACCEL_FLAGS = {
     "hwassist": "--hwassist",
     "qsv": "--hwassist",
 }
+
+
+def comskip_asked_for(recording_id):
+    """Whether the recording itself asked for commercials to be removed: arrTV's "Remove
+    commercials" sends custom_properties.comskip = true (Dispatch More; see run_recording)."""
+    from .models import Recording
+
+    try:
+        cp = Recording.objects.filter(id=recording_id).values_list("custom_properties", flat=True).first()
+    except Exception:
+        return False
+    wanted = (cp or {}).get("comskip") if isinstance(cp, dict) else None
+    return wanted is True or str(wanted).lower() in ("true", "1", "yes", "on")
 
 
 def _comskip_hw_accel_flag(hw_accel: str) -> str | None:

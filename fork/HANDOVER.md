@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v236** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v238** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1805,6 +1805,15 @@ unit, the drop-in and the marker (`$STATE/dvr-worker`). Off: `install.sh --no-dv
 test-patcher.sh against a pretend systemd (a fake systemctl and `SYSTEMD_DIR`).
 Uninstall also takes every fork schedule out of beat now (`core/modified_build.SCHEDULES` and
 uninstall.sh): stream-check-tick, epg-grab-tick, show-groups-tick, show-groups-look-up.
+
+**A recording that asks for Comskip gets it** (v238, `tasks.comskip_asked_for`). arrTV's
+"Remove commercials" (on by default from arr.69, Settings -> DVR) sends
+`custom_properties.comskip = true`; stock ran Comskip after a recording only when the
+server-wide DVR switch was on, so the app's choice did nothing. Now either one is enough; with
+the server switch on every recording is processed, as in stock. Comskip must be installed on
+the server (`shutil.which("comskip")`): without it the recording is marked
+`comskip: {status: skipped, reason: comskip_not_installed}`. Stock's mode is **cut** (the
+breaks are cut out of the file, in place); **mark** only writes chapters.
 
 ### 5.8 Misc
 

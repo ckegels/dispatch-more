@@ -746,3 +746,11 @@ Questions about the server side: the implementation is `apps/proxy/live_proxy/ap
 `apps/proxy/live_proxy/app_reports.py`, `apps/proxy/live_proxy/app_stalls.py`, `apps/proxy/live_proxy/app_own_streams.py`
 and `leave_previous_channel` / `viewer_from_request` in `apps/proxy/live_proxy/probation.py`
 of https://github.com/ckegels/dispatch-more.
+
+
+## Recordings: commercials (v238, arr.69)
+
+arrTV sends `custom_properties.comskip = true` on `POST /api/channels/recordings/` when "Remove
+commercials" is on (Settings -> DVR, on by default from arr.69). From v238 the server runs
+Comskip after such a recording even when its own DVR Comskip switch is off; before, the flag
+was ignored. Series rules have no such flag: the server's switch decides for them.
