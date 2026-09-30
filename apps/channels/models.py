@@ -6,6 +6,9 @@ from core.utils import RedisClient, custom_properties_as_dict
 from apps.proxy.live_proxy.redis_keys import RedisKeys
 from apps.proxy.live_proxy.constants import ChannelMetadataField, ChannelState
 import logging
+# Dispatch More: used by the preemption cooldown below and never imported in stock, so a
+# recently preempted channel raised NameError instead of being skipped
+import time
 import uuid
 from django.utils import timezone
 import hashlib

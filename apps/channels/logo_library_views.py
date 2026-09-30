@@ -59,6 +59,8 @@ def logo_library_suggestions(request):
     # Every guide in Dispatcharr, looked up by name, not only the one each channel is
     # mapped to: read once for the whole page
     guide_icons = logo_library.guide_icons_by_key()
+    from .show_groups.live import copy_group_ids
+
     channels = (
         Channel.objects.select_related(
             "logo", "epg_data", "epg_data__epg_source", "channel_group"
@@ -66,6 +68,7 @@ def logo_library_suggestions(request):
         .prefetch_related(
             Prefetch("streams", queryset=Stream.objects.only("id", "name", "logo_url"))
         )
+        .exclude(channel_group_id__in=copy_group_ids())
         .order_by("channel_number", "name")
     )
 

@@ -25,6 +25,11 @@ the mistakes not to repeat.
 - **Channel Manager recognition is one choice, "How hard to look"**: Thorough (every rule and
   Dispatcharr's language model) by default -- the user's decision, 2026-09-29 -- with Exact
   still reproducing DispatcharrUtils. Other Lineup defaults still follow DispatcharrUtils.
+- **Run the server tests on a test database of your own** (`POSTGRES_DB=dispatcharr_claude`):
+  another session in this repository shares the default one, and two runs at once break each
+  other (missing tables, deadlocks). Baseline: 26 errors, all `/data`.
+- **Show Groups' copies are not the Channel Manager's**: anything that lists channels to change
+  leaves out `show_groups.live.copy_group_ids()` (handover §7b).
 - **Comments and commit messages explain *why*, in plain sentences**, like the existing fork
   code. Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 

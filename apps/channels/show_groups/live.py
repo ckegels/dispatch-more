@@ -40,6 +40,11 @@ PLUGIN_KEY = "show_groups"
 PLUGIN_STATE = "live.json"
 PLUGIN_PASS_KEY = "show_groups:pass"
 RETRY_UNKNOWN = timedelta(days=30)
+# A source that could not be asked rests this long before it is asked again: asking it every
+# pass kept a rate limit going and wrote the same warning every two minutes (the user's
+# server, 2026-09-30: Wikidata and Wikipedia 75 times a day through a VPN's shared address)
+SOURCE_REST_SECONDS = 30 * 60
+DOWN_KEY = "show-groups:source-down:"
 ALWAYS = "always"
 
 
@@ -80,6 +85,19 @@ def profile_id(settings, state):
         return state["profile_id"]
     name = settings.get("profile_name") or "Show Groups"
     return ChannelProfile.objects.filter(name=name).values_list("id", flat=True).first()
+
+
+def copy_group_ids():
+    """
+    The channel groups Show Groups keeps its copies in. The Lineup, the Guides, the Guide
+    Layout, the Logos and Stream Check leave these channels alone: a copy has its source's
+    name and streams, so the Lineup took it for a second copy of the channel to merge or
+    delete, and the others offered changes Show Groups undoes. Empty when never used.
+    """
+    try:
+        return {int(e["group_id"]) for e in load_state()["groups"].values() if e.get("group_id")}
+    except Exception:
+        return set()
 
 
 def own_copy_ids(state):
@@ -710,7 +728,15 @@ def look_up(settings, budget=60, now=None):
         record(f"asking again about {forgotten} answers of \"does not know it\" recorded before a "
                "failed request stopped counting as one")
     plan = plans.load()
-    sources = lookups.enabled_sources(settings)
+    client = _redis()
+
+    def resting(source):
+        try:
+            return bool(client and client.get(DOWN_KEY + source))
+        except Exception:
+            return False
+
+    sources = tuple(s for s in lookups.enabled_sources(settings) if not resting(s))
     down = set()  # sources that could not be asked this time: not asked again this pass
     queue = lookup_queue(plan, store.load_lookups(), sources, now)
     began = time.monotonic()
@@ -724,8 +750,13 @@ def look_up(settings, budget=60, now=None):
             try:
                 answer = lookups.ask(source, written, settings)
             except lookups.Unavailable as why:
-                logger.warning("Show Groups: %s", why)
+                logger.warning("Show Groups: %s; not asked again for %d minutes", why, SOURCE_REST_SECONDS // 60)
                 down.add(source)
+                try:
+                    if client:
+                        client.set(DOWN_KEY + source, "1", ex=SOURCE_REST_SECONDS)
+                except Exception:
+                    pass
                 continue
             except Exception:
                 logger.exception("Show Groups: asking %s about %r failed", source, written)

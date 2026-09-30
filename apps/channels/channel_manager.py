@@ -924,7 +924,9 @@ def search_channels(search, name="", limit=CHANNELS_FOUND):
 
     from .models import Channel, ChannelStream
 
-    channels = Channel.objects.select_related("channel_group")
+    from .show_groups.live import copy_group_ids
+
+    channels = Channel.objects.select_related("channel_group").exclude(channel_group_id__in=copy_group_ids())
     words = [w for w in str(search or "").lower().split() if w]
     if words:
         query = Q()
@@ -999,9 +1001,11 @@ def _existing_channels(settings, aliases):
     """The channels streams may be added to, with what they have now."""
     from .models import Channel, ChannelStream
 
+    from .show_groups.live import copy_group_ids
+
     channels = Channel.objects.select_related(
         "channel_group", "logo", "epg_data", "epg_data__epg_source"
-    )
+    ).exclude(channel_group_id__in=copy_group_ids())
     groups = [int(g) for g in settings.get("channel_groups") or ()]
     if groups:
         channels = channels.filter(channel_group_id__in=groups)

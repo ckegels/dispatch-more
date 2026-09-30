@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v241** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v242** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1167,6 +1167,13 @@ Stream Check. `sync` runs after every Lineup apply and every refresh, so the fir
 backfill of everything already matched; the settings also have "Save what is matched now".
 The next step, comparing the pictures of two streams at night to confirm or refute a pair,
 is designed in `fork/picture-check.md` and waits for the user's decision.
+
+**Not worked out until asked, and not again after an apply** (v242, the user's ask). Opening
+the tab only loads the settings; the lineup is worked out on **Preview** (it reads every
+stream). After an apply the page drops the applied rows and keeps the rest as they were,
+with a notice; before, every apply worked the whole lineup out twice -- `apply_plan` does it
+once on the server on purpose (so what it applies is true at that moment) and the page did it
+again. That server pass stays.
 
 **The row's right-hand side says what an apply adds** (v236, the user's ask): the streams
 it adds by name and provider (two at most; more is the first and "and N others", all of
@@ -2425,7 +2432,60 @@ the handover's v211 update, with the suspected faults run as tests first:
 
 ---
 
+## 7b. The full check of 2026-09-30 (v242)
+
+The user asked for every feature to be checked for issues, problems and conflicts. How: both
+test suites (server 3,683 tests: the 26 known `/data` errors only; frontend 6,715; arrTV's unit
+tests: pass), pyflakes over every Python file the fork touches, ESLint over the fork's
+frontend files, and the user's server's own ERROR and WARNING log lines of the last day
+(Diagnostics -> Logs API, `/api/core/log-center/read/?since=24h&level=ERROR`), grouped.
+
+**Fixed in v242:**
+- **A second worker took over a channel another worker owned** (stock bug, still in upstream
+  `main` and `dev`): `try_acquire_ownership` read redis-py's `None` for a taken `SET NX` key as
+  a Redis failure and "assumed ownership" -- 135 times a day on the user's server, with
+  one-connection providers then refusing the second connection (HTTP 407 from TiviBridge 51x,
+  403 from Digitalizard 39x). The SET is wrapped in `bool()`, so `None` is a failure only
+  (`live_proxy/server.py`, `apps/proxy/tests/test_ownership_taken.py`). A crashed owner's
+  channel now waits out the 30 s lock, as stock meant.
+- **Show Groups' copies were ordinary channels to the rest of the Channel Manager**: the Lineup
+  could merge or delete them (same name and streams as their sources), the Guides, Logos and
+  Guide Layout offered changes to them, Stream Check probed their (shared) streams twice and
+  could hide them. `show_groups.live.copy_group_ids()` names Show Groups' channel groups and
+  all five leave them out.
+- **~850 log lines a day "Failed to log system event ... is not a valid UUID"**: a stream
+  opened by its hash (Streams preview, probes) was logged under the hash as a channel UUID.
+  `core.utils.log_system_event` saves it with `stream_hash` in the details; integrations and
+  plugin hooks get what they always got (stock `tests/test_log_system_event.py`).
+- **`time` never imported in `apps/channels/models.py`** (stock): the preemption cooldown
+  raised NameError for a recently preempted channel instead of skipping it.
+- **Show Groups asked a failing online source every pass** (Wikidata and Wikipedia 75 warnings
+  a day on the user's server, likely a rate limit on the VPN's shared address): a source that
+  fails rests 30 minutes (`SOURCE_REST_SECONDS`, one warning).
+- **The Lineup worked the whole lineup out on opening and twice per apply** (the user): it waits
+  for Preview, and after an apply drops the applied rows (see §5.6).
+
+**Found, not changed (see §8):** the recordings worker is not running on the user's server; a
+stale Celery beat entry for a deleted M3U account (`m3u_account-refresh-8`, "No PeriodicTask
+found" -- stock looks for another name); a task nobody has, `apps.plugins.tasks.run_plugin_action`
+(a leftover schedule, likely from a plugin); arrTV asking for programmes that no longer exist
+(`/api/epg/programs/<id>/` 404, 11x) and logins refused for rate (429, 4x); a channel profile
+created later takes every channel, Show Groups' copies included. False alarms: pyflakes' "undefined
+`logo_cache_by_url`" in `m3u/tasks.py` (a closure), and the ESLint errors in `api.js` (stock style).
+**The test database is shared with any other session** working in this repository: two runs at
+once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatcharr_claude`
+(or any name of its own).
+
 ## 8. Open / possible next
+
+- **The recordings worker is not running on the user's server** (v237 installed, no
+  `dispatcharr-celery-dvr` process or journal unit, 2026-09-30). The server was set up by the
+  Proxmox community script (`uv run celery ... -c 4`), not debian_install.sh; recordings still
+  run on the normal worker (v236's safety net). Needs the install output of v242 (it now says
+  "is running" or why not) or `systemctl status dispatcharr-celery-dvr`.
+- **Stale schedules on the user's server**: `m3u_account-refresh-8` for a deleted account, and
+  something sending `apps.plugins.tasks.run_plugin_action`. Both belong to Django admin ->
+  Periodic tasks; nothing in the API lists them.
 
 - **Picture check** (designed 2026-09-28, the user is deciding): confirm or refute that two
   providers' streams are one channel by sampling both at night (a frame hash a second and the

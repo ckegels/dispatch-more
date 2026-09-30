@@ -335,9 +335,11 @@ def channels_in_scope(settings):
 
     from .models import Channel
 
+    from .show_groups.live import copy_group_ids
+
     channels = Channel.objects.select_related(
         "epg_data", "epg_data__epg_source", "channel_group"
-    ).order_by("channel_number", "id")
+    ).exclude(channel_group_id__in=copy_group_ids()).order_by("channel_number", "id")
     groups = settings.get("channel_groups") or []
     if groups:
         channels = channels.filter(channel_group_id__in=groups)

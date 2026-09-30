@@ -1625,7 +1625,11 @@ def _targets(settings, only=None, due_before=None, skip_accounts=(), waiting_too
     """
     from .models import ChannelStream, Stream
 
-    links = ChannelStream.objects.filter(stream__is_custom=False, stream__m3u_account__isnull=False)
+    from .show_groups.live import copy_group_ids
+
+    # Show Groups' copies play their sources' streams: checked through the sources
+    links = ChannelStream.objects.filter(stream__is_custom=False, stream__m3u_account__isnull=False).exclude(
+        channel__channel_group_id__in=copy_group_ids())
     groups = [int(g) for g in settings.get("channel_groups") or ()]
     if groups:
         links = links.filter(channel__channel_group_id__in=groups)
@@ -3317,8 +3321,12 @@ def _hide_emptied(channel_ids):
         ChannelStream.objects.filter(channel_id__in=channel_ids, stream__is_custom=False)
         .values_list("channel_id", flat=True)
     )
+    from .show_groups.live import copy_group_ids
+
     emptied = [
+        # Show Groups shows and hides its own copies
         channel for channel in Channel.objects.filter(id__in=set(channel_ids) - real_left)
+        .exclude(channel_group_id__in=copy_group_ids())
         # One a person hid already is theirs: not recorded, so never shown again by this
         if not channel.hidden_from_output
     ]

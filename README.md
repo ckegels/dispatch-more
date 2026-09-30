@@ -79,14 +79,16 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   number, with a logo and your fallback stream last). Each row shows what an apply adds.
   Optional: **Remember matched streams** (a stream the provider renames goes back on its
   channel) and **Dispatcharr's language model** (finds matches whose names differ, like
-  "DE| DISCOVERY CHANNEL" and "┃DE┃ DISCOVERY").
+  "DE| DISCOVERY CHANNEL" and "┃DE┃ DISCOVERY"). It is worked out when you press Preview, not
+  every time you open it.
 - **Guides** — finds channels with no guide, an empty guide, or a clearly better guide, and
   shows what is on each guide now so you can pick the right one.
 - **Guide Layout** — drag channels into order, group by group; the numbers follow.
 - **Logos** — logos from public collections, your playlists and your guides, side by side.
 - **Stream Check** — finds streams that no longer play (dead, refused, black, frozen, or the
   provider's "no stream" picture). It never touches a provider someone is watching, and can put
-  dead streams aside automatically.
+  dead streams aside automatically. It also records each stream's resolution, codec, frame rate
+  and audio, which the Stats page shows even on the Proxy profile.
 - **Show Groups** — groups by what is on right now: Cooking, Travel, Movies, Documentaries,
   Sport, Kids and more, plus groups you add. A group holds every channel airing that kind of
   show and lets it go when the show ends (never while someone watches). Channels can be kept in

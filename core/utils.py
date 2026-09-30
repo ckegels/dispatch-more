@@ -920,13 +920,26 @@ def log_system_event(event_type, channel_id=None, channel_name=None, **details):
     from core.models import SystemEvent, CoreSettings
     from django.db import close_old_connections
 
+    # Dispatch More: a stream opened on its own (the Streams page's preview, a probe) is
+    # "played" under its 64-character hash, not a channel's UUID, and the event failed to save
+    # -- hundreds of errors a day on the user's server. Saved with the hash in its details;
+    # integrations and plugin hooks below get exactly what they always got.
+    saved_channel_id, saved_details = channel_id, details
+    if channel_id is not None:
+        import uuid as _uuid
+
+        try:
+            _uuid.UUID(str(channel_id))
+        except ValueError:
+            saved_channel_id, saved_details = None, {**details, "stream_hash": str(channel_id)}
+
     try:
         # Create the event
         SystemEvent.objects.create(
             event_type=event_type,
-            channel_id=channel_id,
+            channel_id=saved_channel_id,
             channel_name=channel_name,
-            details=details
+            details=saved_details
         )
 
         # Connect integrations and plugin event hooks (non-blocking on gevent uWSGI)

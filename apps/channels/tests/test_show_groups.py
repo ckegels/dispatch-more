@@ -560,3 +560,45 @@ class PlanInTheWorker(Api):
                 mock.patch.object(live, "work_out") as here:
             self.client.post("/api/channels/show-groups/run/", {"action": "plan"}, format="json")
         here.assert_called_once()
+
+
+class SourceRests(Api):
+    def test_a_source_that_failed_rests(self):
+        from apps.channels.show_groups import lookups
+
+        plans.save({"unknown": [[3, "Cake Boss", "cake boss"], [2, "Chopped", "chopped"]]})
+        calls = []
+
+        def ask(source, title, settings):
+            calls.append(source)
+            if source == "wikidata":
+                raise lookups.Unavailable("www.wikidata.org could not be asked just now")
+            return {"name": title, "genres": ["Food"]}
+
+        with mock.patch.object(lookups, "ask", side_effect=ask):
+            live.look_up(themes.load_settings(), budget=30, now=NOW)
+            first = calls.count("wikidata")
+            live.look_up(themes.load_settings(), budget=30, now=NOW)
+        self.assertEqual(first, 1)
+        self.assertEqual(calls.count("wikidata"), 1, "resting: not asked on the next pass")
+        self.assertEqual(self.redis.get(live.DOWN_KEY + "wikidata"), "1")
+
+
+class CopiesLeftAlone(Base):
+    """Show Groups' copies are not the Lineup's, the Guides' or Stream Check's to change."""
+
+    def test_the_copy_groups_are_known_and_left_out(self):
+        from apps.channels import channel_manager, guide_manager
+
+        self.airs(self.pbs_guide, "Rick Steves' Europe", 10, 30, ["Travel"])
+        self.switch_on("travel")
+        self.run_at(0)
+        copy = Channel.objects.get(channel_group__name="Travel")
+        self.assertEqual(live.copy_group_ids(), {copy.channel_group_id})
+        existing = channel_manager._existing_channels(channel_manager.load_settings(), {})
+        ids = {getattr(r.get("channel"), "id", None) for r in (existing.values() if isinstance(existing, dict) else existing)}
+        self.assertNotIn(copy.id, ids)
+        self.assertIn(self.pbs.id, ids)
+        looked_at = {c.id for c in guide_manager.channels_in_scope(guide_manager.load_settings())}
+        self.assertNotIn(copy.id, looked_at)
+        self.assertIn(self.pbs.id, looked_at)

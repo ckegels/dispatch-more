@@ -83,9 +83,12 @@ def layout(group_ids=()):
     from collections import Counter
 
     from .models import Channel, ChannelGroup
+    from .show_groups.live import copy_group_ids
 
     channels = (
         Channel.objects.select_related("channel_group", "logo", "epg_data")
+        # Show Groups' copies keep the numbers it gave them (see show_groups.live.copy_group_ids)
+        .exclude(channel_group_id__in=copy_group_ids())
         .order_by("channel_number", "id")
     )
     if group_ids:
