@@ -244,3 +244,38 @@ class Keyed(Case):
     def test_only_the_sources_with_a_key(self):
         self.assertEqual(lookups.enabled_sources({}), ("tvmaze", "wikidata", "wikipedia"))
         self.assertIn("trakt", lookups.enabled_sources({"trakt_client_id": "x"}))
+
+
+class FailingIsNotUnknown(Case):
+    """A failed request is not "this database does not know the show"."""
+
+    def opened(self, table):
+        opened = Opened(table)
+        for patch in (mock.patch("urllib.request.urlopen", opened), mock.patch.object(lookups, "PAUSE", 0),
+                      mock.patch.object(lookups.time, "sleep", lambda s: None)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        lookups._tvdb.update(key=None, token=None, at=0.0)
+        return opened
+
+    def test_not_found_is_unknown(self):
+        self.opened([("singlesearch", 404), ("search/shows", [])])
+        self.assertIsNone(lookups.tvmaze("Nobody Knows This"))
+
+    def test_a_server_error_is_unavailable(self):
+        opened = self.opened([("singlesearch", 503)])
+        with self.assertRaises(lookups.Unavailable):
+            lookups.tvmaze("Great British Menu")
+        self.assertEqual(len(opened.requests), 3, "tried three times first")
+
+    def test_thetvdb_timing_out_is_unavailable(self):
+        self.opened([("/login", {"data": {"token": "t"}}), ("/search", 500)])
+        with self.assertRaises(lookups.Unavailable):
+            lookups.tvdb("Ben & Holly's Little Kingdom", "k")
+
+    def test_thetvdb_genres_failing_is_unavailable(self):
+        self.opened([("/login", {"data": {"token": "t"}}),
+                     ("/search", {"data": [{"name": "Bar Rescue", "tvdb_id": "5"}]}),
+                     ("/series/5/extended", 502)])
+        with self.assertRaises(lookups.Unavailable):
+            lookups.tvdb("Bar Rescue", "k")

@@ -83,6 +83,27 @@ def merge_lookups(new):
     return titles
 
 
+MENDED = "mended-empty-answers"
+
+
+def forget_empty_answers_once():
+    """Forget every "this source does not know the title" recorded before a failed request
+    stopped counting as one (v234), so each is asked again. Once: a marker file says it was
+    done. Only titles still in the plan's queue are asked again, busiest first, so this costs a
+    few hundred requests, not one per title ever asked. Returns how many were forgotten."""
+    if os.path.exists(path_of(MENDED)):
+        return 0
+    titles = load_lookups()
+    forgotten = 0
+    for answers in titles.values():
+        for source in [s for s, a in answers.items() if not (a or {}).get("genres")]:
+            del answers[source]
+            forgotten += 1
+    save_lookups({k: v for k, v in titles.items() if v})
+    write_text(MENDED, _now() + f" {forgotten}\n")
+    return forgotten
+
+
 def online_answers(titles):
     """What the matching sees (matching.judge's from_online): per title, every genre any source
     gave, and which sources gave them. Titles no source knew are left out."""

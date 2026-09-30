@@ -22,6 +22,14 @@ SHOWS = "shows.json"
 MAX_AGE = timedelta(minutes=30)
 # Titles no guide knows, kept for the online lookups, busiest first
 UNKNOWN_KEPT = 1000
+# What a guide puts in a slot it has nothing for. They air around the clock, so busiest first
+# put them at the head of the lookups' queue, where each run spent its minute on titles no
+# database will ever know. A title that is a channel's own name ("Ride TV", "Omroep
+# Tilburg") is the same thing and is left out as well.
+FILLERS = ("paid programming", "paid program", "dauerwerbesendung", "sendepause", "teleshopping",
+           "infomercial", "to be announced", "tba", "no information", "no programme information",
+           "programme information not available", "geen informatie", "off air", "sign off",
+           "close down", "programmation", "programmes", "programma", "programm")
 
 
 def source_channels(settings, exclude_ids=()):
@@ -51,6 +59,15 @@ def source_channels(settings, exclude_ids=()):
 def _order(channel):
     number = channel["effective_channel_number"]
     return (number is None, number or 0, channel["id"])
+
+
+def _bare(name):
+    """A channel's name without the playlist's decoration: "┃NL┃ OMROEP TILBURG HD" is
+    "OMROEP TILBURG"."""
+    import re
+
+    text = re.sub(r"[┃|\[(][^┃|\])]*[┃|\])]", " ", str(name or ""))
+    return re.sub(r"\b(hd|fhd|uhd|sd|4k|hevc|h265|raw)\b", " ", text, flags=re.I)
 
 
 def _label(channel):
@@ -106,6 +123,8 @@ def compute(settings, groups, now=None, exclude_ids=()):
     min_length = float(settings.get("min_length") or 0)
 
     by_guide = source_channels(settings, exclude_ids)
+    fillers = set(FILLERS) | {matching.plain(_bare(c["effective_name"])) for channels in by_guide.values()
+                              for c in channels}
     from_guides = titles_from_guides() if on else {}
     from_online = store.online_answers(store.load_lookups()) if on else {}
 
@@ -129,8 +148,9 @@ def compute(settings, groups, now=None, exclude_ids=()):
             continue
         own = tuple(matching.real_categories((props or {}).get("categories")))
         counted = start < window_end and end > now
-        # Worth asking the online databases about: nothing but vague words anywhere
-        if counted and not matching.telling(own, vague) and not matching.telling(
+        # Worth asking the online databases about: nothing but vague words anywhere, and not
+        # a filler or a channel's own name
+        if counted and key not in fillers and not matching.telling(own, vague) and not matching.telling(
                 matching.real_categories(from_guides.get(key)), vague):
             unknown[key] += 1
             written.setdefault(key, title)

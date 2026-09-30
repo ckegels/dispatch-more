@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v233** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v234** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1484,6 +1484,20 @@ TVmaze, Wikidata, Wikipedia free; TMDB, TheTVDB, Trakt, OMDb when they have a ke
 not "this source does not know the show" -- nothing is recorded, the source is not asked
 again that pass, and the title is asked again later. TheTVDB logs in once per worker and keeps
 the token 20 days. A new source's key queues the titles still unknown for it, busiest first.
+
+**A failed request is not "unknown"** (v234). `lookups.get_json` returned None for a
+timeout, a 5xx or a rate limit as much as for "not found", and None was recorded as "this
+source does not know the show" for 30 days -- the plugin always did this. On the user's server
+TheTVDB's first runs (2026-09-30) knew 49 of 224 titles and recorded Ben & Holly's Little
+Kingdom and Sofia the First (by its Dutch title) as unknown; run from here with the same key
+the same code finds both. Now only 404/410 (or a search without a match) is "unknown";
+anything else raises `Unavailable` and nothing is recorded. `store.forget_empty_answers_once`
+forgot every earlier "unknown" once (marker file `mended-empty-answers`); only titles in the
+plan's queue are asked again. Also measured there: most of the queue was never a show a
+database could know -- channel names as titles ("Ride TV", "Omroep Tilburg"), fillers ("Paid
+Programming", "Dauerwerbesendung"), one-off documentaries, films under a local title. Fillers
+and titles that are a channel's own name are no longer queued (`plan.FILLERS`), since busiest
+first put them at the head of every run.
 
 **Whole channels** (`kinds.py`, v232; the group's "Whole channels" tab): iptv-org's channel
 database files each channel under kinds (cooking, travel, movies, documentary, kids, sports,

@@ -27,21 +27,29 @@ class Unavailable(Exception):
 
 
 def get_json(url, headers=None):
-    """One GET, with a retry on a rate limit or a dropped connection. None when the answer is
-    "not found" or cannot be had; the caller then records "asked, nobody knew"."""
+    """One GET, with a retry on a rate limit, a server error or a dropped connection. None only
+    when the answer is "not found"; the caller then records "asked, nobody knew".
+
+    Anything else that keeps an answer from coming raises Unavailable, so nothing is recorded
+    and the title is asked again later. It used to return None for those too, and every
+    timeout was written down as "this database does not know the show" for 30 days: on the
+    user's server TheTVDB's first runs recorded Ben & Holly's Little Kingdom and Sofia the
+    First as unknown, both of which it knows."""
     request = urllib.request.Request(url, headers={"User-Agent": AGENT, **(headers or {})})
+    host = urllib.parse.urlparse(url).netloc
     for attempt in range(3):
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                time.sleep(5 * (attempt + 1))
-                continue
-            return None
+            if exc.code in (404, 410):
+                return None
+            if exc.code in (401, 403):
+                raise Unavailable(f"{host} refused the request (a key?)")
+            time.sleep(5 * (attempt + 1) if exc.code == 429 else 2)
         except (OSError, ValueError):
             time.sleep(2)
-    return None
+    raise Unavailable(f"{host} could not be asked just now")
 
 
 def _ask(url, headers=None):
@@ -238,12 +246,14 @@ def _tvdb_get(path, key, pin):
             if exc.code == 401 and attempt == 0:
                 _tvdb["token"] = None
                 continue
+            if exc.code in (404, 410):
+                return None
             if exc.code == 429:
                 time.sleep(5)
-            return None
+            raise Unavailable(f"TheTVDB answered {exc.code}")
         except (OSError, ValueError):
-            return None
-    return None
+            raise Unavailable("TheTVDB could not be reached")
+    raise Unavailable("TheTVDB refused the token twice")
 
 
 def tvdb(title, key, pin=""):
@@ -286,9 +296,9 @@ def trakt(title, client_id):
         time.sleep(PAUSE)
         if exc.code in (401, 403):
             raise Unavailable("Trakt refused the Client ID")
-        if exc.code == 429:
-            raise Unavailable("Trakt asks to slow down")
-        return None
+        if exc.code == 404:
+            return None
+        raise Unavailable(f"Trakt answered {exc.code}")
     except (OSError, ValueError):
         raise Unavailable("Trakt could not be reached")
     time.sleep(PAUSE)

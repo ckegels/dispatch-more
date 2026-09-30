@@ -493,3 +493,31 @@ class ServiceKeys(Api):
         self.assertNotIn("tvdb", answers["cake boss"], "not recorded as unknown")
         self.assertEqual(answers["chopped"]["tvmaze"]["genres"], ["Food"])
         self.assertEqual([c.args[0] for c in asked.call_args_list].count("tvdb"), 1, "not asked again this pass")
+
+    def test_the_old_does_not_know_answers_are_asked_again_once(self):
+        from apps.channels.show_groups import lookups
+
+        store.merge_lookups({"cake boss": {"tvmaze": {"asked": "2026-09-20T00:00:00+00:00"},
+                                           "wikidata": {"name": "Cake Boss", "genres": ["Food"],
+                                                        "asked": "2026-09-20T00:00:00+00:00"}}})
+        plans.save({"unknown": [[3, "Cake Boss", "cake boss"]]})
+        with mock.patch.object(lookups, "ask", return_value={"name": "Cake Boss", "genres": ["Reality"]}):
+            live.look_up(themes.load_settings(), budget=30, now=NOW)
+        answers = store.load_lookups()["cake boss"]
+        self.assertEqual(answers["tvmaze"]["genres"], ["Reality"], "asked again")
+        self.assertEqual(answers["wikidata"]["genres"], ["Food"], "a real answer is kept")
+        store.merge_lookups({"chopped": {"tvmaze": {"asked": NOW.isoformat()}}})
+        self.assertEqual(store.forget_empty_answers_once(), 0, "only once")
+
+
+class Queue(Base):
+    def test_fillers_and_a_channels_own_name_are_not_asked_about(self):
+        omroep = Channel.objects.create(name="┃NL┃ OMROEP TILBURG HD", channel_number=9,
+                                        epg_data=EPGData.objects.create(tvg_id="ot", name="ot", epg_source=self.source),
+                                        channel_group=self.public)
+        self.airs(omroep.epg_data, "Omroep Tilburg", 0, 60, [])
+        self.airs(self.pbs_guide, "Paid Programming", 0, 30, [])
+        self.airs(self.pbs_guide, "Mystery Show", 40, 30, [])
+        self.switch_on("cooking")
+        made = plans.compute(themes.load_settings(), themes.load_groups(), NOW)
+        self.assertEqual([written for _, written, _ in made["unknown"]], ["Mystery Show"])

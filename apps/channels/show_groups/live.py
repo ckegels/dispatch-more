@@ -705,6 +705,10 @@ def look_up(settings, budget=60, now=None):
 
     now = now or timezone.now()
     settings = service_keys.with_keys(settings)
+    forgotten = store.forget_empty_answers_once()
+    if forgotten:
+        record(f"asking again about {forgotten} answers of \"does not know it\" recorded before a "
+               "failed request stopped counting as one")
     plan = plans.load()
     sources = lookups.enabled_sources(settings)
     down = set()  # sources that could not be asked this time: not asked again this pass
