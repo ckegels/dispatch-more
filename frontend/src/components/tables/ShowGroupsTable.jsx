@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import {
   Alert,
+  Anchor,
   Badge,
   Box,
   Button,
@@ -682,6 +683,9 @@ const SOURCE_NAMES = {
   wikidata: 'Wikidata',
   wikipedia: 'Wikipedia',
   tmdb: 'TMDB',
+  tvdb: 'TheTVDB',
+  trakt: 'Trakt',
+  omdb: 'OMDb',
 };
 
 const FILTERS = [
@@ -1255,7 +1259,7 @@ const ShowGroupsTable = () => {
                 </Section>
                 <Section
                   title="Shows no guide knows"
-                  about="asking TVmaze, Wikidata, Wikipedia and TMDB what they are"
+                  about="asking TVmaze, Wikidata, Wikipedia and the services with a key what they are"
                 >
                   <Stack gap="xs">
                     <Switch
@@ -1313,17 +1317,13 @@ const ShowGroupsTable = () => {
                         }
                       }}
                     />
-                    <TextInput
-                      size="xs"
-                      label="TMDB key"
-                      description="Free; its keywords know “cooking competition”"
-                      defaultValue={settings.tmdb_key}
-                      onBlur={(event) => {
-                        const value = event.currentTarget.value.trim();
-                        if (value !== settings.tmdb_key)
-                          saveSettings({ tmdb_key: value });
-                      }}
-                    />
+                    <Text size="xs" c="dimmed">
+                      TMDB, TheTVDB, Trakt and OMDb are asked too once they have
+                      a key:{' '}
+                      <Anchor href="/settings#service-keys" size="xs">
+                        Settings → Service keys
+                      </Anchor>
+                    </Text>
                   </Stack>
                 </Section>
               </Stack>

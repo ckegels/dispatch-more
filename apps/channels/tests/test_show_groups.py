@@ -438,3 +438,58 @@ class Comparison(Api):
         self.assertEqual(mystery["sources"]["tvmaze"]["genres"], ["Mystery"])
         self.assertEqual(mystery["sources"]["wikidata"], {"name": "", "genres": []}, "asked, did not know")
         self.assertEqual(self.redis.get(live.REBUILD_KEY), "1", "the plan is made again")
+
+
+class ServiceKeys(Api):
+    """Settings → Service keys: one place for the keys every feature uses."""
+
+    def test_saved_and_read(self):
+        page = self.client.get("/api/channels/service-keys/").json()
+        self.assertEqual([s["id"] for s in page["services"]], ["tmdb", "tvdb", "trakt", "omdb"])
+        self.assertEqual(page["values"]["tvdb_key"], "")
+        saved = self.client.put("/api/channels/service-keys/", {"values": {"tvdb_key": " abc ", "nope": 1}},
+                                format="json").json()
+        self.assertEqual(saved["values"]["tvdb_key"], "abc")
+        self.assertNotIn("nope", saved["values"])
+
+    def test_a_tmdb_key_from_show_groups_is_taken_over(self):
+        from core.models import CoreSettings
+
+        CoreSettings.objects.update_or_create(key=themes.SETTINGS_KEY, defaults={
+            "name": "Show Groups", "value": {"settings": {"tmdb_key": "old"}}})
+        from apps.channels import service_keys
+
+        self.assertEqual(service_keys.load()["tmdb_key"], "old")
+
+    def test_the_test_button(self):
+        from apps.channels import service_keys
+        from apps.channels.show_groups import lookups
+
+        self.assertFalse(self.client.post("/api/channels/service-keys/test/", {"service": "tvdb"},
+                                          format="json").json()["ok"])
+        service_keys.save({"tvdb_key": "k"})
+        with mock.patch.object(lookups, "ask", return_value={"name": "MasterChef", "genres": ["Food"]}):
+            answer = self.client.post("/api/channels/service-keys/test/", {"service": "tvdb"}, format="json").json()
+        self.assertTrue(answer["ok"])
+        with mock.patch.object(lookups, "ask", side_effect=lookups.Unavailable("TheTVDB refused the key")):
+            answer = self.client.post("/api/channels/service-keys/test/", {"service": "tvdb"}, format="json").json()
+        self.assertEqual(answer, {"ok": False, "message": "TheTVDB refused the key"})
+
+    def test_a_refused_key_records_nothing(self):
+        from apps.channels import service_keys
+        from apps.channels.show_groups import lookups
+
+        service_keys.save({"tvdb_key": "wrong"})
+        plans.save({"unknown": [[3, "Cake Boss", "cake boss"], [2, "Chopped", "chopped"]]})
+
+        def ask(source, title, settings):
+            if source == "tvdb":
+                raise lookups.Unavailable("refused")
+            return {"name": title, "genres": ["Food"]}
+
+        with mock.patch.object(lookups, "ask", side_effect=ask) as asked:
+            live.look_up(themes.load_settings(), budget=30, now=NOW)
+        answers = store.load_lookups()
+        self.assertNotIn("tvdb", answers["cake boss"], "not recorded as unknown")
+        self.assertEqual(answers["chopped"]["tvmaze"]["genres"], ["Food"])
+        self.assertEqual([c.args[0] for c in asked.call_args_list].count("tvdb"), 1, "not asked again this pass")

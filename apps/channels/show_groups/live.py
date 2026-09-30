@@ -402,9 +402,14 @@ def take_over():
         mine["on"] = mine["on"] or was_live
         for key in ("profile_name", "first_number", "viewer_grace", "announce_changes",
                     "join_ahead", "leave_after", "linger", "min_length", "wikipedia_languages",
-                    "tmdb_key", "online_lookups"):
+                    "online_lookups"):
             if key in old and old[key] not in (None, ""):
                 settings[key] = old[key]
+        if str(old.get("tmdb_key") or "").strip():
+            from apps.channels import service_keys
+
+            if not service_keys.load()["tmdb_key"]:
+                service_keys.save({"tmdb_key": old["tmdb_key"]})
         wanted = {fold(n).strip() for n in str(old.get("source_groups") or "").split(",") if n.strip()}
         if wanted:
             settings["source_groups"] = [g.id for g in ChannelGroup.objects.all()
@@ -694,11 +699,15 @@ def lookup_queue(plan, titles, sources, now):
 def look_up(settings, budget=60, now=None):
     """Ask the online databases about titles no guide knows for at most budget seconds, and keep
     every answer (an empty one too, so nothing is asked twice). Returns (asked, waiting)."""
+    from apps.channels import service_keys
+
     from . import lookups
 
     now = now or timezone.now()
+    settings = service_keys.with_keys(settings)
     plan = plans.load()
     sources = lookups.enabled_sources(settings)
+    down = set()  # sources that could not be asked this time: not asked again this pass
     queue = lookup_queue(plan, store.load_lookups(), sources, now)
     began = time.monotonic()
     new = {}
@@ -706,8 +715,14 @@ def look_up(settings, budget=60, now=None):
         if time.monotonic() - began >= budget:
             break
         for source in missing:
+            if source in down:
+                continue
             try:
                 answer = lookups.ask(source, written, settings)
+            except lookups.Unavailable as why:
+                logger.warning("Show Groups: %s", why)
+                down.add(source)
+                continue
             except Exception:
                 logger.exception("Show Groups: asking %s about %r failed", source, written)
                 answer = None

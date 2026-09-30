@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v232** (2026-09-29). The commit messages on the branch
+Written 2026-09-19, kept current to **release v233** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1471,6 +1471,19 @@ categories" (`look_past_vague`), with the word list editable (`vague_categories`
 (not asked / does not know / its genres) and the groups that take it; filters All, Taken,
 Databases know, They disagree (guides alone vs databases alone give a group different
 answers), Nobody knows; "Ask now" asks every database about one title at once.
+
+**Service keys** (v233, `apps/channels/service_keys.py` + `service_keys_views.py`,
+`ServiceKeysForm.jsx`; Settings → System → Service keys). The user asked for every service
+with a key in a settings tab of its own, "as we might want to use this for other things":
+TMDB, TheTVDB (key + optional subscriber PIN), Trakt (Client ID) and OMDb, one CoreSettings
+row `service-keys`, each with a Test button that asks it about "MasterChef". Any feature that
+asks a service reads its key there (`service_keys.with_keys(settings)`); Show Groups' own
+`tmdb_key` setting moved there (taken over once). Show Groups now asks all seven sources:
+TVmaze, Wikidata, Wikipedia free; TMDB, TheTVDB, Trakt, OMDb when they have a key.
+**`lookups.Unavailable`**: a refused key, a missing PIN or OMDb's daily limit (about 1,000) is
+not "this source does not know the show" -- nothing is recorded, the source is not asked
+again that pass, and the title is asked again later. TheTVDB logs in once per worker and keeps
+the token 20 days. A new source's key queues the titles still unknown for it, busiest first.
 
 **Whole channels** (`kinds.py`, v232; the group's "Whole channels" tab): iptv-org's channel
 database files each channel under kinds (cooking, travel, movies, documentary, kids, sports,

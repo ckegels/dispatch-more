@@ -3174,6 +3174,26 @@ export default class API {
     });
   }
 
+  // ── Service keys: TMDB, TheTVDB, Trakt, OMDb, shared by every feature (see service_keys) ──
+
+  static async getServiceKeys() {
+    return await request(`${host}/api/channels/service-keys/`);
+  }
+
+  static async saveServiceKeys(values) {
+    return await request(`${host}/api/channels/service-keys/`, {
+      method: 'PUT',
+      body: { values },
+    });
+  }
+
+  static async testServiceKey(service) {
+    return await request(`${host}/api/channels/service-keys/test/`, {
+      method: 'POST',
+      body: { service },
+    });
+  }
+
   // ── Show Groups: groups of channels by what is on them now (see show_groups) ──
 
   static async getShowGroups() {

@@ -66,6 +66,9 @@ Everything is off, or only suggests, until you turn it on or apply it.
 - **Channel Manager → EPG Grabber** — runs iptv-org's guide grabber (when it is installed on
   the server) on a schedule, and only replaces the guide file once the new one has been read
   back and found to hold channels and programmes.
+- **Settings → Service keys** — keys for TMDB, TheTVDB, Trakt and OMDb in one place, each
+  with a Test button; every feature that asks one of these services uses the key here (Show
+  Groups asks them what a show is).
 - **Channel Manager → Show Groups** — groups of channels by what is on them right now:
   Cooking, Travel, Movies, Documentaries, Sport, Kids and more ready-made, and any you add.
   A group holds a copy of every channel airing its kind of show and lets it go when the show

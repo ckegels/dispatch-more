@@ -1,4 +1,5 @@
 # Show Groups' online sources, on recorded answers: no network.
+import json
 import os
 import sys
 import unittest
@@ -148,3 +149,98 @@ class TMDB(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = json.dumps(body).encode()
+
+    def read(self, *a):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class Opened:
+    """urlopen from a table of (url fragment, answer or HTTP status); records the requests."""
+
+    def __init__(self, table):
+        self.table = table
+        self.requests = []
+
+    def __call__(self, request, timeout=None):
+        import urllib.error
+
+        self.requests.append(request)
+        for fragment, answer in self.table:
+            if fragment in unquote(request.full_url):
+                if isinstance(answer, int):
+                    raise urllib.error.HTTPError(request.full_url, answer, "no", {}, None)
+                return FakeResponse(answer)
+        raise urllib.error.HTTPError(request.full_url, 404, "no", {}, None)
+
+
+class Keyed(Case):
+    def opened(self, table):
+        opened = Opened(table)
+        for patch in (mock.patch("urllib.request.urlopen", opened), mock.patch.object(lookups, "PAUSE", 0)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        lookups._tvdb.update(key=None, token=None, at=0.0)
+        return opened
+
+    def test_thetvdb_logs_in_once_and_reads_the_genres(self):
+        opened = self.opened([
+            ("/login", {"data": {"token": "t1"}}),
+            ("/search?type=series", {"data": [
+                {"name": "Chopped Junior", "tvdb_id": "1"},
+                {"name": "Chopped", "tvdb_id": "2", "aliases": []}]}),
+            ("/series/2/extended", {"data": {"genres": [{"name": "Food"}, {"name": "Game Show"}]}}),
+        ])
+        self.assertEqual(lookups.tvdb("Chopped", "k"), {"name": "Chopped", "genres": ["Food", "Game Show"]})
+        lookups.tvdb("Chopped", "k")
+        self.assertEqual(sum("/login" in r.full_url for r in opened.requests), 1)
+        self.assertEqual(json.loads(opened.requests[0].data), {"apikey": "k"}, "no PIN unless given")
+
+    def test_thetvdb_a_refused_key_is_not_a_show_nobody_knows(self):
+        self.opened([("/login", 401)])
+        with self.assertRaises(lookups.Unavailable):
+            lookups.tvdb("Chopped", "wrong")
+
+    def test_thetvdb_by_another_name(self):
+        self.opened([
+            ("/login", {"data": {"token": "t1"}}),
+            ("/search", {"data": [{"name": "Heel Holland Bakt", "tvdb_id": "9",
+                                   "aliases": ["Holland Bakes"]}]}),
+            ("/series/9/extended", {"data": {"genres": [{"name": "Food"}]}}),
+        ])
+        self.assertEqual(lookups.tvdb("Holland Bakes", "k")["genres"], ["Food"])
+
+    def test_trakt(self):
+        opened = self.opened([("api.trakt.tv/search/show", [
+            {"show": {"title": "Chopped After Hours", "genres": ["reality"]}},
+            {"show": {"title": "Chopped", "genres": ["reality", "game-show"]}}])])
+        self.assertEqual(lookups.trakt("Chopped", "cid")["genres"], ["reality", "game-show"])
+        self.assertEqual(opened.requests[0].get_header("Trakt-api-key"), "cid")
+
+    def test_trakt_refused(self):
+        self.opened([("api.trakt.tv", 401)])
+        with self.assertRaises(lookups.Unavailable):
+            lookups.trakt("Chopped", "wrong")
+
+    def test_omdb_and_its_daily_limit(self):
+        self.web([("t=Planet Earth", {"Response": "True", "Title": "Planet Earth", "Genre": "Documentary"}),
+                  ("t=Other", {"Response": "False", "Error": "Series not found!"}),
+                  ("t=Late", {"Response": "False", "Error": "Request limit reached!"})])
+        self.assertEqual(lookups.omdb("Planet Earth", "k")["genres"], ["Documentary"])
+        self.assertIsNone(lookups.omdb("Other", "k"))
+        with self.assertRaises(lookups.Unavailable):
+            lookups.omdb("Late", "k")
+
+    def test_only_the_sources_with_a_key(self):
+        self.assertEqual(lookups.enabled_sources({}), ("tvmaze", "wikidata", "wikipedia"))
+        self.assertIn("trakt", lookups.enabled_sources({"trakt_client_id": "x"}))

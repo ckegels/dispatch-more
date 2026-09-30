@@ -99,7 +99,8 @@ def online_answers(titles):
     return merged
 
 
-_ORDER = {"tvmaze": 0, "wikidata": 1, "wikipedia": 2, "tmdb": 3}
+_ORDER = {"tvmaze": 0, "wikidata": 1, "wikipedia": 2, "tmdb": 3, "tvdb": 4, "trakt": 5,
+          "omdb": 6}
 
 
 def import_survey(survey_path):

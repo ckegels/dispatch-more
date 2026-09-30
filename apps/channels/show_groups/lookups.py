@@ -16,7 +16,14 @@ from .matching import fold, plain
 AGENT = "DispatchMore-ShowGroups/1.0 (github.com/ckegels/dispatch-more)"
 PAUSE = 0.5  # seconds between requests: TVmaze allows 20 per 10 seconds, the others more
 
-SOURCES = ("tvmaze", "wikidata", "wikipedia", "tmdb")
+SOURCES = ("tvmaze", "wikidata", "wikipedia", "tmdb", "tvdb", "trakt", "omdb")
+# The key each source needs (Settings → System → Service keys); the others are free
+KEYED = {"tmdb": "tmdb_key", "tvdb": "tvdb_key", "trakt": "trakt_client_id", "omdb": "omdb_key"}
+
+
+class Unavailable(Exception):
+    """The source could not be asked (a key refused, a daily limit reached): nothing is known
+    about the title, so nothing is recorded and it is asked again later."""
 
 
 def get_json(url, headers=None):
@@ -181,6 +188,137 @@ def tmdb(title, key_or_token):
     return {"name": show.get("name") or "", "genres": genres + keywords}
 
 
+# ---- TheTVDB: genres Food, Travel, Home and Garden... Free key, some with a PIN. ------------------
+
+TVDB = "https://api4.thetvdb.com/v4"
+# One login per worker process: the token lasts a month, and is kept here for 20 days
+_tvdb = {"key": None, "token": None, "at": 0.0}
+TVDB_TOKEN_SECONDS = 20 * 24 * 3600
+
+
+def _tvdb_login(key, pin=""):
+    body = {"apikey": key, **({"pin": pin} if pin else {})}
+    request = urllib.request.Request(
+        TVDB + "/login", data=json.dumps(body).encode(), method="POST",
+        headers={"User-Agent": AGENT, "Content-Type": "application/json",
+                 "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            token = (json.load(response).get("data") or {}).get("token")
+    except urllib.error.HTTPError as exc:
+        time.sleep(PAUSE)
+        if exc.code in (400, 401, 403):
+            raise Unavailable("TheTVDB refused the key (or wants its PIN)")
+        token = None
+    except (OSError, ValueError):
+        token = None
+    time.sleep(PAUSE)
+    _tvdb.update(key=key, token=token, at=time.time())
+    if not token:
+        raise Unavailable("TheTVDB could not be reached")
+    return token
+
+
+def _tvdb_get(path, key, pin):
+    """One GET with the token, logging in first (or again after a refusal)."""
+    for attempt in range(2):
+        fresh = _tvdb["key"] == key and _tvdb["token"] and time.time() - _tvdb["at"] < TVDB_TOKEN_SECONDS
+        token = _tvdb["token"] if fresh and attempt == 0 else _tvdb_login(key, pin)
+        if not token:
+            return None
+        request = urllib.request.Request(TVDB + path, headers={
+            "User-Agent": AGENT, "Accept": "application/json", "Authorization": "Bearer " + token})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                answer = json.load(response)
+            time.sleep(PAUSE)
+            return answer
+        except urllib.error.HTTPError as exc:
+            time.sleep(PAUSE)
+            if exc.code == 401 and attempt == 0:
+                _tvdb["token"] = None
+                continue
+            if exc.code == 429:
+                time.sleep(5)
+            return None
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def tvdb(title, key, pin=""):
+    """A series whose name, or one of its other names, is the title, and its genres."""
+    if not key:
+        return None
+    want = plain(title)
+    found = _tvdb_get("/search?type=series&limit=10&query=" + _q(title), key, pin) or {}
+    hit = None
+    for result in found.get("data") or []:
+        names = [result.get("name")] + list(result.get("aliases") or []) + list(
+            (result.get("translations") or {}).values())
+        if any(plain(n) == want for n in names if isinstance(n, str)):
+            hit = result
+            break
+    if hit is None:
+        return None
+    series_id = hit.get("tvdb_id") or str(hit.get("id") or "").replace("series-", "")
+    detail = _tvdb_get(f"/series/{series_id}/extended?short=true", key, pin) or {}
+    genres = [g.get("name") for g in (detail.get("data") or {}).get("genres") or [] if g.get("name")]
+    if not genres:
+        genres = [g for g in hit.get("genres") or [] if isinstance(g, str)]
+    return {"name": hit.get("name") or "", "genres": genres}
+
+
+# ---- Trakt: show genres (documentary, reality, home-and-garden...). Free Client ID. -------------
+
+def trakt(title, client_id):
+    if not client_id:
+        return None
+    want = plain(title)
+    headers = {"trakt-api-version": "2", "trakt-api-key": client_id, "Content-Type": "application/json"}
+    request = urllib.request.Request(
+        "https://api.trakt.tv/search/show?extended=full&limit=10&query=" + _q(title),
+        headers={"User-Agent": AGENT, **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            found = json.load(response)
+    except urllib.error.HTTPError as exc:
+        time.sleep(PAUSE)
+        if exc.code in (401, 403):
+            raise Unavailable("Trakt refused the Client ID")
+        if exc.code == 429:
+            raise Unavailable("Trakt asks to slow down")
+        return None
+    except (OSError, ValueError):
+        raise Unavailable("Trakt could not be reached")
+    time.sleep(PAUSE)
+    for hit in found or []:
+        show = hit.get("show") or {}
+        if plain(show.get("title")) == want:
+            return {"name": show.get("title") or "", "genres": list(show.get("genres") or [])}
+    return None
+
+
+# ---- OMDb: IMDb's genres. Free key, about 1,000 requests a day. -----------------------------------
+
+def omdb(title, key):
+    if not key:
+        return None
+    found = get_json("https://www.omdbapi.com/?apikey=" + _q(key) + "&t=" + _q(title))
+    time.sleep(PAUSE)
+    if found is None:
+        raise Unavailable("OMDb could not be reached, or refused the key")
+    if found.get("Response") != "True":
+        error = str(found.get("Error") or "").lower()
+        if "limit" in error or "key" in error:
+            raise Unavailable(f"OMDb: {found.get('Error')}")
+        return None
+    if plain(found.get("Title")) != plain(title):
+        return None
+    genres = [g.strip() for g in str(found.get("Genre") or "").split(",") if g.strip() and g.strip() != "N/A"]
+    return {"name": found.get("Title") or "", "genres": genres}
+
+
 def ask(source, title, settings):
     """One source's answer about one title: {"name", "genres"}, or None when it does not know
     the title (or knows only programmes with another name)."""
@@ -194,9 +332,17 @@ def ask(source, title, settings):
         return wikipedia(title, languages or ("en",))
     if source == "tmdb":
         return tmdb(title, str(settings.get("tmdb_key") or "").strip())
+    if source == "tvdb":
+        return tvdb(title, str(settings.get("tvdb_key") or "").strip(),
+                    str(settings.get("tvdb_pin") or "").strip())
+    if source == "trakt":
+        return trakt(title, str(settings.get("trakt_client_id") or "").strip())
+    if source == "omdb":
+        return omdb(title, str(settings.get("omdb_key") or "").strip())
     return None
 
 
 def enabled_sources(settings):
-    """TMDB only with a key; the others are free and always asked."""
-    return tuple(s for s in SOURCES if s != "tmdb" or str(settings.get("tmdb_key") or "").strip())
+    """The keyed sources only with their key; the others are free and always asked."""
+    return tuple(s for s in SOURCES
+                 if s not in KEYED or str(settings.get(KEYED[s]) or "").strip())

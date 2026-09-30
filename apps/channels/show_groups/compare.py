@@ -56,7 +56,9 @@ def row(key, show, answers, judges, vague=frozenset()):
 
 
 def shows(query="", only="all", offset=0, limit=50):
-    settings, groups = themes.load_settings(), themes.load_groups()
+    from apps.channels import service_keys
+
+    settings, groups = service_keys.with_keys(themes.load_settings()), themes.load_groups()
     chosen = [g for g in groups if g.get("on")] or groups
     vague = plans.vague_of(settings)
     judges = {g["id"]: matching.group_from_theme(g, vague) for g in chosen}
@@ -92,7 +94,9 @@ def ask_now(title):
     """Ask every database about one title now, whatever the queue says, and keep the answers."""
     from . import live
 
-    settings = themes.load_settings()
+    from apps.channels import service_keys
+
+    settings = service_keys.with_keys(themes.load_settings())
     key = matching.plain(title)
     if not key:
         raise ValueError("No title")
@@ -101,6 +105,8 @@ def ask_now(title):
     for source in lookups.enabled_sources(settings):
         try:
             answer = lookups.ask(source, title, settings)
+        except lookups.Unavailable:
+            continue
         except Exception:
             answer = None
         new[source] = {**(answer or {}), "asked": now}

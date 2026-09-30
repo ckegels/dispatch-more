@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowLeftRight,
   DatabaseBackup,
+  KeyRound,
   FileOutput,
   Menu,
   Monitor,
@@ -32,6 +33,7 @@ const NetworkAccessForm = lazy(() => import('../components/forms/settings/Networ
 const SystemSettingsForm = lazy(() => import('../components/forms/settings/SystemSettingsForm.jsx'));
 const UserLimitsForm = lazy(() => import('../components/forms/settings/UserLimitsForm.jsx'));
 const BackupManager = lazy(() => import('../components/backups/BackupManager.jsx'));
+const ServiceKeysForm = lazy(() => import('../components/forms/settings/ServiceKeysForm.jsx'));
 const ModifiedBuild = lazy(() => import('../components/ModifiedBuild.jsx'));
 
 // Component lives on each section so it can never drift out of sync with the
@@ -86,6 +88,8 @@ export const SETTINGS_GROUPS = [
     sections: [
       { id: 'system-settings', label: 'System Settings', icon: Settings2, Component: SystemSettingsForm },
       { id: 'user-limits', label: 'User Limits', icon: Users, Component: UserLimitsForm },
+      // Not official Dispatcharr: keys for TMDB, TheTVDB, Trakt, OMDb, shared by every feature
+      { id: 'service-keys', label: 'Service keys', icon: KeyRound, Component: ServiceKeysForm },
       // Not official Dispatcharr: what this build is, and the way back to stock
       { id: 'modified-build', label: 'Modified build', icon: TriangleAlert, Component: ModifiedBuild },
     ],

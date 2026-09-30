@@ -41,7 +41,8 @@ DEFAULTS = {
     "look_past_vague": True,
     "vague_categories": VAGUE_WORDS,
     "wikipedia_languages": "en, nl, de, fr",
-    "tmdb_key": "",
+    # The keys for TMDB, TheTVDB, Trakt and OMDb are not here: they are shared by everything
+    # that asks those services (apps/channels/service_keys.py, Settings → Service keys)
 }
 
 # Every group has these; a ready-made one fills them in
