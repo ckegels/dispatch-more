@@ -122,6 +122,11 @@ DEFAULTS = {
     # get -- the playlist, the guide, the HDHomeRun lineup, Xtream Codes -- rather than shown
     # with nothing but its fallback to play; shown again when a stream of it is put back
     "hide_emptied_channels": True,
+    # What a check read about a stream that plays -- resolution, codec, frame rate, audio -- is
+    # written onto the stream, where Dispatcharr's Stats page and the Lineup's quality read it.
+    # Stock only learns it while a stream plays through an ffmpeg profile; on the Proxy profile
+    # (the user's) it never did (see save_stream_info)
+    "save_stream_info": True,
     # Park a stream by itself once it has failed this many checks in a row -- only a stream
     # that does not play at all; one refused, black, frozen or showing the provider's card is
     # left for a person. Off unless turned on. After a refresh, three checks means at least
@@ -1021,7 +1026,9 @@ def _ffprobe(data):
         done = subprocess.run(
             [
                 "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,width,height", "-of", "json", "-i", "pipe:0",
+                "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,pix_fmt,"
+                "sample_rate,channels,channel_layout:format=format_name",
+                "-of", "json", "-i", "pipe:0",
             ],
             input=data, capture_output=True, timeout=15,
         )
@@ -1029,16 +1036,81 @@ def _ffprobe(data):
         logger.debug(f"ffprobe not usable here: {e}")
         return None
     try:
-        streams = json.loads(done.stdout or b"{}").get("streams") or []
+        answer = json.loads(done.stdout or b"{}")
+        streams = answer.get("streams") or []
     except ValueError:
         return {"video": False, "audio": False}
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     return {
         "video": video is not None,
-        "audio": any(s.get("codec_type") == "audio" for s in streams),
+        "audio": audio is not None,
         "codec": (video or {}).get("codec_name", ""),
         "resolution": f"{video['width']}x{video['height']}" if video and video.get("width") else "",
+        "details": stream_details(video, audio, (answer.get("format") or {}).get("format_name", "")),
     }
+
+
+AUDIO_LAYOUTS = {1: "mono", 2: "stereo", 6: "5.1", 8: "7.1"}
+
+
+def _rate(text):
+    """"50/1" -> 50.0; ffprobe's "0/0" (not known) -> None."""
+    try:
+        top, _, bottom = str(text or "").partition("/")
+        value = float(top) / float(bottom or 1)
+        return round(value, 3) if value > 0 else None
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def stream_details(video, audio, format_name=""):
+    """What ffprobe read, in the fields and shapes Dispatcharr stores in Stream.stream_stats
+    when it parses ffmpeg's output (live_proxy/services/log_parsers.py), so its Stats page
+    shows it the same way."""
+    details = {}
+    if video:
+        details["video_codec"] = video.get("codec_name") or None
+        if video.get("width") and video.get("height"):
+            details["resolution"] = f"{video['width']}x{video['height']}"
+        details["source_fps"] = _rate(video.get("avg_frame_rate")) or _rate(video.get("r_frame_rate"))
+        details["pixel_format"] = video.get("pix_fmt") or None
+    if audio:
+        details["audio_codec"] = audio.get("codec_name") or None
+        try:
+            details["sample_rate"] = int(audio.get("sample_rate")) if audio.get("sample_rate") else None
+        except (TypeError, ValueError):
+            pass
+        channels = audio.get("channels")
+        details["audio_channels"] = audio.get("channel_layout") or (
+            AUDIO_LAYOUTS.get(channels, str(channels)) if channels else None)
+    if format_name:
+        details["stream_type"] = format_name.split(",")[0]
+    return {k: v for k, v in details.items() if v not in (None, "")}
+
+
+def save_stream_info(stream_id, details):
+    """Write what a check read onto the stream, over what was there (ffmpeg's own bitrate
+    readings are kept). Never fails a check."""
+    if not details:
+        return False
+    try:
+        from django.utils import timezone
+
+        from .models import Stream
+
+        stream = Stream.objects.filter(id=stream_id).first()
+        if stream is None:
+            return False
+        stats = dict(stream.stream_stats or {})
+        stats.update(details)
+        stream.stream_stats = stats
+        stream.stream_stats_updated_at = timezone.now()
+        stream.save(update_fields=["stream_stats", "stream_stats_updated_at"])
+        return True
+    except Exception as e:
+        logger.debug(f"Stream Check: could not save what it read about stream {stream_id}: {e}")
+        return False
 
 
 def _said(data):
@@ -1476,7 +1548,8 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
             result["ok"] = _looks_like_ts(data) or kind.startswith("video/")
             result["reason"] = "" if result["ok"] else "What came is not video Dispatcharr knows"
         elif found["video"]:
-            result.update(ok=True, resolution=found["resolution"], codec=found["codec"])
+            result.update(ok=True, resolution=found["resolution"], codec=found["codec"],
+                          details=found.get("details") or {})
             picture = _picture(data) if picture_seconds else None
             if picture and picture["length"] >= PICTURE_LEAST:
                 result["frame"] = picture["frame"]
@@ -1828,6 +1901,8 @@ def _record(redis_client, results, stream, outcome, settings, round_id=None):
     # Failures in a row of a stream that does not play at all: what autopark counts. Any other
     # kind of failure, or playing, starts it again.
     dead_streak = int(previous.get("dead_streak") or 0) + 1 if kind == DEAD else 0
+    if outcome["ok"] and outcome.get("details") and settings.get("save_stream_info", True):
+        save_stream_info(stream.id, outcome["details"])
     record = {
         "ok": outcome["ok"],
         "kind": kind,

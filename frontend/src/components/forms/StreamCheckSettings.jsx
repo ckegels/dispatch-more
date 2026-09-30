@@ -170,6 +170,13 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           )}
           <Switch
             size="xs"
+            label="Save what it reads about each stream"
+            description="Resolution, codec, frame rate and audio, shown on Dispatcharr's Stats page and used for the quality of streams. Dispatcharr only learns this itself while a stream plays through an ffmpeg profile."
+            checked={draft.save_stream_info !== false}
+            onChange={(e) => set({ save_stream_info: e.currentTarget.checked })}
+          />
+          <Switch
+            size="xs"
             label="Check failing streams again"
             description="Without waiting for the next full run."
             checked={!!draft.recheck_failed}

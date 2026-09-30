@@ -701,6 +701,21 @@ const StreamConnectionCard = ({
               </Badge>
             </Tooltip>
           )}
+          {/* Dispatch More: on the Proxy profile nothing is measured while it plays, so
+              the badges come from what Stream Check last read about this stream */}
+          {channel.stream_info_from === 'saved' && (
+            <Tooltip
+              label={`Not measured while playing (Proxy profile): what Stream Check last read about this stream${
+                channel.stream_info_saved_at
+                  ? `, ${new Date(channel.stream_info_saved_at).toLocaleString()}`
+                  : ''
+              }`}
+            >
+              <Text size="xs" c="dimmed">
+                from last check
+              </Text>
+            </Tooltip>
+          )}
           {channel.ffmpeg_speed && (
             <Tooltip
               label={`Current Speed: ${parseFloat(channel.ffmpeg_speed).toFixed(2)}x`}

@@ -570,10 +570,44 @@ class ChannelStatus:
             if stream_type:
                 info['stream_type'] = stream_type
 
+            ChannelStatus._fill_from_saved_stream_info(info)
             return info
         except Exception as e:
             logger.error(f"Error getting channel info: {e}", exc_info=True)
             return None
+
+    # What the Stats page's badges show, as stored on a Stream
+    SAVED_STREAM_INFO = ("video_codec", "resolution", "source_fps", "audio_codec", "audio_channels",
+                         "stream_type")
+
+    @staticmethod
+    def _fill_from_saved_stream_info(info):
+        """
+        Dispatch More: what is not measured live, taken from what was last saved about the
+        stream playing (Stream.stream_stats). Stock only measures while a stream plays through
+        an ffmpeg profile, so on the Proxy profile a card had no resolution, codec or audio at
+        all and looked unlike the others; Stream Check saves them now. Said as such:
+        stream_info_from = "saved", with when.
+        """
+        stream_id = info.get('stream_id')
+        if not stream_id or all(info.get(key) for key in ChannelStatus.SAVED_STREAM_INFO):
+            return
+        try:
+            from apps.channels.models import Stream
+
+            row = Stream.objects.filter(id=stream_id).values('stream_stats', 'stream_stats_updated_at').first()
+        except Exception:
+            return
+        saved = (row or {}).get('stream_stats') or {}
+        filled = False
+        for key in ChannelStatus.SAVED_STREAM_INFO:
+            if not info.get(key) and saved.get(key) not in (None, ''):
+                info[key] = saved[key]
+                filled = True
+        if filled:
+            info['stream_info_from'] = 'saved'
+            if row.get('stream_stats_updated_at'):
+                info['stream_info_saved_at'] = row['stream_stats_updated_at'].isoformat()
 
 
 def build_live_channel_stats_data(redis_client):

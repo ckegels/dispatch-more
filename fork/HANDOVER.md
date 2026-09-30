@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v239** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v240** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1826,6 +1826,19 @@ button, or play them). Capabilities say `commercial_breaks: {installed, enabled,
 marks}` -- `installed` is `shutil.which("comskip")`, which a Linux install may not have
 (Docker has it). On the user's server (2026-09-30) Comskip was on in cut mode; set to
 mark.
+
+**Stream information from Stream Check** (v240, `stream_check.stream_details` / `save_stream_info`,
+setting `save_stream_info`, on). Dispatcharr stores a stream's resolution, codec, frame rate
+and audio (`Stream.stream_stats`) only from ffmpeg's output while a stream plays through an
+**ffmpeg** profile; on the **Proxy** profile (the user's) it never learnt any of it. Stream
+Check's ffprobe now also reads frame rate, pixel format, audio codec, sample rate, channel
+layout and the container, and writes them onto every stream that plays, in the same fields
+and shapes as `log_parsers.py` (ffmpeg's bitrate readings are kept). So the Lineup's
+`quality_of` and the arrTV "away from home" limit use measured resolutions, and the **Stats
+page's live cards** -- which had no badges at all on the Proxy profile, one reason they looked
+unlike each other (the others: live, VOD and catch-up cards are three designs in stock) --
+fall back to the saved values (`ChannelStatus._fill_from_saved_stream_info`, marked "from last
+check").
 
 ### 5.8 Misc
 
