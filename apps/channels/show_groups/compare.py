@@ -69,8 +69,20 @@ def shows(query="", only="all", offset=0, limit=50):
     everything = data.get("shows") or {}
     answers = store.load_lookups()
     wanted = matching.fold(query).strip()
+    ordered = sorted(everything.items(), key=lambda kv: (-kv[1].get("airings", 0), kv[0]))
+    if only == "all":
+        # Every show counts, so only the page shown needs judging (not all 9,000 each time)
+        matching_ones = [(k, s) for k, s in ordered if not wanted or wanted in matching.fold(s["title"])]
+        return {
+            "made": data.get("made"), "total": len(matching_ones),
+            "shows": [row(k, s, answers.get(k, {}), judges, vague)
+                      for k, s in matching_ones[offset:offset + limit]],
+            "groups": [{"id": g["id"], "name": g["name"]} for g in chosen],
+            "sources": [s for s in lookups.SOURCES if s in lookups.enabled_sources(settings)],
+            "count": len(everything),
+        }
     rows = []
-    for key, show in sorted(everything.items(), key=lambda kv: (-kv[1].get("airings", 0), kv[0])):
+    for key, show in ordered:
         if wanted and wanted not in matching.fold(show["title"]):
             continue
         one = row(key, show, answers.get(key, {}), judges, vague)

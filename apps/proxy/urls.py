@@ -14,6 +14,8 @@ urlpatterns = [
     path('stats/', stats_views.combined_stats, name='combined_stats'),
     # Diagnostics: channel starts and what Channel Switch Overlap is doing
     path('diagnostics/', diagnostics_views.diagnostics, name='live_diagnostics'),
+    # Which process holds how much memory (see live_proxy/memory.py)
+    path('diagnostics/memory/', diagnostics_views.diagnostics_memory, name='live_diagnostics_memory'),
     # Media Servers: the servers themselves, for the settings tab
     path('media-servers/', media_server_views.media_server_list, name='media_servers'),
     path(

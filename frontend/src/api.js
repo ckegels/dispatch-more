@@ -2703,6 +2703,11 @@ export default class API {
     );
   }
 
+  // Every Dispatcharr process and the memory it holds (Diagnostics → Memory)
+  static async getMemoryUse() {
+    return await request(`${host}/proxy/diagnostics/memory/`);
+  }
+
   static async getDiagnostics() {
     // Channel starts and Channel Switch Overlap activity for the Diagnostics page
     try {

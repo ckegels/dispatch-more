@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v234** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v235** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -319,6 +319,26 @@ cleanup loop (`health.sweep`, one worker at a time via a Redis lock, `scan_iter`
 Speed only exists when ffmpeg runs (a stream profile other than Proxy). Every section is read
 on its own: one bad record is logged and left out rather than 500-ing the page (it did,
 because switch records sometimes carry a channel id or "None" instead of a UUID).
+
+### 5.4c Memory — `live_proxy/memory.py`, `MemoryUse.jsx` (Diagnostics → Memory, v235)
+
+Asked for on 2026-09-30: the user's server showed Dispatcharr near 4 GB and memory at 100 %
+(the 100 % was largely this session's own requests: three `/epg/grid/` builds of ~38,000
+programmes left running after nginx's 504, and ~360 pages of the Show Groups comparison,
+each of which judged all 9,000 shows). The tab lists every Dispatcharr process by kind with
+its PSS (shared pages divided, so the web workers forked from one master add up honestly;
+RSS where PSS cannot be read) and whether PyTorch is mapped into it.
+
+What the code says can be large (to be confirmed with the tab): **PyTorch and the language
+model in web workers** -- the Lineup preview runs in the request (`channel_manager_preview`),
+and with the model on by default each web worker that served one imports torch (hundreds of
+MB that never go back, even after `release_ml_models`) and keeps `meaning._MEANINGS` (up to
+100,000 vectors, ~150 MB); Celery children are recycled at 512 MB, web workers are not.
+Changed in v235, without changing what anything does: the Show Groups plan made on the tab's
+buttons is made by a Celery worker (`tasks.show_groups_work_out`, waited for; made in the web
+worker only when no worker answers a 1 s ping); `meaning_index._index` keeps only
+`channel_top` in memory; the comparison judges only the page shown for "All". Open: moving
+the Lineup's encoding out of the web workers -- wait for the tab's numbers first.
 
 ### 5.4b Logs — `core/log_center.py`, `LogViewer.jsx` (Diagnostics → Logs)
 

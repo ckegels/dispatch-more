@@ -277,3 +277,12 @@ def diagnostics(request):
         "keep_choices": list(probation.EVENT_TTL_CHOICES),
         "timestamp": time.time(),
     })
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def diagnostics_memory(request):
+    """Every Dispatcharr process and the memory it holds (see memory.py)."""
+    from . import memory
+
+    return JsonResponse(memory.snapshot())

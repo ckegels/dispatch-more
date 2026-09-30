@@ -29,6 +29,7 @@ import ChannelSwitches, {
 } from './ChannelSwitches';
 import ChannelHealth, { HEALTH_COLORS, HEALTH_MEANINGS } from './ChannelHealth';
 import LogViewer from './LogViewer';
+import MemoryUse from './MemoryUse';
 
 const REFRESH_MS = 5000;
 
@@ -87,7 +88,7 @@ const Diagnostics = ({ active }) => {
   // open none of this is asked for: every ask is a read of every channel start, every
   // running channel and every account, five seconds apart, for a page showing none of it
   useEffect(() => {
-    if (!active || tab === 'logs') return undefined;
+    if (!active || tab === 'logs' || tab === 'memory') return undefined;
     load();
     const timer = setInterval(load, REFRESH_MS);
     return () => clearInterval(timer);
@@ -123,6 +124,7 @@ const Diagnostics = ({ active }) => {
             label: `${phone ? 'Health' : 'Channel health'} (${(activity.running || []).length})`,
           },
           { value: 'logs', label: 'Logs' },
+          { value: 'memory', label: 'Memory' },
         ]}
       />
 
@@ -133,6 +135,7 @@ const Diagnostics = ({ active }) => {
         <ChannelSwitches activity={activity} onCopy={copyToClipboard} />
       )}
       {tab === 'logs' && <LogViewer />}
+      {tab === 'memory' && <MemoryUse />}
 
       {tab === 'health' && (
         <ChannelHealth

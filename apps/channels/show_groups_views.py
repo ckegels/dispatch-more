@@ -153,6 +153,27 @@ def show_groups_kinds(request):
                          "channels": found})
 
 
+def _work_out(settings, groups):
+    """The plan made by the Celery worker, waited for (see tasks.show_groups_work_out); made
+    here only when no worker answers, so the button never fails for it."""
+    from celery.exceptions import TimeoutError as StillWorking
+
+    try:
+        from dispatcharr.celery import app
+
+        from .tasks import show_groups_work_out
+
+        # No worker answering (Celery down, or the tests): made here, as before
+        if not app.control.ping(timeout=1.0):
+            raise RuntimeError("no Celery worker answered")
+        show_groups_work_out.apply_async().get(timeout=600, propagate=True)
+    except StillWorking:
+        raise live.Refused("The plan is still being made; look again in a minute.")
+    except Exception as e:
+        logger.warning(f"Show Groups: the plan could not be made by the worker ({e}); making it here")
+        live.work_out(settings, groups)
+
+
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def show_groups_run(request):
@@ -163,11 +184,11 @@ def show_groups_run(request):
     settings, groups = themes.load_settings(), themes.load_groups()
     try:
         if action == "plan":
-            live.work_out(settings, groups)
+            _work_out(settings, groups)
             message = "Worked out what the groups that are on would hold."
         elif action == "update":
             if themes.active(settings, groups):
-                live.work_out(settings, groups)
+                _work_out(settings, groups)
             joined, left, held = live.tick(settings, groups, plans.load())
             message = (f"{len(joined)} joined, {len(left)} left"
                        + (f", {len(held)} kept for viewers" if held else ""))

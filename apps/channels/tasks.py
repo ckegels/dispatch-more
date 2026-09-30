@@ -5029,3 +5029,15 @@ def show_groups_look_up():
         return f"{asked} asked, {waiting} waiting"
     finally:
         cache.delete(live.LOOKUP_KEY)
+
+
+@shared_task
+def show_groups_work_out():
+    """The Show Groups plan, made on request from the tab ("Work it out", "Update now"). Made
+    here rather than in the web worker that got the request: reading every categorised
+    programme in the guide grows a process by hundreds of MB that Python does not give back,
+    and a Celery child is recycled after such a task (CELERY_WORKER_MAX_MEMORY_PER_CHILD)."""
+    from .show_groups import live, themes
+
+    live.work_out(themes.load_settings(), themes.load_groups())
+    return "made"

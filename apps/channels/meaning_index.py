@@ -181,7 +181,10 @@ def build(say=None):
 
 
 def _index():
-    """index.json, read again only when it changes."""
+    """index.json, read again only when it changes. Only each channel's closest guides are
+    kept in memory: that is all a lookup reads, and the rest of the file (every guide's id,
+    country and hash, ~94,000 each on the user's server) sat in every web worker that had
+    looked up a guide."""
     path = os.path.join(INDEX_DIR, "index.json")
     try:
         stamp = os.path.getmtime(path)
@@ -189,7 +192,9 @@ def _index():
         return None
     if _loaded["stamp"] != stamp:
         with open(path) as handle:
-            _loaded.update(stamp=stamp, meta=json.load(handle))
+            meta = json.load(handle)
+        _loaded.update(stamp=stamp, meta={"channel_top": meta.get("channel_top") or {}})
+        del meta
     return _loaded
 
 

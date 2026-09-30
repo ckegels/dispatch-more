@@ -539,3 +539,24 @@ class OldDefaults(Base):
         groups[0]["category_words"] = "cooking, my word"
         themes.save(None, groups)
         self.assertEqual(themes.load_groups()[0]["category_words"], "cooking, my word")
+
+
+class PlanInTheWorker(Api):
+    """"Work it out" has the Celery worker make the plan, so the web worker does not keep the
+    memory reading the whole guide takes."""
+
+    def test_made_by_the_worker_when_one_answers(self):
+        self.switch_on("cooking")
+        with mock.patch("dispatcharr.celery.app.control.ping", return_value=[{"w": {"ok": "pong"}}]), \
+                mock.patch("apps.channels.tasks.show_groups_work_out.apply_async") as sent, \
+                mock.patch.object(live, "work_out") as here:
+            self.client.post("/api/channels/show-groups/run/", {"action": "plan"}, format="json")
+        sent.assert_called_once()
+        here.assert_not_called()
+
+    def test_made_here_when_no_worker_answers(self):
+        self.switch_on("cooking")
+        with mock.patch("dispatcharr.celery.app.control.ping", return_value=[]), \
+                mock.patch.object(live, "work_out") as here:
+            self.client.post("/api/channels/show-groups/run/", {"action": "plan"}, format="json")
+        here.assert_called_once()
