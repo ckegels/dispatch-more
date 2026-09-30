@@ -3,127 +3,151 @@
 <img width="200" height="200" alt="DispatchMore" src="https://github.com/user-attachments/assets/8c3a0b64-f10b-4463-8d91-e1beccfc5738" />
 </p>
 
+**An unofficial, modified build of [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr)** that
+adds faster channel switching, a Channel Manager for your whole lineup, diagnostics, recordings
+that work on every install, and a lot more. It installs over the Dispatcharr you already have
+and takes itself off again with one button.
 
+> [!TIP]
+> **Use it together with [arrTV](https://github.com/ckegels/AerioTV-Android)**, the Android TV
+> app built for Dispatch More. Many features only work, or work much better, when both are used
+> together: see [Better together with arrTV](#better-together-with-arrtv).
 
-**An unofficial, modified build of [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr).**
-It is not made, reviewed or supported by the Dispatcharr developers.
-
-> **Before reporting any problem:** uninstall Dispatch More (Settings → System → Modified
-> build → Uninstall) and try the same thing on stock Dispatcharr. **Do not report problems
-> with this build on the official Dispatcharr GitHub or Discord** — only problems that also
-> happen on stock Dispatcharr belong there. Problems with Dispatch More go to
+> [!WARNING]
+> Dispatch More is **not made, reviewed or supported by the Dispatcharr developers.**
+> Before reporting a problem, uninstall Dispatch More (Settings → System → Modified build →
+> Uninstall) and try the same thing on stock Dispatcharr. **Do not report Dispatch More problems
+> on the official Dispatcharr GitHub or Discord**; report them in
 > [this repository's issues](../../issues).
 
-> This is what i Wish Dispatcharr could be, however due to the big amount of changes and the heavy usage of llms i decided to not try and add it to the official repo.
-> if people could test this and tell me their findings and maybe some of these features could be added to the official repo. 
+This is what I wish Dispatcharr could be. Because of the size of the changes, and because a lot
+of it was written with the help of AI, I did not try to add it to the official project. If you
+test it, please share what you find: maybe some of these features can make it into Dispatcharr
+itself one day.
 
-Dispatch More installs over an existing Dispatcharr, on Linux, in an LXC or in Docker, and
-takes itself off again with one button. It changes no database tables, and with its features
-switched off Dispatcharr behaves as stock.
-## What issues it fixes
+**Contents:** [What it is](#what-it-is) · [Better together with arrTV](#better-together-with-arrtv) ·
+[Features](#features) · [Install](#install) · [Install arrTV](#install-arrtv) ·
+[Update](#update) · [Uninstall](#uninstall) · [Good to know](#good-to-know) ·
+[Screenshots](#screenshots) · [License](#license-and-source)
 
-- **Media servers** — When using a media server like plex or jellyfin they would leave open streams too long, with the channel overlap on this is solved. It also adds one place where all your media server are managed, so you can add and delete tuners.
-- **channel loading times** — When only one provider is available streams take very long to load because it has to close the old stream and reopen the new one, this recognizes streams by login and allows streams to be closed immediately and allows channels to overlap if allowed by the provider.
-- **Diagnostics and Logs** — Dispatcharr doesn't have an easy way to see at a glance what is going wrong and why things take long, the diagnostics page aims to resolve that.
-- **Find Logo** — Finding and adding logos to channels is not easy, the new Find logos tab inside the logo Manager uses collections and epg sources to make this easier.
-- **Channel Manager** — There is already plugins that help with merging and creating channels however these have no easy way of seeing exactly what is happening, this should give you all the tools you need.
-- **Recordings on a Linux install** — Dispatcharr sends recordings to a queue that only the Docker image has a worker for; on a Linux/LXC install (debian_install.sh) a recording was never started. Dispatch More has the normal worker pick them up, and on Linux installs adds a worker of its own for recordings (`dispatcharr-celery-dvr`, up to 20 at once), as Docker has. Not added on Docker; `install.sh --no-dvr-worker` leaves it out.
-  
-## What it adds
+## What it is
 
-Everything is off, or only suggests, until you turn it on or apply it.
+- **A layer over stock Dispatcharr.** It replaces a set of Dispatcharr's files and keeps the
+  originals, so going back to stock is one button (or one command).
+- **Safe to try.** It adds no database tables. Everything new is **off, or only suggests
+  changes, until you switch it on or press Apply**. With its features off, Dispatcharr behaves as
+  stock.
+- **For Linux, LXC (including the Proxmox script) and Docker.** Each release is built for one
+  Dispatcharr version; the installer picks the right one for you.
 
-- **Channel Switch Overlap** (per M3U account) — switching channels on an account that allows
-  one stream no longer waits for the old stream to let go: the new channel may use one extra
-  connection for a few seconds.
-- **Force Close on Identified Traffic** (per M3U account, works without the overlap) — when a
-  player asks for a channel, the channel it was watching is closed at once, so its connection is
-  free straight away. Only for players Dispatcharr can tell apart (see Disadvantages).
-- **Media Servers** — Plex and Jellyfin: who is watching what, stop a session, and add, move and
-  remove Dispatcharr's HDHomeRun tuners and guides on the server.
-- **Diagnostics** — where the time goes when a channel starts, every channel switch, **Channel
-  health** (what each running channel plays, from where and to whom, and how stopped ones ended),
-  and **Logs**: every log Dispatcharr writes, filtered by part, level and text, downloadable
-  whole or as a bundle to send to whoever helps.
-- **Stream Recovery** — a provider rotating a working connection is not counted as a failure.
-- **Find Logos** — logos from public collections, your playlists and your guides, side by side.
-- **Channel Manager → Lineup** — every copy of a channel from every provider and quality merged
-  into one (matching the way DispatcharrUtils does by default), and new streams suggested as new
-  channels: in the group your other channels from that provider group are in, on the next free
-  number of that group, with a logo from the collections and your fallback stream last. Take a
-  wrong stream out of a row, change the group, or ignore a suggestion for good. With
-  **Remember matched streams** on, every stream on a channel is written down with its
-  provider's stream number, so one the provider renames goes back on its channel after the
-  next playlist refresh instead of dropping off; one you take off stays off. With **Use
-  Dispatcharr's language model** on, a stream whose name matches none of your channels is
-  compared by what it means (DE| DISCOVERY CHANNEL is ┃DE┃ DISCOVERY) and suggested onto the
-  channel it means, marked "by meaning" with its score.
-- **Channel Manager → Guides** — finds channels on no guide, on a guide that holds nothing, or
-  with a clearly better guide, and suggests the change; the guide's programme on now is shown
-  so the right one can be picked. Guides are also found by what their names mean, with Dispatcharr's own
-  language model, from an index worked out in the background after each guide refresh.
-- **Channel Manager → Guide Layout** — drag channels into place, group by group, and the
-  numbers follow; shows numbers used twice across groups.
-- **Channel Manager → EPG Grabber** — runs iptv-org's guide grabber (when it is installed on
-  the server) on a schedule, and only replaces the guide file once the new one has been read
-  back and found to hold channels and programmes.
-- **Settings → Service keys** — keys for TMDB, TheTVDB, Trakt and OMDb in one place, each
-  with a Test button; every feature that asks one of these services uses the key here (Show
-  Groups asks them what a show is).
-- **Channel Manager → Show Groups** — groups of channels by what is on them right now:
-  Cooking, Travel, Movies, Documentaries, Sport, Kids and more ready-made, and any you add.
-  A group holds a copy of every channel airing its kind of show and lets it go when the show
-  is over (never while someone watches it); channels can be kept in a group for good, and
-  iptv-org's channel database suggests which of yours are that kind as a whole. A Shows
-  panel compares every show in the guide with what TVmaze, Wikidata, Wikipedia and TMDB
-  say it is, and shows where they disagree with your guides. Off
-  until switched on; takes over the Show Groups plugin's group if you had it.
-- **Channel Manager → Stream Check** — finds the streams on your channels that no longer play:
-  dead, refused by the provider, black, frozen, or showing the provider's "no stream" picture
-  (a picture fault is looked at again later in the same run before it counts). Never touches a
-  provider someone is watching, learns how many streams each provider allows, rechecks failing
-  streams by itself, and can park dead ones automatically (autopark) and hide a channel with
-  nothing left. Streams can be ignored, and the list cleared.
-- **arrTV** (Settings → Streaming → arrTV) — for [arrTV](https://github.com/ckegels/AerioTV-Android),
-  an Android TV app built for this server: each TV is recognised as its own device (so Force
-  Close never closes another TV's channel), gets streams it can decode, reports problems and
-  stutters, fails over faster, and viewers can pick the right guide for a channel from the
-  player ("Wrong guide? Choose another", recorded with who changed it). Every switch off by
-  default; no other app sends any of it.
-- **Modified build** (Settings → System) — what is installed, and a button to go back to stock.
+## Better together with arrTV
 
-## Disadvantages
-- **Registered Devices** — For this to work each device has to be unique, so each device needs its own login when external, and on local network it will use the ip adress to recognize the device. (you have to add the local lan in the m3u settings)
+[arrTV](https://github.com/ckegels/AerioTV-Android) is an app for Google TV / Android TV (and
+phones) that works with any Dispatcharr, but talks to Dispatch More directly. Using both is
+**highly recommended**:
 
+| With Dispatch More + arrTV | What you get |
+|---|---|
+| **Each TV is its own device** | Switching channels on one TV never cuts off another TV on the same provider login, and each TV gets streams it can actually play. |
+| **Faster channel switching and failover** | A stream that does not start is replaced by the next one sooner, and a stuttering stream is reported so the server can switch. |
+| **Report a problem from the TV** | One press on the remote sends what went wrong with a channel to the server, where you see it under Settings → arrTV. |
+| **Wrong guide? Choose another** | From the player, pick the right guide for a channel by comparing what is on each with the picture; it changes for everyone. |
+| **Instant updates** | New channels, Show Groups and guide changes reach the TV within seconds, without restarting the app. |
+| **Recordings with ad skipping** | Commercial breaks marked on the server are skipped during playback; the recording itself is never cut. |
+| **Away from home** | Viewers outside your home network get a quality your connection can carry. |
 
+Every one of these has its own switch in Dispatch More (Settings → Streaming → arrTV) and in
+arrTV (Settings → General → arrTV optimizations).
+
+## Features
+
+### Channels start faster
+
+- **Channel Switch Overlap** (per provider account) — on a provider that allows one stream,
+  switching channels no longer waits for the old stream to close: the new channel may use one
+  extra connection for a few seconds.
+- **Force Close on Identified Traffic** (per provider account) — when a player asks for a new
+  channel, the one it was watching is closed straight away, so its connection is free at once.
+  Only for players Dispatcharr can tell apart (see [Good to know](#good-to-know)).
+
+### Channel Manager
+
+A new page with everything for keeping a big lineup tidy. Nothing changes until you apply it.
+
+- **Lineup** — merges every copy of a channel, from every provider and in every quality, into
+  one channel, and suggests new streams as new channels (in the right group, on the next free
+  number, with a logo and your fallback stream last). Each row shows what an apply adds.
+  Optional: **Remember matched streams** (a stream the provider renames goes back on its
+  channel) and **Dispatcharr's language model** (finds matches whose names differ, like
+  "DE| DISCOVERY CHANNEL" and "┃DE┃ DISCOVERY").
+- **Guides** — finds channels with no guide, an empty guide, or a clearly better guide, and
+  shows what is on each guide now so you can pick the right one.
+- **Guide Layout** — drag channels into order, group by group; the numbers follow.
+- **Logos** — logos from public collections, your playlists and your guides, side by side.
+- **Stream Check** — finds streams that no longer play (dead, refused, black, frozen, or the
+  provider's "no stream" picture). It never touches a provider someone is watching, and can put
+  dead streams aside automatically.
+- **Show Groups** — groups by what is on right now: Cooking, Travel, Movies, Documentaries,
+  Sport, Kids and more, plus groups you add. A group holds every channel airing that kind of
+  show and lets it go when the show ends (never while someone watches). Channels can be kept in
+  a group for good. Uses your guides and, optionally, TVmaze, Wikidata, Wikipedia, TMDB,
+  TheTVDB, Trakt and OMDb to recognise shows.
+- **EPG Grabber** — runs iptv-org's guide grabber on a schedule (when it is installed on the
+  server) and only replaces your guide once the new one is complete.
+
+### Recordings
+
+- **Recordings work on Linux installs.** Stock Dispatcharr never starts a recording on a
+  Linux/LXC install (only Docker has the worker for it). Dispatch More fixes that and adds a
+  worker of its own for recordings, up to 20 at once.
+- **Commercial breaks marked, not cut.** With Comskip in *Mark* mode, the breaks are stored with
+  the recording so arrTV can skip them; nothing is cut out, so a wrong guess costs nothing.
+- **Comskip when the recording asks for it**, even with the server-wide switch off.
+
+### Diagnostics
+
+- **Channel starts and switches** — where the time goes when a channel starts.
+- **Channel health** — what each running channel plays, from where, to whom, and how stopped
+  ones ended.
+- **Logs** — every log Dispatcharr writes, filtered and downloadable.
+- **Memory** — how much memory each part of Dispatcharr uses.
+
+### And more
+
+- **Media Servers** — Plex and Jellyfin in one place: who watches what, stop a session, and
+  manage Dispatcharr's HDHomeRun tuners and guides on them. Plex and Jellyfin no longer keep
+  streams open too long.
+- **Service keys** (Settings → System) — keys for TMDB, TheTVDB, Trakt and OMDb in one place,
+  with a Test button.
+- **Modified build** (Settings → System) — what is installed, and the button back to stock.
 
 ## Install
 
-Each release is built for one Dispatcharr version. The command below picks the one for **your**
-Dispatcharr by itself, and on a version no release was built for it changes nothing. Make a
-backup first (Settings → Backup & Restore).
+> [!IMPORTANT]
+> **Make a backup first:** Dispatcharr → Settings → Backup & Restore.
 
-### One command
+Dispatch More needs a working Dispatcharr. The installer checks your version and **changes
+nothing** if no release was built for it.
 
-On **Linux or an LXC**:
+### Linux or LXC (Debian install, Proxmox script)
+
+Run on the Dispatcharr machine:
 
 ```bash
 curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash
 ```
 
-In **Docker** (use your container's name instead of `dispatcharr`):
+### Docker
+
+Run on the Docker host (use your container's name instead of `dispatcharr`):
 
 ```bash
 docker exec dispatcharr bash -c "curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | bash" && docker restart dispatcharr
 ```
 
-It finds which Dispatcharr you have, downloads the Dispatch More release made for it, checks that
-every file it replaces is the stock one (and stops if not), keeps the originals, and installs --
-backend and an already-built frontend, so nothing is built on your server.
-
-In Docker, a restart keeps it, but **recreating** the container (a new image, or a changed
-compose file) starts stock Dispatcharr again: run the command again then. Or have it put back
-at every start, by adding this to the Dispatcharr container in `docker-compose.yml`:
+A **restart** keeps Dispatch More, but **recreating** the container (a new image, or a changed
+compose file) brings back stock Dispatcharr. To have it put back at every start, add this to
+the Dispatcharr service in `docker-compose.yml`:
 
 ```yaml
     entrypoint: ["/bin/bash", "/data/dispatch-more/docker-entrypoint.sh"]
@@ -132,33 +156,71 @@ at every start, by adding this to the Dispatcharr container in `docker-compose.y
 With separate Celery containers, give them the same `entrypoint` and
 `environment: DISPATCHARR_ENTRYPOINT=/app/docker/entrypoint.celery.sh`.
 
+### What the installer does
+
+1. Finds your Dispatcharr and its version, and downloads the Dispatch More release made for it.
+2. Checks that every file it replaces is the stock one, and **stops** if one is not.
+3. Keeps the originals, installs the new files (the web page comes ready-built, so nothing is
+   compiled on your server) and restarts Dispatcharr.
+4. On Linux only: adds a worker for recordings (`dispatcharr-celery-dvr`). Leave it out with
+   `--no-dvr-worker`.
+
 ### By hand
 
-Download `dispatch-more-<release>-dispatcharr-<version>.tar.gz` from [Releases](../../releases)
-and run `sudo bash dispatch-more/install.sh` (add `--app /path/to/dispatcharr` if it is not in
-`/opt/dispatcharr`).
+Download `dispatch-more-<release>-dispatcharr-<version>.tar.gz` from [Releases](../../releases),
+unpack it and run `sudo bash dispatch-more/install.sh` (add `--app /path/to/dispatcharr` if
+Dispatcharr is not in `/opt/dispatcharr`).
+
+### After installing
+
+Open Dispatcharr: **Settings → System → Modified build** says which release is installed. New
+pages: **Channel Manager** in the menu, **Diagnostics** and **arrTV** under Settings →
+Streaming. Switch on what you want to use; the rest stays off.
+
+## Install arrTV
+
+On a Google TV / Android TV:
+
+1. Install **Downloader** (by AFTVnews) from the Play Store.
+2. Enter `https://github.com/ckegels/AerioTV-Android/releases/latest/download/ArrTV.apk` and
+   install the app (allow Downloader to install apps when asked).
+3. Open arrTV. It finds Dispatcharr on your network by itself; pick it and log in.
+4. In Dispatch More, switch on what you want under **Settings → Streaming → arrTV**.
+
+Phones, tablets and other ways to install are in the
+[arrTV instructions](https://github.com/ckegels/AerioTV-Android#install).
+
+## Update
+
+Run the same install command again: it replaces the installed release with the newest one.
+arrTV updates itself (Settings › App Updates).
+
+**A new Dispatcharr version:** a Dispatch More release only fits the Dispatcharr version it was
+built for. When Dispatcharr updates, a new Dispatch More release follows. Until then, keep your
+Dispatcharr version, or uninstall Dispatch More first and update to stock.
 
 ## Uninstall
 
 - **From the page:** Settings → System → Modified build → *Uninstall and go back to stock
-  Dispatcharr*. On Linux it happens right away; in Docker on the next restart of the container.
-- **By hand:** `sudo bash /var/lib/dispatch-more/uninstall.sh` (Linux). In Docker, recreate the
-  container (`docker compose up -d --force-recreate`), without the `entrypoint` line if you added
-  it: a new container is stock Dispatcharr.
+  Dispatcharr*. On Linux it happens right away; in Docker at the next restart of the container.
+- **By hand (Linux):** `sudo bash /var/lib/dispatch-more/uninstall.sh`
+- **Docker:** recreate the container (`docker compose up -d --force-recreate`), without the
+  `entrypoint` line if you added it.
 
-Every file is put back as it was. Your channels, streams and settings stay: stock Dispatcharr
-simply ignores the settings only Dispatch More uses.
+Every file is put back as it was. Your channels, streams and settings stay; stock Dispatcharr
+ignores the settings only Dispatch More uses.
 
-## New Dispatcharr versions
+## Good to know
 
-A release only fits the Dispatcharr version it was built for. When Dispatcharr releases a new
-version, this repository's automation tries the changes against it and reports whether they
-still apply; a new release follows. Until then, keep the Dispatcharr version you have, or
-uninstall first and update to stock.
+- **Telling devices apart.** Force Close and the per-TV features need each device to be
+  recognisable. arrTV identifies itself; other players are told apart by their address, so on
+  your home network add your local network in the provider account's settings, and away from
+  home give each device its own login.
+- **One Dispatcharr version per release.** See [Update](#update).
+- **AI-assisted.** Much of the code was written with the help of AI and tested on one large
+  setup. Report what does not work in [the issues](../../issues).
 
----
-
-# Screenshots
+## Screenshots
 
 <div align="center">
 <img width="1588" height="1089" alt="Screenshot_20260919_180716" src="https://github.com/user-attachments/assets/1289637a-7385-4ec4-ae0c-3fc35ef7b1e0" />
@@ -167,16 +229,13 @@ uninstall first and update to stock.
 <img width="1136" height="1339" alt="Screenshot_20260919_180332" src="https://github.com/user-attachments/assets/03b597f7-26fc-4852-9173-ebe21297b1aa" />
 <img width="917" height="1011" alt="Screenshot_20260919_180252" src="https://github.com/user-attachments/assets/0c1a4038-f12e-43b4-959c-51eed60ad6ba" />
 <img width="2558" height="1347" alt="Screenshot_20260919_180216" src="https://github.com/user-attachments/assets/b5f287db-c63b-4f1a-87f7-5f53490e0fd8" />
-
 </div>
-
----
 
 ## License and source
 
 Dispatcharr is licensed under the [GNU AGPL v3](LICENSE), and so is Dispatch More. This
 repository is the complete source: the `feature/probation-slots` branch is Dispatcharr's code
-with Dispatch More's changes, every one explained in its commit message. The installed build
-names this repository under Settings → System → Modified build.
+with Dispatch More's changes, each explained in its commit message. The installed build names
+this repository under Settings → System → Modified build.
 
 For people working on it: [`fork/HANDOVER.md`](fork/HANDOVER.md) and [`CLAUDE.md`](CLAUDE.md).
