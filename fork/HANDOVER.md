@@ -1778,7 +1778,7 @@ no longer play. Summary of how it works now:
   `stream-check:*` (round, progress, run lock, stop, make-way, queued, live results, opens).
   Times are sent to the page as ISO moments and shown in the viewer's zone (server is UTC).
 
-### 5.7b Recordings on a Debian install — `dispatcharr/celery.py` (v236)
+### 5.7b Recordings on a Debian install — `dispatcharr/celery.py`, `fork/patcher/dvr-worker.sh` (v236)
 
 Stock routes `run_recording` to a `dvr` queue, which the Docker image serves with a second
 worker (`-Q dvr`, thread pool). `debian_install.sh` -- the user's install -- starts **one**
@@ -1791,6 +1791,20 @@ with Celery's own queue selection and `tests/test_dvr_queue.py`. Off:
 `DISPATCHARR_DVR_ON_DEFAULT_WORKER=false`. On that worker a recording holds one prefork child
 for its length. A recording still waiting in the queue is picked up at the next start; one
 whose end has passed ends at once (the loop runs until the end time).
+
+**A worker of its own for recordings** (`fork/patcher/dvr-worker.sh`, run by install.sh on the
+systemd layout only -- never on Docker, whose image already has one). It copies the install's
+own Celery service (found by its ExecStart: `celery ... worker`, not beat, not already `-Q
+dvr`) to `dispatcharr-celery-dvr.service` with `-Q dvr -n dvr@%%h --pool=threads
+--concurrency=20` added and `Restart=always`, and writes a drop-in
+(`<celery unit>.d/dispatch-more-dvr.conf`) setting `DISPATCHARR_DVR_ON_DEFAULT_WORKER=false`,
+so the normal worker leaves `dvr` to it instead of competing for a recording. The unit is
+named `dispatcharr*`, so install's and uninstall's restarts include it. Uninstall removes the
+unit, the drop-in and the marker (`$STATE/dvr-worker`). Off: `install.sh --no-dvr-worker`
+(remembered in `$STATE/dvr-worker-off`; `--dvr-worker` turns it back on). Tested in
+test-patcher.sh against a pretend systemd (a fake systemctl and `SYSTEMD_DIR`).
+Uninstall also takes every fork schedule out of beat now (`core/modified_build.SCHEDULES` and
+uninstall.sh): stream-check-tick, epg-grab-tick, show-groups-tick, show-groups-look-up.
 
 ### 5.8 Misc
 

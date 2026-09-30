@@ -27,6 +27,7 @@ switched off Dispatcharr behaves as stock.
 - **Diagnostics and Logs** — Dispatcharr doesn't have an easy way to see at a glance what is going wrong and why things take long, the diagnostics page aims to resolve that.
 - **Find Logo** — Finding and adding logos to channels is not easy, the new Find logos tab inside the logo Manager uses collections and epg sources to make this easier.
 - **Channel Manager** — There is already plugins that help with merging and creating channels however these have no easy way of seeing exactly what is happening, this should give you all the tools you need.
+- **Recordings on a Linux install** — Dispatcharr sends recordings to a queue that only the Docker image has a worker for; on a Linux/LXC install (debian_install.sh) a recording was never started. Dispatch More has the normal worker pick them up, and on Linux installs adds a worker of its own for recordings (`dispatcharr-celery-dvr`, up to 20 at once), as Docker has. Not added on Docker; `install.sh --no-dvr-worker` leaves it out.
   
 ## What it adds
 
