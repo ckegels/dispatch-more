@@ -24,8 +24,15 @@ preview after an apply works out only what is new, and the model is let go ten m
 it was last used.
 """
 
+import hashlib
+import json
 import logging
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +106,197 @@ def _let_go_later():
     _release["timer"] = timer
 
 
+# ── Out of the web workers (v241) ────────────────────────────────────────────
+#
+# The Lineup preview runs in a uWSGI web worker. Loading the model there imports PyTorch,
+# which a running Python cannot unload: measured on the user's server (2026-09-30) all four
+# web workers held it, 550-650 MB each instead of 160-290 MB, 1.6 GB in all, long after the
+# model itself had been let go. In a web worker the meanings are therefore worked out by a
+# separate process that exits when done (its memory goes with it), and kept on disk --
+# float32, so every score is what it was -- where every worker and the next start find them:
+# a preview after an apply still has nothing new to work out. Celery (the guide index) and
+# the tests work in-process as before. DISPATCHARR_MEANINGS_IN_PROCESS=true: as before
+# everywhere.
+
+STORE_DIR = os.path.join(os.environ.get("DISPATCHARR_MODELS_DIR", "/data/models"), "meanings", "lineup")
+STORE_MOST = 200_000
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+ENCODER = """
+import json, os, sys
+import numpy as np
+from sentence_transformers import SentenceTransformer
+texts = json.load(open(sys.argv[1]))
+model = SentenceTransformer(sys.argv[3], cache_folder=sys.argv[4])
+vectors = model.encode(texts, normalize_embeddings=True, batch_size=256)
+np.save(sys.argv[2], np.asarray(vectors, dtype="float32"))
+"""
+
+
+def in_web_worker():
+    if os.environ.get("DISPATCHARR_MEANINGS_IN_PROCESS", "").lower() in ("true", "1", "yes", "on"):
+        return False
+    try:
+        import uwsgi  # noqa: F401 -- only importable inside a uWSGI worker
+
+        return True
+    except ImportError:
+        return False
+
+
+def _hash(text):
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _python():
+    """Dispatcharr's own Python: in a uWSGI worker sys.executable is uWSGI itself."""
+    for candidate in (os.path.join(sys.prefix, "bin", "python3"), os.path.join(sys.prefix, "bin", "python"),
+                      sys.executable if "python" in os.path.basename(sys.executable or "") else "",
+                      shutil.which("python3") or ""):
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _store_paths():
+    return (os.path.join(STORE_DIR, "vectors.npy"), os.path.join(STORE_DIR, "hashes.json"),
+            os.path.join(STORE_DIR, "lock"))
+
+
+def _read_store():
+    """({hash: row}, vectors read from disk as needed), or ({}, None)."""
+    import fcntl
+
+    import numpy as np
+
+    vectors_path, hashes_path, lock_path = _store_paths()
+    if not os.path.exists(hashes_path):
+        return {}, None
+    os.makedirs(STORE_DIR, exist_ok=True)
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        try:
+            with open(hashes_path) as fh:
+                hashes = json.load(fh)
+            vectors = np.load(vectors_path, mmap_mode="r")
+        except (OSError, ValueError):
+            return {}, None
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    if len(hashes) != len(vectors):
+        return {}, None
+    return {h: row for row, h in enumerate(hashes)}, vectors
+
+
+def _add_to_store(hashes, vectors):
+    """Append these, rewriting both files beside the old ones and moving them into place."""
+    import fcntl
+
+    import numpy as np
+
+    vectors_path, hashes_path, lock_path = _store_paths()
+    os.makedirs(STORE_DIR, exist_ok=True)
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            index, old = _read_store_unlocked(vectors_path, hashes_path)
+            keep = [h for h in hashes if h not in index]
+            if not keep:
+                return
+            rows = [vectors[hashes.index(h)] for h in keep]
+            if old is not None and len(index) + len(keep) <= STORE_MOST:
+                all_hashes = list(index) + keep
+                matrix = np.concatenate([np.asarray(old, dtype="float32"), np.asarray(rows, dtype="float32")])
+            else:
+                all_hashes, matrix = keep, np.asarray(rows, dtype="float32")
+            np.save(vectors_path + ".tmp.npy", matrix)
+            with open(hashes_path + ".tmp", "w") as fh:
+                json.dump(all_hashes, fh)
+            os.replace(vectors_path + ".tmp.npy", vectors_path)
+            os.replace(hashes_path + ".tmp", hashes_path)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _read_store_unlocked(vectors_path, hashes_path):
+    import numpy as np
+
+    try:
+        with open(hashes_path) as fh:
+            hashes = json.load(fh)
+        vectors = np.load(vectors_path)
+    except (OSError, ValueError):
+        return {}, None
+    if len(hashes) != len(vectors):
+        return {}, None
+    return {h: row for row, h in enumerate(hashes)}, vectors
+
+
+def _encode_elsewhere(texts):
+    """The texts' vectors, worked out by a process of their own, or None."""
+    import numpy as np
+
+    python = _python()
+    if python is None:
+        logger.warning("Lineup: no Python found to run the language model with")
+        return None
+    cache = os.environ.get("DISPATCHARR_MODELS_DIR", "/data/models")
+    if os.environ.get("DISABLE_ML_DOWNLOADS", "false").lower() == "true" and not os.path.exists(
+            os.path.join(cache, f"models--{MODEL_NAME.replace('/', '--')}")):
+        logger.warning("Lineup: the language model is not downloaded and downloads are off")
+        return None
+    with tempfile.TemporaryDirectory() as work:
+        given, answer = os.path.join(work, "texts.json"), os.path.join(work, "vectors.npy")
+        with open(given, "w") as fh:
+            json.dump(list(texts), fh)
+        try:
+            done = subprocess.run(
+                [python, "-c", ENCODER, given, answer, MODEL_NAME, cache],
+                capture_output=True, timeout=900,
+                env={**os.environ, "TOKENIZERS_PARALLELISM": "false"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.warning(f"Lineup: the language model could not be run: {e}")
+            return None
+        if done.returncode != 0 or not os.path.exists(answer):
+            logger.warning(f"Lineup: the language model failed: {done.stderr.decode('utf-8', 'replace')[-400:]}")
+            return None
+        return np.load(answer)
+
+
+def _meanings_elsewhere(texts):
+    unique = list(dict.fromkeys(texts))
+    keys = {t: _hash(t) for t in unique}
+    import numpy as np
+
+    index, vectors = _read_store()
+    new = [t for t in unique if keys[t] not in index]
+    if new:
+        worked_out = _encode_elsewhere(new)
+        if worked_out is None or len(worked_out) != len(new):
+            return None
+        try:
+            _add_to_store([keys[t] for t in new], worked_out)
+        except OSError as e:
+            logger.warning(f"Lineup: the meanings could not be kept on disk: {e}")
+        stored_index, stored = _read_store()
+        if stored is None or any(keys[t] not in stored_index for t in unique):
+            # Not kept (a full disk): what was worked out, and what was read before, answer
+            by_text = dict(zip(new, worked_out))
+            return {t: (by_text[t] if t in by_text else np.asarray(vectors[index[keys[t]]]))
+                    for t in texts}
+        index, vectors = stored_index, stored
+
+    return {t: np.asarray(vectors[index[keys[t]]]) for t in texts}
+
+
 def meanings(texts):
     """
     {text: vector} for these texts: the ones worked out before from memory, the rest by the
-    model (loaded only when something is new). None when the model cannot be loaded.
+    model (loaded only when something is new). None when the model cannot be loaded. In a
+    web worker, from the store on disk and a process of their own (see above).
     """
+    if in_web_worker():
+        return _meanings_elsewhere(texts)
     from . import epg_matching
 
     new = [t for t in dict.fromkeys(texts) if t not in _MEANINGS]

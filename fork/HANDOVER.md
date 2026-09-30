@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v240** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v241** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -339,6 +339,22 @@ buttons is made by a Celery worker (`tasks.show_groups_work_out`, waited for; ma
 worker only when no worker answers a 1 s ping); `meaning_index._index` keeps only
 `channel_top` in memory; the comparison judges only the page shown for "All". Open: moving
 the Lineup's encoding out of the web workers -- wait for the tab's numbers first.
+
+**The language model out of the web workers** (v241, `meaning.py`). Measured with the Memory
+tab on the user's server (2026-09-30): all 4 uWSGI workers had PyTorch mapped, 550-650 MB
+each against 160-290 MB without, ~1.6 GB of the 3.7 GB total -- the "nearly 4 GB". The Lineup
+preview runs in the request, so each worker that served one imported torch, which a running
+Python cannot unload: letting the model go after 10 minutes freed ~90 MB and left the rest,
+and `_MEANINGS` held up to 100,000 vectors per worker on top. Now, in a uWSGI worker
+(`in_web_worker()`: `import uwsgi` works), `meanings()` reads a store on disk
+(`/data/models/meanings/lineup/`, float32 `vectors.npy` + `hashes.json`, flock'd, read
+memory-mapped, 200,000 at most) and works out only new texts in a process of its own
+(`ENCODER`, run with the venv's python; `sys.executable` is uWSGI there), which exits.
+Checked with the real model: the vectors are identical (max difference 0.0), so every score
+and placement is unchanged; the cost is a few seconds of model start when there are new
+names. Celery and the tests keep the in-process path. Off:
+`DISPATCHARR_MEANINGS_IN_PROCESS=true`. Workers that already hold torch lose it at their next
+restart (installing a release restarts them).
 
 ### 5.4b Logs — `core/log_center.py`, `LogViewer.jsx` (Diagnostics → Logs)
 

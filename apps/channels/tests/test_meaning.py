@@ -154,3 +154,56 @@ class ProgressTests(TestCase):
         cache.delete(channel_manager.PROGRESS_KEY)
         channel_manager.build_plan(settings())
         self.assertEqual(channel_manager.load_progress()["stage"], "Done")
+
+
+class OutOfTheWebWorkerTests(TestCase):
+    """In a web worker the meanings come from a process of their own and a store on disk, so
+    the worker never loads PyTorch (1.6 GB over four workers on the user's server)."""
+
+    # Stands in for the model: a vector from the text's letters, so equal texts are equal
+    FAKE_ENCODER = """
+import json, sys
+import numpy as np
+texts = json.load(open(sys.argv[1]))
+vectors = np.zeros((len(texts), 8), dtype="float32")
+for i, t in enumerate(texts):
+    for j, ch in enumerate(t[:8]):
+        vectors[i, j] = ord(ch) / 128.0
+np.save(sys.argv[2], vectors)
+"""
+
+    def setUp(self):
+        import tempfile
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for patcher in (patch.object(meaning, "STORE_DIR", folder.name),
+                        patch.object(meaning, "ENCODER", self.FAKE_ENCODER),
+                        patch.object(meaning, "in_web_worker", return_value=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_worked_out_elsewhere_then_read_from_disk(self):
+        found = meaning.meanings(["discovery", "vrt 1"])
+        self.assertAlmostEqual(float(found["discovery"][0]), ord("d") / 128.0, places=5)
+        with patch("subprocess.run", side_effect=AssertionError("nothing new: no process")):
+            again = meaning.meanings(["vrt 1", "discovery"])
+        self.assertEqual(again["vrt 1"].tolist(), found["vrt 1"].tolist())
+
+    def test_only_what_is_new_is_worked_out(self):
+        meaning.meanings(["discovery"])
+        seen = []
+        real = meaning._encode_elsewhere
+
+        def counting(texts):
+            seen.append(list(texts))
+            return real(texts)
+
+        with patch.object(meaning, "_encode_elsewhere", side_effect=counting):
+            meaning.meanings(["discovery", "orf 1"])
+        self.assertEqual(seen, [["orf 1"]])
+
+    def test_the_model_is_never_loaded_in_the_worker(self):
+        with patch("apps.channels.epg_matching.get_sentence_transformer",
+                   side_effect=AssertionError("PyTorch in the web worker")):
+            meaning.meanings(["ketnet"])
