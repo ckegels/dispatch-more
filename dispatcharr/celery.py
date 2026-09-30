@@ -85,6 +85,18 @@ app.conf.task_routes = {
     'apps.channels.tasks.run_recording': {'queue': 'dvr'},
 }
 
+# Dispatch More: the queues there are, so that a worker started without -Q listens to both.
+# The Docker image starts two workers with -Q (celery, and dvr on a thread pool), which is
+# what the route above assumes. The Debian install (debian_install.sh) starts one worker with
+# no -Q, which listened to `celery` only: a recording was queued on `dvr` and nobody ever ran
+# it (the user's first recording from arrTV, 2026-09-30, stayed "playback not available" with
+# no status at all). A worker given -Q still listens to what it is given, so Docker is as it
+# was. Off with DISPATCHARR_DVR_ON_DEFAULT_WORKER=false.
+if os.environ.get("DISPATCHARR_DVR_ON_DEFAULT_WORKER", "true").lower() not in ("false", "0", "no", "off"):
+    from kombu import Queue
+
+    app.conf.task_queues = (Queue("celery"), Queue("dvr"))
+
 
 @task_prerun.connect
 def reset_db_connection_before_task(**kwargs):

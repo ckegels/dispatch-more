@@ -1778,6 +1778,20 @@ no longer play. Summary of how it works now:
   `stream-check:*` (round, progress, run lock, stop, make-way, queued, live results, opens).
   Times are sent to the page as ISO moments and shown in the viewer's zone (server is UTC).
 
+### 5.7b Recordings on a Debian install — `dispatcharr/celery.py` (v236)
+
+Stock routes `run_recording` to a `dvr` queue, which the Docker image serves with a second
+worker (`-Q dvr`, thread pool). `debian_install.sh` -- the user's install -- starts **one**
+worker with no `-Q`, which listened to `celery` only: a recording was queued and never run.
+Found 2026-09-30: the user's first recording from arrTV (The Simpsons) stayed "Recording
+playback not available yet" with no status, file or start time in its custom_properties (a
+recording that ran has them). The fork declares both queues (`app.conf.task_queues`), so a
+worker without `-Q` listens to both and a worker given `-Q` (Docker) keeps to it; checked
+with Celery's own queue selection and `tests/test_dvr_queue.py`. Off:
+`DISPATCHARR_DVR_ON_DEFAULT_WORKER=false`. On that worker a recording holds one prefork child
+for its length. A recording still waiting in the queue is picked up at the next start; one
+whose end has passed ends at once (the loop runs until the end time).
+
 ### 5.8 Misc
 
 - **Modified-build label:** `version.py` `__build__` ("Dispatch More dev", stamped "Dispatch
