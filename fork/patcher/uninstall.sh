@@ -43,7 +43,7 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
     if [ -n "$UNIT" ]; then
       while IFS= read -r line; do [ -n "$line" ] && export "$line"; done < <(systemctl show "$UNIT" -p Environment --value | tr ' ' '\n')
     fi
-    "$PY" manage.py shell -c "from django_celery_beat.models import PeriodicTask; PeriodicTask.objects.filter(name__in=['stream-check-tick']).delete()" >/dev/null 2>&1
+    "$PY" manage.py shell -c "from django_celery_beat.models import PeriodicTask; PeriodicTask.objects.filter(name__in=['stream-check-tick', 'epg-grab-tick', 'show-groups-tick', 'show-groups-look-up']).delete()" >/dev/null 2>&1
   ) || echo "Note: could not take the build's schedule out of Celery beat; stock may log 'unregistered task stream_check_tick'."
 fi
 
@@ -55,6 +55,9 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
     gpasswd -d "$(cat "$STATE/journal-group-added")" systemd-journal >/dev/null 2>&1 || true
     rm -f "$STATE/journal-group-added"
   fi
+  # The recordings worker and the drop-in on the normal worker go (dvr-worker.sh)
+  [ -f "$STATE/dvr-worker.sh" ] && bash "$STATE/dvr-worker.sh" remove "$STATE" "$SLUG" || true
+  rm -f "$STATE/dvr-worker-off"
   systemctl disable "$SLUG-uninstall.path" --no-block >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$SLUG-uninstall.path" "/etc/systemd/system/$SLUG-uninstall.service"
   systemctl daemon-reload || true

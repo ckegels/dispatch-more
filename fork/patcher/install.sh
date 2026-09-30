@@ -12,7 +12,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SLUG="$(sed -n 's/.*"slug": "\([^"]*\)".*/\1/p' "$HERE/manifest.json" | head -1)"
 SLUG="${SLUG:-dispatch-more}"
-APP="" LAYOUT="" RESTART=1 FORCE="" SYSTEMD=1
+APP="" LAYOUT="" RESTART=1 FORCE="" SYSTEMD=1 DVR_WORKER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --app) APP="$2"; shift 2 ;;
@@ -20,6 +20,10 @@ while [ $# -gt 0 ]; do
     --no-restart) RESTART=0; shift ;;
     --no-systemd) SYSTEMD=0; shift ;;   # neither the uninstall watcher nor a restart
     --force) FORCE=--force; shift ;;
+    # A worker of its own for recordings (systemd installs only; dvr-worker.sh). Remembered:
+    # --no-dvr-worker stays off at the next update until --dvr-worker turns it on again
+    --no-dvr-worker) DVR_WORKER=0; shift ;;
+    --dvr-worker) DVR_WORKER=1; shift ;;
     *) echo "Unknown option: $1"; exit 2 ;;
   esac
 done
@@ -78,6 +82,16 @@ ExecStart=/bin/bash $STATE/uninstall.sh --app $APP
 UNIT
   systemctl daemon-reload
   systemctl enable --now "$SLUG-uninstall.path" >/dev/null 2>&1 || echo "Note: the uninstall watcher could not be started; the page's button will not work."
+
+  # Recordings get a Celery worker of their own, as the Docker image has (dvr-worker.sh).
+  # Never on Docker: this whole block is the systemd layout only.
+  if [ "$DVR_WORKER" = 0 ]; then touch "$STATE/dvr-worker-off"; fi
+  if [ "$DVR_WORKER" = 1 ]; then rm -f "$STATE/dvr-worker-off"; fi
+  if [ -f "$STATE/dvr-worker-off" ]; then
+    bash "$HERE/dvr-worker.sh" remove "$STATE" "$SLUG" || true
+  else
+    bash "$HERE/dvr-worker.sh" add "$STATE" "$SLUG" || echo "Note: the recordings worker could not be added; recordings stay on the one worker."
+  fi
 
   # Diagnostics -> Logs reads the systemd journal; the user Dispatcharr runs as needs to be in
   # the systemd-journal group for that (root needs nothing). Noted, so uninstalling undoes it.

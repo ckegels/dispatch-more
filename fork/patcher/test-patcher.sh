@@ -119,6 +119,52 @@ check "installs in one command" "[ $code = 0 ] && [ -f '$T/app/.fork-install.jso
 STATE="$QUICK_STATE" bash "$QUICK_STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
 check "and uninstalls back to stock" "same_as_stock"
 
+echo "The recordings worker (dvr-worker.sh, against a pretend systemd):"
+UNITS="$T/units"; FAKE="$T/fakebin"; mkdir -p "$UNITS" "$FAKE" "$T/dvr-state"
+# The Celery service as debian_install.sh writes it
+cat > "$UNITS/dispatcharr-celery.service" <<'UNIT'
+[Unit]
+Description=Celery Worker for Dispatcharr
+After=network.target redis-server.service
+Requires=dispatcharr.service
+
+[Service]
+User=dispatcharr
+WorkingDirectory=/opt/dispatcharr
+EnvironmentFile=/opt/dispatcharr/.env
+Environment="CELERY_BROKER_URL=redis://localhost:6379/0"
+ExecStart=/opt/dispatcharr/env/bin/celery -A dispatcharr worker -l info
+Restart=always
+KillMode=mixed
+SyslogIdentifier=dispatcharr-celery
+[Install]
+WantedBy=multi-user.target
+UNIT
+printf '[Service]\nExecStart=/opt/dispatcharr/env/bin/celery -A dispatcharr beat -l info\n' > "$UNITS/dispatcharr-celerybeat.service"
+cat > "$FAKE/systemctl" <<FAKE
+#!/bin/bash
+echo "\$*" >> "$T/systemctl.log"
+case "\$1" in
+  list-units) for f in "$UNITS"/dispatcharr*.service; do echo "\$(basename "\$f") loaded active running x"; done ;;
+  show) echo "$UNITS/\${@: -1}" ;;
+esac
+exit 0
+FAKE
+chmod +x "$FAKE/systemctl"
+dvr() { PATH="$FAKE:$PATH" SYSTEMD_DIR="$UNITS" bash "$REPO/fork/patcher/dvr-worker.sh" "$@" "$T/dvr-state" "$SLUG" 2>&1; }
+out="$(dvr add)"
+check "a worker of its own for recordings, copied from the install's Celery service" \
+  "grep -q '^ExecStart=/opt/dispatcharr/env/bin/celery -A dispatcharr worker -l info -Q dvr -n dvr@%%h --pool=threads --concurrency=20$' '$UNITS/dispatcharr-celery-dvr.service' && grep -q '^User=dispatcharr' '$UNITS/dispatcharr-celery-dvr.service'"
+check "...and the normal worker leaves recordings to it" \
+  "grep -q 'DISPATCHARR_DVR_ON_DEFAULT_WORKER=false' '$UNITS/dispatcharr-celery.service.d/$SLUG-dvr.conf'"
+check "...the stock service untouched" "grep -q 'worker -l info$' '$UNITS/dispatcharr-celery.service' && ! grep -q dvr '$UNITS/dispatcharr-celery.service'"
+out="$(dvr add)"
+check "added again (an update) it is the same one, not a copy of itself" \
+  "[ \$(grep -c -- '-Q dvr' '$UNITS/dispatcharr-celery-dvr.service') = 1 ]"
+out="$(dvr remove)"
+check "removed, nothing of it is left" \
+  "[ ! -e '$UNITS/dispatcharr-celery-dvr.service' ] && [ ! -e '$UNITS/dispatcharr-celery.service.d' ] && [ ! -e '$T/dvr-state/dvr-worker' ]"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
