@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v235** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v236** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1151,6 +1151,12 @@ Stream Check. `sync` runs after every Lineup apply and every refresh, so the fir
 backfill of everything already matched; the settings also have "Save what is matched now".
 The next step, comparing the pictures of two streams at night to confirm or refute a pair,
 is designed in `fork/picture-check.md` and waits for the user's decision.
+
+**The row's right-hand side says what an apply adds** (v236, the user's ask): the streams
+it adds by name and provider (two at most; more is the first and "and N others", all of
+them on hovering) and how many it takes off. The guide and what is on it show there only when
+the apply changes the guide (a new channel, another guide, one chosen on the card); kept as
+it is, the left side says it already.
 
 ### 5.6b Channel Manager: Guides — `apps/channels/guide_manager.py` (+ `guide_manager_views.py`, `GuideManagerTable.jsx`)
 

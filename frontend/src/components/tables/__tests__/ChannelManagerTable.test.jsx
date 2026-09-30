@@ -1,7 +1,13 @@
 // Drawn with the real table and the real Mantine rather than stand-ins: the table's own
 // tick box and row expansion are most of what this page is, and a stand-in cannot tell
 // whether they are wired up.
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
@@ -23,9 +29,19 @@ vi.mock('../../../api', () => ({
     applyChannelManager: vi.fn(),
     ignoreChannelManager: vi.fn(),
     saveChannelManagerSettings: vi.fn(),
-    getChannelManagerPairings: vi.fn(() => Promise.resolve({ streams: 0, channels: 0 })),
-    getChannelManagerProgress: vi.fn(() => Promise.resolve({ stage: 'Matching streams to channels', done: 5, total: 10 })),
-    changeChannelManagerPairings: vi.fn(() => Promise.resolve({ streams: 0, channels: 0 })),
+    getChannelManagerPairings: vi.fn(() =>
+      Promise.resolve({ streams: 0, channels: 0 })
+    ),
+    getChannelManagerProgress: vi.fn(() =>
+      Promise.resolve({
+        stage: 'Matching streams to channels',
+        done: 5,
+        total: 10,
+      })
+    ),
+    changeChannelManagerPairings: vi.fn(() =>
+      Promise.resolve({ streams: 0, channels: 0 })
+    ),
     getChannelManagerReading: vi.fn(),
     addChannelGroup: vi.fn(),
     getChannelManagerGuides: vi.fn(),
@@ -38,50 +54,135 @@ vi.mock('../../../api', () => ({
 }));
 
 const stream = (id, name, extra = {}) => ({
-  id, name, hash: `hash-${id}`, account: 'Provider A', group: '┃AT┃ AUSTRIA', quality: 'HD', probed: false,
-  tvg_id: '', logo_url: '', added: false, removed: false, custom: false, in_scope: true, ...extra,
+  id,
+  name,
+  hash: `hash-${id}`,
+  account: 'Provider A',
+  group: '┃AT┃ AUSTRIA',
+  quality: 'HD',
+  probed: false,
+  tvg_id: '',
+  logo_url: '',
+  added: false,
+  removed: false,
+  custom: false,
+  in_scope: true,
+  ...extra,
 });
-const fallback = stream(9, 'could not dispatch', { custom: true, account: 'custom' });
+const fallback = stream(9, 'could not dispatch', {
+  custom: true,
+  account: 'custom',
+});
 const held = {
-  id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept',
-  programmes: 40, now: 'Bundesland heute', in_use: true,
+  id: 5,
+  name: 'ORF 1',
+  tvg_id: 'ORF1.at',
+  source: 'Austria',
+  how: 'kept',
+  programmes: 40,
+  now: 'Bundesland heute',
+  in_use: true,
 };
 const guide = {
-  id: 7, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96,
-  programmes: 312, now: 'Zeit im Bild', in_use: true,
+  id: 7,
+  name: 'ORF 1',
+  tvg_id: 'ORF1.at',
+  source: 'Austria',
+  how: 'name',
+  score: 96,
+  programmes: 312,
+  now: 'Zeit im Bild',
+  in_use: true,
 };
 
 const mergeRow = {
-  key: 'ch:1', status: 'merge', adds: 1, removes: 0, changes: [], country: 'at',
-  channel: { id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', group_id: 1, logo_url: '', epg: { id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept' } },
+  key: 'ch:1',
+  status: 'merge',
+  adds: 1,
+  removes: 0,
+  changes: [],
+  country: 'at',
+  channel: {
+    id: 1,
+    name: '┃AT┃ ORF 1',
+    number: 1,
+    group: '┃AT┃ AUSTRIA',
+    group_id: 1,
+    logo_url: '',
+    epg: {
+      id: 5,
+      name: 'ORF 1',
+      tvg_id: 'ORF1.at',
+      source: 'Austria',
+      how: 'kept',
+    },
+  },
   before: {
     channel: {
-      id: 1, name: '┃AT┃ ORF 1', number: 1, logo_url: '', group: '┃AT┃ AUSTRIA', group_id: 1,
+      id: 1,
+      name: '┃AT┃ ORF 1',
+      number: 1,
+      logo_url: '',
+      group: '┃AT┃ AUSTRIA',
+      group_id: 1,
       epg: {
-        id: 5, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'kept',
-        programmes: 40, now: 'Bundesland heute',
+        id: 5,
+        name: 'ORF 1',
+        tvg_id: 'ORF1.at',
+        source: 'Austria',
+        how: 'kept',
+        programmes: 40,
+        now: 'Bundesland heute',
       },
     },
     streams: [stream(1, '┃AT┃ ORF 1'), fallback],
   },
   streams: [
     stream(1, '┃AT┃ ORF 1'),
-    stream(2, '┃AT┃ ORF 1 FHD', { added: true, quality: 'FHD', account: 'Provider B' }),
+    stream(2, '┃AT┃ ORF 1 FHD', {
+      added: true,
+      quality: 'FHD',
+      account: 'Provider B',
+    }),
     fallback,
   ],
 };
 const conflictRow = {
-  key: 'conflict:at:puls4', status: 'conflict', adds: 0, removes: 0, changes: [], country: 'at',
+  key: 'conflict:at:puls4',
+  status: 'conflict',
+  adds: 0,
+  removes: 0,
+  changes: [],
+  country: 'at',
   channel: null,
   candidates: [
-    { id: 3, name: '┃AT┃ PULS 4', number: 3, group: '┃AT┃ AUSTRIA', logo_url: '' },
-    { id: 4, name: '┃AT┃ PULS 4 HD', number: 4, group: '┃AT┃ AUSTRIA', logo_url: '' },
+    {
+      id: 3,
+      name: '┃AT┃ PULS 4',
+      number: 3,
+      group: '┃AT┃ AUSTRIA',
+      logo_url: '',
+    },
+    {
+      id: 4,
+      name: '┃AT┃ PULS 4 HD',
+      number: 4,
+      group: '┃AT┃ AUSTRIA',
+      logo_url: '',
+    },
   ],
   before: { channel: null, streams: [stream(5, '┃AT┃ PULS 4 FHD')] },
   streams: [],
 };
 const plan = {
-  summary: { streams: 4, merge: 1, new: 0, conflict: 1, unchanged: 0, streams_added: 1 },
+  summary: {
+    streams: 4,
+    merge: 1,
+    new: 0,
+    conflict: 1,
+    unchanged: 0,
+    streams_added: 1,
+  },
   rows: [mergeRow, conflictRow],
 };
 
@@ -107,12 +208,21 @@ const pickOption = async (fieldName, text) => {
 describe('ChannelManagerTable', () => {
   beforeEach(() => {
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
-      channel_groups: [], all_groups: [], profiles: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
+      channel_groups: [],
+      all_groups: [],
+      profiles: [],
     });
     API.previewChannelManager.mockResolvedValue(plan);
     API.saveChannelManagerSettings.mockResolvedValue({});
-    API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
+    API.applyChannelManager.mockResolvedValue({
+      created: 0,
+      updated: 1,
+      streams_added: 1,
+    });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
     API.getGuideMatching.mockResolvedValue({ matching: null, sources: [] });
     API.saveGuideMatching.mockResolvedValue({});
@@ -124,18 +234,69 @@ describe('ChannelManagerTable', () => {
 
   it('shows each channel as it is and as it would be, and what it comes to', async () => {
     draw();
-    expect((await screen.findAllByText('┃AT┃ ORF 1')).length).toBeGreaterThan(0);
-    // The guide it is on now and the one it would come out with, said the same way on
-    // both sides so they can be read against each other
-    expect(screen.getAllByText('Guide: ORF 1 · Austria')).toHaveLength(2);
+    expect((await screen.findAllByText('┃AT┃ ORF 1')).length).toBeGreaterThan(
+      0
+    );
+    // The guide it is on now, once: the apply keeps it, so the right-hand side says what
+    // the apply adds instead of saying the guide again
+    expect(screen.getAllByText('Guide: ORF 1 · Austria')).toHaveLength(1);
+    expect(screen.getAllByText(/^\+ ┃AT┃ ORF 1 FHD · /).length).toBeGreaterThan(
+      0
+    );
     expect(screen.getByText(/1 channels gain 1 streams/)).toBeInTheDocument();
     expect(screen.getByText(/1 conflicts/)).toBeInTheDocument();
+  });
+
+  it('says what an apply adds: two streams by name, more as one and how many others', async () => {
+    const many = {
+      ...mergeRow,
+      key: 'ch:2',
+      channel: { ...mergeRow.channel, id: 2, name: '┃AT┃ ORF 2' },
+      before: {
+        ...mergeRow.before,
+        channel: { ...mergeRow.before.channel, id: 2, name: '┃AT┃ ORF 2' },
+      },
+      streams: [
+        stream(11, '┃AT┃ ORF 2'),
+        stream(12, '┃AT┃ ORF 2 FHD', { added: true, account: 'Provider B' }),
+        stream(13, '┃AT┃ ORF 2 HD', { added: true, account: 'Provider C' }),
+        stream(14, 'AT: ORF 2', { added: true, account: 'Provider D' }),
+        fallback,
+      ],
+    };
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [many] });
+    draw();
+    expect(
+      await screen.findByText('+ ┃AT┃ ORF 2 FHD · Provider B')
+    ).toBeInTheDocument();
+    expect(screen.getByText('and 2 others')).toBeInTheDocument();
+    expect(
+      screen.queryByText('+ ┃AT┃ ORF 2 HD · Provider C')
+    ).not.toBeInTheDocument();
+  });
+
+  it('still shows the guide on the right when the apply changes it', async () => {
+    const moved = {
+      ...mergeRow,
+      channel: {
+        ...mergeRow.channel,
+        epg: { ...guide, id: 8, name: 'ORF 1 HD' },
+      },
+    };
+    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [moved] });
+    draw();
+    expect(
+      await screen.findByText('Guide: ORF 1 HD · Austria (by name)')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Guide: ORF 1 · Austria')).toBeInTheDocument();
   });
 
   it('opens a row to every stream before and after, the fallback last', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
 
     expect(await screen.findByText('+ ┃AT┃ ORF 1 FHD')).toBeInTheDocument();
     expect(screen.getAllByText('fallback').length).toBeGreaterThan(0);
@@ -144,7 +305,9 @@ describe('ChannelManagerTable', () => {
   it('plays any stream, to see whether it really is the same channel', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
 
     fireEvent.click(await screen.findByLabelText('Watch ┃AT┃ ORF 1 FHD'));
 
@@ -164,7 +327,15 @@ describe('ChannelManagerTable', () => {
 
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}, {}, {}
+        { order: 'quality' },
+        ['ch:1'],
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {}
       )
     );
   });
@@ -172,7 +343,9 @@ describe('ChannelManagerTable', () => {
   it('puts streams in another order by hand, the fallback staying last', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
 
     // The fallback cannot be moved, and the first cannot go further up
     expect(screen.queryByLabelText('Move could not dispatch up')).toBeNull();
@@ -193,7 +366,8 @@ describe('ChannelManagerTable', () => {
         {},
         {},
         {},
-        {}, {}
+        {},
+        {}
       )
     );
   });
@@ -201,14 +375,18 @@ describe('ChannelManagerTable', () => {
   it('never counts a conflict as something to apply', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('Could be several').querySelector('input[type=checkbox]'));
+    fireEvent.click(
+      rowOf('Could be several').querySelector('input[type=checkbox]')
+    );
     expect(screen.getByRole('button', { name: /^Apply/ })).toBeDisabled();
   });
 
   it('lists the channels a conflict could be, when it is opened', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('Could be several').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('Could be several').querySelector('.td:nth-child(2) > div > div')
+    );
     expect(await screen.findByText('┃AT┃ PULS 4 HD')).toBeInTheDocument();
     expect(screen.getByText(/nothing is done with them/)).toBeInTheDocument();
   });
@@ -219,94 +397,183 @@ describe('ChannelManagerTable', () => {
     expect(screen.queryByText(/nothing is done with them/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     // The merge and the conflict are both open
-    expect(await screen.findByText(/nothing is done with them/)).toBeInTheDocument();
-    expect(screen.getAllByText(/After · in the order they are tried/).length).toBe(1);
+    expect(
+      await screen.findByText(/nothing is done with them/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/After · in the order they are tried/).length
+    ).toBe(1);
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
-    await waitFor(() => expect(screen.queryByText(/nothing is done with them/)).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/nothing is done with them/)).toBeNull()
+    );
   });
 
   it('lists the new channels with the most streams first, and hides the ones with too few', async () => {
     Element.prototype.scrollIntoView = vi.fn();
     const suggestion = (key, name, count) => ({
-      key, status: 'new', adds: count, removes: 0, changes: [], country: 'at',
-      channel: { id: null, name, number: 20, group: '┃AT┃ AUSTRIA', group_id: 1, logo_url: '', epg: null },
+      key,
+      status: 'new',
+      adds: count,
+      removes: 0,
+      changes: [],
+      country: 'at',
+      channel: {
+        id: null,
+        name,
+        number: 20,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        logo_url: '',
+        epg: null,
+      },
       before: { channel: null, streams: [] },
       streams: [
-        ...Array.from({ length: count }, (_, i) => stream(100 + key.length * 10 + i, `${name} ${i}`, { added: true })),
+        ...Array.from({ length: count }, (_, i) =>
+          stream(100 + key.length * 10 + i, `${name} ${i}`, { added: true })
+        ),
         fallback,
       ],
     });
     API.previewChannelManager.mockResolvedValue({
       ...plan,
-      rows: [suggestion('new:a', 'ONE PROVIDER TV', 1), suggestion('new:bb', 'THREE PROVIDERS TV', 3)],
+      rows: [
+        suggestion('new:a', 'ONE PROVIDER TV', 1),
+        suggestion('new:bb', 'THREE PROVIDERS TV', 3),
+      ],
     });
     draw();
     await screen.findAllByText('ONE PROVIDER TV');
     const order = () =>
-      screen.getAllByText(/PROVIDERS? TV$/).map((el) => el.textContent).filter((t, i, all) => all.indexOf(t) === i);
+      screen
+        .getAllByText(/PROVIDERS? TV$/)
+        .map((el) => el.textContent)
+        .filter((t, i, all) => all.indexOf(t) === i);
     expect(order()).toEqual(['ONE PROVIDER TV', 'THREE PROVIDERS TV']);
 
     await pickOption('Order', 'Most streams first');
-    await waitFor(() => expect(order()).toEqual(['THREE PROVIDERS TV', 'ONE PROVIDER TV']));
+    await waitFor(() =>
+      expect(order()).toEqual(['THREE PROVIDERS TV', 'ONE PROVIDER TV'])
+    );
 
     // The fallback does not count as a stream
-    fireEvent.change(screen.getByLabelText('At least streams'), { target: { value: '2' } });
-    await waitFor(() => expect(screen.queryAllByText('ONE PROVIDER TV')).toHaveLength(0));
+    fireEvent.change(screen.getByLabelText('At least streams'), {
+      target: { value: '2' },
+    });
+    await waitFor(() =>
+      expect(screen.queryAllByText('ONE PROVIDER TV')).toHaveLength(0)
+    );
     expect(screen.getAllByText('THREE PROVIDERS TV').length).toBeGreaterThan(0);
   });
 
   it('puts a suggested new channel on one you have instead of making it', async () => {
     const newRow = {
-      key: 'new:at:orfeins', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      key: 'new:at:orfeins',
+      status: 'new',
+      adds: 1,
+      removes: 0,
+      changes: [],
+      country: 'at',
       channel: {
-        id: null, name: 'AT| ORF EINS', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
-        logo_url: '', epg: null,
+        id: null,
+        name: 'AT| ORF EINS',
+        number: 12,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        logo_url: '',
+        epg: null,
       },
       before: { channel: null, streams: [stream(6, 'AT| ORF EINS HD')] },
       streams: [stream(6, 'AT| ORF EINS HD', { added: true }), fallback],
     };
     API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
     API.searchChannelManagerChannels.mockResolvedValue({
-      channels: [{ id: 1, name: '┃AT┃ ORF 1', number: 1, group: '┃AT┃ AUSTRIA', providers: ['Provider A'] }],
+      channels: [
+        {
+          id: 1,
+          name: '┃AT┃ ORF 1',
+          number: 1,
+          group: '┃AT┃ AUSTRIA',
+          providers: ['Provider A'],
+        },
+      ],
     });
     draw();
     await screen.findAllByText('AT| ORF EINS');
-    fireEvent.click(screen.getByRole('button', { name: 'Put AT| ORF EINS on a channel you have' }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Put AT| ORF EINS on a channel you have',
+      })
+    );
     // Nothing typed: the channels most like the suggestion
     await waitFor(() =>
-      expect(API.searchChannelManagerChannels).toHaveBeenCalledWith({ q: '', name: 'AT| ORF EINS' })
+      expect(API.searchChannelManagerChannels).toHaveBeenCalledWith({
+        q: '',
+        name: 'AT| ORF EINS',
+      })
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Put it on ┃AT┃ ORF 1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Done choosing a channel' }));
-    expect(await screen.findByText(/→ onto ┃AT┃ ORF 1 \(1\), no new channel/)).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Put it on ┃AT┃ ORF 1' })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Done choosing a channel' })
+    );
+    expect(
+      await screen.findByText(/→ onto ┃AT┃ ORF 1 \(1\), no new channel/)
+    ).toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['new:at:orfeins'], {}, {}, {}, {}, {}, {}, { 'new:at:orfeins': 1 }
+        { order: 'quality' },
+        ['new:at:orfeins'],
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        { 'new:at:orfeins': 1 }
       )
     );
   });
 
   it('suggests a group for a new channel, which can be changed before applying', async () => {
     const newRow = {
-      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      key: 'new:at:puls4',
+      status: 'new',
+      adds: 1,
+      removes: 0,
+      changes: [],
+      country: 'at',
       channel: {
-        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
-        group_why: 'where your channels from this stream group are', logo_url: '', epg: null,
+        id: null,
+        name: '┃AT┃ PULS 4',
+        number: 12,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        group_why: 'where your channels from this stream group are',
+        logo_url: '',
+        epg: null,
       },
       before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
       streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
     };
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
       profiles: [],
       channel_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
         { id: 2, name: '┃DE┃ GERMANY', count: 9, kind: 'with_channels' },
       ],
-      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 2, name: '┃DE┃ GERMANY' }],
+      all_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA' },
+        { id: 2, name: '┃DE┃ GERMANY' },
+      ],
     });
     API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
     Element.prototype.scrollIntoView = vi.fn();
@@ -314,17 +581,31 @@ describe('ChannelManagerTable', () => {
     await screen.findAllByText('┃AT┃ PULS 4');
     expect(screen.getByText('12 · ┃AT┃ AUSTRIA')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(await screen.findByText(/Suggested: where your channels from this stream group are/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        /Suggested: where your channels from this stream group are/
+      )
+    ).toBeInTheDocument();
 
     await pickOption('Channel group for ┃AT┃ PULS 4', '┃DE┃ GERMANY');
-    expect(await screen.findByText('new number · ┃DE┃ GERMANY')).toBeInTheDocument();
+    expect(
+      await screen.findByText('new number · ┃DE┃ GERMANY')
+    ).toBeInTheDocument();
 
     // Choosing a group ticks the row, as moving a stream does
     fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['new:at:puls4'], {}, { 'new:at:puls4': 2 }, {}, {}, {}, {}, {}
+        { order: 'quality' },
+        ['new:at:puls4'],
+        {},
+        { 'new:at:puls4': 2 },
+        {},
+        {},
+        {},
+        {},
+        {}
       )
     );
   });
@@ -333,15 +614,29 @@ describe('ChannelManagerTable', () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(screen.queryByRole('button', { name: 'Drop could not dispatch' })).toBeNull();
-    fireEvent.click(await screen.findByRole('button', { name: 'Drop ┃AT┃ ORF 1 FHD' }));
+    expect(
+      screen.queryByRole('button', { name: 'Drop could not dispatch' })
+    ).toBeNull();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Drop ┃AT┃ ORF 1 FHD' })
+    );
     // Undoable, and the row is ticked
-    expect(screen.getByRole('button', { name: 'Keep ┃AT┃ ORF 1 FHD' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Keep ┃AT┃ ORF 1 FHD' })
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, { 'ch:1': [2] }, {}, {}, {}, {}
+        { order: 'quality' },
+        ['ch:1'],
+        {},
+        {},
+        { 'ch:1': [2] },
+        {},
+        {},
+        {},
+        {}
       )
     );
   });
@@ -353,7 +648,10 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ignore ┃AT┃ ORF 1' }));
     await waitFor(() =>
       expect(API.ignoreChannelManager).toHaveBeenCalledWith('ignore', {
-        key: 'ch:1', name: '┃AT┃ ORF 1', kind: 'merge', streams: [2],
+        key: 'ch:1',
+        name: '┃AT┃ ORF 1',
+        kind: 'merge',
+        streams: [2],
       })
     );
     fireEvent.click(screen.getByRole('textbox', { name: 'Which channels' }));
@@ -361,7 +659,9 @@ describe('ChannelManagerTable', () => {
     expect(await screen.findByText('┃AT┃ ORF 1')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Clear ignored list' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Clear' }));
-    await waitFor(() => expect(API.ignoreChannelManager).toHaveBeenLastCalledWith('clear'));
+    await waitFor(() =>
+      expect(API.ignoreChannelManager).toHaveBeenLastCalledWith('clear')
+    );
   });
 
   it('shows where a preview has got to while it is worked out', async () => {
@@ -369,7 +669,9 @@ describe('ChannelManagerTable', () => {
     await screen.findAllByText('┃AT┃ ORF 1');
     API.previewChannelManager.mockReturnValueOnce(new Promise(() => {}));
     fireEvent.click(screen.getByRole('button', { name: /Preview/ }));
-    expect(await screen.findByText('Matching streams to channels')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Matching streams to channels')
+    ).toBeInTheDocument();
     expect(await screen.findByText('5 of 10')).toBeInTheDocument();
   });
 
@@ -378,33 +680,66 @@ describe('ChannelManagerTable', () => {
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('input[type=checkbox]'));
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Open What the Lineup may suggest' }));
-    fireEvent.click(screen.getByRole('switch', { name: /Suggest new channels/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open What the Lineup may suggest' })
+    );
+    fireEvent.click(
+      screen.getByRole('switch', { name: /Suggest new channels/ })
+    );
 
-    expect(await screen.findByText(/The settings have changed/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/The settings have changed/)
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Apply/ })).toBeDisabled();
   });
 
   it('goes back to the defaults, keeping what is looked at', async () => {
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality', recognition: 'custom', match_tvg_id: true, channel_groups: [7] },
-      defaults: { order: 'provider', recognition: 'exact', match_tvg_id: false, channel_groups: [] },
-      accounts: [], stream_groups: [], channel_groups: [], all_groups: [], profiles: [],
+      settings: {
+        order: 'quality',
+        recognition: 'custom',
+        match_tvg_id: true,
+        channel_groups: [7],
+      },
+      defaults: {
+        order: 'provider',
+        recognition: 'exact',
+        match_tvg_id: false,
+        channel_groups: [],
+      },
+      accounts: [],
+      stream_groups: [],
+      channel_groups: [],
+      all_groups: [],
+      profiles: [],
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Open Recognising a channel' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open Recognising a channel' })
+    );
     // Custom: the switches under Advanced are open
-    expect(screen.getByRole('switch', { name: /Trust tvg-id first/ })).toBeChecked();
+    expect(
+      screen.getByRole('switch', { name: /Trust tvg-id first/ })
+    ).toBeChecked();
 
-    fireEvent.click(screen.getByRole('button', { name: /Back to the defaults/ }));
-    expect(screen.getByRole('switch', { name: /Trust tvg-id first/ })).not.toBeChecked();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Back to the defaults/ })
+    );
+    expect(
+      screen.getByRole('switch', { name: /Trust tvg-id first/ })
+    ).not.toBeChecked();
 
     fireEvent.click(screen.getByRole('button', { name: /Preview/ }));
     await waitFor(() =>
       expect(API.previewChannelManager).toHaveBeenLastCalledWith(
-        expect.objectContaining({ order: 'provider', recognition: 'exact', match_tvg_id: false, channel_groups: [7] })
+        expect.objectContaining({
+          order: 'provider',
+          recognition: 'exact',
+          match_tvg_id: false,
+          channel_groups: [7],
+        })
       )
     );
   });
@@ -412,9 +747,13 @@ describe('ChannelManagerTable', () => {
   it('renames a channel on its row, and applies the name with it', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
 
-    const name = await screen.findByRole('textbox', { name: 'Name for ┃AT┃ ORF 1' });
+    const name = await screen.findByRole('textbox', {
+      name: 'Name for ┃AT┃ ORF 1',
+    });
     fireEvent.change(name, { target: { value: '┃AT┃ ORF Eins' } });
     // The row says what it would come out as, and warns that a channel is renamed
     expect(await screen.findByText(/renamed or re-guided/)).toBeInTheDocument();
@@ -431,7 +770,8 @@ describe('ChannelManagerTable', () => {
         {},
         { 'ch:1': '┃AT┃ ORF Eins' },
         {},
-        {}, {}
+        {},
+        {}
       )
     );
   });
@@ -442,7 +782,9 @@ describe('ChannelManagerTable', () => {
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
 
     // Opening the row asks nothing: with Expand all that would be a question per row
     const change = await screen.findByRole('button', {
@@ -464,17 +806,30 @@ describe('ChannelManagerTable', () => {
     API.getChannelManagerGuides.mockResolvedValue({
       guides: [
         held,
-        { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: true },
+        {
+          ...guide,
+          id: 8,
+          name: 'ORF 1 elsewhere',
+          programmes: 0,
+          now: '',
+          in_use: true,
+        },
       ],
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
     );
 
-    expect(await screen.findByText('ORF1.at · no programmes')).toBeInTheDocument();
+    expect(
+      await screen.findByText('ORF1.at · no programmes')
+    ).toBeInTheDocument();
     expect(screen.getByText('Nothing on it now')).toBeInTheDocument();
     // and the one it has says what it holds, next to it -- in the window, not the row
     const window_ = within(screen.getByRole('dialog'));
@@ -488,9 +843,13 @@ describe('ChannelManagerTable', () => {
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
     );
     expect(await screen.findByLabelText('Guide ORF Eins')).toBeInTheDocument();
 
@@ -515,9 +874,13 @@ describe('ChannelManagerTable', () => {
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
     );
     fireEvent.click(await screen.findByLabelText('Guide ORF 1 Austria'));
 
@@ -528,7 +891,15 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': 7 }, {}, {}
+        { order: 'quality' },
+        ['ch:1'],
+        {},
+        {},
+        {},
+        {},
+        { 'ch:1': 7 },
+        {},
+        {}
       )
     );
   });
@@ -536,9 +907,13 @@ describe('ChannelManagerTable', () => {
   it('takes a guide off again by choosing no guide', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
     );
     fireEvent.click(await screen.findByLabelText('Guide none'));
 
@@ -546,24 +921,45 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, { 'ch:1': null }, {}, {}
+        { order: 'quality' },
+        ['ch:1'],
+        {},
+        {},
+        {},
+        {},
+        { 'ch:1': null },
+        {},
+        {}
       )
     );
   });
 
-  it('reads a guide\'s programmes on request, rather than calling it empty', async () => {
-    const unread = { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: false };
+  it("reads a guide's programmes on request, rather than calling it empty", async () => {
+    const unread = {
+      ...guide,
+      id: 8,
+      name: 'ORF 1 elsewhere',
+      programmes: 0,
+      now: '',
+      in_use: false,
+    };
     API.getChannelManagerGuides.mockResolvedValue({ guides: [held, unread] });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
     );
 
     // Nothing uses it and it holds nothing, so it has never been read -- not empty
     await screen.findByLabelText('Guide ORF 1 elsewhere');
-    expect(screen.getByText('ORF1.at · programmes not read yet')).toBeInTheDocument();
+    expect(
+      screen.getByText('ORF1.at · programmes not read yet')
+    ).toBeInTheDocument();
 
     API.getChannelManagerGuides.mockResolvedValue({
       guides: [held, { ...unread, programmes: 120, now: 'Bundesliga' }],
@@ -573,11 +969,15 @@ describe('ChannelManagerTable', () => {
         name: 'Read the programmes of ORF 1 elsewhere',
       })
     );
-    await waitFor(() => expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([8]));
+    await waitFor(() =>
+      expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([8])
+    );
 
     // They arrive as a task, so the list is asked again until they show up
     expect(
-      await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 5000 })
+      await screen.findByText('ORF1.at · 120 programmes', undefined, {
+        timeout: 5000,
+      })
     ).toBeInTheDocument();
     expect(screen.getByText('Now: Bundesliga')).toBeInTheDocument();
     // The reading is asked after every three real seconds (GuidePicker), so this waits
@@ -585,14 +985,34 @@ describe('ChannelManagerTable', () => {
   }, 15000);
 
   it('reads every unread guide at once, which costs one pass of the file', async () => {
-    const first = { ...guide, id: 8, name: 'ORF 1 elsewhere', programmes: 0, now: '', in_use: false };
-    const second = { ...guide, id: 9, name: 'ORF Eins', programmes: 0, now: '', in_use: false };
-    API.getChannelManagerGuides.mockResolvedValue({ guides: [held, first, second] });
+    const first = {
+      ...guide,
+      id: 8,
+      name: 'ORF 1 elsewhere',
+      programmes: 0,
+      now: '',
+      in_use: false,
+    };
+    const second = {
+      ...guide,
+      id: 9,
+      name: 'ORF Eins',
+      programmes: 0,
+      now: '',
+      in_use: false,
+    };
+    API.getChannelManagerGuides.mockResolvedValue({
+      guides: [held, first, second],
+    });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
     );
 
     // The one the channel has is read already, so it is not among them
@@ -614,7 +1034,9 @@ describe('ChannelManagerTable', () => {
       expect(API.loadChannelManagerGuide).toHaveBeenCalledWith([8, 9])
     );
     expect(
-      await screen.findByText('ORF1.at · 120 programmes', undefined, { timeout: 6000 })
+      await screen.findByText('ORF1.at · 120 programmes', undefined, {
+        timeout: 6000,
+      })
     ).toBeInTheDocument();
     expect(screen.getByText('ORF1.at · 90 programmes')).toBeInTheDocument();
     // The reading is asked after every three real seconds (GuidePicker), so this waits
@@ -627,7 +1049,10 @@ describe('ChannelManagerTable', () => {
       rows: [
         {
           ...mergeRow,
-          before: { ...mergeRow.before, channel: { ...mergeRow.before.channel, epg: null } },
+          before: {
+            ...mergeRow.before,
+            channel: { ...mergeRow.before.channel, epg: null },
+          },
         },
       ],
     });
@@ -669,13 +1094,27 @@ describe('ChannelManagerTable', () => {
     const german = {
       ...mergeRow,
       key: 'ch:2',
-      channel: { ...mergeRow.channel, id: 2, name: '┃DE┃ ARD', group: '┃DE┃ GERMANY', group_id: 2 },
+      channel: {
+        ...mergeRow.channel,
+        id: 2,
+        name: '┃DE┃ ARD',
+        group: '┃DE┃ GERMANY',
+        group_id: 2,
+      },
       before: {
         ...mergeRow.before,
-        channel: { ...mergeRow.before.channel, id: 2, name: '┃DE┃ ARD', group_id: 2 },
+        channel: {
+          ...mergeRow.before.channel,
+          id: 2,
+          name: '┃DE┃ ARD',
+          group_id: 2,
+        },
       },
     };
-    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [mergeRow, german] });
+    API.previewChannelManager.mockResolvedValue({
+      ...plan,
+      rows: [mergeRow, german],
+    });
     Element.prototype.scrollIntoView = vi.fn();
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
@@ -703,10 +1142,19 @@ describe('ChannelManagerTable', () => {
       status: 'combine',
       group_why: 'where most of your at channels are',
       combining: [
-        { id: 2, name: '┃AT┃ ORF 1', number: 300, group: '┃AT┃ NEWS', group_id: 3 },
+        {
+          id: 2,
+          name: '┃AT┃ ORF 1',
+          number: 300,
+          group: '┃AT┃ NEWS',
+          group_id: 3,
+        },
       ],
     };
-    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [combineRow] });
+    API.previewChannelManager.mockResolvedValue({
+      ...plan,
+      rows: [combineRow],
+    });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     expect(screen.getByText('Combine')).toBeInTheDocument();
@@ -719,32 +1167,55 @@ describe('ChannelManagerTable', () => {
       key: 'combine:at:orf1',
       status: 'combine',
       group_why: 'where most of your at channels are',
-      combining: [{ id: 2, name: '┃AT┃ ORF 1', number: 300, group: '┃AT┃ NEWS', group_id: 3 }],
+      combining: [
+        {
+          id: 2,
+          name: '┃AT┃ ORF 1',
+          number: 300,
+          group: '┃AT┃ NEWS',
+          group_id: 3,
+        },
+      ],
     };
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
       profiles: [],
       channel_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
         { id: 3, name: '┃AT┃ NEWS', count: 4, kind: 'with_channels' },
       ],
-      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 3, name: '┃AT┃ NEWS' }],
+      all_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA' },
+        { id: 3, name: '┃AT┃ NEWS' },
+      ],
     });
-    API.previewChannelManager.mockResolvedValue({ ...plan, rows: [combineRow] });
+    API.previewChannelManager.mockResolvedValue({
+      ...plan,
+      rows: [combineRow],
+    });
     Element.prototype.scrollIntoView = vi.fn();
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(
-      await screen.findByText(/is kept/)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/is kept/)).toBeInTheDocument();
 
     await pickOption('Channel group for ┃AT┃ ORF 1', '┃AT┃ NEWS');
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['combine:at:orf1'], {}, { 'combine:at:orf1': 3 }, {}, {}, {}, {}, {}
+        { order: 'quality' },
+        ['combine:at:orf1'],
+        {},
+        { 'combine:at:orf1': 3 },
+        {},
+        {},
+        {},
+        {},
+        {}
       )
     );
   });
@@ -755,12 +1226,18 @@ describe('ChannelManagerTable', () => {
     // make it from. A group of channels that plainly exists could not be found here.
     API.getChannelManagerOptions.mockResolvedValue({
       settings: { order: 'quality', channel_groups: [1] },
-      defaults: {}, accounts: [], stream_groups: [], profiles: [],
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
+      profiles: [],
       channel_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
         { id: 5, name: 'Cooking', count: 6, kind: 'with_channels' },
       ],
-      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 5, name: 'Cooking' }],
+      all_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA' },
+        { id: 5, name: 'Cooking' },
+      ],
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
@@ -774,21 +1251,39 @@ describe('ChannelManagerTable', () => {
 
   it('offers only the groups you have channels in, and a way to make one', async () => {
     const newRow = {
-      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      key: 'new:at:puls4',
+      status: 'new',
+      adds: 1,
+      removes: 0,
+      changes: [],
+      country: 'at',
       channel: {
-        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
-        group_why: 'where your channels are', logo_url: '', epg: null,
+        id: null,
+        name: '┃AT┃ PULS 4',
+        number: 12,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        group_why: 'where your channels are',
+        logo_url: '',
+        epg: null,
       },
       before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
       streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
     };
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
       profiles: [],
       // Every group there is runs to hundreds, most of them a provider's own names
       channel_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
-        { id: 99, name: 'A provider group no channel of yours is in', kind: 'active_m3u' },
+        {
+          id: 99,
+          name: 'A provider group no channel of yours is in',
+          kind: 'active_m3u',
+        },
       ],
       all_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA' },
@@ -803,9 +1298,13 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
 
     fireEvent.click(
-      await screen.findByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' })
+      await screen.findByRole('textbox', {
+        name: 'Channel group for ┃AT┃ PULS 4',
+      })
     );
-    expect((await screen.findAllByText('┃AT┃ AUSTRIA')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('┃AT┃ AUSTRIA')).length).toBeGreaterThan(
+      0
+    );
     expect(
       screen.queryByText('A provider group no channel of yours is in')
     ).toBeNull();
@@ -820,25 +1319,46 @@ describe('ChannelManagerTable', () => {
     await waitFor(() =>
       expect(API.addChannelGroup).toHaveBeenCalledWith({ name: '┃AT┃ KIDS' })
     );
-    expect(await screen.findByText('new number · ┃AT┃ KIDS')).toBeInTheDocument();
+    expect(
+      await screen.findByText('new number · ┃AT┃ KIDS')
+    ).toBeInTheDocument();
   });
 
   it('chooses a group of that name that is already there, rather than refusing', async () => {
     const newRow = {
-      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      key: 'new:at:puls4',
+      status: 'new',
+      adds: 1,
+      removes: 0,
+      changes: [],
+      country: 'at',
       channel: {
-        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
-        group_why: 'where your channels are', logo_url: '', epg: null,
+        id: null,
+        name: '┃AT┃ PULS 4',
+        number: 12,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        group_why: 'where your channels are',
+        logo_url: '',
+        epg: null,
       },
       before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
       streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
     };
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, accounts: [], stream_groups: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
       profiles: [],
-      channel_groups: [{ id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' }],
+      channel_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
+      ],
       // It exists, it simply has no channels in it yet
-      all_groups: [{ id: 1, name: '┃AT┃ AUSTRIA' }, { id: 5, name: '┃AT┃ KIDS' }],
+      all_groups: [
+        { id: 1, name: '┃AT┃ AUSTRIA' },
+        { id: 5, name: '┃AT┃ KIDS' },
+      ],
     });
     API.previewChannelManager.mockResolvedValue({ ...plan, rows: [newRow] });
     Element.prototype.scrollIntoView = vi.fn();
@@ -846,7 +1366,9 @@ describe('ChannelManagerTable', () => {
     await screen.findAllByText('┃AT┃ PULS 4');
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     fireEvent.click(
-      await screen.findByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' })
+      await screen.findByRole('textbox', {
+        name: 'Channel group for ┃AT┃ PULS 4',
+      })
     );
     fireEvent.click(screen.getByText('+ A new group…'));
     fireEvent.change(await screen.findByLabelText('Name for the new group'), {
@@ -855,34 +1377,55 @@ describe('ChannelManagerTable', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Make it' }));
 
     // Making one is what was asked for; having that group is what was meant
-    expect(await screen.findByText('new number · ┃AT┃ KIDS')).toBeInTheDocument();
+    expect(
+      await screen.findByText('new number · ┃AT┃ KIDS')
+    ).toBeInTheDocument();
     expect(API.addChannelGroup).not.toHaveBeenCalled();
   });
 
   it('says what the reading of guides is doing, rather than only spinning', async () => {
     const unread = {
-      id: 8, name: 'ORF 1', tvg_id: 'ORF1.at', source: 'Austria', how: 'name', score: 96,
-      programmes: 0, now: '', in_use: false,
+      id: 8,
+      name: 'ORF 1',
+      tvg_id: 'ORF1.at',
+      source: 'Austria',
+      how: 'name',
+      score: 96,
+      programmes: 0,
+      now: '',
+      in_use: false,
     };
     API.getChannelManagerGuides.mockResolvedValue({ guides: [held, unread] });
     API.getChannelManagerReading.mockResolvedValue({
       reading: {
-        reading: true, state: 'reading', stage: 'going through xmltv.at',
-        at: 'ORF 1', done: 1, total: 4,
+        reading: true,
+        state: 'reading',
+        stage: 'going through xmltv.at',
+        at: 'ORF 1',
+        done: 1,
+        total: 4,
       },
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Change the guide for ┃AT┃ ORF 1' })
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
     );
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Read the programmes of ORF 1' })
+      await screen.findByRole('button', {
+        name: 'Change the guide for ┃AT┃ ORF 1',
+      })
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Read the programmes of ORF 1',
+      })
     );
 
     expect(
-      await screen.findByText(/going through xmltv.at/, undefined, { timeout: 6000 })
+      await screen.findByText(/going through xmltv.at/, undefined, {
+        timeout: 6000,
+      })
     ).toBeInTheDocument();
     // The reading loop waits three seconds before it asks the first time, so this test
     // cannot finish inside vitest's five. It waited six and was given five, which passed
@@ -892,18 +1435,35 @@ describe('ChannelManagerTable', () => {
 
   it("offers a provider's groups when the levers ask for them", async () => {
     const newRow = {
-      key: 'new:at:puls4', status: 'new', adds: 1, removes: 0, changes: [], country: 'at',
+      key: 'new:at:puls4',
+      status: 'new',
+      adds: 1,
+      removes: 0,
+      changes: [],
+      country: 'at',
       channel: {
-        id: null, name: '┃AT┃ PULS 4', number: 12, group: '┃AT┃ AUSTRIA', group_id: 1,
-        group_why: 'where your channels are', logo_url: '', epg: null,
+        id: null,
+        name: '┃AT┃ PULS 4',
+        number: 12,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        group_why: 'where your channels are',
+        logo_url: '',
+        epg: null,
       },
       before: { channel: null, streams: [stream(6, '┃AT┃ PULS 4 HD')] },
       streams: [stream(6, '┃AT┃ PULS 4 HD', { added: true }), fallback],
     };
     API.getChannelManagerOptions.mockResolvedValue({
       // Asked for outright, so the hundreds of provider groups are offered too
-      settings: { order: 'quality', group_choices: ['with_channels', 'active_m3u'] },
-      defaults: {}, accounts: [], stream_groups: [], profiles: [],
+      settings: {
+        order: 'quality',
+        group_choices: ['with_channels', 'active_m3u'],
+      },
+      defaults: {},
+      accounts: [],
+      stream_groups: [],
+      profiles: [],
       channel_groups: [
         { id: 1, name: '┃AT┃ AUSTRIA', count: 20, kind: 'with_channels' },
         { id: 99, name: 'AT | PROVIDER SPORT', kind: 'active_m3u' },
@@ -917,7 +1477,9 @@ describe('ChannelManagerTable', () => {
     await screen.findAllByText('┃AT┃ PULS 4');
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     fireEvent.click(
-      await screen.findByRole('textbox', { name: 'Channel group for ┃AT┃ PULS 4' })
+      await screen.findByRole('textbox', {
+        name: 'Channel group for ┃AT┃ PULS 4',
+      })
     );
 
     expect(await screen.findByText('AT | PROVIDER SPORT')).toBeInTheDocument();
@@ -938,21 +1500,48 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     // Where the fallback streams live: every server has it, and it is nobody's provider
     { id: 5, name: 'custom', active: true, custom: true },
   ];
-  const a = (id, name, extra = {}) => stream(id, name, { account_id: 1, ...extra });
+  const a = (id, name, extra = {}) =>
+    stream(id, name, { account_id: 1, ...extra });
   const shortRow = {
     ...mergeRow,
     before: { ...mergeRow.before, streams: [a(1, '┃AT┃ ORF 1'), fallback] },
     streams: [
       a(1, '┃AT┃ ORF 1'),
-      a(2, '┃AT┃ ORF 1 FHD', { added: true, quality: 'FHD', account: 'Provider B', account_id: 2 }),
+      a(2, '┃AT┃ ORF 1 FHD', {
+        added: true,
+        quality: 'FHD',
+        account: 'Provider B',
+        account_id: 2,
+      }),
       fallback,
     ],
   };
   const fullRow = {
-    key: 'ch:2', status: 'unchanged', adds: 0, removes: 0, changes: [], country: 'at',
-    channel: { id: 2, name: '┃AT┃ ORF 2', number: 2, group: '┃AT┃ AUSTRIA', group_id: 1, logo_url: '', epg: null },
+    key: 'ch:2',
+    status: 'unchanged',
+    adds: 0,
+    removes: 0,
+    changes: [],
+    country: 'at',
+    channel: {
+      id: 2,
+      name: '┃AT┃ ORF 2',
+      number: 2,
+      group: '┃AT┃ AUSTRIA',
+      group_id: 1,
+      logo_url: '',
+      epg: null,
+    },
     before: {
-      channel: { id: 2, name: '┃AT┃ ORF 2', number: 2, group: '┃AT┃ AUSTRIA', group_id: 1, logo_url: '', epg: null },
+      channel: {
+        id: 2,
+        name: '┃AT┃ ORF 2',
+        number: 2,
+        group: '┃AT┃ AUSTRIA',
+        group_id: 1,
+        logo_url: '',
+        epg: null,
+      },
       streams: [],
     },
     streams: [
@@ -963,24 +1552,51 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     ],
   };
   const found = {
-    id: 21, name: 'AT: ORF1 HD', hash: 'hash-21', account: 'Provider C', account_id: 3,
-    group: 'AT | AUSTRIA', quality: 'HD', probed: false, tvg_id: '', logo_url: '', custom: false,
-    in_scope: true, stale: false, channels: [{ id: 9, name: 'ORF 1 Old', number: 90 }],
+    id: 21,
+    name: 'AT: ORF1 HD',
+    hash: 'hash-21',
+    account: 'Provider C',
+    account_id: 3,
+    group: 'AT | AUSTRIA',
+    quality: 'HD',
+    probed: false,
+    tvg_id: '',
+    logo_url: '',
+    custom: false,
+    in_scope: true,
+    stale: false,
+    channels: [{ id: 9, name: 'ORF 1 Old', number: 90 }],
     check: { state: 'ok', at: '2026-09-25T10:00:00Z' },
   };
 
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, accounts, stream_groups: [],
-      channel_groups: [], all_groups: [], profiles: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      accounts,
+      stream_groups: [],
+      channel_groups: [],
+      all_groups: [],
+      profiles: [],
     });
     API.previewChannelManager.mockResolvedValue({
-      summary: { streams: 6, merge: 1, new: 0, conflict: 0, unchanged: 1, streams_added: 1 },
+      summary: {
+        streams: 6,
+        merge: 1,
+        new: 0,
+        conflict: 0,
+        unchanged: 1,
+        streams_added: 1,
+      },
       rows: [shortRow, fullRow],
     });
     API.saveChannelManagerSettings.mockResolvedValue({});
-    API.applyChannelManager.mockResolvedValue({ created: 0, updated: 1, streams_added: 1 });
+    API.applyChannelManager.mockResolvedValue({
+      created: 0,
+      updated: 1,
+      streams_added: 1,
+    });
     API.getChannelManagerGuides.mockResolvedValue({ guides: [] });
     API.getGuideMatching.mockResolvedValue({ matching: null, sources: [] });
     API.getChannelManagerReading.mockResolvedValue({ reading: {} });
@@ -994,14 +1610,20 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     await screen.findAllByText('┃AT┃ ORF 1');
     // Before: its own stream and the fallback -- two streams, one provider
     expect(screen.getByText('2 streams · 1 provider')).toBeInTheDocument();
-    expect(screen.getByText('2 of 3 providers · missing Provider C')).toBeInTheDocument();
+    expect(
+      screen.getByText('2 of 3 providers · missing Provider C')
+    ).toBeInTheDocument();
   });
 
   it('never counts the account the fallbacks live under, however the server says it', async () => {
     // A server from before the flag says it by name only
     API.getChannelManagerOptions.mockResolvedValue({
-      settings: { order: 'quality' }, defaults: {}, stream_groups: [],
-      channel_groups: [], all_groups: [], profiles: [],
+      settings: { order: 'quality' },
+      defaults: {},
+      stream_groups: [],
+      channel_groups: [],
+      all_groups: [],
+      profiles: [],
       accounts: accounts.map((account) => {
         const { id, name, active } = account;
         return { id, name, active };
@@ -1009,7 +1631,9 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     });
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    expect(screen.getByText('2 of 3 providers · missing Provider C')).toBeInTheDocument();
+    expect(
+      screen.getByText('2 of 3 providers · missing Provider C')
+    ).toBeInTheDocument();
     expect(screen.queryByText(/missing custom/)).not.toBeInTheDocument();
   });
 
@@ -1017,12 +1641,20 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     // "What would change" leaves the full, unchanged channel out; the filter looks at all
-    fireEvent.change(screen.getByLabelText('Fewer providers than'), { target: { value: '3' } });
-    await waitFor(() => expect(screen.queryAllByText('┃AT┃ ORF 2')).toHaveLength(0));
+    fireEvent.change(screen.getByLabelText('Fewer providers than'), {
+      target: { value: '3' },
+    });
+    await waitFor(() =>
+      expect(screen.queryAllByText('┃AT┃ ORF 2')).toHaveLength(0)
+    );
     expect(screen.getAllByText('┃AT┃ ORF 1').length).toBeGreaterThan(0);
 
-    fireEvent.change(screen.getByLabelText('Fewer providers than'), { target: { value: '2' } });
-    await waitFor(() => expect(screen.queryAllByText('┃AT┃ ORF 1')).toHaveLength(0));
+    fireEvent.change(screen.getByLabelText('Fewer providers than'), {
+      target: { value: '2' },
+    });
+    await waitFor(() =>
+      expect(screen.queryAllByText('┃AT┃ ORF 1')).toHaveLength(0)
+    );
   });
 
   it('shows only what comes from every login switched on', async () => {
@@ -1031,8 +1663,12 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     await pickOption('Which channels', 'Everything');
     await screen.findAllByText('┃AT┃ ORF 2');
     // Three logins switched on; the one switched off does not count
-    fireEvent.click(screen.getByRole('switch', { name: 'From every provider' }));
-    await waitFor(() => expect(screen.queryAllByText('┃AT┃ ORF 1')).toHaveLength(0));
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'From every provider' })
+    );
+    await waitFor(() =>
+      expect(screen.queryAllByText('┃AT┃ ORF 1')).toHaveLength(0)
+    );
     expect(screen.getAllByText('┃AT┃ ORF 2').length).toBeGreaterThan(0);
   });
 
@@ -1040,21 +1676,29 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
     await pickOption('Missing provider', 'Missing Provider C');
-    await waitFor(() => expect(screen.queryAllByText('┃AT┃ ORF 2')).toHaveLength(0));
+    await waitFor(() =>
+      expect(screen.queryAllByText('┃AT┃ ORF 2')).toHaveLength(0)
+    );
     expect(screen.getAllByText('┃AT┃ ORF 1').length).toBeGreaterThan(0);
   });
 
   it('finds a stream for the missing provider and puts it on, before the fallback', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' })
+    );
 
     // The search starts from the channel's name without its country box, and looks only
     // at the provider the channel has nothing from
     expect(await screen.findByDisplayValue('ORF 1')).toBeInTheDocument();
     await waitFor(() =>
       expect(API.searchChannelManagerStreams).toHaveBeenCalledWith({
-        q: 'ORF 1', accounts: ['3'], leave_out: ['1', '2', '9'], name: '┃AT┃ ORF 1', unassigned: false,
+        q: 'ORF 1',
+        accounts: ['3'],
+        leave_out: ['1', '2', '9'],
+        name: '┃AT┃ ORF 1',
+        unassigned: false,
       })
     );
     expect(await screen.findByText('AT: ORF1 HD')).toBeInTheDocument();
@@ -1062,14 +1706,24 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     expect(screen.getByText('plays')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Put on AT: ORF1 HD' }));
-    expect(await screen.findByRole('button', { name: 'Take off AT: ORF1 HD' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Take off AT: ORF1 HD' })
+    ).toBeInTheDocument();
     expect(screen.getByText('+1 by hand')).toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], {}, {}, {}, {}, {}, { 'ch:1': [21] }, {}
+        { order: 'quality' },
+        ['ch:1'],
+        {},
+        {},
+        {},
+        {},
+        {},
+        { 'ch:1': [21] },
+        {}
       )
     );
   });
@@ -1077,9 +1731,15 @@ describe('ChannelManagerTable, channels short of a provider', () => {
   it('lists what a provider carries that no channel has, without typing', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
-    fireEvent.change(await screen.findByDisplayValue('ORF 1'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('switch', { name: /Only streams on no channel/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' })
+    );
+    fireEvent.change(await screen.findByDisplayValue('ORF 1'), {
+      target: { value: '' },
+    });
+    fireEvent.click(
+      screen.getByRole('switch', { name: /Only streams on no channel/ })
+    );
     await waitFor(() =>
       expect(API.searchChannelManagerStreams).toHaveBeenLastCalledWith(
         expect.objectContaining({ q: '', unassigned: true, accounts: ['3'] })
@@ -1089,16 +1749,29 @@ describe('ChannelManagerTable, channels short of a provider', () => {
 
   it('shows more of what no channel has, a page at a time', async () => {
     const page = (from, count) =>
-      Array.from({ length: count }, (_, i) => ({ ...found, id: 500 + from + i, name: `AT| SPARE ${from + i}` }));
+      Array.from({ length: count }, (_, i) => ({
+        ...found,
+        id: 500 + from + i,
+        name: `AT| SPARE ${from + i}`,
+      }));
     // Three streams no channel has, two to a page
-    API.searchChannelManagerStreams.mockImplementation(async ({ offset = 0 }) =>
-      offset ? { streams: page(2, 1), more: false } : { streams: page(0, 2), more: true }
+    API.searchChannelManagerStreams.mockImplementation(
+      async ({ offset = 0 }) =>
+        offset
+          ? { streams: page(2, 1), more: false }
+          : { streams: page(0, 2), more: true }
     );
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
-    fireEvent.change(await screen.findByDisplayValue('ORF 1'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('switch', { name: /Only streams on no channel/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' })
+    );
+    fireEvent.change(await screen.findByDisplayValue('ORF 1'), {
+      target: { value: '' },
+    });
+    fireEvent.click(
+      screen.getByRole('switch', { name: /Only streams on no channel/ })
+    );
     expect(await screen.findByText('AT| SPARE 1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
@@ -1106,35 +1779,61 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     expect(API.searchChannelManagerStreams).toHaveBeenLastCalledWith(
       expect.objectContaining({ unassigned: true, offset: 2 })
     );
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull()
+    );
   });
 
   it('keeps a stream put on in the order set by hand', async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Put on AT: ORF1 HD' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Done putting streams on' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' })
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Put on AT: ORF1 HD' })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Done putting streams on' })
+    );
 
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
     fireEvent.click(await screen.findByLabelText('Move AT: ORF1 HD up'));
     fireEvent.click(await screen.findByRole('button', { name: /Apply \(1\)/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenLastCalledWith(
-        { order: 'quality' }, ['ch:1'], { 'ch:1': [1, 21, 2] }, {}, {}, {}, {}, { 'ch:1': [21] }, {}
+        { order: 'quality' },
+        ['ch:1'],
+        { 'ch:1': [1, 21, 2] },
+        {},
+        {},
+        {},
+        {},
+        { 'ch:1': [21] },
+        {}
       )
     );
   });
 
-  it('takes a stream put on off again with the row\'s own button, and out of its order', async () => {
+  it("takes a stream put on off again with the row's own button, and out of its order", async () => {
     draw();
     await screen.findAllByText('┃AT┃ ORF 1');
-    fireEvent.click(screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Put on AT: ORF1 HD' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Done putting streams on' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Put a stream on ┃AT┃ ORF 1' })
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Put on AT: ORF1 HD' })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Done putting streams on' })
+    );
 
-    fireEvent.click(rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div'));
+    fireEvent.click(
+      rowOf('┃AT┃ ORF 1').querySelector('.td:nth-child(2) > div > div')
+    );
     fireEvent.click(await screen.findByLabelText('Move AT: ORF1 HD up'));
     fireEvent.click(screen.getByLabelText('Drop AT: ORF1 HD'));
     expect(screen.queryByText('+1 by hand')).not.toBeInTheDocument();
@@ -1144,7 +1843,15 @@ describe('ChannelManagerTable, channels short of a provider', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(API.applyChannelManager).toHaveBeenCalledWith(
-        { order: 'quality' }, ['ch:1'], { 'ch:1': [1, 2] }, {}, {}, {}, {}, {}, {}
+        { order: 'quality' },
+        ['ch:1'],
+        { 'ch:1': [1, 2] },
+        {},
+        {},
+        {},
+        {},
+        {},
+        {}
       )
     );
   });

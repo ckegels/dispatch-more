@@ -246,6 +246,60 @@ const ProviderLine = ({ streams, providers }) => {
   );
 };
 
+// What an apply gives the channel, at a glance: the streams it adds, by name (two at most,
+// then "and 3 others", all of them on hovering), and how many it takes off. The user's ask:
+// the right-hand side repeated the guide and what is on, which an apply mostly leaves as it
+// is, and did not say what it adds.
+const AddedLine = ({ streams }) => {
+  const live = (streams || []).filter((s) => !s.custom);
+  const added = live.filter((s) => s.added && !s.removed);
+  const removed = live.filter((s) => s.removed);
+  if (!added.length && !removed.length) {
+    return (
+      <Text size="xs" c="dimmed">
+        Nothing added
+      </Text>
+    );
+  }
+  const named = (one) => `${one.name} · ${one.account}`;
+  const shown = added.length <= 2 ? added : added.slice(0, 1);
+  return (
+    <Tooltip
+      label={[
+        ...added.map((one) => `+ ${named(one)}`),
+        ...removed.map((one) => `− ${named(one)}`),
+      ].join('\n')}
+      multiline
+      maw={420}
+      style={{ whiteSpace: 'pre-line' }}
+    >
+      <Box>
+        {shown.map((one) => (
+          <Text
+            key={one.id}
+            size="xs"
+            c="teal"
+            lineClamp={1}
+            style={{ wordBreak: 'break-word' }}
+          >
+            + {named(one)}
+          </Text>
+        ))}
+        {added.length > 2 && (
+          <Text size="xs" c="teal">
+            and {added.length - 1} others
+          </Text>
+        )}
+        {removed.length > 0 && (
+          <Text size="xs" c="orange">
+            − {removed.length} taken off
+          </Text>
+        )}
+      </Box>
+    </Tooltip>
+  );
+};
+
 // Which guide a channel is on, said the same way before and after so the two lines can
 // be read against each other
 const GuideLine = ({ guide, how }) => (
@@ -1309,6 +1363,13 @@ const ChannelManagerTable = () => {
             );
           }
           const epg = channel.epg;
+          const before = row.original.before?.channel;
+          // The guide is shown here only when an apply changes it: a new channel, another
+          // guide, or one chosen on the card. Kept as it is, the left side says it already.
+          const guideChanges =
+            !before ||
+            (before.epg?.id ?? null) !== (epg?.id ?? null) ||
+            epg?.how === 'chosen';
           return (
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Logo url={channel.logo_url} name={channel.name} />
@@ -1350,16 +1411,19 @@ const ChannelManagerTable = () => {
                     providers={providers}
                   />
                 )}
-                <GuideLine
-                  guide={epg}
-                  how={
-                    epg?.how === 'chosen'
-                      ? ' (chosen)'
-                      : epg?.how && epg.how !== 'kept'
-                        ? ` (by ${epg.how})`
-                        : ''
-                  }
-                />
+                <AddedLine streams={row.original.streams} />
+                {guideChanges && (
+                  <GuideLine
+                    guide={epg}
+                    how={
+                      epg?.how === 'chosen'
+                        ? ' (chosen)'
+                        : epg?.how && epg.how !== 'kept'
+                          ? ` (by ${epg.how})`
+                          : ''
+                    }
+                  />
+                )}
               </Box>
             </Group>
           );
