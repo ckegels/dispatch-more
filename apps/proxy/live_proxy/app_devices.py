@@ -559,6 +559,22 @@ def failover_order(redis_client, channel_uuid, alternates, streams):
         return alternates
 
 
+def commercial_breaks():
+    """Whether recordings here get their commercial breaks marked, and why not."""
+    import shutil
+
+    try:
+        from core.models import CoreSettings
+
+        enabled = bool(CoreSettings.get_dvr_comskip_enabled())
+        mode = CoreSettings.get_dvr_comskip_mode()
+    except Exception:
+        enabled, mode = False, "cut"
+    installed = shutil.which("comskip") is not None
+    return {"installed": installed, "enabled": enabled, "mode": mode,
+            "marks": installed and mode == "mark"}
+
+
 def capabilities():
     """What an app may rely on here, for GET /api/core/capabilities/."""
     try:
@@ -587,6 +603,9 @@ def capabilities():
         # "Wrong guide? Choose another" (app_guides); any device, recognised or not
         "guide_choice": settings["guide_choice"],
         "guide_choice_url": "/api/core/app-guide/",
+        # Commercial breaks marked by Comskip: custom_properties.comskip.breaks on a recording,
+        # when Comskip is installed here, switched on and in "mark" mode (it never cuts then)
+        "commercial_breaks": commercial_breaks(),
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

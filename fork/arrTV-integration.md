@@ -754,3 +754,9 @@ arrTV sends `custom_properties.comskip = true` on `POST /api/channels/recordings
 commercials" is on (Settings -> DVR, on by default from arr.69). From v238 the server runs
 Comskip after such a recording even when its own DVR Comskip switch is off; before, the flag
 was ignored. Series rules have no such flag: the server's switch decides for them.
+
+**Marked breaks** (v239): with the server's Comskip in "mark" mode a completed recording
+carries `custom_properties.comskip = {"status": "completed", "mode": "mark", "breaks": [[300.0,
+480.5], ...]}` (seconds from the start of the file). `GET /api/core/capabilities/` says
+`commercial_breaks: {"installed": bool, "enabled": bool, "mode": "cut"|"mark", "marks": bool}`.
+arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playing.

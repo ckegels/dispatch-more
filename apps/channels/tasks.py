@@ -3435,6 +3435,10 @@ def comskip_process_recording(recording_id: int):
             "mode": "mark",
             "edl": os.path.basename(edl_path),
             "commercials": len(commercials),
+            # Dispatch More: the breaks themselves, [start, end] in seconds from the start
+            # of the file, so a player can skip them (arrTV's "Skip ad"). The .edl beside
+            # the file says the same; this saves an app from reading files it cannot reach.
+            "breaks": [[round(s, 1), round(e, 1)] for s, e in commercials if e - s >= 1.0],
         }
         if selected_ini:
             cp["comskip"]["ini_path"] = selected_ini

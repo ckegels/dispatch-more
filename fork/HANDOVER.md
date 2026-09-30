@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v238** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v239** (2026-09-30). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1814,6 +1814,18 @@ the server switch on every recording is processed, as in stock. Comskip must be 
 the server (`shutil.which("comskip")`): without it the recording is marked
 `comskip: {status: skipped, reason: comskip_not_installed}`. Stock's mode is **cut** (the
 breaks are cut out of the file, in place); **mark** only writes chapters.
+
+**Commercial breaks marked, not cut** (v239). Comskip guesses; in stock's **cut** mode a wrong
+guess cuts part of the programme out of the file for good, and on European channels (no
+black frames between breaks) it guesses wrong often. The user chose marking and skipping, as
+Plex, Jellyfin and Kodi do: in **mark** mode `comskip_process_recording` now also writes the
+breaks onto the recording, `custom_properties.comskip.breaks` = [[start, end] seconds]
+(breaks under a second left out); arrTV (arr.71) reads them when a recording plays and skips
+them (Settings -> DVR -> Commercial Breaks: skip automatically with "◀ Back", a Skip ad
+button, or play them). Capabilities say `commercial_breaks: {installed, enabled, mode,
+marks}` -- `installed` is `shutil.which("comskip")`, which a Linux install may not have
+(Docker has it). On the user's server (2026-09-30) Comskip was on in cut mode; set to
+mark.
 
 ### 5.8 Misc
 
