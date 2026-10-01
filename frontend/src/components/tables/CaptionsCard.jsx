@@ -55,7 +55,8 @@ export const machineLine = (machine) => {
     parts.push(
       `${size(machine.memory.total_mb)} memory, ${size(machine.memory.free_mb)} free`
     );
-  if (machine.disk_free_mb) parts.push(`${size(machine.disk_free_mb)} disk free`);
+  if (machine.disk_free_mb)
+    parts.push(`${size(machine.disk_free_mb)} disk free`);
   return parts.join(' · ');
 };
 
@@ -145,7 +146,12 @@ const CaptionsCard = () => {
       {open && (
         <Stack gap="md" p="md" pt={0}>
           {error && (
-            <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+            <Alert
+              color="red"
+              variant="light"
+              withCloseButton
+              onClose={() => setError(null)}
+            >
               {error}
             </Alert>
           )}
@@ -156,11 +162,11 @@ const CaptionsCard = () => {
           ) : (
             <>
               <Text size="sm" c="dimmed">
-                A caption worker turns a channel's sound into text with a
-                speech model. It runs apart from Dispatcharr and only when
-                installed; what fits depends on this machine, so it is measured
-                here. Making captions while a TV watches comes in the next
-                release; this sets the worker up and shows what it can do.
+                A caption worker turns a channel's sound into text with a speech
+                model. It runs apart from Dispatcharr and only when installed;
+                what fits depends on this machine, so it is measured here.
+                Making captions while a TV watches comes in the next release;
+                this sets the worker up and shows what it can do.
               </Text>
 
               <Box>
@@ -183,7 +189,11 @@ const CaptionsCard = () => {
                 {status.machine.seen_from === 'dispatcharr' && (
                   <Text size="xs" c="dimmed">
                     Seen from Dispatcharr; the worker sees for itself once it
-                    runs{status.layout === 'docker' ? ' (a card given only to its container shows then)' : ''}.
+                    runs
+                    {status.layout === 'docker'
+                      ? ' (a card given only to its container shows then)'
+                      : ''}
+                    .
                   </Text>
                 )}
                 {worker.cuda_failed && (
@@ -195,7 +205,11 @@ const CaptionsCard = () => {
               </Box>
 
               {proposal && (
-                <Alert variant="light" color="blue" title={`Fits this server: ${proposal.model}${proposal.measured ? '' : ' (a guess until measured)'}`}>
+                <Alert
+                  variant="light"
+                  color="blue"
+                  title={`Fits this server: ${proposal.model}${proposal.measured ? '' : ' (a guess until measured)'}`}
+                >
                   <Text size="sm">{proposal.why}</Text>
                   {proposal.translation && (
                     <Text size="sm">
@@ -208,7 +222,9 @@ const CaptionsCard = () => {
                     </Text>
                   )}
                   {status.translation.deepl && (
-                    <Text size="sm">A DeepL key is set and can translate too.</Text>
+                    <Text size="sm">
+                      A DeepL key is set and can translate too.
+                    </Text>
                   )}
                   {proposal.measure_next && worker.running && (
                     <Text size="sm">
@@ -255,11 +271,17 @@ const CaptionsCard = () => {
                       <Box key={kind}>
                         <Group justify="space-between">
                           <Text size="xs" fw={600}>
-                            {kind === 'gpu' ? 'With an NVIDIA card (NVIDIA Container Toolkit installed)' : 'Processor only'}
+                            {kind === 'gpu'
+                              ? 'With an NVIDIA card (NVIDIA Container Toolkit installed)'
+                              : 'Processor only'}
                           </Text>
                           <CopyButton value={status.docker[kind]}>
                             {({ copied, copy }) => (
-                              <Button size="compact-xs" variant="subtle" onClick={copy}>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                onClick={copy}
+                              >
                                 {copied ? 'Copied' : 'Copy'}
                               </Button>
                             )}
@@ -291,11 +313,17 @@ const CaptionsCard = () => {
                         Remove it and its models
                       </Button>
                     )}
-                    <Text size="xs" c={install.state === 'failed' ? 'red' : 'dimmed'}>
-                      {install.requested
-                        ? 'Asked; the installer starts within a few seconds…'
-                        : install.step ||
-                          `faster-whisper in /opt (about 250 MB${status.machine.gpus?.length ? ', and 1.5 GB of NVIDIA libraries for the card' : ''}), as a service of its own.`}
+                    <Text
+                      size="xs"
+                      c={install.state === 'failed' ? 'red' : 'dimmed'}
+                    >
+                      {['installing', 'removing'].includes(install.state) &&
+                      install.step
+                        ? `${install.step}…`
+                        : install.requested
+                          ? 'Asked; the installer starts within a few seconds…'
+                          : install.step ||
+                            `faster-whisper in /opt (about 250 MB${status.machine.gpus?.length ? ', and 1.5 GB of NVIDIA libraries for the card' : ''}), as a service of its own.`}
                     </Text>
                   </Group>
                 ) : (
@@ -381,7 +409,11 @@ const CaptionsCard = () => {
                               Downloading…
                             </Text>
                           ) : !m.downloaded ? (
-                            <Button size="compact-xs" variant="light" onClick={() => act('download', m.name)}>
+                            <Button
+                              size="compact-xs"
+                              variant="light"
+                              onClick={() => act('download', m.name)}
+                            >
                               Download
                             </Button>
                           ) : (

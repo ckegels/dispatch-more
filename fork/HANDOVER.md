@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v245** (2026-10-01, published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v246** (2026-10-01; v245 published, v246 built). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1896,6 +1896,28 @@ installed by the root watcher `dispatch-more-captions-request.path` -> `fork/pat
 measure models from the card. Remove (or uninstalling Dispatch More) takes the service, venv
 and models. Nothing makes captions during playback yet (step 3b). Off means stock: nothing is
 installed or run unless asked; `captions.sh` is never run on Docker.
+
+### 5.7c Catch-up sessions kept alive — `apps/timeshift/sessions.adopt` (v246)
+
+Stock catch-up (`apps/timeshift`, native API sessions: `POST /api/catchup/sessions/`, then
+`GET /proxy/catchup/<uuid>?session_id=`) has a sliding 10-minute idle TTL per API session,
+refreshed by each playback GET and by the stream's 5-second heartbeats. When a new session's
+first request is fingerprint-matched to an earlier session's pool (arrTV re-mints a session
+for every scrub, and a show started again from the same device matches too), it streams
+under the earlier id (`effective_session_id`), and the heartbeats refreshed only that id. The
+session the player holds therefore ran out ten minutes in, however long it went on playing:
+every seek or resume after that got 400, and its position reports 404 "No active playback".
+Seen on the user's server on 2026-09-30 (a 34-minute play, then five refused requests).
+
+`sessions.adopt(session_id, matched)` (called where the match is made in `views.catchup_proxy`)
+links the two both ways in Redis (`timeshift:api-aliases:<pool>`,
+`timeshift:api-adopted-by:<session>`, same TTL); `_refresh_active_session_redis_ttl` also
+touches the aliases (`touch_with_aliases`); `stats.update_catchup_session_position` follows
+`adopted_by` to the stats entry that streams and touches the player's own session; and
+`_finalize_playback_session_auth` deletes the aliases when viewing ends. A bug fix to stock
+behaviour, so no switch: without a match nothing changes. Tests:
+`apps/timeshift/tests/test_session_adoption.py`. arrTV's half (it stopped reporting on that
+first 404) is arr.73 (`fix/catchup-session`).
 
 ### 5.8 Misc
 

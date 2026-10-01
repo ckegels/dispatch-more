@@ -32,6 +32,18 @@ class TimeshiftRedisKeys:
     def pool(session_id):
         return f"timeshift:pool:{session_id}"
 
+    # Dispatch More: an API session whose first request was fingerprint-matched to another
+    # session's pool streams under that session's id. These link the two, so the API
+    # session is kept alive by the pool's heartbeats and its position reports reach the
+    # stats entry that is actually streaming (sessions.adopt).
+    @staticmethod
+    def api_session_aliases(pool_session_id):
+        return f"timeshift:api-aliases:{pool_session_id}"
+
+    @staticmethod
+    def api_session_adopted_by(session_id):
+        return f"timeshift:api-adopted-by:{session_id}"
+
     @staticmethod
     def pool_lock(session_id):
         return f"timeshift:pool:{session_id}:lock"

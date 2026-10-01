@@ -108,6 +108,81 @@ def touch_catchup_session(session_id, *, redis_client=None):
         return False
 
 
+def adopt(session_id, pool_session_id, *, redis_client=None):
+    """
+    Dispatch More: ``session_id`` (an API session) is being served under another session's
+    pool (``pool_session_id``) after a fingerprint match -- a re-mint for a seek or a
+    restart from the same device. Stock refreshed only the pool's own id from then on, so
+    the API session the player holds ran out ``SESSION_IDLE_TTL_SECONDS`` after its first
+    request, however long it went on playing: every seek or resume after that was refused,
+    and its position reports were answered "no active playback". Linked here both ways.
+    """
+    if not session_id or not pool_session_id or session_id == pool_session_id:
+        return False
+    if redis_client is None:
+        redis_client = RedisClient.get_client()
+    if redis_client is None or not catchup_session_exists(session_id, redis_client=redis_client):
+        return False
+    try:
+        aliases = TimeshiftRedisKeys.api_session_aliases(pool_session_id)
+        adopted = TimeshiftRedisKeys.api_session_adopted_by(session_id)
+        pipe = redis_client.pipeline(transaction=False)
+        pipe.sadd(aliases, session_id)
+        pipe.expire(aliases, SESSION_IDLE_TTL_SECONDS)
+        pipe.set(adopted, pool_session_id, ex=SESSION_IDLE_TTL_SECONDS)
+        pipe.execute()
+        return True
+    except Exception as exc:
+        logger.warning("Catchup session link failed for %s: %s", session_id, exc)
+        return False
+
+
+def aliases_of(pool_session_id, *, redis_client=None):
+    """The API sessions served under ``pool_session_id`` (see adopt)."""
+    if redis_client is None:
+        redis_client = RedisClient.get_client()
+    if redis_client is None or not pool_session_id:
+        return []
+    try:
+        return [m.decode() if isinstance(m, bytes) else str(m)
+                for m in redis_client.smembers(TimeshiftRedisKeys.api_session_aliases(pool_session_id))]
+    except Exception:
+        return []
+
+
+def adopted_by(session_id, *, redis_client=None):
+    """The pool session an API session is served under, or None (see adopt)."""
+    if redis_client is None:
+        redis_client = RedisClient.get_client()
+    if redis_client is None or not session_id:
+        return None
+    try:
+        value = redis_client.get(TimeshiftRedisKeys.api_session_adopted_by(session_id))
+    except Exception:
+        return None
+    if not value:
+        return None
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+def touch_with_aliases(pool_session_id, *, redis_client=None):
+    """Keep the API sessions served under this pool alive, and their links (see adopt)."""
+    if redis_client is None:
+        redis_client = RedisClient.get_client()
+    if redis_client is None or not pool_session_id:
+        return
+    aliases = aliases_of(pool_session_id, redis_client=redis_client)
+    if not aliases:
+        return
+    try:
+        redis_client.expire(TimeshiftRedisKeys.api_session_aliases(pool_session_id), SESSION_IDLE_TTL_SECONDS)
+        for alias in aliases:
+            if touch_catchup_session(alias, redis_client=redis_client):
+                redis_client.expire(TimeshiftRedisKeys.api_session_adopted_by(alias), SESSION_IDLE_TTL_SECONDS)
+    except Exception as exc:
+        logger.debug("Catchup alias touch failed for %s: %s", pool_session_id, exc)
+
+
 def delete_catchup_session(session_id, *, redis_client=None):
     if not session_id:
         return False

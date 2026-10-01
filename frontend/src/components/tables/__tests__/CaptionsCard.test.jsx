@@ -82,6 +82,22 @@ describe('CaptionsCard', () => {
     expect(await screen.findByText(/installer starts within a few seconds/)).toBeInTheDocument();
   });
 
+  it('shows what the installer is doing, not that it was asked', async () => {
+    API.getCaptions.mockResolvedValue(
+      status({
+        install: {
+          can_request: true,
+          requested: true,
+          state: 'installing',
+          step: "Installing NVIDIA's CUDA libraries for the card (about 1.5 GB)",
+        },
+      })
+    );
+    await open();
+    expect(await screen.findByText(/Installing NVIDIA's CUDA libraries/)).toBeInTheDocument();
+    expect(screen.queryByText(/installer starts within/)).not.toBeInTheDocument();
+  });
+
   it('gives Docker a container to add instead of an install button', async () => {
     API.getCaptions.mockResolvedValue(
       status({

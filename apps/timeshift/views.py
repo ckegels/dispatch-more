@@ -470,6 +470,11 @@ def _serve_catchup(request, user, channel, timestamp, client_duration_hint=None)
             )
             effective_session_id = matched
             client_id = matched
+            # Dispatch More: the player's own session is kept alive with the pool it now
+            # streams under (sessions.adopt)
+            from .sessions import adopt
+
+            adopt(session_id, matched, redis_client=redis_client)
 
     if debug:
         if effective_session_id != session_id:
@@ -1051,6 +1056,11 @@ def _finalize_playback_session_auth(redis_client, session_id):
     """
     if redis_client is None or not session_id:
         return False
+    # Dispatch More: the API sessions served under this one end with it (sessions.adopt)
+    from .sessions import aliases_of
+
+    for alias in aliases_of(session_id, redis_client=redis_client):
+        delete_catchup_session(alias, redis_client=redis_client)
     if not catchup_session_exists(session_id, redis_client=redis_client):
         return False
     delete_catchup_session(session_id, redis_client=redis_client)
@@ -2434,6 +2444,10 @@ def _refresh_active_session_redis_ttl(
     if catchup_session_exists(session_id, redis_client=redis_client):
         from .sessions import touch_catchup_session
         touch_catchup_session(session_id, redis_client=redis_client)
+    # Dispatch More: and the API sessions served under this one (sessions.adopt)
+    from .sessions import touch_with_aliases
+
+    touch_with_aliases(session_id, redis_client=redis_client)
 
 
 def _discard_pool_session(redis_client, session_id, profile_id):

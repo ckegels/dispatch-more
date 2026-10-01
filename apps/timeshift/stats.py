@@ -324,7 +324,14 @@ def update_catchup_session_position(
     if redis_client is None or not session_id:
         return False
 
+    api_session_id = session_id
     stats_channel_id = find_stats_channel_for_session(redis_client, session_id)
+    if not stats_channel_id:
+        # Dispatch More: served under another session's pool (sessions.adopt)
+        from apps.timeshift.sessions import adopted_by
+
+        session_id = adopted_by(session_id, redis_client=redis_client) or session_id
+        stats_channel_id = find_stats_channel_for_session(redis_client, session_id)
     if not stats_channel_id:
         return False
 
@@ -364,7 +371,7 @@ def update_catchup_session_position(
     except Exception:
         return False
 
-    touch_catchup_session(session_id, redis_client=redis_client)
+    touch_catchup_session(api_session_id, redis_client=redis_client)
     return True
 
 

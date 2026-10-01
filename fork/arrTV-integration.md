@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244; latest release v245) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246; latest release v246) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -225,7 +225,7 @@ Use whichever the app used to open A. Format: letters, digits, dashes, at most 8
 | Reconnect / retry of the same channel (network blip, `StreamEndVerifier`, 503 retry) | **no**: A == B, and the server ignores it anyway |
 | Failover inside one channel (`LiveStreamFailover`, `change_stream`) | **no**: same channel, and `change_stream` is not a new stream request |
 | Leaving the player to the guide/home | no header (there is no new request); just close the connection |
-| Catch-up / timeshift / VOD | no |
+| Catch-up / timeshift / VOD | no (catch-up sessions: from v246 a re-minted session stays alive while it streams, and position reports reach it -- `fork/HANDOVER.md` §5.7c; arrTV keeps reporting after the first "no active playback" 404 from arr.73) |
 
 The server never closes a channel another viewer is also on, never one being recorded, and
 never another device's, even if the header names it. A wrong value costs nothing.
