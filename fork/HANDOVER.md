@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v242** (2026-09-30). The commit messages on the branch
+Written 2026-09-19, kept current to **release v243** (2026-10-01). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1862,6 +1862,11 @@ page's live cards** -- which had no badges at all on the Proxy profile, one reas
 unlike each other (the others: live, VOD and catch-up cards are three designs in stock) --
 fall back to the saved values (`ChannelStatus._fill_from_saved_stream_info`, marked "from last
 check").
+
+**Subtitles, step 1** (v243): Stream Check also records which subtitles a stream carries
+(teletext, DVB, closed captions, text) and its audio languages; the Channel Manager's eighth
+tab, **Subtitles**, lists them per channel. The whole plan -- captions made from the sound,
+translation, the caption worker, arrTV's part -- is **`fork/subtitles.md`**; read it first.
 
 ### 5.8 Misc
 

@@ -3179,6 +3179,19 @@ export default class API {
     });
   }
 
+  // ── Subtitles: what every channel's streams carry (see subtitles) ──
+
+  static async getSubtitles() {
+    return await request(`${host}/api/channels/subtitles/`);
+  }
+
+  static async setSpokenLanguage(channel, spoken) {
+    return await request(`${host}/api/channels/subtitles/`, {
+      method: 'PUT',
+      body: { channel, spoken },
+    });
+  }
+
   // ── Service keys: TMDB, TheTVDB, Trakt, OMDb, shared by every feature (see service_keys) ──
 
   static async getServiceKeys() {

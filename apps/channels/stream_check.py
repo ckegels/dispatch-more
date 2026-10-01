@@ -1027,7 +1027,8 @@ def _ffprobe(data):
             [
                 "ffprobe", "-v", "error", "-show_entries",
                 "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,pix_fmt,"
-                "sample_rate,channels,channel_layout:format=format_name",
+                "sample_rate,channels,channel_layout:stream_tags=language:"
+                "stream_disposition=hearing_impaired:format=format_name",
                 "-of", "json", "-i", "pipe:0",
             ],
             input=data, capture_output=True, timeout=15,
@@ -1042,13 +1043,53 @@ def _ffprobe(data):
         return {"video": False, "audio": False}
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    details = stream_details(video, audio, (answer.get("format") or {}).get("format_name", ""))
+    details.update(subtitle_details(streams, data))
     return {
         "video": video is not None,
         "audio": audio is not None,
         "codec": (video or {}).get("codec_name", ""),
         "resolution": f"{video['width']}x{video['height']}" if video and video.get("width") else "",
-        "details": stream_details(video, audio, (answer.get("format") or {}).get("format_name", "")),
+        "details": details,
     }
+
+
+# Subtitle tracks as fork/subtitles.md §2 names them
+SUBTITLE_KINDS = {"dvb_teletext": "teletext", "dvb_subtitle": "dvb", "webvtt": "text",
+                  "mov_text": "text", "subrip": "text", "ass": "text"}
+# American and Canadian captions (CEA-608/708) ride in the video as ATSC A/53 user data:
+# "GA94" then user_data_type 3, cc_data. ffprobe's closed_captions field stays empty on a
+# check's 1 MB (measured on NBC 2026-10-01: empty, while 107 frames carried captions), and
+# decoding the frames to find them costs a second or more; a byte search finds the same 107
+# for nothing. Two at least, so a chance match in compressed video cannot count.
+CC_MARKER = b"GA94\x03"
+CC_LEAST = 2
+
+
+def _language(stream):
+    return ((stream.get("tags") or {}).get("language") or "").split(",")[0].strip().lower()
+
+
+def subtitle_details(streams, data=b""):
+    """Which subtitles the stream carries and the languages its sound is in (subtitles.md §2):
+    {"subtitles": [{"kind", "lang", "hearing_impaired"}], "audio_languages": [...],
+    "subtitles_checked_at": ...}. An empty list is "looked and found none"."""
+    found = []
+    for stream in streams or ():
+        kind = SUBTITLE_KINDS.get(stream.get("codec_name") or "")
+        if stream.get("codec_type") == "subtitle" and kind:
+            entry = {"kind": kind, "lang": _language(stream),
+                     "hearing_impaired": bool((stream.get("disposition") or {}).get("hearing_impaired"))}
+            if entry not in found:
+                found.append(entry)
+    if data and data.count(CC_MARKER) >= CC_LEAST:
+        found.append({"kind": "cc", "lang": "", "hearing_impaired": False})
+    languages = []
+    for stream in streams or ():
+        lang = _language(stream)
+        if stream.get("codec_type") == "audio" and lang and lang != "und" and lang not in languages:
+            languages.append(lang)
+    return {"subtitles": found, "audio_languages": languages, "subtitles_checked_at": _now()}
 
 
 AUDIO_LAYOUTS = {1: "mono", 2: "stereo", 6: "5.1", 8: "7.1"}

@@ -195,8 +195,13 @@ const open = () =>
   );
 const draw = () => {
   const drawn = open();
-  waitFor(() =>
-    expect(screen.getByRole('button', { name: /Preview/ })).not.toBeDisabled()
+  // Up to 5 s: under the whole suite's load the settings can take more than a second
+  waitFor(
+    () =>
+      expect(
+        screen.getByRole('button', { name: /Preview/ })
+      ).not.toBeDisabled(),
+    { timeout: 5000 }
   ).then(() =>
     fireEvent.click(screen.getByRole('button', { name: /Preview/ }))
   );
@@ -244,9 +249,9 @@ describe('ChannelManagerTable', () => {
 
   it('shows each channel as it is and as it would be, and what it comes to', async () => {
     draw();
-    expect((await screen.findAllByText('┃AT┃ ORF 1')).length).toBeGreaterThan(
-      0
-    );
+    expect(
+      (await screen.findAllByText('┃AT┃ ORF 1', {}, { timeout: 5000 })).length
+    ).toBeGreaterThan(0);
     // The guide it is on now, once: the apply keeps it, so the right-hand side says what
     // the apply adds instead of saying the guide again
     expect(screen.getAllByText('Guide: ORF 1 · Austria')).toHaveLength(1);

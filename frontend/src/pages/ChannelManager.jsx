@@ -18,6 +18,7 @@ import GuideManagerTable from '../components/tables/GuideManagerTable';
 import LogoLibraryTable from '../components/tables/LogoLibraryTable';
 import ShowGroupsTable from '../components/tables/ShowGroupsTable';
 import StreamCheckTable from '../components/tables/StreamCheckTable';
+import SubtitlesTable from '../components/tables/SubtitlesTable';
 
 // One sentence per tab, saying what the page is for. On its own line under the tabs, so
 // it can be a whole sentence without moving them.
@@ -34,6 +35,8 @@ const BLURB = {
     'What order your channels come in and which numbers they are on. Drag one to move it, within a group or into another.',
   shows:
     'Groups of channels by what is on them right now: a Cooking group holds every channel airing a cooking show, and lets it go when the show is over. Switch on the ones you want, or add your own, and pick channels that are always in one.',
+  subtitles:
+    'Which subtitles every channel carries, as Stream Check finds them in its streams: teletext, DVB subtitles or closed captions, and the language each channel speaks.',
   grabber:
     'The iptv-org/epg grabber that is installed on this machine, run from here: where it is, what to grab, and when. The guide it writes is read straight off disk, and the one you have is only replaced once the new one has been read back and found to hold something.',
 };
@@ -79,6 +82,7 @@ const ChannelManagerPage = () => {
               <TabsTab value="layout">Guide Layout</TabsTab>
               <TabsTab value="grabber">EPG Grabber</TabsTab>
               <TabsTab value="shows">Show Groups</TabsTab>
+              <TabsTab value="subtitles">Subtitles</TabsTab>
             </TabsList>
           </Tabs>
         </Flex>
@@ -124,6 +128,7 @@ const ChannelManagerPage = () => {
       {activeTab === 'layout' && <GuideLayoutTable />}
       {activeTab === 'grabber' && <EpgGrabberTable />}
       {activeTab === 'shows' && <ShowGroupsTable />}
+      {activeTab === 'subtitles' && <SubtitlesTable />}
     </Box>
   );
 };

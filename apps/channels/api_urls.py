@@ -8,6 +8,7 @@ from . import (
     guide_manager_views,
     service_keys_views,
     show_groups_views,
+    subtitles_views,
     logo_library_views,
     stream_check_views,
 )
@@ -110,6 +111,8 @@ urlpatterns = [
     path('show-groups/shows/', show_groups_views.show_groups_shows, name='show_groups_shows'),
     # Keys for online services, shared by every feature that asks them (see service_keys)
     path('service-keys/', service_keys_views.service_keys_page, name='service_keys_page'),
+    # Which subtitles each channel's streams carry (fork/subtitles.md)
+    path('subtitles/', subtitles_views.subtitles_page, name='subtitles_page'),
     path('service-keys/test/', service_keys_views.service_keys_test, name='service_keys_test'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),

@@ -94,6 +94,8 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   show and lets it go when the show ends (never while someone watches). Channels can be kept in
   a group for good. Uses your guides and, optionally, TVmaze, Wikidata, Wikipedia, TMDB,
   TheTVDB, Trakt and OMDb to recognise shows.
+- **Subtitles** — which subtitles every channel carries (teletext, DVB subtitles, closed
+  captions) and the language it speaks, as Stream Check finds them in its streams.
 - **EPG Grabber** — runs iptv-org's guide grabber on a schedule (when it is installed on the
   server) and only replaces your guide once the new one is complete.
 
