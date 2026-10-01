@@ -157,10 +157,21 @@ DEFAULTS = {
     # A provider whose first streams in a run all fail is down, not its streams: after this
     # many in a row it is left for the rest of the run, and those failures do not count
     "account_failures": 5,
+    # How many providers are checked at the same time. "auto": one while people may be
+    # watching (only_when_idle off), two when nothing plays -- so whoever starts watching in
+    # the middle of a check still finds providers nobody is checking. A provider that rests
+    # (refusing, in use) hands its turn to the next one, and the next batch carries on with
+    # the provider it was on, so each is checked through before the next. 0 = every provider
+    # at once, as before v245 (the off switch).
+    "providers_at_once": "auto",
 }
 
 # ── Redis keys, all short-lived: what outlives a run is written to CoreSettings ──
 RUN_KEY = "stream-check:running"
+# The accounts whose provider a check is on right now, for the viewer's path (viewer_order)
+CHECKING_KEY = "stream-check:checking"
+# The providers the last batch was in the middle of, first in line for the next one
+FOCUS_KEY = "stream-check:focus"
 # Refreshed while a run is alive, so a worker that died does not block the next forever
 RUN_TTL = 120
 STOP_KEY = "stream-check:stop"
@@ -366,6 +377,8 @@ def save_settings(given):
         values["remove_above"] = min(100, max(0, int(values["remove_above"])))
         values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
         values["picture_every_days"] = min(60, max(0, float(values["picture_every_days"])))
+        if values["providers_at_once"] != "auto":
+            values["providers_at_once"] = min(20, max(0, int(values["providers_at_once"])))
     except (TypeError, ValueError):
         raise ValueError("Numbers only, please")
     if values["recheck_mode"] not in ("hours", "refresh"):
@@ -971,6 +984,67 @@ def _usable_logins(account, profiles, user_agent):
     if not profiles:
         problems.append("it has no active profile")
     return usable, "; ".join(problems)
+
+
+def providers_at_once(settings, idle_only=None):
+    """How many providers a batch checks at the same time; 0 = all of them."""
+    value = settings.get("providers_at_once", "auto")
+    if value == "auto":
+        idle = settings.get("only_when_idle") if idle_only is None else idle_only
+        return 2 if idle else 1
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 1
+
+
+def provider_order(keys, names, focus=()):
+    """The order providers get their turn: those the last batch was in the middle of first,
+    then the rest by name, so every batch goes through them the same way."""
+    focus = [k for k in focus if k in keys]
+    rest = sorted((k for k in keys if k not in focus), key=lambda k: (names.get(k) or "").lower())
+    return focus + rest
+
+
+def viewer_order(redis_client, viewer, streams):
+    """
+    A channel's streams for a viewer while a check runs (the viewer's path, from
+    Channel.get_stream): the provider the viewer already watches through first -- they stay
+    on it, as "Stay on same account" would have them, for as long as the check goes on --
+    then providers nobody is checking, then the one being checked, which still plays when it
+    is the only one with room (the check makes way). Custom streams keep their places.
+    Costs one Redis lookup when no check runs, and changes nothing then.
+    """
+    try:
+        if not redis_client or not redis_client.exists(RUN_KEY):
+            return streams
+        streams = list(streams)
+        checking = {int(a) for a in json.loads(redis_client.get(CHECKING_KEY) or "[]")}
+        watching = set()
+        if viewer is not None and not getattr(viewer, "recording", False):
+            from apps.m3u.models import M3UAccountProfile
+            from apps.proxy.live_proxy import probation
+
+            watched = probation.watched_channels_by(redis_client, viewer)
+            if watched:
+                watching = set(M3UAccountProfile.objects.filter(id__in=list(watched))
+                               .values_list("m3u_account_id", flat=True))
+        if not checking and not watching:
+            return streams
+
+        def rank(stream):
+            if stream.m3u_account_id in watching:
+                return 0
+            return 2 if stream.m3u_account_id in checking else 1
+
+        places = [i for i, s in enumerate(streams) if not s.is_custom]
+        ordered = sorted((streams[i] for i in places), key=rank)
+        for i, stream in zip(places, ordered):
+            streams[i] = stream
+        return streams
+    except Exception as e:  # never let this cost a viewer their channel
+        logger.debug(f"Stream Check: could not order a viewer's streams: {e}")
+        return streams
 
 
 def make_way(redis_client):
@@ -2782,18 +2856,59 @@ def run(redis_client, only=None, batch_seconds=None):
                 if connections["default"] is not own_connection:
                     connections["default"].close()
 
-        threads = [
-            threading.Thread(target=one_provider, args=(key, streams), daemon=True, name="stream-check")
-            for key, streams in by_provider.items()
-        ]
+        # Whose turn it is: a few providers at a time (providers_at_once), in an order that
+        # carries on from the last batch; one that rests hands its turn to the next in line
+        at_once = providers_at_once(settings, idle_only) if only is None else 0
         try:
-            for thread in threads:
-                thread.start()
-            while any(thread.is_alive() for thread in threads):
+            focus = [tuple(k) for k in json.loads(redis_client.get(FOCUS_KEY) or "[]")]
+        except (ValueError, TypeError):
+            focus = []
+        queue = provider_order(list(by_provider), names, focus)
+        if at_once and at_once < len(queue):
+            for key in queue[at_once:]:
+                entry = accounts[_key_text(key)]
+                entry.update(status="waiting its turn",
+                             reason="one provider at a time" if at_once == 1 else f"{at_once} providers at a time")
+            _progress(redis_client, accounts=accounts)
+        running = {}
+
+        def mark_checking():
+            # For the viewer's path: these accounts' provider is being checked (viewer_order)
+            checked = sorted({s.m3u_account_id for k in running for s in by_provider[k]})
+            redis_client.set(CHECKING_KEY, json.dumps(checked), ex=RUN_TTL)
+
+        started = 0
+        try:
+            while True:
+                for key in [k for k, t in running.items() if not t.is_alive()]:
+                    del running[key]
+                while queue and (not at_once or len(running) < at_once):
+                    if stop_asked():
+                        stopped["asked"] = stopped["asked"] or bool(redis_client.exists(STOP_KEY))
+                        break
+                    if started and time.monotonic() > deadline:
+                        break  # the next batch carries on; every batch starts one at least
+                    started += 1
+                    key = queue.pop(0)
+                    if accounts[_key_text(key)].get("status") == "waiting its turn":
+                        accounts[_key_text(key)].update(status="checking", reason="")
+                    running[key] = threading.Thread(target=one_provider, args=(key, by_provider[key]),
+                                                    daemon=True, name="stream-check")
+                    running[key].start()
+                if not running:
+                    break
+                mark_checking()
                 redis_client.expire(RUN_KEY, RUN_TTL)
-                for thread in threads:
-                    thread.join(timeout=5)
+                # Woken often enough to hand a rested provider's turn on within a second
+                for thread in list(running.values()):
+                    thread.join(timeout=1 if at_once else 5)
+            # The providers it was in the middle of: first in line for the next batch
+            unfinished = [k for k in provider_order(list(by_provider), names, focus)
+                          if k not in waiting and accounts[_key_text(k)].get("status") == "checking"
+                          and accounts[_key_text(k)].get("left", 0) > 0]
+            redis_client.set(FOCUS_KEY, json.dumps(unfinished), ex=ROUND_TTL)
         finally:
+            redis_client.delete(CHECKING_KEY)
             for stream_id in recovered:
                 # Parked by autopark, it goes back by itself as it came; by a person, only
                 # when that is asked for

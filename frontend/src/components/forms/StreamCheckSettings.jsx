@@ -4,6 +4,7 @@ import {
   Button,
   Group,
   MultiSelect,
+  NativeSelect,
   NumberInput,
   Select,
   Stack,
@@ -37,6 +38,23 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             description="Off: checks go on while people watch, but never on a provider anyone is using -- every account on the same server, login or server group counts as one provider. On: nothing is checked while anyone watches anything."
             checked={!!draft.only_when_idle}
             onChange={(e) => set({ only_when_idle: e.currentTarget.checked })}
+          />
+          <NativeSelect
+            size="xs"
+            label="Providers at a time"
+            description="Automatic: one while people may be watching, two when only checking while nothing plays -- so someone who starts watching mid-check always finds a provider nobody is checking. Each provider is checked through before the next; one that refuses or is in use hands its turn on. While a check runs, a viewer's next channel stays on the provider they are watching through."
+            data={[
+              { value: 'auto', label: 'Automatic (1, or 2 when nothing plays)' },
+              { value: '1', label: 'One' },
+              { value: '2', label: 'Two' },
+              { value: '3', label: 'Three' },
+              { value: '0', label: 'All at once (as before)' },
+            ]}
+            value={String(draft.providers_at_once ?? 'auto')}
+            onChange={(e) => {
+              const v = e.currentTarget.value;
+              set({ providers_at_once: v === 'auto' ? 'auto' : Number(v) });
+            }}
           />
           <Switch
             size="xs"

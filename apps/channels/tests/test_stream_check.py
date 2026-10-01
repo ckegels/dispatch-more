@@ -2538,3 +2538,116 @@ class ProviderLimitTests(WhatAProviderAllowsTests):
         self.assertTrue(250 < stream_check._retry_after(later) <= 300)
         self.assertIsNone(stream_check._retry_after("soon"))
         self.assertIsNone(stream_check._retry_after(None))
+
+
+class ProviderTurnsTests(_Setup):
+    """
+    A few providers at a time (providers_at_once): one while people may be watching, two when
+    only checking while nothing plays, each checked through before the next, a provider that
+    cannot be used handing its turn on -- and, while a check runs, a viewer's next channel
+    staying on the provider they are on.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        stream_check.save_settings({"gap_seconds": 0, "broken_after": 2, "only_when_idle": False})
+
+    def _round(self, probe, batch_seconds=None):
+        with mock.patch.object(stream_check, "probe", side_effect=probe):
+            stream_check.start_round(self.redis, force=True)
+            for _ in range(20):
+                ended = stream_check.run(self.redis, batch_seconds=batch_seconds)
+                if ended not in ("more", "waiting"):
+                    break
+        return ended
+
+    def test_how_many_at_once(self):
+        self.assertEqual(stream_check.providers_at_once({"providers_at_once": "auto", "only_when_idle": False}), 1)
+        self.assertEqual(stream_check.providers_at_once({"providers_at_once": "auto", "only_when_idle": True}), 2)
+        self.assertEqual(stream_check.providers_at_once({"providers_at_once": 0}), 0)
+        self.assertEqual(stream_check.save_settings({"providers_at_once": 99})["providers_at_once"], 20)
+        self.assertEqual(stream_check.save_settings({"providers_at_once": "auto"})["providers_at_once"], "auto")
+        with self.assertRaises(ValueError):
+            stream_check.save_settings({"providers_at_once": "lots"})
+
+    def test_the_provider_it_was_on_goes_first(self):
+        names = {("account", 1): "Zebra", ("account", 2): "Alpha", ("account", 3): "Middle"}
+        self.assertEqual(stream_check.provider_order(list(names), names),
+                         [("account", 2), ("account", 3), ("account", 1)])
+        self.assertEqual(stream_check.provider_order(list(names), names, focus=[("account", 1)]),
+                         [("account", 1), ("account", 2), ("account", 3)])
+
+    def _overlap(self):
+        """A probe that notes how many providers were being read at the same moment."""
+        state = {"now": 0, "most": 0, "order": []}
+        lock = threading.Lock()
+        inner = _answers({})
+
+        def probe(url, *args, **kwargs):
+            with lock:
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+                state["order"].append(url.split("/")[2])
+            time.sleep(0.05)
+            try:
+                return inner(url, *args, **kwargs)
+            finally:
+                with lock:
+                    state["now"] -= 1
+
+        return probe, state
+
+    def test_one_provider_at_a_time_while_people_may_watch(self):
+        probe, state = self._overlap()
+        self.assertEqual(self._round(probe), "done")
+        self.assertEqual(state["most"], 1)
+        # Checked through, one provider after the other
+        self.assertEqual(state["order"], ["ProviderA", "ProviderA", "ProviderB"])
+
+    def test_all_at_once_is_the_off_switch(self):
+        stream_check.save_settings({"providers_at_once": 0})
+        probe, state = self._overlap()
+        self.assertEqual(self._round(probe), "done")
+        self.assertEqual(state["most"], 2)
+
+    def test_a_provider_in_use_hands_its_turn_on(self):
+        a = stream_check._Providers(self.redis).provider_of(self.a.id)
+        real = stream_check._Providers.in_use
+        with mock.patch.object(stream_check._Providers, "in_use",
+                               lambda self, key, holding=None: key == a or real(self, key, holding)):
+            probe, state = self._overlap()
+            with mock.patch.object(stream_check, "probe", side_effect=probe):
+                stream_check.start_round(self.redis, force=True)
+                ended = stream_check.run(self.redis)
+        self.assertEqual(ended, "waiting")
+        self.assertEqual(state["order"], ["ProviderB"], "B checked in the same batch, A left for later")
+        accounts = stream_check.progress(self.redis)["accounts"]
+        self.assertEqual(accounts[stream_check._key_text(a)]["status"], "in use")
+
+    def test_the_next_batch_carries_on_with_the_provider_it_was_on(self):
+        stream_check.start_round(self.redis, force=True)
+        b = stream_check._Providers(self.redis).provider_of(self.b.id)
+        self.redis.set(stream_check.FOCUS_KEY, json.dumps([list(b)]))
+        probe, state = self._overlap()
+        with mock.patch.object(stream_check, "probe", side_effect=probe):
+            stream_check.run(self.redis)
+        self.assertEqual(state["order"][0], "ProviderB")
+
+    def test_a_viewer_stays_on_their_provider_while_a_check_runs(self):
+        streams = [self.first, self.second, self.fallback]
+        viewer = mock.Mock(recording=False)
+        # No check running: nothing changes
+        self.assertEqual(stream_check.viewer_order(self.redis, viewer, streams), streams)
+        self.redis.set(stream_check.RUN_KEY, "1")
+        self.redis.set(stream_check.CHECKING_KEY, json.dumps([self.a.id]))
+        # The provider being checked goes last; the fallback keeps its place
+        with mock.patch("apps.proxy.live_proxy.probation.watched_channels_by", return_value={}):
+            self.assertEqual(stream_check.viewer_order(self.redis, viewer, streams),
+                             [self.second, self.first, self.fallback])
+        # Watching through A: A first even while it is checked, the check makes way
+        profile = M3UAccountProfile.objects.get(m3u_account=self.a)
+        with mock.patch("apps.proxy.live_proxy.probation.watched_channels_by", return_value={profile.id: "x"}):
+            self.redis.set(stream_check.CHECKING_KEY, json.dumps([self.b.id]))
+            self.assertEqual(stream_check.viewer_order(self.redis, viewer, [self.second, self.first, self.fallback]),
+                             [self.first, self.second, self.fallback])

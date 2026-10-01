@@ -86,7 +86,9 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
 - **Guide Layout** — drag channels into order, group by group; the numbers follow.
 - **Logos** — logos from public collections, your playlists and your guides, side by side.
 - **Stream Check** — finds streams that no longer play (dead, refused, black, frozen, or the
-  provider's "no stream" picture). It never touches a provider someone is watching, and can put
+  provider's "no stream" picture). It checks one provider at a time (two when it only runs
+  while nothing plays), so your other providers stay free for watching, and keeps a viewer on
+  the provider they are on while it runs. It never touches a provider someone is watching, and can put
   dead streams aside automatically. It also records each stream's resolution, codec, frame rate
   and audio, which the Stats page shows even on the Proxy profile.
 - **Show Groups** — groups by what is on right now: Cooking, Travel, Movies, Documentaries,

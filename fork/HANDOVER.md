@@ -1620,7 +1620,16 @@ no longer play. Summary of how it works now:
   resumes a paused one; a paused round retries after 60 s, or when a resting provider is due.
 - **Per provider, never on one in use.** A provider = every account sharing a server host, a
   login (credential fingerprint) or a server group, keyed by its server name. One check at a
-  time per provider, all providers in parallel. Before every stream and while reading: anyone
+  time per provider, and **a few providers at a time** (v245, `providers_at_once`, "auto":
+  1 with `only_when_idle` off, 2 with it on; 0 = all in parallel as before, the off switch).
+  `provider_order`: the providers the last batch was in the middle of first (`FOCUS_KEY`), then
+  by name, so each is checked through before the next; one that rests (in use, refusing, its
+  limit) ends its thread and hands its slot to the next in line within a second. Waiting ones
+  show "waiting its turn". While a run is on, `CHECKING_KEY` lists the accounts being checked
+  and `viewer_order` (called from `Channel.get_stream`) puts the provider a viewer already
+  watches through first ("stay on" for the length of the check, without touching the account's
+  saved "When Switching Channels"), the checked one last (still used when it is the only one
+  with room; `make_way` frees it). One Redis lookup when no check runs. Before every stream and while reading: anyone
   watching through that provider (live channels via `stream_profile:*`, VOD, counters) → it
   is left alone; Xtream providers are also asked `active_cons` (at most every 30 s). A viewer
   starting on it drops the check at once; a viewer finding the provider full calls
