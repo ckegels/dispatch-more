@@ -275,6 +275,13 @@ Connections; several of them behind one IP can then be kept on one account, and 
 stream that is not a switch is moved to a free account when the window expires. Earlier
 builds stored "Stay On Same Account" as `probation_sticky: true`, which still reads as `same`.
 
+**While Stream Check runs** (v245, `stream_check.viewer_order`), every viewer gets something
+like "Stay on same account" whatever the account's preference, without it being saved: after
+the preferences above, the normal stream order puts the account the viewer is watching on
+first and the provider being checked last (still used when it is the only one with room; the
+check makes way). Failover does the same (`stream_check.checked_last`), and with
+`failover_makes_way` asks the check to let go when nothing else is free.
+
 ## Recognising the same viewer
 
 A stream request carries a client IP address, a User-Agent and the login it used. Nothing is

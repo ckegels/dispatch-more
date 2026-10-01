@@ -44,7 +44,7 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v230 is the latest. Users install one with
+   Releases run from v99; v244 is the latest published, v245 built. Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker.
 
@@ -56,7 +56,11 @@ the mistakes not to repeat.
    git diff bcbb68c4..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' ':(exclude)README.md' ':(exclude).github' > ~/probation-slots-vNN.patch
    ```
 
-3. Never let the overlay or a patch carry `CLAUDE.md`, `README.md`, `fork/` or `.github/`: they
+3. **Keep every md file up to date after each edit** (the user, 2026-10-01): `fork/HANDOVER.md`
+   (and its "kept current to" line), `README.md`, this file, `fork/subtitles.md`,
+   `fork/arrTV-integration.md`, `docs/channel-switch-overlap.md` and any design file the
+   change touches -- in the same commit as the change, not afterwards.
+4. Never let the overlay or a patch carry `CLAUDE.md`, `README.md`, `fork/` or `.github/`: they
    are for the repository, not for servers.
 
 ## Where things are
