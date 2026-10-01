@@ -260,10 +260,12 @@ are shown.
 
 ## 8. Still to decide
 
-1. **Where the GPU is.** The user mentioned an RTX 3060; the PC this was designed on has an
+1. ~~**Where the GPU is.**~~ **Decided 2026-10-01: the Proxmox host; the Dispatcharr LXC already
+   has access to it.** So the caption worker can run beside Dispatcharr in the same LXC.
+   Previously: The user mentioned an RTX 3060; the PC this was designed on has an
    RTX 3080 (10 GB). The worker must run on a machine that is on whenever someone watches: the
    Proxmox host (GPU passed through to an LXC or a VM) is ideal, a desktop that sleeps is not.
-2. **Teletext first in arrTV** (§7.3) before any of the server work? Recommended.
+2. ~~**Teletext first in arrTV**~~ -- done (arr.72).
 3. **First server step:** §2 + the tab's list (§3.1), with nothing made yet -- it shows what the
    channels carry, which decides how much of §4-§6 is needed at all.
 
@@ -278,7 +280,9 @@ are shown.
    NPO 1 = teletext dut + sound dut, NBC 56 = CC. The caption columns of §3.1 (setting, model,
    translate, last made) come with step 3. Filled as Stream Check runs: until a stream has been
    checked again it says "not checked yet".
-2. arrTV: teletext subtitles (§7.3).
+2. ~~arrTV: teletext subtitles (§7.3).~~ **Built in arrTV arr.72** (branch `feature/teletext`, see
+   arrTV's `.personal/CHANGES.md` §3k): each subtitle page the PMT names is a text track; checked
+   against libzvbi on a minute of NPO 1. Teletext needs nothing from the server.
 3. The caption worker with faster-whisper (§5, §6.1), delivery to arrTV (§4), the tab's settings
    (§3.2-§3.3), arrTV's Subtitles settings (§7.1).
 4. Translation (§6.2, §7.2).
