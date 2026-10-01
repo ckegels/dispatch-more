@@ -226,14 +226,49 @@ class StreamManager:
             return None
         return max(0.0, cooldown_until - time.time())
 
+    def _wait_for_stream_check(self, seconds=8.0):
+        """
+        Stream Check (failover_makes_way): no other stream had a free connection, and a check
+        may be holding the one this channel needs. Ask it to let go and wait, a little at a
+        time, until an untried stream has room. True when one has. Costs one Redis lookup
+        when no check runs. Only from the run loop, like the cooldown wait.
+        """
+        try:
+            from apps.channels.stream_check import failover_may_wait
+
+            if not failover_may_wait(getattr(getattr(self, "buffer", None), "redis_client", None)):
+                return False
+        except Exception as e:  # never let this cost a viewer their channel
+            logger.debug(f"Could not ask Stream Check to let go for {self.channel_id}: {e}")
+            return False
+        logger.info(
+            f"Failover for channel {self.channel_id}: no free stream, a stream check is "
+            f"letting go of its connection; waiting up to {seconds:.0f}s"
+        )
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not self._sleep_interruptible(0.5):
+                return False
+            alternates = get_alternate_streams(self.channel_id, self.current_stream_id)
+            if any(a['stream_id'] not in self.tried_stream_ids for a in alternates):
+                return True
+        return False
+
     def _try_next_stream_with_cooldown(self):
         """Try next stream; if a wrap cooldown was armed, wait here then retry once.
 
         Only call from the stream manager run loop. Do not call from the stderr
         reader / buffering-timeout path, which must stay non-blocking.
         """
+        before = (getattr(self, '_failover_rotation_passes', 0),
+                  getattr(self, '_rotation_cooldown_until', None))
         if self._try_next_stream():
             return True
+        if self._wait_for_stream_check():
+            # A check was holding the connection; what the failed try armed is undone
+            self._failover_rotation_passes, self._rotation_cooldown_until = before
+            if self._try_next_stream():
+                return True
 
         remaining = self._rotation_cooldown_remaining()
         if remaining is None:
@@ -2110,6 +2145,13 @@ class StreamManager:
 
             # Get alternate streams excluding the current one
             alternate_streams = get_alternate_streams(self.channel_id, self.current_stream_id)
+            # The provider a stream check is on last (stream_check.checked_last)
+            try:
+                from apps.channels.stream_check import checked_last
+
+                alternate_streams = checked_last(getattr(getattr(self, "buffer", None), "redis_client", None), alternate_streams)
+            except Exception:
+                pass
             logger.info(f"Found {len(alternate_streams)} potential alternate streams for channel {self.channel_id}")
 
             # Filter out streams we've already tried

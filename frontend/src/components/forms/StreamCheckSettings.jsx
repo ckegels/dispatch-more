@@ -59,6 +59,16 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           <Switch
             size="xs"
             color="green"
+            label="Failover takes the connection from a check"
+            description="When a playing stream fails and its next stream's provider has no free connection because a check holds it, the check lets go and the channel waits a few seconds for it instead of failing. The provider being checked is also tried last."
+            checked={draft.failover_makes_way !== false}
+            onChange={(e) =>
+              set({ failover_makes_way: e.currentTarget.checked })
+            }
+          />
+          <Switch
+            size="xs"
+            color="green"
             label="Believe the playlist"
             description="On: a stream its provider has stopped listing is taken as gone, without a connection being opened for it -- Dispatcharr already marks those on every refresh, and deletes them by itself after the account's stale days. Off: they are opened and checked like any other."
             checked={!!draft.trust_the_playlist}

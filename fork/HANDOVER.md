@@ -1629,7 +1629,16 @@ no longer play. Summary of how it works now:
   and `viewer_order` (called from `Channel.get_stream`) puts the provider a viewer already
   watches through first ("stay on" for the length of the check, without touching the account's
   saved "When Switching Channels"), the checked one last (still used when it is the only one
-  with room; `make_way` frees it). One Redis lookup when no check runs. Before every stream and while reading: anyone
+  with room; `make_way` frees it). One Redis lookup when no check runs.
+- **Failover during a check** (v245, `failover_makes_way`, on; the setting "Failover takes the
+  connection from a check"). Stock failover (`input/manager._try_next_stream`) only takes
+  alternates with a free connection and never asked a check to let go, so a channel whose only
+  other stream was on a provider whose last connection a check held gave up. Now
+  `_try_next_stream_with_cooldown` (run loop only, never the stderr path), when the try finds
+  nothing: `stream_check.failover_may_wait` -> `make_way`, then up to 8 s polling
+  `get_alternate_streams` (read-only) for an untried stream with room, and tries again,
+  undoing the rotation cooldown the failed try armed. `checked_last` puts alternates on the
+  provider being checked last. Off: stock failover. Before every stream and while reading: anyone
   watching through that provider (live channels via `stream_profile:*`, VOD, counters) → it
   is left alone; Xtream providers are also asked `active_cons` (at most every 30 s). A viewer
   starting on it drops the check at once; a viewer finding the provider full calls

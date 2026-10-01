@@ -164,6 +164,11 @@ DEFAULTS = {
     # the provider it was on, so each is checked through before the next. 0 = every provider
     # at once, as before v245 (the off switch).
     "providers_at_once": "auto",
+    # A channel whose stream fails while it plays moves to its next stream (failover). With a
+    # check holding the only free connection of that next stream's provider, failover saw the
+    # provider as full and gave up. On: it asks the check to let go and waits a few seconds
+    # for the connection, and tries the provider being checked last, as a channel start does.
+    "failover_makes_way": True,
 }
 
 # ── Redis keys, all short-lived: what outlives a run is written to CoreSettings ──
@@ -1045,6 +1050,39 @@ def viewer_order(redis_client, viewer, streams):
     except Exception as e:  # never let this cost a viewer their channel
         logger.debug(f"Stream Check: could not order a viewer's streams: {e}")
         return streams
+
+
+def checked_last(redis_client, alternates):
+    """Failover's alternates ({"stream_id", ...}) with those on the provider being checked last.
+    Unchanged when no check runs (one Redis lookup)."""
+    try:
+        if not alternates or not redis_client or not redis_client.exists(RUN_KEY):
+            return alternates
+        checking = {int(a) for a in json.loads(redis_client.get(CHECKING_KEY) or "[]")}
+        if not checking:
+            return alternates
+        from .models import Stream
+
+        account_of = dict(Stream.objects.filter(id__in=[a["stream_id"] for a in alternates])
+                          .values_list("id", "m3u_account_id"))
+        return sorted(alternates, key=lambda a: account_of.get(a["stream_id"]) in checking)
+    except Exception as e:  # never let this cost a viewer their channel
+        logger.debug(f"Stream Check: could not order failover's streams: {e}")
+        return alternates
+
+
+def failover_may_wait(redis_client):
+    """Whether failover, finding nothing free, should ask a running check to let go and wait
+    for the connection (failover_makes_way). Asks it to when so."""
+    try:
+        if not redis_client or not redis_client.exists(RUN_KEY):
+            return False
+        if not load_settings().get("failover_makes_way", True):
+            return False
+        return make_way(redis_client)
+    except Exception as e:
+        logger.debug(f"Stream Check: failover could not ask the checks to let go: {e}")
+        return False
 
 
 def make_way(redis_client):
