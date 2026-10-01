@@ -1,5 +1,5 @@
 """
-Keys for online services (TMDB, TheTVDB, Trakt, OMDb), kept in one place so every feature
+Keys for online services (TMDB, TheTVDB, Trakt, OMDb, DeepL), kept in one place so every feature
 that asks one of them uses the same key: Settings → System → Service keys. Show Groups is the
 first to use them (what a show is, show_groups/lookups.py).
 
@@ -31,6 +31,12 @@ SERVICES = [
         "id": "omdb", "name": "OMDb", "url": "https://www.omdbapi.com/apikey.aspx",
         "about": "Free key, about 1,000 requests a day. IMDb's genres (Documentary, Reality-TV, Animation...).",
         "fields": [{"key": "omdb_key", "label": "API key", "secret": True}],
+    },
+    {
+        "id": "deepl", "name": "DeepL", "url": "https://www.deepl.com/your-account/keys",
+        "about": "Free key, 500,000 characters a month. Translates captions (Subtitles tab) when "
+                 "this server has nothing to translate with itself.",
+        "fields": [{"key": "deepl_key", "label": "Authentication key", "secret": True}],
     },
 ]
 FIELDS = [field["key"] for service in SERVICES for field in service["fields"]]

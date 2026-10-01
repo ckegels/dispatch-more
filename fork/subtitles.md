@@ -1,7 +1,9 @@
 # Subtitles: what channels carry, captions made from the sound, and translation
 
 Designed 2026-10-01, against release v242. **Step 1 (§2 and the tab's list, §3.1) is built in
-v243**; the rest is not. This is the hand-over for
+v243; step 2 (teletext) in arrTV arr.72; the first half of step 3 -- the caption worker, what it
+finds out and measures, the proposal and the installer (§5b.1-§5b.3, §5b.6) -- in v244.**
+Captions while a TV watches, delivery, keeping up and translation are not built yet. This is the hand-over for
 the work: what the user asked for, how it fits Stream Check, the Channel Manager and arrTV,
 the models, and what is still to decide (§8). Read `fork/HANDOVER.md` (§2, §3, §5.7, §5.11)
 and `fork/arrTV-integration.md` alongside it.
@@ -361,6 +363,48 @@ are shown.
 3. The caption worker with faster-whisper (§5, §6.1) **starting with what it finds out and
    measures (§5b.1-§5b.3)**, delivery to arrTV (§4), the tab's settings (§3.2-§3.3, §5b.4),
    arrTV's Subtitles settings (§7.1), keeping up (§5b.5), and its installer (§5b.6).
+   - **3a, done in v244: the worker, measuring, the proposal, the installer.**
+     - `apps/channels/captions/worker.py`: standalone (stdlib HTTP, no Django, no database),
+       run by its own Python with faster-whisper. `GET /status` (NVIDIA cards via `nvidia-smi`,
+       CPU threads/AVX2/arch from `/proc/cpuinfo`, memory, disk, which models are downloaded,
+       whether CTranslate2 sees CUDA); `POST /look`, `/download?model=`, `/benchmark?model=`
+       (background; progress in `/status`), `/transcribe?model=&offset=&language=` (16 kHz mono
+       PCM or WAV -> segments with times plus the offset; VAD on). Optional `X-Worker-Token`.
+       CUDA float16 on a card, int8 on the CPU; a card whose CUDA libraries fail falls back to
+       the CPU (`cuda_failed` in `/status`). NVIDIA's pip libraries (cuBLAS, cuDNN 9) are put
+       on `LD_LIBRARY_PATH` by the worker itself (it starts itself again once), so neither the
+       installer nor Docker has to.
+     - Measuring: the faster-whisper project's public-domain JFK clip, three times (33 s),
+       after a warm-up; `channels = min(floor(0.6 / RTF), memory free / model memory)`.
+       Checked on an RTX 3080: tiny 0.034 RTF = 17 channels; Dutch NPO 1 sound recognised as
+       `nl` (0.97).
+     - `apps/channels/captions/manager.py`: CoreSettings `captions` (`enabled` false,
+       `worker_url` "" = 127.0.0.1:9725, or `dispatch-more-captions:9725` in Docker, `token`,
+       `model`, `channels_at_once` 2, `quality` balanced/best/channels, `languages`,
+       `ollama_url`). `guess()` is the §5b.3 table; `propose()` replaces it with measurements
+       (largest measured model that keeps up with the channels asked for, +1 for
+       "balanced"; the one with most channels for "channels"; says when none keeps up, and
+       which bigger model the hardware suggests measuring next). Before the worker runs, the
+       machine is looked at from Dispatcharr with the worker's own functions.
+       `GET/PUT /api/channels/captions/`, `POST /api/channels/captions/action/`
+       (`install`/`remove` for the root watcher; `look`/`download`/`benchmark` for the worker).
+     - Installer `fork/patcher/captions.sh` (systemd only): `install.sh` sets up
+       `dispatch-more-captions-request.path` on `$STATE/requests/captions`; the tab's button
+       leaves `{"action": "install"|"remove"}` there; the root service makes
+       `/opt/dispatch-more-captions` (uv, else `python3 -m venv`), installs faster-whisper
+       (+ `nvidia-cublas-cu12`, `nvidia-cudnn-cu12==9.*` only when `nvidia-smi` sees a card),
+       writes `dispatch-more-captions.service` (127.0.0.1:9725, as Dispatcharr's user, models in
+       `${DISPATCHARR_MODELS_DIR:-/data/models}/captions`), and reports progress in
+       `$STATE/captions-status.json` (log `captions-install.log`). Remove takes the service, the
+       venv and the models; uninstalling Dispatch More takes the watcher too
+       (`captions.sh remove ... all`). Docker: the tab shows a compose service (python:3.12-slim
+       that pip-installs faster-whisper and fetches this release's `worker.py` from the fork's
+       tag; a GPU variant with the NVIDIA device reservation). DeepL joined Service keys.
+     - Tab: the "Captions from the sound" card above the list (closed until opened; nothing is
+       asked of the worker before that).
+   - **3b, next:** caption jobs while a TV watches (sound from the proxy's buffer, PTS timing,
+     §4), delivery to arrTV and arrTV's display, the per-channel setting (§3.2), keeping up
+     (§5b.5). Then step 4.
 4. Translation (§6.2, §7.2).
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 

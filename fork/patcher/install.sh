@@ -93,6 +93,10 @@ UNIT
     bash "$HERE/dvr-worker.sh" add "$STATE" "$SLUG" || echo "Note: the recordings worker could not be added; recordings stay on the one worker."
   fi
 
+  # The Subtitles tab may ask for the caption worker; a root watcher installs it (captions.sh).
+  # Nothing is installed until someone asks.
+  bash "$HERE/captions.sh" watch "$STATE" "$SLUG" "$APP" || echo "Note: the captions watcher could not be set up."
+
   # Diagnostics -> Logs reads the systemd journal; the user Dispatcharr runs as needs to be in
   # the systemd-journal group for that (root needs nothing). Noted, so uninstalling undoes it.
   RUNS_AS="$(systemctl show dispatcharr -p User --value 2>/dev/null || true)"

@@ -108,7 +108,7 @@ json.dump({
 }, open(os.path.join(package, "manifest.json"), "w"), indent=1)
 PY
 
-cp "$REPO/fork/patcher/install.sh" "$REPO/fork/patcher/uninstall.sh" "$REPO/fork/patcher/docker-entrypoint.sh" "$REPO/fork/patcher/patch.py" "$REPO/fork/patcher/dvr-worker.sh" "$PACKAGE/"
+cp "$REPO/fork/patcher/install.sh" "$REPO/fork/patcher/uninstall.sh" "$REPO/fork/patcher/docker-entrypoint.sh" "$REPO/fork/patcher/patch.py" "$REPO/fork/patcher/dvr-worker.sh" "$REPO/fork/patcher/captions.sh" "$PACKAGE/"
 chmod +x "$PACKAGE"/*.sh
 
 mkdir -p "$OUT"

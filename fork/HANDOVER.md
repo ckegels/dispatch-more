@@ -1868,6 +1868,17 @@ check").
 tab, **Subtitles**, lists them per channel. The whole plan -- captions made from the sound,
 translation, the caption worker, arrTV's part -- is **`fork/subtitles.md`**; read it first.
 
+**Captions, the caption worker** (v244, `fork/subtitles.md` §9 step 3a): the Subtitles tab's
+card "Captions from the sound" finds out what the server has, proposes a speech model that fits
+it (the §5b.3 table until measured, then the measurements), and installs a **caption worker**
+only when asked: `apps/channels/captions/worker.py` (standalone HTTP service, faster-whisper, in
+its own venv `/opt/dispatch-more-captions`, service `dispatch-more-captions` on 127.0.0.1:9725),
+installed by the root watcher `dispatch-more-captions-request.path` -> `fork/patcher/captions.sh`
+(systemd installs only; Docker gets a compose service to add, shown on the card). Download and
+measure models from the card. Remove (or uninstalling Dispatch More) takes the service, venv
+and models. Nothing makes captions during playback yet (step 3b). Off means stock: nothing is
+installed or run unless asked; `captions.sh` is never run on Docker.
+
 ### 5.8 Misc
 
 - **Modified-build label:** `version.py` `__build__` ("Dispatch More dev", stamped "Dispatch
@@ -2482,6 +2493,11 @@ once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatc
 (or any name of its own).
 
 ## 8. Open / possible next
+
+- **Captions step 3b** (`fork/subtitles.md` §9): caption jobs while a TV watches, delivery to
+  arrTV with PTS timing, arrTV's display, per-channel settings, keeping up; then translation.
+  The user's GPU is on the Proxmox host, passed to the Dispatcharr LXC; its `nvidia-smi`
+  (VRAM) is still to be seen -- the card's measurement will say it anyway once installed.
 
 - **The recordings worker is not running on the user's server** (v237 installed, no
   `dispatcharr-celery-dvr` process or journal unit, 2026-09-30). The server was set up by the

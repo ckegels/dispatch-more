@@ -3192,6 +3192,26 @@ export default class API {
     });
   }
 
+  // ── Captions from the sound: the caption worker and what fits this server (see subtitles) ──
+
+  static async getCaptions() {
+    return await request(`${host}/api/channels/captions/`);
+  }
+
+  static async setCaptions(settings) {
+    return await request(`${host}/api/channels/captions/`, {
+      method: 'PUT',
+      body: settings,
+    });
+  }
+
+  static async captionsAction(action, model = '') {
+    return await request(`${host}/api/channels/captions/action/`, {
+      method: 'POST',
+      body: { action, model },
+    });
+  }
+
   // ── Service keys: TMDB, TheTVDB, Trakt, OMDb, shared by every feature (see service_keys) ──
 
   static async getServiceKeys() {

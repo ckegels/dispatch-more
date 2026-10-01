@@ -760,3 +760,14 @@ carries `custom_properties.comskip = {"status": "completed", "mode": "mark", "br
 480.5], ...]}` (seconds from the start of the file). `GET /api/core/capabilities/` says
 `commercial_breaks: {"installed": bool, "enabled": bool, "mode": "cut"|"mark", "marks": bool}`.
 arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playing.
+
+## Subtitles (v243, v244, arr.72)
+
+- **Broadcast subtitles** need nothing from the server: arrTV shows DVB, CEA-608/708 and, from
+  arr.72, **teletext** subtitle pages (Settings -> Player -> Teletext Subtitles, on by default;
+  its own TsExtractor reader for descriptor 0x56, `teletext/TeletextMedia3.kt`). Stream Check
+  records per stream what it carries (`stream_stats.subtitles`), listed on the Subtitles tab.
+- **Captions made from the sound** (`fork/subtitles.md`): v244 adds the caption worker and its
+  installer on the server only. Nothing reaches arrTV yet; the delivery (an `app-captions`
+  endpoint and socket messages carrying text with the stream's PTS, so arrTV can show them in
+  step with the picture) is step 3b, designed in `fork/subtitles.md` §4.4 and §7.3.

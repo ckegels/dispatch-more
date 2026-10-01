@@ -58,6 +58,8 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
   # The recordings worker and the drop-in on the normal worker go (dvr-worker.sh)
   [ -f "$STATE/dvr-worker.sh" ] && bash "$STATE/dvr-worker.sh" remove "$STATE" "$SLUG" || true
   rm -f "$STATE/dvr-worker-off"
+  # The caption worker, its models and the watcher for the Subtitles tab's requests (captions.sh)
+  [ -f "$STATE/captions.sh" ] && bash "$STATE/captions.sh" remove "$STATE" "$SLUG" "$APP" all || true
   systemctl disable "$SLUG-uninstall.path" --no-block >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$SLUG-uninstall.path" "/etc/systemd/system/$SLUG-uninstall.service"
   systemctl daemon-reload || true

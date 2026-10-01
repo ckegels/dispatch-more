@@ -73,7 +73,9 @@ the mistakes not to repeat.
 - Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health,
   diagnostics, and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
   app_alternatives, app_guides) and `apps/channels/` (logo_library, channel_manager,
-  pairings, guide_manager, guide_layout, epg_grabber, stream_check, show_groups/).
+  pairings, guide_manager, guide_layout, epg_grabber, stream_check, show_groups/,
+  subtitles, captions/ -- the caption worker runs apart, in its own venv or container).
+- `fork/subtitles.md` — subtitles, captions and translation: design and what is built.
 - `fork/arrTV-integration.md` — the contract with arrTV (the user's Android TV app);
   `fork/arrTV-guide-choice.md` and `fork/picture-check.md` — designs.
 - `git log bcbb68c4..HEAD` — every change, explained in its message.

@@ -18,6 +18,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import API from '../../api';
+import CaptionsCard from './CaptionsCard';
 
 // Which subtitles every channel's streams carry, read by Stream Check, and the language each
 // channel speaks (fork/subtitles.md, step 1). Making captions from the sound and translating
@@ -53,7 +54,7 @@ const KIND_LABEL = { teletext: 'Teletext', dvb: 'DVB', cc: 'CC', text: 'Text' };
 const KIND_COLOR = { teletext: 'blue', dvb: 'grape', cc: 'teal', text: 'cyan' };
 const KIND_ABOUT = {
   teletext:
-    "Teletext subtitles (page 888, 777, 150…). arrTV's player cannot show these yet; whether the track holds a subtitle page is not known until its pages are read.",
+    "Teletext subtitles (page 888, 777, 150…), shown by arrTV from arr.72 (Teletext Subtitles in its player settings). Whether the track holds a subtitle page is not known until its pages are read.",
   dvb: 'DVB subtitles: pictures, shown by arrTV today.',
   cc: 'Closed captions in the picture (CEA-608/708), shown by arrTV today.',
   text: 'Text subtitles in the stream, shown by arrTV today.',
@@ -186,6 +187,7 @@ const SubtitlesTable = () => {
       }}
     >
       <Stack gap="md" style={{ maxWidth: '1200px', width: '100%' }}>
+        <CaptionsCard />
         <Paper style={PANEL}>
           <Box
             style={{

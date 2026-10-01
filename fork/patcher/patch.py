@@ -159,7 +159,7 @@ def install(app, state, package, layout, force=False):
 
     # What uninstalling needs, kept where the page's request and the watcher can find it
     for script in ("install.sh", "uninstall.sh", "docker-entrypoint.sh", "patch.py", "manifest.json",
-                   "dvr-worker.sh"):
+                   "dvr-worker.sh", "captions.sh"):
         source, kept = os.path.join(package, script), os.path.join(state, script)
         # In Docker the release is unpacked in the state folder itself: nothing to copy then
         if os.path.exists(source) and os.path.abspath(source) != os.path.abspath(kept):
@@ -181,6 +181,9 @@ def install(app, state, package, layout, force=False):
         "built_from": manifest.get("built_from", ""),
         "state": state,
         "uninstall_request": os.path.join(requests, "uninstall"),
+        # The Subtitles tab's caption worker (captions.sh): asked for here, its progress there
+        "captions_request": os.path.join(requests, "captions"),
+        "captions_status": os.path.join(state, "captions-status.json"),
     }
     json.dump(record, open(os.path.join(state, "record.json"), "w"), indent=1)
     json.dump(record, open(os.path.join(app, RECORD), "w"), indent=1)
@@ -226,7 +229,7 @@ def uninstall(app, state, quiet=False):
         shutil.rmtree(dist, ignore_errors=True)
 
     for path in (os.path.join(app, RECORD), os.path.join(state, "record.json"),
-                 os.path.join(state, "requests", "uninstall")):
+                 os.path.join(state, "requests", "uninstall"), os.path.join(state, "requests", "captions")):
         try:
             os.remove(path)
         except OSError:

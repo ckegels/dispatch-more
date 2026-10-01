@@ -95,7 +95,11 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   a group for good. Uses your guides and, optionally, TVmaze, Wikidata, Wikipedia, TMDB,
   TheTVDB, Trakt and OMDb to recognise shows.
 - **Subtitles** — which subtitles every channel carries (teletext, DVB subtitles, closed
-  captions) and the language it speaks, as Stream Check finds them in its streams.
+  captions) and the language it speaks, as Stream Check finds them in its streams. For
+  channels without any, an optional **caption worker** (speech to text with faster-whisper)
+  can be installed from the tab: it looks at your server's graphics card, processor and
+  memory, measures each model there, and proposes the one that fits. Nothing is installed
+  until you ask; making captions while you watch arrives in a later release.
 - **EPG Grabber** — runs iptv-org's guide grabber on a schedule (when it is installed on the
   server) and only replaces your guide once the new one is complete.
 
@@ -168,6 +172,9 @@ With separate Celery containers, give them the same `entrypoint` and
    compiled on your server) and restarts Dispatcharr.
 4. On Linux only: adds a worker for recordings (`dispatcharr-celery-dvr`). Leave it out with
    `--no-dvr-worker`.
+5. On Linux only: a watcher that lets the Subtitles tab install the optional caption worker
+   when you ask for it (nothing is installed until then). In Docker the tab shows a container
+   to add to your compose file instead.
 
 ### By hand
 

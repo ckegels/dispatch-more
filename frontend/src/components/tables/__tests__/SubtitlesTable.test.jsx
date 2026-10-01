@@ -12,6 +12,9 @@ import theme from '../../../mantineTheme';
 import SubtitlesTable from '../SubtitlesTable.jsx';
 import API from '../../../api';
 
+// Mantine's dropdown scrolls to its option; jsdom has no scrolling
+Element.prototype.scrollIntoView = vi.fn();
+
 vi.mock('../../../api', () => ({
   default: { getSubtitles: vi.fn(), setSpokenLanguage: vi.fn() },
 }));

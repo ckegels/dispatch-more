@@ -445,7 +445,7 @@ class ServiceKeys(Api):
 
     def test_saved_and_read(self):
         page = self.client.get("/api/channels/service-keys/").json()
-        self.assertEqual([s["id"] for s in page["services"]], ["tmdb", "tvdb", "trakt", "omdb"])
+        self.assertEqual([s["id"] for s in page["services"]], ["tmdb", "tvdb", "trakt", "omdb", "deepl"])
         self.assertEqual(page["values"]["tvdb_key"], "")
         saved = self.client.put("/api/channels/service-keys/", {"values": {"tvdb_key": " abc ", "nope": 1}},
                                 format="json").json()

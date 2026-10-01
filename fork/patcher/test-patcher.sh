@@ -175,6 +175,31 @@ out="$(dvr remove)"
 check "removed, nothing of it is left" \
   "[ ! -e '$UNITS/dispatcharr-celery-dvr.service' ] && [ ! -e '$UNITS/dispatcharr-celery.service.d' ] && [ ! -e '$T/dvr-state/dvr-worker' ]"
 
+echo "The caption worker (captions.sh, against a pretend systemd, pip and card):"
+CAP="$T/cap-state"; mkdir -p "$CAP/requests" "$T/models" "$T/capapp/apps/channels/captions"
+touch "$T/capapp/apps/channels/captions/worker.py"
+mkdir -p "$T/capvenv/bin"; printf '#!/bin/bash\nexit 0\n' > "$T/capvenv/bin/python"; chmod +x "$T/capvenv/bin/python"
+printf '#!/bin/bash\nexit 0\n' > "$FAKE/uv"; printf '#!/bin/bash\nexit 0\n' > "$FAKE/curl"
+printf '#!/bin/bash\nexit 1\n' > "$FAKE/nvidia-smi"; chmod +x "$FAKE/uv" "$FAKE/curl" "$FAKE/nvidia-smi"
+cap() { PATH="$FAKE:$PATH" SYSTEMD_DIR="$UNITS" VENV="$T/capvenv" DISPATCHARR_MODELS_DIR="$T/models/m" \
+        bash "$REPO/fork/patcher/captions.sh" "$1" "$CAP" "$SLUG" "$T/capapp" "${2:-}" 2>&1; }
+cp "$REPO/fork/patcher/captions.sh" "$CAP/"
+out="$(cap watch)"
+check "a root watcher for the Subtitles tab's requests, and nothing installed yet" \
+  "grep -q '^PathExists=$CAP/requests/captions$' '$UNITS/$SLUG-captions-request.path' && grep -q 'captions.sh request' '$UNITS/$SLUG-captions-request.service' && [ ! -e '$UNITS/$SLUG-captions.service' ]"
+echo '{"action": "install"}' > "$CAP/requests/captions"
+out="$(cap request)"
+check "asked for, the worker is installed as the user Dispatcharr runs as, on 127.0.0.1" \
+  "grep -q '^ExecStart=$T/capvenv/bin/python $T/capapp/apps/channels/captions/worker.py --host 127.0.0.1 --port 9725 --models $T/models/m/captions$' '$UNITS/$SLUG-captions.service' && [ ! -e '$CAP/requests/captions' ] && grep -q '\"state\": \"installed\"' '$CAP/captions-status.json'"
+check "...without CUDA libraries when there is no NVIDIA card" "! grep -q 'NVIDIA card' '$CAP/captions-status.json' && grep -q '\"gpu\": false' '$CAP/captions-status.json'"
+echo '{"action": "remove"}' > "$CAP/requests/captions"
+out="$(cap request)"
+check "asked to remove, the worker, its environment and its models go; the watcher stays" \
+  "[ ! -e '$UNITS/$SLUG-captions.service' ] && [ ! -e '$T/capvenv' ] && [ ! -e '$T/models/m/captions' ] && [ -e '$UNITS/$SLUG-captions-request.path' ] && grep -q removed '$CAP/captions-status.json'"
+out="$(cap remove all)"
+check "uninstalling Dispatch More takes the watcher too" \
+  "[ ! -e '$UNITS/$SLUG-captions-request.path' ] && [ ! -e '$UNITS/$SLUG-captions-request.service' ] && [ ! -e '$CAP/captions-status.json' ]"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
