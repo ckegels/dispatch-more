@@ -188,6 +188,81 @@ small models; a weak one can use a cloud key or stay on broadcast subtitles only
 
 ---
 
+## 5b. It fits each server, not one (the user, 2026-10-01)
+
+"This has to work on more than just my build: make it dynamic, depending on the person's build
+and needs." Nothing below may assume the user's GPU. The rule: **the server finds out what it
+has, measures what it can do, proposes a setup that fits, and lets the owner change it.**
+Broadcast subtitles (§2, teletext in arrTV) need none of this and work everywhere.
+
+### 5b.1 What the worker finds out (at start, and on "Look again")
+
+- **GPU:** NVIDIA through CUDA (name, memory total and free, driver/CUDA version); Intel and AMD
+  graphics are listed but used only by runtimes that support them (whisper.cpp with Vulkan or
+  OpenVINO), never assumed.
+- **CPU:** cores, AVX2/AVX-512 (CTranslate2 and whisper.cpp are several times faster with
+  them), architecture (x86-64 or ARM: a Raspberry Pi gets Vosk or nothing).
+- **Memory and disk:** RAM free, and room for models (a model is 40 MB to 3 GB).
+- **What is already there:** models downloaded, an Ollama on this machine or a URL (its
+  installed models from `/api/tags`), service keys for cloud speech or translation (Settings ->
+  Service keys gains Deepgram / OpenAI / DeepL / Google).
+- **Other workers:** any number of caption workers by URL (a GPU PC beside a small server); each
+  reports the above for itself.
+
+### 5b.2 What it measures
+
+Every model that fits is **timed on a 30-second test clip** (shipped with the worker, speech with
+some music under it): its real-time factor (seconds of work per second of sound) and its memory.
+From that, per model, **how many channels it can caption at once** = what keeps up with live
+speech with a margin (`floor(0.6 / RTF)`), limited by memory. Measured, not guessed from the card's
+name: two "8 GB" cards or two "8-core" CPUs can differ twofold. Measured again when the hardware
+or the models change, or on request.
+
+### 5b.3 What it proposes (the tab says it in words; the owner can change all of it)
+
+| What the server has | Speech to text | Translation | At once (typical) |
+|---|---|---|---|
+| NVIDIA, 10 GB or more | Whisper large-v3-turbo | Ollama 8B if Ollama is there, else Opus-MT | 3-6 |
+| NVIDIA, 4-8 GB | Whisper turbo int8, or medium | Opus-MT (Ollama 3-4B if wanted) | 2-3 |
+| NVIDIA, under 4 GB | Whisper small | Opus-MT on the CPU | 1-2 |
+| CPU, 8+ cores with AVX2 | Whisper small int8 | Opus-MT | 1-2 |
+| CPU, 4 cores | Whisper base int8 | Opus-MT | 1 |
+| Weak or ARM CPU | Vosk (one model per language) | none, or a DeepL key | 1 |
+| A cloud key only | the cloud service | DeepL / Google | as the plan allows |
+| None of these | -- broadcast subtitles only -- | | |
+
+The numbers in the last column are what the measurement replaces; the table only says what is
+offered first. Parakeet v3 (NVIDIA, NeMo) is offered where it is installed, for many channels.
+
+### 5b.4 Fitted to what the person needs
+
+- **The languages they watch** (picked on the tab; their channels' spoken languages are
+  suggested): Vosk downloads only those, Opus-MT only the pairs between those and the languages
+  their TVs ask for, Whisper needs nothing extra.
+- **How many channels at once**, up to what was measured.
+- **Quality or more channels**: one choice that moves to a bigger or smaller model.
+- **Per channel** (§3.2): which get captions at all, so the budget goes where it is wanted.
+
+### 5b.5 When it cannot keep up
+
+The worker reports how far behind live each caption job is. Past 6 s: new channels get the next
+smaller model; past 15 s, or when every slot is in use, a TV asking for captions is told "captions
+are busy" (shown in arrTV) rather than getting them a minute late. A worker that stops answering
+is noticed within seconds and the next one (or broadcast subtitles only) takes over. Nothing of
+this ever touches the stream itself.
+
+### 5b.6 Installed only by those who want it
+
+The caption worker is **not** part of a normal Dispatch More install (it is hundreds of MB of
+Python packages plus models). The tab offers it when captions are switched on:
+- **Linux/LXC:** a button installs it in a virtualenv of its own beside Dispatcharr (CUDA
+  packages only when an NVIDIA GPU was found) and runs it as a service; models are downloaded
+  when picked, with their size shown first.
+- **Docker:** an optional second container (`dispatch-more-captions`, with the NVIDIA runtime when
+  there is a GPU), its address given on the tab.
+- **Anywhere else:** the same container or venv on another machine, by URL.
+Uninstalling Dispatch More removes the worker it installed and its models.
+
 ## 6. The models
 
 All of these cover English, German, Italian, French and Dutch. Model versions move fast
@@ -283,8 +358,9 @@ are shown.
 2. ~~arrTV: teletext subtitles (§7.3).~~ **Built in arrTV arr.72** (branch `feature/teletext`, see
    arrTV's `.personal/CHANGES.md` §3k): each subtitle page the PMT names is a text track; checked
    against libzvbi on a minute of NPO 1. Teletext needs nothing from the server.
-3. The caption worker with faster-whisper (§5, §6.1), delivery to arrTV (§4), the tab's settings
-   (§3.2-§3.3), arrTV's Subtitles settings (§7.1).
+3. The caption worker with faster-whisper (§5, §6.1) **starting with what it finds out and
+   measures (§5b.1-§5b.3)**, delivery to arrTV (§4), the tab's settings (§3.2-§3.3, §5b.4),
+   arrTV's Subtitles settings (§7.1), keeping up (§5b.5), and its installer (§5b.6).
 4. Translation (§6.2, §7.2).
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 
