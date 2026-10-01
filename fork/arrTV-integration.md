@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246; latest release v246) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247; latest release v247) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -768,6 +768,10 @@ arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playi
   its own TsExtractor reader for descriptor 0x56, `teletext/TeletextMedia3.kt`). Stream Check
   records per stream what it carries (`stream_stats.subtitles`), listed on the Subtitles tab.
 - **Captions made from the sound** (`fork/subtitles.md`): v244 adds the caption worker and its
-  installer on the server only. Nothing reaches arrTV yet; the delivery (an `app-captions`
-  endpoint and socket messages carrying text with the stream's PTS, so arrTV can show them in
-  step with the picture) is step 3b, designed in `fork/subtitles.md` §4.4 and §7.3.
+  installer; **v247 delivers them** (arrTV arr.75): `GET /api/channels/captions/live/<uuid>/?since=<seq>`
+  (polled about once a second while "Generated captions" is picked) answers
+  `{"state", "reason", "error", "language", "behind", "cues": [{"seq", "start", "end", "text"}]}`,
+  `start`/`end` being the stream's PTS in seconds; states "off", "not playing", "busy",
+  "starting", "loading model", "listening", "ended", "error". `DELETE` on the same URL when the
+  TV is done (channel change, captions off, player closed). A server without it answers a plain
+  404. arrTV shows a line while the frame on screen has its stream time.

@@ -101,7 +101,9 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   channels without any, an optional **caption worker** (speech to text with faster-whisper)
   can be installed from the tab: it looks at your server's graphics card, processor and
   memory, measures each model there, and proposes the one that fits. Nothing is installed
-  until you ask; making captions while you watch arrives in a later release.
+  until you ask. Installed, arrTV offers **Generated captions** in its Subtitles menu: text made
+  from the sound of the channel you watch, in step with the picture, without an extra provider
+  connection.
 - **EPG Grabber** — runs iptv-org's guide grabber on a schedule (when it is installed on the
   server) and only replaces your guide once the new one is complete.
 

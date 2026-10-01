@@ -33,6 +33,12 @@ DEFAULTS = {
     "quality": "balanced",  # best / balanced / channels
     "languages": [],  # the TVs' languages to translate to (step 4)
     "ollama_url": "http://127.0.0.1:11434",
+    # Captions while a TV watches (captions/live.py): TVs may ask for them. Off: nothing is
+    # captioned, whatever a TV asks
+    "live": True,
+    # Where the worker reads the channel from: Dispatcharr's own proxy. "" = this machine's
+    # (127.0.0.1:9191), or in Docker the address the TV used
+    "stream_base": "",
 }
 QUALITIES = ("best", "balanced", "channels")
 LOCAL_WORKER = "http://127.0.0.1:9725"
@@ -57,7 +63,7 @@ def save(values):
     for key, value in (values or {}).items():
         if key not in DEFAULTS:
             continue
-        if key == "enabled":
+        if key in ("enabled", "live"):
             value = bool(value)
         elif key == "channels_at_once":
             value = max(1, min(20, int(value)))
@@ -307,6 +313,8 @@ def status(user_settings=None):
             "device": answer.get("device") if running else "",
             "cuda_failed": answer.get("cuda_failed", "") if running else "",
             "version": answer.get("version") if running else None,
+            # Channels being captioned for a TV now (captions/live.py)
+            "jobs": answer.get("jobs") or [] if running else [],
         },
         "install": install_state(),
         "docker": {"cpu": docker_compose(False), "gpu": docker_compose(True)} if layout() == "docker" else None,

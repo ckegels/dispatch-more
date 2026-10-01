@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v246** (2026-10-01, published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v247** (2026-10-01; v246 published, v247 built). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1894,8 +1894,16 @@ its own venv `/opt/dispatch-more-captions`, service `dispatch-more-captions` on 
 installed by the root watcher `dispatch-more-captions-request.path` -> `fork/patcher/captions.sh`
 (systemd installs only; Docker gets a compose service to add, shown on the card). Download and
 measure models from the card. Remove (or uninstalling Dispatch More) takes the service, venv
-and models. Nothing makes captions during playback yet (step 3b). Off means stock: nothing is
-installed or run unless asked; `captions.sh` is never run on Docker.
+and models. Off means stock: nothing is installed or run unless asked; `captions.sh` is never
+run on Docker.
+
+**Captions while a TV watches** (v247, `captions/live.py`, worker jobs; `fork/subtitles.md` §9
+3b): arrTV polls `GET /api/channels/captions/live/<uuid>/?since=`; the worker reads the channel
+through this server's own proxy (User-Agent `DispatchMore-Captions/1`, no provider connection of
+its own), transcribes pieces cut at pauses and stamps each line with the stream's PTS, which
+arrTV matches against the frame on screen. Force Close passes the caption client by
+(`captions.is_caption_client`). Switch: the Subtitles tab's "Generated captions for TVs"
+(`live`, on); arrTV's Settings -> Player -> Generated Captions (on).
 
 ### 5.7c Catch-up sessions kept alive — `apps/timeshift/sessions.adopt` (v246)
 
@@ -2534,8 +2542,8 @@ once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatc
 
 ## 8. Open / possible next
 
-- **Captions step 3b** (`fork/subtitles.md` §9): caption jobs while a TV watches, delivery to
-  arrTV with PTS timing, arrTV's display, per-channel settings, keeping up; then translation.
+- **Captions after 3b** (`fork/subtitles.md` §9): per-channel settings, smaller model when
+  behind, translation, more engines.
   The user's GPU is on the Proxmox host, passed to the Dispatcharr LXC; its `nvidia-smi`
   (VRAM) is still to be seen -- the card's measurement will say it anyway once installed.
 

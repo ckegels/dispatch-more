@@ -3,7 +3,7 @@
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 
-from apps.accounts.permissions import IsAdmin
+from apps.accounts.permissions import IsAdmin, IsStandardUser
 
 from . import subtitles
 
@@ -53,3 +53,26 @@ def captions_action(request):
     except ValueError as e:
         return JsonResponse({"error": str(e)}, status=400)
     return JsonResponse(manager.status())
+
+
+@api_view(["GET", "DELETE"])
+@permission_classes([IsStandardUser])
+def captions_live(request, channel_uuid):
+    """
+    Captions while a TV watches (captions/live.py). GET ?since=<seq>: the lines made since
+    then, each with the stream time it belongs to; asking keeps the channel's job going and
+    starts it. DELETE: the TV is done (changed channel, turned captions off, closed).
+    """
+    from .captions import live
+    from .models import Channel
+
+    channel = Channel.objects.filter(uuid=channel_uuid).first()
+    if channel is None:
+        return JsonResponse({"error": "No such channel"}, status=404)
+    if request.method == "DELETE":
+        return JsonResponse({"stopped": live.stop(channel.uuid)})
+    try:
+        since = int(request.GET.get("since") or 0)
+    except ValueError:
+        since = 0
+    return JsonResponse(live.poll(channel, since))

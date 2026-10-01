@@ -12,6 +12,7 @@ import {
   NumberInput,
   Paper,
   Stack,
+  Switch,
   Table,
   Text,
   TextInput,
@@ -233,6 +234,24 @@ const CaptionsCard = () => {
                     </Text>
                   )}
                 </Alert>
+              )}
+
+              <Switch
+                checked={settings.live !== false}
+                onChange={(e) => save({ live: e.currentTarget.checked })}
+                label="Generated captions for TVs"
+                description="arrTV offers “Generated captions” in its Subtitles menu; picking it makes captions from the sound of the channel being watched, read alongside the TV (no extra provider connection). Off: nothing is captioned, whatever a TV asks."
+              />
+              {worker.running && (worker.jobs || []).length > 0 && (
+                <Text size="sm">
+                  Captioning now:{' '}
+                  {worker.jobs
+                    .map(
+                      (j) =>
+                        `${j.key.slice(0, 8)}… (${j.state}${j.language ? `, ${j.language}` : ''}${j.behind ? `, ${j.behind}s behind` : ''})`
+                    )
+                    .join(', ')}
+                </Text>
               )}
 
               <Group align="flex-end" gap="md">

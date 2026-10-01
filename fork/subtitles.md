@@ -2,8 +2,10 @@
 
 Designed 2026-10-01, against release v242. **Step 1 (§2 and the tab's list, §3.1) is built in
 v243; step 2 (teletext) in arrTV arr.72; the first half of step 3 -- the caption worker, what it
-finds out and measures, the proposal and the installer (§5b.1-§5b.3, §5b.6) -- in v244.**
-Captions while a TV watches, delivery, keeping up and translation are not built yet. This is the hand-over for
+finds out and measures, the proposal and the installer (§5b.1-§5b.3, §5b.6) -- in v244;
+captions while a TV watches, delivered to arrTV and shown in step with the picture (3b) -- in
+v247 and arrTV arr.75.** Translation, the per-channel setting and the finer points of keeping up
+are not built yet. This is the hand-over for
 the work: what the user asked for, how it fits Stream Check, the Channel Manager and arrTV,
 the models, and what is still to decide (§8). Read `fork/HANDOVER.md` (§2, §3, §5.7, §5.11)
 and `fork/arrTV-integration.md` alongside it.
@@ -402,9 +404,34 @@ are shown.
        tag; a GPU variant with the NVIDIA device reservation). DeepL joined Service keys.
      - Tab: the "Captions from the sound" card above the list (closed until opened; nothing is
        asked of the worker before that).
-   - **3b, next:** caption jobs while a TV watches (sound from the proxy's buffer, PTS timing,
-     §4), delivery to arrTV and arrTV's display, the per-channel setting (§3.2), keeping up
-     (§5b.5). Then step 4.
+   - **3b, done in v247 (server) and arrTV arr.75: captions while a TV watches.**
+     - Worker jobs (`worker.Job`, one per channel, key = channel UUID): a reader decodes the
+       channel's sound with PyAV (no ffmpeg) from this server's own proxy,
+       `http://127.0.0.1:9191/proxy/ts/stream/<uuid>` (setting `stream_base`), as one more
+       client of the channel the TV already plays -- no provider connection of its own -- with
+       User-Agent `DispatchMore-Captions/1`; `Chunker` cuts 16 kHz pieces at a pause (2.5-7 s);
+       a transcriber turns them into lines stamped with the stream's PTS (seconds, the frame's
+       own time); at most 3 pieces wait (the oldest dropped: live first). The language is the
+       one set by hand on the tab, else found by the model and fixed once two pieces agree at
+       0.7, looked at again every 5 minutes. A job stops when nobody asked for 10 s, or on
+       `POST /jobs/stop`. `POST /jobs/poll {key, url, model, language, since}` starts or keeps
+       it and answers the lines since `since`; `/status` lists the jobs.
+     - Dispatch More (`captions/live.py`): `GET /api/channels/captions/live/<uuid>/?since=`
+       (any signed-in user) answers "off" (setting `live` off, or no worker), "not playing"
+       (the proxy is not playing it: a job only ever reads alongside), "busy" (as many jobs as
+       `channels_at_once`), or the worker's answer; the model is the setting or the proposal
+       (asked once a minute). `DELETE` stops the job.
+     - Force Close (`probation.stop_skipped_channels`) passes the caption client by
+       (`captions.is_caption_client`): it would otherwise be "someone else watching" and the
+       channel a viewer left would stay open, holding the provider's connection.
+     - arrTV: "Generated captions (from the sound)" in Subtitles; polls once a second; shows a
+       line while the frame on screen has its stream time (the TS extractor's
+       `TimestampAdjuster`); `DELETE` on leaving. See arrTV's `.personal/CHANGES.md` §3n.
+     - Checked live: CBC Vancouver through the user's proxy, model tiny on a CPU here, English
+       found by itself, about half a second behind live.
+     - Still to do: the per-channel setting (§3.2), smaller-model fallback when behind
+       (§5b.5), translation (step 4), playing a few seconds further behind live when captions
+       are on, more engines (whisper.cpp, Vosk, Parakeet, cloud).
 4. Translation (§6.2, §7.2).
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 

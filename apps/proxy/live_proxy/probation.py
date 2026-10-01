@@ -45,6 +45,7 @@ from typing import Optional
 import gevent
 from django.db.models.signals import post_delete, post_save
 
+from apps.channels.captions import is_caption_client
 from . import app_devices
 from .constants import ChannelMetadataField, ChannelState
 from .redis_keys import RedisKeys
@@ -1600,6 +1601,8 @@ def stop_skipped_channels(redis_client, viewer, requested_channel_uuid, now=None
 
             joined = []
             for client in _channel_clients(redis_client, channel_uuid):
+                if is_caption_client(client.get("user_agent")):
+                    continue  # the caption worker reading along (captions/__init__.py): no viewer
                 try:
                     joined_at = float(client.get("connected_at"))
                 except (TypeError, ValueError):

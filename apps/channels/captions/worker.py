@@ -38,7 +38,7 @@ import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = 1
+VERSION = 2
 SAMPLE_RATE = 16000
 
 # The models offered, by faster-whisper's own names; sizes and memory to show before a download
@@ -286,6 +286,210 @@ def benchmark(models_dir, name):
         entry["benchmarking"] = False
 
 
+# ── Captions while a TV watches (fork/subtitles.md §4) ─────────────────────────────
+
+# The stream is read through Dispatcharr's own proxy, as one more client of the channel the
+# TV is already watching: no connection to the provider of its own. Named, so the proxy's
+# Force Close and viewer checks know it is not a viewer (apps/channels/captions/__init__.py).
+CAPTIONS_USER_AGENT = "DispatchMore-Captions/1"
+# A job nobody has asked for its captions this long is stopped (the TV polls every second)
+JOB_IDLE_SECONDS = 10
+# A piece of sound is cut at a pause once it is this long, and at the longest regardless
+CHUNK_LEAST, CHUNK_MOST = 2.5, 7.0
+# Captions kept per job, for a TV that asks again after a moment
+CUES_KEPT = 200
+# Pieces waiting for the model past which the oldest are dropped: live is what matters
+QUEUE_MOST = 3
+# The spoken language is found by the model and fixed once two pieces in a row agree with
+# this much certainty; looked at again this often (a programme in another language)
+LANGUAGE_SURE, LANGUAGE_AGAIN = 0.7, 300
+
+jobs = {}  # key -> Job
+jobs_lock = threading.Lock()
+
+
+class Chunker:
+    """
+    Cuts a stream of 16 kHz mono samples into pieces for the model, at a pause where there is
+    one: a piece is let go once it is CHUNK_LEAST long and its last 300 ms are quiet next to
+    the rest, or at CHUNK_MOST. Each piece carries the stream time (PTS, in seconds) of its
+    first sample, which is what the TV times the caption by.
+    """
+
+    def __init__(self):
+        self.samples = []
+        self.start = None
+        self.count = 0
+
+    def feed(self, samples, start_time):
+        import numpy as np
+
+        if self.start is None:
+            self.start = start_time
+        self.samples.append(samples)
+        self.count += len(samples)
+        seconds = self.count / SAMPLE_RATE
+        if seconds < CHUNK_LEAST:
+            return None
+        audio = np.concatenate(self.samples).astype(np.float32) / 32768.0
+        tail = audio[-int(0.3 * SAMPLE_RATE):]
+        loud = float(np.sqrt(np.mean(audio ** 2))) or 1e-9
+        quiet = float(np.sqrt(np.mean(tail ** 2))) < 0.35 * loud
+        if not quiet and seconds < CHUNK_MOST:
+            return None
+        piece = (audio, self.start)
+        self.samples, self.start, self.count = [], None, 0
+        return piece
+
+
+class Job:
+    """One channel's captions: a reader that decodes the channel's sound from Dispatcharr's
+    proxy (PyAV, no ffmpeg needed) and a transcriber that turns its pieces into timed text."""
+
+    def __init__(self, key, url, model_name, language, models_dir):
+        self.key, self.url, self.model_name = key, url, model_name
+        # Given (set by hand on the Subtitles tab): always that one. Not given: found
+        self.forced_language = language or None
+        self.language = self.forced_language
+        self.heard = []  # (language, certainty) of the last pieces, while finding it
+        self.language_at = 0.0
+        self.models_dir = models_dir
+        self.cues = []
+        self.seq = 0
+        self.reading = "starting"  # starting / reading / ended / failed
+        self.model_state = "waiting"  # waiting / loading / ready / failed
+        self.error = ""
+        self.behind = 0.0
+        self.live_at = None  # stream time of the newest sound read
+        self.touched = time.monotonic()
+        self.stop = threading.Event()  # asked to stop, or nobody asks any more
+        self.pieces = []
+        self.have_piece = threading.Condition()
+
+    @property
+    def state(self):
+        if self.reading == "failed" or self.model_state == "failed":
+            return "error"
+        if self.reading == "ended" and not self.pieces:
+            return "ended"
+        if self.reading == "starting":
+            return "starting"
+        if self.model_state in ("waiting", "loading"):
+            return "loading model"
+        return "listening"
+
+    def start(self):
+        threading.Thread(target=self._read, daemon=True, name=f"captions-read-{self.key}").start()
+        threading.Thread(target=self._transcribe, daemon=True, name=f"captions-text-{self.key}").start()
+
+    def idle(self):
+        return time.monotonic() - self.touched > JOB_IDLE_SECONDS
+
+    def finished(self):
+        return self.stop.is_set() or self.state in ("ended", "error")
+
+    def _read(self):
+        import av
+
+        chunker = Chunker()
+        try:
+            container = av.open(self.url, options={"user_agent": CAPTIONS_USER_AGENT, "timeout": "10000000"})
+            audio = next((s for s in container.streams if s.type == "audio"), None)
+            if audio is None:
+                raise RuntimeError("the channel has no sound")
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+            self.reading = "reading"
+            for packet in container.demux(audio):
+                if self.stop.is_set() or self.idle():
+                    break
+                for frame in packet.decode():
+                    if frame.time is None:
+                        continue
+                    self.live_at = float(frame.time)
+                    for out in resampler.resample(frame):
+                        piece = chunker.feed(out.to_ndarray().reshape(-1), float(frame.time))
+                        if piece is not None:
+                            with self.have_piece:
+                                self.pieces.append(piece)
+                                if len(self.pieces) > QUEUE_MOST:
+                                    del self.pieces[0]  # behind: live first
+                                self.have_piece.notify()
+            container.close()
+            self.reading = "ended"
+        except Exception as e:
+            self.reading, self.error = "failed", f"could not read the channel: {e}"
+        finally:
+            with self.have_piece:
+                self.have_piece.notify()
+
+    def _transcribe(self):
+        while not self.stop.is_set():
+            with self.have_piece:
+                while not self.pieces and self.reading in ("starting", "reading") and not self.stop.is_set():
+                    self.have_piece.wait(1.0)
+                if not self.pieces:
+                    break  # the reading is over and everything read is done
+                audio, start = self.pieces.pop(0)
+            try:
+                if self.model_state == "waiting":
+                    self.model_state = "loading"  # the first call loads (or downloads) it
+                if (not self.forced_language and self.language
+                        and time.monotonic() - self.language_at > LANGUAGE_AGAIN):
+                    self.language, self.heard = None, []  # look again
+                found = transcribe(self.models_dir, self.model_name, audio, self.language, start)
+                self.model_state = "ready"
+                if self.language is None and found["segments"]:
+                    self.heard = (self.heard + [(found["language"], found["language_probability"])])[-2:]
+                    if (len(self.heard) == 2 and self.heard[0][0] == self.heard[1][0]
+                            and min(p for _l, p in self.heard) >= LANGUAGE_SURE):
+                        self.language, self.language_at = self.heard[0][0], time.monotonic()
+            except Exception as e:
+                self.model_state, self.error = "failed", f"the model failed: {e}"
+                break
+            if self.live_at is not None:
+                self.behind = round(max(0.0, self.live_at - start - len(audio) / SAMPLE_RATE), 1)
+            for segment in found["segments"]:
+                self.seq += 1
+                self.cues.append({"seq": self.seq, "start": segment["start"], "end": segment["end"],
+                                  "text": segment["text"]})
+            del self.cues[:-CUES_KEPT]
+
+    def answer(self, since=0):
+        return {"key": self.key, "state": self.state, "error": self.error, "behind": self.behind,
+                "model": self.model_name, "language": self.language or "",
+                "language_found": not self.forced_language,
+                "live_at": self.live_at, "cues": [c for c in self.cues if c["seq"] > since]}
+
+
+def poll_job(models_dir, key, url, model_name, language, since=0):
+    """The job for this key, started when there is none (or it ended), and its captions."""
+    with jobs_lock:
+        for old_key in [k for k, j in jobs.items() if k != key and (j.stop.is_set() or j.idle())]:
+            jobs.pop(old_key).stop.set()
+        job = jobs.get(key)
+        if job is None or job.stop.is_set() or job.idle() or job.url != url or job.model_name != model_name:
+            if job is not None:
+                job.stop.set()
+            job = jobs[key] = Job(key, url, model_name, language, models_dir)
+            job.start()
+        job.touched = time.monotonic()
+    return job.answer(since)
+
+
+def stop_job(key):
+    with jobs_lock:
+        job = jobs.pop(key, None)
+    if job is not None:
+        job.stop.set()
+    return job is not None
+
+
+def jobs_now():
+    with jobs_lock:
+        return [{k: v for k, v in job.answer(10 ** 12).items() if k != "cues"}
+                for job in jobs.values() if not job.finished() and not job.idle()]
+
+
 # ── HTTP ───────────────────────────────────────────────────────────────────────
 
 def make_handler(models_dir, token):
@@ -313,7 +517,9 @@ def make_handler(models_dir, token):
             if urlparse(self.path).path == "/status":
                 return self._send(200, {"machine": state["machine"], "models": state["models"],
                                         "catalogue": MODELS, "version": VERSION, "device": device(),
-                                        "cuda_failed": state.get("cuda_failed", "")})
+                                        "cuda_failed": state.get("cuda_failed", ""), "jobs": jobs_now()})
+            if urlparse(self.path).path == "/jobs":
+                return self._send(200, {"jobs": jobs_now()})
             self._send(404, {"error": "unknown"})
 
         def do_POST(self):
@@ -324,6 +530,22 @@ def make_handler(models_dir, token):
             name = query.get("model", "")
             if url.path == "/look":
                 return self._send(200, look(models_dir))
+            if url.path == "/jobs/poll":
+                # {key, url, model, language, since}: the job's captions since `since`,
+                # starting it when it is not running
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    if body.get("model") not in MODELS:
+                        return self._send(400, {"error": f"unknown model: {body.get('model')}"})
+                    if not str(body.get("url") or "").startswith(("http://", "https://")):
+                        return self._send(400, {"error": "a stream URL, please"})
+                    return self._send(200, poll_job(models_dir, str(body["key"]), body["url"], body["model"],
+                                                    body.get("language"), int(body.get("since") or 0)))
+                except (ValueError, KeyError) as e:
+                    return self._send(400, {"error": str(e)})
+            if url.path == "/jobs/stop":
+                return self._send(200, {"stopped": stop_job(query.get("key", ""))})
             if url.path in ("/download", "/benchmark", "/transcribe") and name not in MODELS:
                 return self._send(400, {"error": f"unknown model: {name}"})
             if url.path == "/download":

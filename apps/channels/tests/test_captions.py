@@ -193,3 +193,107 @@ class WorkerServiceTests(SimpleTestCase):
             wav.writeframes(pcm)
         self.assertEqual(len(worker.body_to_audio(out.getvalue())), 1600)
         self.assertEqual(len(worker.body_to_audio(pcm)), 1600)
+
+
+class LiveCaptionsTests(TestCase):
+    """What a TV polls while "Generated captions" is picked (captions/live.py)."""
+
+    def setUp(self):
+        from apps.channels.models import Channel
+
+        user = get_user_model().objects.create_user(username="tv", password="x", user_level=1)
+        self.client = APIClient()
+        self.client.force_authenticate(user)
+        self.channel = Channel.objects.create(name="┃NL┃ NPO 1", channel_number=1)
+        self.url = f"/api/channels/captions/live/{self.channel.uuid}/"
+        self.asked = []
+
+        def ask(path, method="GET", settings=None, body=None, timeout=4):
+            self.asked.append((path, json.loads(body) if body else None))
+            if path == "/jobs":
+                return {"jobs": self.jobs}
+            if path == "/status":
+                return {"machine": CARD_12GB, "models": {}}
+            if path.startswith("/jobs/stop"):
+                return {"stopped": True}
+            return {"state": "listening", "cues": [{"seq": 3, "start": 100.0, "end": 102.0, "text": "Goedenavond"}]}
+
+        self.jobs = []
+        for target, value in (("ask", ask), ("playing", None)):
+            module = manager if target == "ask" else __import__("apps.channels.captions.live", fromlist=["x"])
+            p = mock.patch.object(module, target, value if value else (lambda uuid: True))
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_the_lines_come_with_the_stream_time(self):
+        answer = self.client.get(self.url + "?since=2").json()
+        self.assertEqual(answer["cues"][0]["text"], "Goedenavond")
+        path, body = self.asked[-1]
+        self.assertEqual(path, "/jobs/poll")
+        self.assertEqual(body["url"], f"http://127.0.0.1:9191/proxy/ts/stream/{self.channel.uuid}")
+        self.assertEqual((body["since"], body["model"], body["language"]), (2, "large-v3-turbo", None))
+
+    def test_a_language_set_by_hand_is_passed_on(self):
+        from apps.channels import subtitles
+
+        subtitles.set_spoken(self.channel.id, "dut")
+        self.client.get(self.url)
+        self.assertEqual(self.asked[-1][1]["language"], "nl")
+
+    def test_busy_when_every_slot_is_in_use(self):
+        self.jobs = [{"key": "a"}, {"key": "b"}]
+        self.assertEqual(self.client.get(self.url).json()["state"], "busy")
+        self.jobs = [{"key": "a"}, {"key": str(self.channel.uuid)}]
+        self.assertEqual(self.client.get(self.url).json()["state"], "listening", "its own job is not another")
+
+    def test_off_and_not_playing(self):
+        manager.save({"live": False})
+        self.assertEqual(self.client.get(self.url).json()["state"], "off")
+        manager.save({"live": True})
+        from apps.channels.captions import live
+
+        with mock.patch.object(live, "playing", lambda uuid: False):
+            self.assertEqual(self.client.get(self.url).json()["state"], "not playing")
+
+    def test_the_tv_says_it_is_done(self):
+        self.assertTrue(self.client.delete(self.url).json()["stopped"])
+        self.assertEqual(self.asked[-1][0], f"/jobs/stop?key={self.channel.uuid}")
+
+
+class CaptionClientTests(SimpleTestCase):
+    def test_the_worker_is_known_by_its_user_agent(self):
+        from apps.channels.captions import is_caption_client
+
+        self.assertTrue(is_caption_client(worker.CAPTIONS_USER_AGENT))
+        self.assertFalse(is_caption_client("ExoPlayerLib/2.19"))
+        self.assertFalse(is_caption_client(None))
+
+
+class ChunkerTests(SimpleTestCase):
+    def setUp(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("numpy")
+
+    def _tone(self, seconds, loud=True):
+        import numpy as np
+
+        n = int(seconds * worker.SAMPLE_RATE)
+        return (np.sin(np.arange(n) / 5.0) * (8000 if loud else 50)).astype(np.int16)
+
+    def test_cut_at_a_pause_with_the_time_of_its_first_sample(self):
+        chunker = worker.Chunker()
+        self.assertIsNone(chunker.feed(self._tone(2.0), 500.0))
+        piece = chunker.feed(self._tone(1.0, loud=False), 502.0)
+        self.assertIsNotNone(piece)
+        audio, start = piece
+        self.assertEqual(start, 500.0)
+        self.assertAlmostEqual(len(audio) / worker.SAMPLE_RATE, 3.0, places=2)
+
+    def test_cut_at_the_longest_without_a_pause(self):
+        chunker = worker.Chunker()
+        pieces = [chunker.feed(self._tone(1.0), 10.0 + i) for i in range(8)]
+        cut = [p for p in pieces if p is not None]
+        self.assertEqual(len(cut), 1)
+        self.assertEqual(cut[0][1], 10.0)
