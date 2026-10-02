@@ -62,14 +62,25 @@ class MakeRoomTests(SimpleTestCase):
             self.assertIsNone(priority.make_room(USER, CHANNEL, self.redis))
         self.assertFalse(self.redis.exists(priority.cooldown_key(7, CHANNEL.uuid)))
 
+    def test_the_askers_own_channel_or_look_back_is_never_a_refusal(self):
+        self.redis.set(priority.cooldown_key(7, CHANNEL.uuid), "1")
+        with mock.patch.object(priority, "has_room", return_value=False), \
+             mock.patch.object(priority, "others_holding", return_value=[]), \
+             mock.patch.object(priority, "candidates") as candidates:
+            self.assertIsNone(priority.make_room(USER, CHANNEL, self.redis))
+        candidates.assert_not_called()
+        self.assertFalse(self.redis.exists(priority.cooldown_key(7, CHANNEL.uuid)))
+
     def test_nobody_can_move_refuses_with_a_cooldown(self):
         with mock.patch.object(priority, "has_room", return_value=False), \
+             mock.patch.object(priority, "others_holding", return_value=["x"]), \
              mock.patch.object(priority, "candidates", return_value=[]):
             outcome, body = priority.make_room(USER, CHANNEL, self.redis)
         self.assertEqual((outcome, body["reason"]), ("refused", "viewing_priorities"))
         self.assertEqual(body["retry_after"], priority.COOLDOWN_SECONDS)
         # Asked again while it runs: refused at once, nobody looked at
         with mock.patch.object(priority, "has_room", return_value=False), \
+             mock.patch.object(priority, "others_holding", return_value=["x"]), \
              mock.patch.object(priority, "candidates") as candidates:
             outcome, body = priority.make_room(USER, CHANNEL, self.redis)
         candidates.assert_not_called()
@@ -78,6 +89,7 @@ class MakeRoomTests(SimpleTestCase):
     def test_someone_can_move(self):
         found = [(holding_channel(), 12, 15, [(ALT, ALT_PROFILE)])]
         with mock.patch.object(priority, "has_room", return_value=False), \
+             mock.patch.object(priority, "others_holding", return_value=["x"]), \
              mock.patch.object(priority, "candidates", return_value=found):
             self.assertEqual(priority.make_room(USER, CHANNEL, self.redis), ("moving", found))
 
@@ -141,3 +153,18 @@ class VerifyTests(SimpleTestCase):
         self.assertTrue(priority.verify(Redis(), "c", 55, seconds=2, sleep=lambda s: None))
         self.assertFalse(priority.verify(Redis(), "c", 56, seconds=0.01, sleep=lambda s: None))
         self.assertTrue(RedisKeys.buffer_index("c"))
+
+
+class OthersTests(SimpleTestCase):
+    def test_only_other_peoples_viewing_counts(self):
+        clients = {"mine": [{"user_id": "7", "user_agent": "AerioTV"}],
+                   "theirs": [{"user_id": "4", "user_agent": "AerioTV"}],
+                   "recorded": [{"user_id": "0", "user_agent": "Dispatcharr-DVR"}]}
+        with mock.patch.object(priority, "_catchup_profiles", return_value=({1}, [SimpleNamespace(id=15)])), \
+             mock.patch("apps.proxy.live_proxy.probation._active_channels",
+                        return_value=[("mine", 15), ("theirs", 15), ("elsewhere", 99)]), \
+             mock.patch("apps.proxy.live_proxy.probation._channel_clients",
+                        side_effect=lambda r, uuid: iter(clients.get(uuid, []))), \
+             mock.patch("apps.proxy.live_proxy.probation.is_recording", side_effect=lambda a: "DVR" in a):
+            self.assertEqual(priority.others_holding(CHANNEL, 7, FakeRedis()), ["theirs"])
+

@@ -84,22 +84,43 @@ def has_room(channel, redis_client):
     return any(pool_has_capacity_for_profile(p, redis_client) for p in profiles)
 
 
-def _viewers(redis_client, channel_uuid):
-    """The channel's clients that are people: (count, any recording)."""
+def _viewers(redis_client, channel_uuid, user_id=None):
+    """The channel's clients that are people other than `user_id`: (count, any recording)."""
     from apps.channels.captions import is_caption_client
-    from apps.proxy.live_proxy.probation import _channel_clients, is_recording
+    from apps.proxy.live_proxy.probation import _channel_clients, _client_user_id, is_recording
 
     count, recording = 0, False
     for client in _channel_clients(redis_client, channel_uuid):
         agent = client.get("user_agent") or ""
         if is_recording(agent):
             recording = True
-        elif not is_caption_client(agent):
+        elif not is_caption_client(agent) and (user_id is None or _client_user_id(client.get("user_id")) != user_id):
             count += 1
     return count, recording
 
 
-def candidates(channel, redis_client):
+def others_holding(channel, user_id, redis_client):
+    """The live channels on the archive's providers that someone else watches or records.
+
+    None of them: whatever holds the provider is the asker's own -- the live channel they are
+    leaving for the look back, their previous look back still closing -- and the stock path sorts
+    that out; refusing then is what made a second look back say "viewing priorities" (2026-10-02).
+    """
+    from apps.proxy.live_proxy.probation import _active_channels
+
+    _accounts, archive_profiles = _catchup_profiles(channel)
+    held = {p.id for p in archive_profiles}
+    found = []
+    for channel_uuid, profile_id in _active_channels(redis_client):
+        if profile_id not in held:
+            continue
+        viewers, recording = _viewers(redis_client, channel_uuid, user_id)
+        if viewers or recording:
+            found.append(channel_uuid)
+    return found
+
+
+def candidates(channel, redis_client, user_id=None):
     """Live channels holding the archive's providers that could move, fewest viewers first.
 
     Each is (holding channel, its stream id, its profile id, [(stream, profile), ...]): the
@@ -119,8 +140,8 @@ def candidates(channel, redis_client):
             continue
         if redis_client.exists(moved_key(channel_uuid)):
             continue
-        viewers, recording = _viewers(redis_client, channel_uuid)
-        if recording:
+        viewers, recording = _viewers(redis_client, channel_uuid, user_id)
+        if recording or not viewers:
             continue
         holding = Channel.objects.filter(uuid=channel_uuid).first()
         if holding is None:
@@ -179,10 +200,13 @@ def make_room(user, channel, redis_client):
         # The other viewer left: whatever cooldown there was is over
         redis_client.delete(cooldown_key(user.id, channel.uuid))
         return None
+    if not others_holding(channel, user.id, redis_client):
+        redis_client.delete(cooldown_key(user.id, channel.uuid))
+        return None
     left = cooling_down(redis_client, user.id, channel.uuid)
     if left:
         return "refused", {"error": REFUSED_TEXT, "reason": "viewing_priorities", "retry_after": left}
-    found = candidates(channel, redis_client)
+    found = candidates(channel, redis_client, user.id)
     if not found:
         logger.info(f"Look-back priority: no live viewer on {channel.name}'s archive providers can move; refused")
         return "refused", refuse(redis_client, user.id, channel.uuid)

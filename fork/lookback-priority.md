@@ -149,4 +149,10 @@ room poll), the catch-up loading card (`PlayerScreen` / `CatchupUnavailableCard`
 - Not built: holding the freed slot for the player's GET (the player asks within a second of
   `ready`; the 503 retry covers a race), the Diagnostics listing.
 - Tests: `apps/timeshift/tests/test_priority.py`.
+- **v249**: the asker's own live channel or previous look back is never a refusal.
+  `others_holding(channel, user_id)` lists the live channels on the archive's profiles that
+  someone *else* watches or records; none -> stock (the cooldown is deleted), since the stock
+  path frees what the asker held. `candidates` skips channels with no viewer but the asker.
+  Seen 2026-10-02: a second look back on ┃UK┃ FOOD NETWORK refused while the only holder was the
+  asker's own channel.
 
