@@ -469,6 +469,9 @@ def usage():
         out.append({
             "channel_uuid": d, "bytes": _dir_size(os.path.join(base, d)),
             "minutes": round(sum(s[2] for s in found) / 60, 1),
-            "recording": d in _recorders or bool(_redis().get(_owner_key(d))),
+            # A TV still watches and a recorder holds the lease: the recorder object and its
+            # lease outlive ffmpeg by FILES_GRACE, which read as "recording" for five minutes
+            # after the last viewer left (2026-10-02)
+            "recording": bool(viewers(d)) and (d in _recorders or bool(_redis().get(_owner_key(d)))),
         })
     return out
