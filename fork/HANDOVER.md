@@ -1637,8 +1637,10 @@ no longer play. Summary of how it works now:
   saved "When Switching Channels"), the checked one last (still used when it is the only one
   with room; `make_way` frees it). One Redis lookup when no check runs.
 - **The rewind recorder held channels for nobody** (v252, `fork/pause-resume.md` "v252"): it
-  now runs only for a TV paused/behind in it or a person on the live channel, and never starts
-  or restarts a channel that is not running. The slate check skips streams run on their own
+  now runs only while a person is on the live channel (the user's rule: the recording never
+  holds a channel), never starts or restarts a channel that is not running, and the channel's
+  own shutdown checks count people only (`ProxyServer._people_count`): helpers (recorder,
+  caption worker) never keep a channel open. The slate check skips streams run on their own
   (keyed by hash, not a channel UUID), which raised every 10 s.
 - **Leaving the fallback slate** (v250, `slate_retry`, on; Stream Check settings "Leave the
   fallback slate", `slate_retry_seconds` 60, `slate_limit_minutes` 15, 0 = never). Seen

@@ -138,8 +138,8 @@ def channel_running(uuid, redis_client):
 
 
 def needed(uuid, watching, redis_client):
-    """Whether the recording has a reason to run: a TV paused or behind live in it (it plays the
-    recording, not the channel), or somebody on the live channel itself.
+    """Whether the recording has a reason to run: a TV wants it and somebody is on the live
+    channel itself.
 
     A TV only saying it watches was not enough: on 2026-10-02 the Shield watched ┃NL┃ 24KITCHEN
     on a stream of its own (app_own_streams), its keep-alive named the channel, and the recorder
@@ -148,8 +148,8 @@ def needed(uuid, watching, redis_client):
     """
     if not watching:
         return False
-    if any(e.get("paused_at") for e in watching.values()):
-        return True
+    # Never for a paused TV alone either: the recording may not hold the channel; when the last
+    # person leaves it, the channel closes and the recording with it (the user, 2026-10-02)
     try:
         return _people_on(uuid, redis_client)
     except Exception:

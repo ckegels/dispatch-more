@@ -1094,6 +1094,30 @@ class ProxyServer:
             )
             gevent.sleep(min(poll_interval, remaining))
 
+    def _people_count(self, channel_id, total):
+        """
+        The channel's clients that are people. Dispatch More's own helpers -- the rewind recorder,
+        the caption worker -- read along with a viewer and never keep a channel open: when the
+        last person leaves, the channel stops as it would without them, and they with it (the
+        user's rule, 2026-10-02, after the recorder held ┃NL┃ 24KITCHEN open for nobody).
+        """
+        if not total or not self.redis_client:
+            return total
+        try:
+            from apps.channels.captions import is_caption_client
+
+            ids = [cid.decode() if isinstance(cid, bytes) else cid
+                   for cid in self.redis_client.smembers(RedisKeys.clients(channel_id)) or ()]
+            pipe = self.redis_client.pipeline(transaction=False)
+            for cid in ids:
+                pipe.hget(RedisKeys.client_metadata(channel_id, cid), "user_agent")
+            agents = pipe.execute()
+            return sum(1 for agent in agents
+                       if not is_caption_client(agent.decode() if isinstance(agent, bytes) else agent))
+        except Exception as e:
+            logger.debug(f"Could not tell people from helpers on {channel_id}: {e}")
+            return total
+
     def handle_client_disconnect(self, channel_id):
         """
         Handle client disconnect event - check if channel should shut down and
@@ -1177,7 +1201,7 @@ class ProxyServer:
                         logger.info(f"[Profile:{pid}] No clients remain, stopping transcode for channel {channel_id}")
                         self.stop_output_profile(channel_id, pid)
 
-            if total == 0:
+            if self._people_count(channel_id, total) == 0:
                 logger.debug(f"No clients left after disconnect event - stopping channel {channel_id}")
 
                 shutdown_delay = ConfigHelper.channel_shutdown_delay()
@@ -1909,6 +1933,9 @@ class ProxyServer:
 
                                     if total_clients == 0:
                                         logger.warning(f"Channel {channel_id} is missing client_manager but we're the owner with 0 clients - will trigger cleanup")
+
+                            # Helpers (rewind recorder, caption worker) never keep it open
+                            total_clients = self._people_count(channel_id, total_clients)
 
                             # Log client count periodically
                             if time.time() % 30 < 1:  # Every ~30 seconds

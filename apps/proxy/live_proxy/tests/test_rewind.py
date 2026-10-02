@@ -169,9 +169,9 @@ class WatchTests(_Folder):
             rewind.watch(self.uuid, "1:tv", redis_client=redis)
             start.assert_not_called()
             self.assertFalse(rewind.needed(self.uuid, rewind.viewers(self.uuid, redis), redis))
-            # Paused, the TV plays the recording itself: it is kept
+            # Not for a paused TV alone either: the recording never holds the channel
             rewind.watch(self.uuid, "1:tv", paused_at_ms=1_790_000_000_000, redis_client=redis)
-            start.assert_called_once()
+            start.assert_not_called()
         self.assertFalse(rewind.needed(self.uuid, {}, redis))
 
     def test_never_starts_a_channel_that_does_not_run(self):

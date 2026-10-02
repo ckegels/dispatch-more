@@ -194,3 +194,13 @@ or somebody is on the live channel itself; it is only started, and ffmpeg only r
 the channel runs (a state other than error/stopping/stopped). A channel that stopped stays
 stopped; what was recorded stays for a paused TV until FILES_GRACE.
 
+**The user's rule (same evening): the recording may never hold the channel.** When the last
+person leaves, the channel closes as fast as it would without any recorder, and the recording
+with it. So `needed` is now only "a TV wants it and a person is on the live channel" (no
+exception for a paused TV), and the channel's own shutdown checks count people only
+(`ProxyServer._people_count` in `handle_client_disconnect` and the owner's cleanup loop): the
+rewind recorder and the caption worker are never a reason to keep a channel open. Consequence:
+a TV that plays the recording is not on the live channel, so the recording only goes on while
+somebody else is on it -- a TV that wants to keep catching up must stay a client of the channel
+(arrTV-side work, not done).
+
