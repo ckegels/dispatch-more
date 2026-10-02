@@ -1096,10 +1096,11 @@ class ProxyServer:
 
     def _people_count(self, channel_id, total):
         """
-        The channel's clients that are people. Dispatch More's own helpers -- the rewind recorder,
-        the caption worker -- read along with a viewer and never keep a channel open: when the
-        last person leaves, the channel stops as it would without them, and they with it (the
-        user's rule, 2026-10-02, after the recorder held ┃NL┃ 24KITCHEN open for nobody).
+        The channel's viewers. Dispatch More's own helpers -- the rewind recorder, the caption
+        worker -- are nobody: when the last person leaves, the channel stops as it would without
+        them, and they with it (2026-10-02, after the recorder held ┃NL┃ 24KITCHEN open for
+        nobody). A TV paused or behind live in the rewind recording is somebody: it watches
+        through the recorder, and the app says so every 20 s.
         """
         if not total or not self.redis_client:
             return total
@@ -1112,8 +1113,18 @@ class ProxyServer:
             for cid in ids:
                 pipe.hget(RedisKeys.client_metadata(channel_id, cid), "user_agent")
             agents = pipe.execute()
-            return sum(1 for agent in agents
-                       if not is_caption_client(agent.decode() if isinstance(agent, bytes) else agent))
+            people = sum(1 for agent in agents
+                         if not is_caption_client(agent.decode() if isinstance(agent, bytes) else agent))
+            if people == 0 and len(agents) > people:
+                # A TV paused or behind live in the rewind recording watches through the recorder
+                try:
+                    from . import rewind
+
+                    people = rewind.paused_viewers(channel_id, self.redis_client)
+                except Exception as e:
+                    # Unknown is nobody: a helper never holds a channel by default
+                    logger.debug(f"Could not read paused TVs of {channel_id}: {e}")
+            return people
         except Exception as e:
             logger.debug(f"Could not tell people from helpers on {channel_id}: {e}")
             return total

@@ -2,6 +2,7 @@
 the shutdown checks count people only (server.ProxyServer._people_count)."""
 
 from types import SimpleNamespace
+from unittest import mock
 
 from django.test import SimpleTestCase
 
@@ -47,3 +48,10 @@ class PeopleCountTests(SimpleTestCase):
 
     def test_the_client_key_is_the_channels(self):
         self.assertTrue(RedisKeys.client_metadata("c1", "a").endswith(":clients:a"))
+
+    def test_a_paused_tv_watching_through_the_recorder_is_somebody(self):
+        with mock.patch("apps.proxy.live_proxy.rewind.paused_viewers", return_value=1):
+            self.assertEqual(people({"a": "DispatchMore-Rewind/1"}), 1)
+        with mock.patch("apps.proxy.live_proxy.rewind.paused_viewers", return_value=0):
+            self.assertEqual(people({"a": "DispatchMore-Rewind/1"}), 0)
+

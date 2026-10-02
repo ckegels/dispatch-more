@@ -137,9 +137,21 @@ def channel_running(uuid, redis_client):
     return bool(state) and state not in (ChannelState.ERROR, ChannelState.STOPPING, ChannelState.STOPPED)
 
 
+def paused(watching):
+    """Whether any of these TVs said it is paused or behind live (`paused_at`)."""
+    return any(e.get("paused_at") for e in (watching or {}).values())
+
+
+def paused_viewers(uuid, redis_client=None):
+    """How many TVs are paused or behind live in this channel's recording: viewers of the channel
+    for its shutdown checks (the app says so every 20 s; gone 45 s after it stops saying it)."""
+    return sum(1 for e in viewers(uuid, redis_client).values() if e.get("paused_at"))
+
+
 def needed(uuid, watching, redis_client):
-    """Whether the recording has a reason to run: a TV wants it and somebody is on the live
-    channel itself.
+    """Whether the recording has a reason to run: a TV that said it is paused or behind live in
+    it (it plays the recording, not the channel -- a viewer like any other), or somebody on the
+    live channel itself. A keep-alive alone, at the live edge, is not a viewer.
 
     A TV only saying it watches was not enough: on 2026-10-02 the Shield watched ┃NL┃ 24KITCHEN
     on a stream of its own (app_own_streams), its keep-alive named the channel, and the recorder
@@ -148,8 +160,8 @@ def needed(uuid, watching, redis_client):
     """
     if not watching:
         return False
-    # Never for a paused TV alone either: the recording may not hold the channel; when the last
-    # person leaves it, the channel closes and the recording with it (the user, 2026-10-02)
+    if paused(watching):
+        return True
     try:
         return _people_on(uuid, redis_client)
     except Exception:

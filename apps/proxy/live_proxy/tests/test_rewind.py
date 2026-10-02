@@ -169,9 +169,13 @@ class WatchTests(_Folder):
             rewind.watch(self.uuid, "1:tv", redis_client=redis)
             start.assert_not_called()
             self.assertFalse(rewind.needed(self.uuid, rewind.viewers(self.uuid, redis), redis))
-            # Not for a paused TV alone either: the recording never holds the channel
+            # Paused (or behind live), the TV watches through the recording: it runs
             rewind.watch(self.uuid, "1:tv", paused_at_ms=1_790_000_000_000, redis_client=redis)
-            start.assert_not_called()
+            start.assert_called_once()
+            self.assertEqual(rewind.paused_viewers(self.uuid, redis), 1)
+            # Back at the live edge it is a keep-alive again, not a viewer of the recording
+            rewind.watch(self.uuid, "1:tv", redis_client=redis)
+            self.assertEqual(rewind.paused_viewers(self.uuid, redis), 0)
         self.assertFalse(rewind.needed(self.uuid, {}, redis))
 
     def test_never_starts_a_channel_that_does_not_run(self):
