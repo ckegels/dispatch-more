@@ -2542,6 +2542,23 @@ once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatc
 
 ## 8. Open / possible next
 
+Planned 2026-10-02 (the user's three asks, designs written, nothing built):
+- **Look back gets a provider** -- **`fork/lookback-priority.md`**: when the only provider with a
+  programme's archive is held by another viewer's live channel, the session mint moves that
+  viewer to another stream of theirs (verified, moved back if it fails), shows the look-back
+  viewer each step, and refuses with a 5-minute cooldown when it cannot ("unavailable due to
+  current viewing priorities"). Seen: Food Network UK's archive is on Digitalizard only (1
+  connection), held by a BRAVIA's live channel.
+- **Pause for as long as you like** -- **`fork/pause-resume.md`**: a 20-minute live pause resumed
+  live. Reproduce with arrTV's log recorded live first; likely the Live Rewind filler stopping
+  (frozen head -> `goLive()`), the ring length, or the app stopping while paused.
+- **Translation of the generated captions** -- `fork/subtitles.md` §9 step 4: per (channel,
+  language) cue lists, DeepL / Ollama / Opus-MT in the worker, `&lang=` on the poll.
+- Look back on arrTV (arr.87, not published): timestamps smoothed through archive seams
+  (`TsTimestampSmoothingDataSource`); at the Food Network seam it plays on but skips about a
+  minute ahead (the archive repeats a stretch) -- to look at. A busy provider still shows
+  "Catch-up Unavailable ... no archive": to wait longer and say why (part of the priority plan).
+
 - **Captions after 3b** (`fork/subtitles.md` §9): per-channel settings, smaller model when
   behind, translation, more engines.
   The user's GPU is on the Proxmox host, passed to the Dispatcharr LXC; its `nvidia-smi`

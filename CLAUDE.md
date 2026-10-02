@@ -80,6 +80,7 @@ the mistakes not to repeat.
   pairings, guide_manager, guide_layout, epg_grabber, stream_check, show_groups/,
   subtitles, captions/ -- the caption worker runs apart, in its own venv or container).
 - `fork/subtitles.md` — subtitles, captions and translation: design and what is built.
+- `fork/lookback-priority.md`, `fork/pause-resume.md` — planned (2026-10-02), not built.
 - `fork/arrTV-integration.md` — the contract with arrTV (the user's Android TV app);
   `fork/arrTV-guide-choice.md` and `fork/picture-check.md` — designs.
 - `git log bcbb68c4..HEAD` — every change, explained in its message.

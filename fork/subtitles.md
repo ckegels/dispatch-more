@@ -4,8 +4,8 @@ Designed 2026-10-01, against release v242. **Step 1 (§2 and the tab's list, §3
 v243; step 2 (teletext) in arrTV arr.72; the first half of step 3 -- the caption worker, what it
 finds out and measures, the proposal and the installer (§5b.1-§5b.3, §5b.6) -- in v244;
 captions while a TV watches, delivered to arrTV and shown in step with the picture (3b) -- in
-v247 and arrTV arr.75.** Translation, the per-channel setting and the finer points of keeping up
-are not built yet. This is the hand-over for
+v247 and arrTV arr.75.** Translation is planned (§9 step 4); the per-channel setting and the finer
+points of keeping up are not built yet. This is the hand-over for
 the work: what the user asked for, how it fits Stream Check, the Channel Manager and arrTV,
 the models, and what is still to decide (§8). Read `fork/HANDOVER.md` (§2, §3, §5.7, §5.11)
 and `fork/arrTV-integration.md` alongside it.
@@ -432,7 +432,35 @@ are shown.
      - Still to do: the per-channel setting (§3.2), smaller-model fallback when behind
        (§5b.5), translation (step 4), playing a few seconds further behind live when captions
        are on, more engines (whisper.cpp, Vosk, Parakeet, cloud).
-4. Translation (§6.2, §7.2).
+4. **Translation (§6.2, §7.2) -- planned 2026-10-02, next to build.** The user: "subtitles work
+   but there is no translation yet". The plan, fitted to what 3b built:
+   - **What a TV asks for.** arrTV gets Settings -> Player -> **Caption language** (Original /
+     the TV's own language / a list), and the Subtitles menu shows "Generated captions" and, when
+     the programme's language differs, "Generated captions (translated to Dutch)". The poll gains
+     `&lang=nl` (`GET /api/channels/captions/live/<uuid>/?since=&lang=`); without it nothing
+     changes.
+   - **One translation per (channel, language), shared** (§7.2): Dispatch More keeps, per job, a
+     list of translated cues alongside the originals -- same `seq`, same stream times, the text
+     translated -- so every TV asking for Dutch on that channel reads the same lines.
+   - **Where it runs.** A translator per server, chosen like the speech model (§5b.3) and shown on
+     the captions card: **DeepL** when its key is set (Service keys, v244); else **Ollama** when the
+     card found one (an 8B model, prompt "translate these subtitle lines from {src} to {dst}, keep
+     one line per line"); else **Opus-MT** in the caption worker (CTranslate2 + SentencePiece,
+     one ~300 MB model per pair, through English when a pair is missing, downloaded on first use
+     with its size shown first); else none ("translation not available on this server").
+   - **In the worker** (it already has CTranslate2): `POST /translate {lines, source, target,
+     engine}` for Opus-MT (and Ollama/DeepL called from there too, so one place batches); the job
+     translates each finished piece's lines as they come (whole sentences: a line ending
+     mid-sentence waits for the next piece, at most 2 s), adding about 0.2-1 s.
+   - **Source language**: the job's (set by hand, or found by the model, 3b). Same as the asked
+     language: no translation, the originals are shown.
+   - **Keeping up**: a translation that falls behind the picture is shown late rather than not at
+     all, and the card shows its delay; arrTV's "play further behind live while captions are on"
+     (§5b.5, not built) helps both.
+   - **Switch**: the captions card's "Translate captions" (on when a translator exists); arrTV's
+     setting Original keeps today's behaviour.
+   - **Tests**: the per-language cue list (seq/stream times kept, sentences joined), engine
+     choice, the `lang` parameter, Opus-MT on a Dutch sample (worker, skipped without the model).
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 
 Tests, as always: the full backend suite (baseline `FAILED (errors=26)`, all `/data`) on a test

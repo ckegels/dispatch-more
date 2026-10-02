@@ -775,3 +775,16 @@ arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playi
   "starting", "loading model", "listening", "ended", "error". `DELETE` on the same URL when the
   TV is done (channel change, captions off, player closed). A server without it answers a plain
   404. arrTV shows a line while the frame on screen has its stream time.
+- **Planned (2026-10-02):** translated captions -- the same poll with `&lang=<code>` returns the
+  cues translated, same `seq` and times (`fork/subtitles.md` §9 step 4).
+
+## Look back that needs a busy provider (planned 2026-10-02)
+
+Designed in `fork/lookback-priority.md`, not built. `POST /api/catchup/sessions/` may answer
+**202** `{"state": "making_room", ...}` when every catch-up provider of the channel is held by
+another viewer's live channel; arrTV then polls `GET /api/catchup/sessions/<id>/room/` (0.5 s)
+for `{"step": "found" | "moving" | "moved" | "verified" | "ready" | "refused", "text",
+"retry_after"}`, shows each step on the loading screen, plays on `ready`, and shows the refusal
+("unavailable due to current viewing priorities", "try again in N min") on `refused`. A moved
+viewer's arrTV may get a socket message to show "Moved to {stream} for another viewer". A
+server without it answers 201 as today.
