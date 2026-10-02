@@ -104,6 +104,11 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   until you ask. Installed, arrTV offers **Generated captions** in its Subtitles menu: text made
   from the sound of the channel you watch, in step with the picture, without an extra provider
   connection.
+- **Server rewind** — while a TV watches a channel, the server records it to its own disk
+  (no re-encoding, no extra provider connection) and arrTV pauses and rewinds on that
+  recording instead of its own: a pause of hours resumes where it stopped, even on a TV with
+  little free space. Keeps the last hour (and up to 4 h behind a paused TV), within a disk
+  budget you set on the arrTV page; off records nothing.
 - **EPG Grabber** — runs iptv-org's guide grabber on a schedule (when it is installed on the
   server) and only replaces your guide once the new one is complete.
 

@@ -621,6 +621,12 @@ def capabilities():
         # Commercial breaks marked by Comskip: custom_properties.comskip.breaks on a recording,
         # when Comskip is installed here, switched on and in "mark" mode (it never cuts then)
         "commercial_breaks": commercial_breaks(),
+        # Server rewind (rewind.py): a TV may pause and rewind on the server's recording
+        "rewind": settings["rewind"],
+        "rewind_url": "/api/channels/rewind/",
+        # Generated captions (captions/live.py), and look back moving another viewer
+        "captions_url": "/api/channels/captions/live/",
+        "look_back_priority": settings["look_back_priority"],
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
