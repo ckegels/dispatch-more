@@ -1,6 +1,8 @@
 # Pause for as long as you like: resuming where it was paused
 
-Planned 2026-10-02, against release v247 and arrTV arr.87. Nothing here is built yet.
+Planned 2026-10-02, against release v247 and arrTV arr.87. **Server rewind's server side (§4.3) is
+built (v248):** `apps/proxy/live_proxy/rewind.py`, `rewind_views.py`, the arrTV settings page;
+arrTV's side and the fixes of §4.2 are next.
 
 ## 1. The problem
 
@@ -135,6 +137,33 @@ viewer changing channel stops the old channel's recording unless someone paused 
 **Switch.** "Server rewind" on the arrTV settings page (Dispatch More), with the minutes, the
 maximum pause and the disk budget; arrTV uses it when the server offers it and falls back to its
 own ring otherwise (and when switched off on the TV). Off = stock: nothing is recorded.
+
+**Built in v248 (server side).**
+- `rewind.watch(uuid, viewer, paused_at)` from `POST /api/channels/rewind/<uuid>/` (any signed-in
+  user; viewer = `<user id>:<device>`, kept 45 s): starts the recorder in this worker unless the
+  lease `rewind:owner:<uuid>` is held (one recorder per channel across workers). `DELETE` leaves,
+  `GET` gives the window `{enabled, recording, tail_wall_ms, head_wall_ms, playlist}`.
+- `Recorder`: ffmpeg (`-c copy`, video and audio, `-f hls -hls_time 6`, `program_date_time`,
+  numbered segments `p<part>-NNNNNN.ts` -- named by the second, the start burst overwrote them),
+  errors to `recorder.log` (a pipe nobody reads fills and stalls ffmpeg), dies with its worker
+  (`PR_SET_PDEATHSIG`); a restart is a new part. The supervisor (every 5 s): restarts ffmpeg while
+  TVs watch (at most 20 times), stops it at once when none does (it holds the channel and its
+  provider connection open), deletes the folder 5 min later, trims to `keep_from_ms` (the last
+  `rewind_minutes`, or a paused TV's position minus 30 s, within `rewind_max_pause_minutes`), keeps
+  the budget (`enforce_budget`: `rewind_budget_gb`, never more than free space minus 5 GB; oldest
+  segments of channels nobody is paused on first) and its lease.
+- `GET /proxy/ts/rewind/<uuid>/index.m3u8` (network access as for streams): an EVENT playlist built
+  from the parts' own playlists, only segments still on disk, `#EXT-X-PROGRAM-DATE-TIME` each,
+  `#EXT-X-DISCONTINUITY` between parts; segments served from `/proxy/ts/rewind/<uuid>/<name>`
+  (names checked). `GET /api/channels/rewind/` (admin): what is recorded, for the settings page.
+- Force Close passes the recorder by (User-Agent `DispatchMore-Rewind/1`,
+  `captions.is_caption_client` now covers both helpers).
+- Settings (`app_devices.DEFAULTS`): `rewind` (on), `rewind_minutes` 60 (5-240),
+  `rewind_max_pause_minutes` 240 (15-1440), `rewind_budget_gb` 20 (1-4000); folder
+  `DISPATCHARR_REWIND_DIR` (default `/data/rewind`), proxy `DISPATCHARR_INTERNAL_URL` (default
+  `http://127.0.0.1:9191`).
+- Checked with a real ffmpeg against a served sample: segments, parts, the playlist, stop and
+  clean-up when the viewer goes. Tests: `apps/proxy/live_proxy/tests/test_rewind.py`.
 
 **Order of work.** (1) The recorder and its housekeeping (start / stop / trim / budget), with the
 HLS window served under `/proxy/ts/rewind/`; tests with a sample stream. (2) arrTV: pause and

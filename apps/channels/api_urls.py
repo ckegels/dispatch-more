@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
+from apps.proxy.live_proxy import rewind_views
 from . import (
     channel_manager_views,
     epg_grabber_views,
@@ -116,6 +117,9 @@ urlpatterns = [
     path('captions/', subtitles_views.captions_page, name='captions_page'),
     path('captions/action/', subtitles_views.captions_action, name='captions_action'),
     path('captions/live/<uuid:channel_uuid>/', subtitles_views.captions_live, name='captions_live'),
+    # Server rewind (live_proxy/rewind.py): a TV watching, and what can be rewound into
+    path('rewind/', rewind_views.rewind_usage, name='rewind_usage'),
+    path('rewind/<uuid:channel_uuid>/', rewind_views.rewind_channel, name='rewind_channel'),
     path('service-keys/test/', service_keys_views.service_keys_test, name='service_keys_test'),
     path('channel-manager/ignore/', channel_manager_views.channel_manager_ignore, name='channel_manager_ignore'),
     path('channel-manager/settings/', channel_manager_views.channel_manager_settings, name='channel_manager_settings'),

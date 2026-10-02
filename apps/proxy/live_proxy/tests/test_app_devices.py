@@ -85,13 +85,17 @@ class AppDevicesTests(TestCase):
             {"devices": False, "switch_hints": False, "reports": False,
              "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
              "alternatives": False, "fast_grace": 5, "fast_grace_many": 3,
-             "guide_choice": False, "guide_choice_sources": "", "keep_past_days": 0},
+             "guide_choice": False, "guide_choice_sources": "", "keep_past_days": 0,
+             "rewind": True, "rewind_minutes": 60, "rewind_max_pause_minutes": 240, "rewind_budget_gb": 20,
+             "look_back_priority": True, "look_back_priority_notify": True},
         )
         answer = client.put("/api/core/arrtv/", {"devices": True}, format="json").json()
         self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
                                   "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
              "alternatives": False, "fast_grace": 5, "fast_grace_many": 3,
-             "guide_choice": False, "guide_choice_sources": "", "keep_past_days": 0})
+             "guide_choice": False, "guide_choice_sources": "", "keep_past_days": 0,
+             "rewind": True, "rewind_minutes": 60, "rewind_max_pause_minutes": 240, "rewind_budget_gb": 20,
+             "look_back_priority": True, "look_back_priority_notify": True})
         # Only an admin changes them
         viewer = User.objects.create_user(username="tv", password="x", user_level=0)
         client.force_authenticate(user=viewer)

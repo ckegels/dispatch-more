@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import rewind_views, views
 
 app_name = 'live_proxy'
 
@@ -11,4 +11,7 @@ urlpatterns = [
     path('stop/<str:channel_id>', views.stop_channel, name='stop_channel'),
     path('stop_client/<str:channel_id>', views.stop_client, name='stop_client'),
     path('next_stream/<str:channel_id>', views.next_stream, name='next_stream'),
+    # Server rewind (rewind.py): the recording as HLS
+    path('rewind/<uuid:channel_uuid>/index.m3u8', rewind_views.rewind_playlist, name='rewind_playlist'),
+    path('rewind/<uuid:channel_uuid>/<str:name>', rewind_views.rewind_segment, name='rewind_segment'),
 ]

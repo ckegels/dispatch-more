@@ -348,6 +348,25 @@ const GuideChanges = () => {
 
 // A whole number, saved when the field is left (not on every key): a wait in seconds, or
 // the days of guide kept
+// What server rewind keeps now (live_proxy/rewind.py), read when the section opens
+const RewindUsage = () => {
+  const [usage, setUsage] = useState(null);
+  useEffect(() => {
+    API.getRewindUsage()
+      .then(setUsage)
+      .catch(() => setUsage(null));
+  }, []);
+  if (!usage) return null;
+  const gb = (b) => `${(b / 1024 ** 3).toFixed(1)} GB`;
+  return (
+    <Text size="xs" c="dimmed" mt={4}>
+      {usage.channels.length
+        ? `Recording now: ${usage.channels.filter((c) => c.recording).length} channel(s), ${gb(usage.bytes)} of ${gb(usage.budget_bytes)} in ${usage.folder}.`
+        : `Nothing recorded now. Room for ${gb(usage.budget_bytes)} in ${usage.folder}.`}
+    </Text>
+  );
+};
+
 const Seconds = ({
   label,
   description,
@@ -604,6 +623,62 @@ const ArrTvSettings = () => {
           value={settings.keep_past_days ?? 0}
           onSave={(days) => change({ keep_past_days: days })}
         />
+        <Setting
+          label="Server rewind"
+          description="While a TV watches a channel, the server keeps a recording of it, so arrTV can pause for as long as it likes and rewind without using the TV's own storage. Read from the channel the TV already plays: no extra provider connection while someone watches; a paused TV alone keeps its channel open. Off: nothing is recorded and arrTV uses its own buffer."
+          checked={settings.rewind}
+          onChange={(on) => change({ rewind: on })}
+        />
+        {settings.rewind && (
+          <Box pl="md">
+            <Group gap="md" align="flex-start">
+              <Seconds
+                label="Always kept"
+                min={5}
+                max={240}
+                suffix=" min"
+                description="How far back a TV can rewind."
+                value={settings.rewind_minutes ?? 60}
+                onSave={(v) => change({ rewind_minutes: v })}
+              />
+              <Seconds
+                label="Longest pause"
+                min={15}
+                max={1440}
+                suffix=" min"
+                description="Kept from a TV's pause on."
+                value={settings.rewind_max_pause_minutes ?? 240}
+                onSave={(v) => change({ rewind_max_pause_minutes: v })}
+              />
+              <Seconds
+                label="Disk budget"
+                min={1}
+                max={4000}
+                suffix=" GB"
+                description="All channels together; never more than the disk can spare."
+                value={settings.rewind_budget_gb ?? 20}
+                onSave={(v) => change({ rewind_budget_gb: v })}
+              />
+            </Group>
+            <RewindUsage />
+          </Box>
+        )}
+        <Setting
+          label="Look back may move another viewer"
+          description="When the only provider with a programme's look back is in use by someone's live channel, that channel is moved to another of its streams (checked to play, moved back if not) so the look back can start. When it cannot, the look-back viewer is told it is unavailable due to current viewing priorities and may try again after 5 minutes, or as soon as the provider is free."
+          checked={settings.look_back_priority}
+          onChange={(on) => change({ look_back_priority: on })}
+        />
+        {settings.look_back_priority && (
+          <Box pl="md">
+            <Setting
+              label="Tell the viewer who was moved"
+              description="Their arrTV shows a short note that their channel moved to another stream for someone else."
+              checked={settings.look_back_priority_notify}
+              onChange={(on) => change({ look_back_priority_notify: on })}
+            />
+          </Box>
+        )}
         <Setting
           label="Take problem reports from arrTV"
           description="Someone with a problem on a channel sends a report from arrTV's player settings. It arrives below with what arrTV saw and what the server knew about that channel at that moment: its streams and providers, its readings, how it started, the channel switches and the log. Logins and passwords are taken out."

@@ -2549,6 +2549,9 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   viewer each step, and refuses with a 5-minute cooldown when it cannot ("unavailable due to
   current viewing priorities"). Seen: Food Network UK's archive is on Digitalizard only (1
   connection), held by a BRAVIA's live channel.
+- **Server rewind: server side built (v248)** -- `live_proxy/rewind.py` (recorder per watched
+  channel, HLS window, budget), `POST/GET/DELETE /api/channels/rewind/<uuid>/`,
+  `/proxy/ts/rewind/<uuid>/index.m3u8`; arrTV's side next. Details in `fork/pause-resume.md` §4.3.
 - **Pause for as long as you like** -- **`fork/pause-resume.md`**: a 20-minute live pause resumed
   live. Reproduce with arrTV's log recorded live first; likely the Live Rewind filler stopping
   (frozen head -> `goLive()`), the ring length, or the app stopping while paused -- and the TVs'

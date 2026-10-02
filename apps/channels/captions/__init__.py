@@ -3,7 +3,11 @@
 # What the caption worker calls itself when it reads a channel through the proxy
 # (worker.CAPTIONS_USER_AGENT). Not a viewer: Force Close and the viewer checks pass it by.
 CAPTIONS_USER_AGENT = "DispatchMore-Captions/"
+# Server rewind's recorder reads channels the same way (live_proxy/rewind.py)
+HELPER_USER_AGENTS = (CAPTIONS_USER_AGENT, "DispatchMore-Rewind/")
 
 
 def is_caption_client(user_agent):
-    return str(user_agent or "").startswith(CAPTIONS_USER_AGENT)
+    """A Dispatch More helper reading a channel alongside its viewers: the caption worker or the
+    rewind recorder. Not a viewer."""
+    return str(user_agent or "").startswith(HELPER_USER_AGENTS)

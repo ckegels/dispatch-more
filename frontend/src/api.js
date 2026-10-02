@@ -2727,6 +2727,11 @@ export default class API {
   }
 
   // What arrTV may tell this server (Settings → arrTV)
+  // Server rewind: what is recorded now (live_proxy/rewind.py)
+  static async getRewindUsage() {
+    return await request(`${host}/api/channels/rewind/`);
+  }
+
   static async getArrTvSettings() {
     return await request(`${host}/api/core/arrtv/`);
   }

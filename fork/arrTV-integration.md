@@ -778,6 +778,16 @@ arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playi
 - **Planned (2026-10-02):** translated captions -- the same poll with `&lang=<code>` returns the
   cues translated, same `seq` and times (`fork/subtitles.md` §9 step 4).
 
+## Server rewind (v248)
+
+While a TV watches a channel and server rewind is on, arrTV says so every ~20 s:
+`POST /api/channels/rewind/<uuid>/ {"viewer": "<device id>", "paused_at": <wall ms, while paused>}`
+-> `{"enabled", "recording", "tail_wall_ms", "head_wall_ms", "playlist"}` (`enabled: false`: the
+server does not offer it; use the TV's own buffer). `DELETE` with the same viewer when leaving the
+channel. Paused or rewinding, arrTV plays `playlist` (`/proxy/ts/rewind/<uuid>/index.m3u8`, an HLS
+EVENT playlist with `#EXT-X-PROGRAM-DATE-TIME`), seeking by wall time; Live goes back to the normal
+stream. A server without it answers 404.
+
 ## Look back that needs a busy provider (planned 2026-10-02)
 
 Designed in `fork/lookback-priority.md`, not built. `POST /api/catchup/sessions/` may answer

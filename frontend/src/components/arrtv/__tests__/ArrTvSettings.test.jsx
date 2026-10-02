@@ -20,6 +20,7 @@ vi.mock('../../../api', () => ({
     keepArrTvGuide: vi.fn(),
     getArrTvGuidePreload: vi.fn(),
     startArrTvGuidePreload: vi.fn(),
+    getRewindUsage: vi.fn(),
   },
 }));
 
@@ -35,6 +36,30 @@ Element.prototype.scrollIntoView = vi.fn();
 
 describe('ArrTvSettings', () => {
   afterEach(() => vi.clearAllMocks());
+
+  it('shows server rewind with what it keeps now, and look-back priority', async () => {
+    API.getArrTvSettings.mockResolvedValue({
+      rewind: true,
+      rewind_minutes: 60,
+      rewind_max_pause_minutes: 240,
+      rewind_budget_gb: 20,
+      look_back_priority: true,
+      look_back_priority_notify: true,
+    });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.getRewindUsage.mockResolvedValue({
+      channels: [{ channel_uuid: 'a', bytes: 2 * 1024 ** 3, minutes: 30, recording: true }],
+      bytes: 2 * 1024 ** 3,
+      budget_bytes: 20 * 1024 ** 3,
+      folder: '/data/rewind',
+    });
+    draw();
+    expect(
+      await screen.findByText(/Recording now: 1 channel\(s\), 2.0 GB of 20.0 GB in \/data\/rewind/)
+    ).toBeInTheDocument();
+    expect(screen.getByText('Longest pause')).toBeInTheDocument();
+    expect(screen.getByText('Tell the viewer who was moved')).toBeInTheDocument();
+  });
 
   it('is all off at first, and the channel change needs the devices', async () => {
     API.getArrTvSettings.mockResolvedValue({

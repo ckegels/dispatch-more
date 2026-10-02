@@ -64,9 +64,23 @@ DEFAULTS = {
     "fast_grace": 5, "fast_grace_many": 3,
     "guide_choice": False, "guide_choice_sources": "",
     "keep_past_days": 0,
+    # Server rewind (live_proxy/rewind.py, fork/pause-resume.md §4.3): watched channels kept on
+    # the server so a TV can pause and rewind without its own disk. Minutes always kept, the
+    # longest pause kept, and the disk budget in GB
+    "rewind": True, "rewind_minutes": 60, "rewind_max_pause_minutes": 240, "rewind_budget_gb": 20,
+    # Look back gets a provider (fork/lookback-priority.md): another viewer's live channel may be
+    # moved to a stream of its own so a look back can have the only provider with the archive;
+    # the moved viewer is told
+    "look_back_priority": True, "look_back_priority_notify": True,
 }
 # The seconds settings: whole seconds within these bounds
 GRACE_BOUNDS = (1, 60)
+# Settings with bounds of their own
+BOUNDS = {
+    "rewind_minutes": (5, 240),
+    "rewind_max_pause_minutes": (15, 1440),
+    "rewind_budget_gb": (1, 4000),
+}
 
 # Faster failover: which channels an arrTV device started, and how many other streams each
 # could switch to, for the start phase only. (v212 wrote "1" under fast_start:, v213 the grace
@@ -116,8 +130,9 @@ def _as_kind(key, value):
         except (TypeError, ValueError):
             return 0
     if isinstance(DEFAULTS[key], int):
+        low, high = BOUNDS.get(key, GRACE_BOUNDS)
         try:
-            return max(GRACE_BOUNDS[0], min(GRACE_BOUNDS[1], int(float(value))))
+            return max(low, min(high, int(float(value))))
         except (TypeError, ValueError):
             return DEFAULTS[key]
     if key == "guide_choice_sources":
