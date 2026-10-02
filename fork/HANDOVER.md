@@ -2577,6 +2577,8 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   new stream within 10 s, switch back on failure), `GET /api/catchup/sessions/<id>/room/`, the
   socket message `lookback_moved`; tests `apps/timeshift/tests/test_priority.py`.
   v249: the asker's own channel or previous look back is never a refusal (`others_holding`).
+  v251: the asker is the device, not the login (two TVs on `admin`); a provider only the asker
+  holds is room -- its own channel there is closed first (`askers_own`, `close_askers_own`).
 - **Server rewind: server side built (v248)** -- `live_proxy/rewind.py` (recorder per watched
   channel, HLS window, budget), `POST/GET/DELETE /api/channels/rewind/<uuid>/`,
   `/proxy/ts/rewind/<uuid>/index.m3u8`; arrTV's side next. Details in `fork/pause-resume.md` §4.3.

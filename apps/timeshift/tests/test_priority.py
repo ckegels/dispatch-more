@@ -87,7 +87,7 @@ class MakeRoomTests(SimpleTestCase):
         self.assertEqual(outcome, "refused")
 
     def test_someone_can_move(self):
-        found = [(holding_channel(), 12, 15, [(ALT, ALT_PROFILE)])]
+        found = [(holding_channel(), 12, 15, [(ALT, ALT_PROFILE, [])])]
         with mock.patch.object(priority, "has_room", return_value=False), \
              mock.patch.object(priority, "others_holding", return_value=["x"]), \
              mock.patch.object(priority, "candidates", return_value=found):
@@ -101,7 +101,7 @@ class MoveTests(SimpleTestCase):
                       mock.patch.object(priority, "_provider_name", lambda _id: "Digitalizard")):
             patch.start()
             self.addCleanup(patch.stop)
-        self.found = [(holding_channel(), 12, 15, [(ALT, ALT_PROFILE)])]
+        self.found = [(holding_channel(), 12, 15, [(ALT, ALT_PROFILE, [])])]
 
     def steps(self):
         return [s["step"] for s in json.loads(self.redis.get(priority.room_key("s1")))["steps"]]
@@ -168,3 +168,69 @@ class OthersTests(SimpleTestCase):
              mock.patch("apps.proxy.live_proxy.probation.is_recording", side_effect=lambda a: "DVR" in a):
             self.assertEqual(priority.others_holding(CHANNEL, 7, FakeRedis()), ["theirs"])
 
+
+
+class AskerTests(SimpleTestCase):
+    """2026-10-02: a Google TV Stick and the Shield on one login. The Stick asks for ┃DE┃ BON
+    GUSTO's look back (archive on profiles 12 and 14); the Shield watches NJAM! on 12, a BRAVIA
+    PBS on 14, the Stick itself Food Network CA on 15."""
+
+    STICK, SHIELD = "app|1|stick", "app|1|shield"
+    CLIENTS = {
+        "njam": [{"user_id": "1", "user_agent": "AerioTV", "server_device": SHIELD}],
+        "pbs": [{"user_id": "4", "user_agent": "AerioTV", "server_device": "app|4|bravia"}],
+        "food": [{"user_id": "1", "user_agent": "AerioTV", "server_device": STICK}],
+    }
+    ACTIVE = [("njam", 12), ("pbs", 14), ("food", 15)]
+
+    def patches(self):
+        return (
+            mock.patch("apps.proxy.live_proxy.probation._active_channels", return_value=self.ACTIVE),
+            mock.patch("apps.proxy.live_proxy.probation._channel_clients",
+                       side_effect=lambda r, uuid: iter(self.CLIENTS.get(uuid, []))),
+            mock.patch("apps.proxy.live_proxy.probation.is_recording", return_value=False),
+        )
+
+    def test_another_tv_on_the_same_login_is_another_viewer(self):
+        a, b, c = self.patches()
+        with a, b, c:
+            self.assertEqual(priority._viewers(FakeRedis(), "njam", priority.Asker(1, self.STICK))[0], 1)
+            self.assertEqual(priority._viewers(FakeRedis(), "food", priority.Asker(1, self.STICK))[0], 0)
+            # Without a device it is the login, as before
+            self.assertEqual(priority._viewers(FakeRedis(), "njam", priority.Asker(1))[0], 0)
+
+    def test_a_provider_only_the_asker_holds_is_room(self):
+        a, b, c = self.patches()
+        with a, b, c:
+            self.assertEqual(priority.askers_own(FakeRedis(), 15, priority.Asker(1, self.STICK)), ["food"])
+            self.assertEqual(priority.askers_own(FakeRedis(), 12, priority.Asker(1, self.STICK)), [])
+
+    def test_the_asker_holding_an_archive_provider_leaves_it(self):
+        a, b, c = self.patches()
+        user = SimpleNamespace(id=1)
+        with a, b, c, \
+             mock.patch.object(priority, "settings", lambda: (True, False)), \
+             mock.patch.object(priority, "has_room", return_value=False), \
+             mock.patch.object(priority, "_catchup_profiles",
+                               return_value=({12, 15}, [SimpleNamespace(id=12), SimpleNamespace(id=15)])), \
+             mock.patch.object(priority, "close_askers_own") as close:
+            self.assertIsNone(priority.make_room(user, CHANNEL, FakeRedis(), device=self.STICK))
+        close.assert_called_once()
+        self.assertEqual(close.call_args.args[1], ["food"])
+
+    def test_the_move_closes_the_askers_own_channel_first(self):
+        redis = FakeRedis()
+        found = [(holding_channel(), 12, 12, [(ALT, ALT_PROFILE, ["food"])])]
+        with mock.patch.object(priority, "settings", lambda: (True, False)), \
+             mock.patch.object(priority, "_provider_name", lambda _id: "TiviBridge2"), \
+             mock.patch.object(priority, "close_askers_own") as close, \
+             mock.patch.object(priority, "_wait_for_room", return_value=True), \
+             mock.patch.object(priority, "_switch", return_value=True) as switch, \
+             mock.patch.object(priority, "verify", return_value=True), \
+             mock.patch.object(priority, "has_room", return_value=True), \
+             mock.patch("apps.m3u.models.M3UAccountProfile.objects"):
+            priority.write_step(redis, "s2", "found", provider="TiviBridge2")
+            final = priority.run_move("s2", 1, CHANNEL, found, redis, sleep=lambda s: None)
+        self.assertEqual(final["state"], "ready")
+        self.assertEqual(close.call_args.args[1], ["food"])
+        switch.assert_called_once_with("live-channel", ALT, ALT_PROFILE)

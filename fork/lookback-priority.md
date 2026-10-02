@@ -155,4 +155,13 @@ room poll), the catch-up loading card (`PlayerScreen` / `CatchupUnavailableCard`
   path frees what the asker held. `candidates` skips channels with no viewer but the asker.
   Seen 2026-10-02: a second look back on ┃UK┃ FOOD NETWORK refused while the only holder was the
   asker's own channel.
+- **v251**: the asker is the asking *device* (`Asker`, from the mint's `X-Dispatch-Device`;
+  the login only when the app names no device). 2026-10-02 21:44: a Google TV Stick (login
+  `admin`) asked for ┃DE┃ BON GUSTO (archive on TiviBridge2 and TiviBridge); the Shield, same
+  login, held TiviBridge2 with ┃NL┃ NJAM! and was taken for the Stick's own channel, the
+  BRAVIA's PBS held TiviBridge with no stream elsewhere -> refused. Now the Shield is another
+  viewer, and a provider only the asker holds counts as room (`askers_own`): the asker's own
+  channel there is closed first (`close_askers_own`, it is leaving it for the look back) --
+  NJAM! moves to Digitalizard, freed by closing the Stick's Food Network CA, and the look back
+  gets TiviBridge2. An archive provider only the asker holds is freed the same way, then stock.
 

@@ -154,7 +154,13 @@ class CatchupSessionCreateAPIView(APIView):
         # Fork: look-back priority (priority.py) -- every archive provider busy with live
         # viewers: move one of them, or refuse with a cooldown. Off, or nothing busy: stock.
         try:
-            room = priority.make_room(user, channel, RedisClient.get_client())
+            from apps.proxy.live_proxy import app_devices
+
+            said = app_devices.declared_device(request)
+            room = priority.make_room(
+                user, channel, RedisClient.get_client(),
+                device=app_devices.device_key(user.id, said) if said else None,
+            )
         except Exception:
             room = None
         if room and room[0] == "refused":

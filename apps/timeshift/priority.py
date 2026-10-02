@@ -84,22 +84,90 @@ def has_room(channel, redis_client):
     return any(pool_has_capacity_for_profile(p, redis_client) for p in profiles)
 
 
-def _viewers(redis_client, channel_uuid, user_id=None):
-    """The channel's clients that are people other than `user_id`: (count, any recording)."""
-    from apps.channels.captions import is_caption_client
-    from apps.proxy.live_proxy.probation import _channel_clients, _client_user_id, is_recording
+class Asker:
+    """Who asks for the look back: their device when the app says which it is, else their login.
 
+    By login alone, every TV on one login was "the asker": on 2026-10-02 a Google TV Stick's look
+    back on ┃DE┃ BON GUSTO was refused because the Shield -- same login, another room -- held
+    one of its archive providers and was taken for the Stick's own channel, never moved.
+    """
+
+    def __init__(self, user_id, device=None):
+        self.user_id = user_id
+        self.device = device or None
+
+    def owns(self, client):
+        from apps.proxy.live_proxy.probation import _client_user_id
+
+        if self.device:
+            return client.get("server_device") == self.device
+        return self.user_id is not None and _client_user_id(client.get("user_id")) == self.user_id
+
+
+def _asker(who):
+    """An Asker from an Asker, a user id or None (the tests and older callers pass the id)."""
+    return who if isinstance(who, Asker) else Asker(who)
+
+
+def _viewers(redis_client, channel_uuid, asker=None):
+    """The channel's clients that are people other than the asker: (count, any recording)."""
+    from apps.channels.captions import is_caption_client
+    from apps.proxy.live_proxy.probation import _channel_clients, is_recording
+
+    asker = _asker(asker)
     count, recording = 0, False
     for client in _channel_clients(redis_client, channel_uuid):
         agent = client.get("user_agent") or ""
         if is_recording(agent):
             recording = True
-        elif not is_caption_client(agent) and (user_id is None or _client_user_id(client.get("user_id")) != user_id):
+        elif not is_caption_client(agent) and not asker.owns(client):
             count += 1
     return count, recording
 
 
-def others_holding(channel, user_id, redis_client):
+def askers_own(redis_client, profile_id, asker):
+    """The live channels on a profile when every one of them is only the asker's -- what it is
+    leaving for the look back -- else []."""
+    from apps.proxy.live_proxy.probation import _active_channels
+
+    asker = _asker(asker)
+    if asker.user_id is None and not asker.device:
+        return []
+    found = []
+    for channel_uuid, channel_profile in _active_channels(redis_client):
+        if channel_profile != profile_id:
+            continue
+        viewers, recording = _viewers(redis_client, channel_uuid, asker)
+        if viewers or recording:
+            return []
+        found.append(channel_uuid)
+    return found
+
+
+def close_askers_own(redis_client, channel_uuids, why):
+    """Close the asker's own live channels, so their provider is free a moment sooner."""
+    from apps.proxy.live_proxy.services.channel_service import ChannelService
+
+    for channel_uuid in channel_uuids:
+        logger.info(f"Look-back priority: closing {channel_uuid}, which only the asker watched ({why})")
+        try:
+            ChannelService.stop_channel(channel_uuid)
+        except Exception as e:
+            logger.warning(f"Look-back priority: could not close {channel_uuid}: {e}")
+
+
+def _wait_for_room(profile, redis_client, seconds=6, sleep=gevent.sleep):
+    from apps.m3u.connection_pool import pool_has_capacity_for_profile
+
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if pool_has_capacity_for_profile(profile, redis_client):
+            return True
+        sleep(0.5)
+    return pool_has_capacity_for_profile(profile, redis_client)
+
+
+def others_holding(channel, asker, redis_client):
     """The live channels on the archive's providers that someone else watches or records.
 
     None of them: whatever holds the provider is the asker's own -- the live channel they are
@@ -114,17 +182,20 @@ def others_holding(channel, user_id, redis_client):
     for channel_uuid, profile_id in _active_channels(redis_client):
         if profile_id not in held:
             continue
-        viewers, recording = _viewers(redis_client, channel_uuid, user_id)
+        viewers, recording = _viewers(redis_client, channel_uuid, asker)
         if viewers or recording:
             found.append(channel_uuid)
     return found
 
 
-def candidates(channel, redis_client, user_id=None):
+def candidates(channel, redis_client, asker=None):
     """Live channels holding the archive's providers that could move, fewest viewers first.
 
     Each is (holding channel, its stream id, its profile id, [(stream, profile), ...]): the
     alternatives on providers with room, never the archive's own providers, never custom streams.
+    Each alternative is (stream, profile, the asker's own channels to close first): a provider
+    only the asker holds has room once it leaves for the look back (2026-10-02: the Stick's own
+    Food Network CA held Digitalizard, where the Shield's NJAM! could have gone).
     """
     from apps.channels.models import Channel
     from apps.m3u.connection_pool import pool_has_capacity_for_profile
@@ -140,7 +211,7 @@ def candidates(channel, redis_client, user_id=None):
             continue
         if redis_client.exists(moved_key(channel_uuid)):
             continue
-        viewers, recording = _viewers(redis_client, channel_uuid, user_id)
+        viewers, recording = _viewers(redis_client, channel_uuid, asker)
         if recording or not viewers:
             continue
         holding = Channel.objects.filter(uuid=channel_uuid).first()
@@ -156,8 +227,13 @@ def candidates(channel, redis_client, user_id=None):
                 continue
             for profile in sorted(account.profiles.filter(is_active=True), key=lambda p: not p.is_default):
                 if pool_has_capacity_for_profile(profile, redis_client):
-                    alternatives.append((stream, profile))
+                    alternatives.append((stream, profile, []))
                     break
+                own = askers_own(redis_client, profile.id, asker)
+                if own:
+                    alternatives.append((stream, profile, own))
+                    break
+        alternatives.sort(key=lambda alt: bool(alt[2]))
         if alternatives:
             found.append((viewers, holding, int(stream_id) if stream_id else None, profile_id, alternatives))
     found.sort(key=lambda item: item[0])
@@ -191,22 +267,34 @@ def cooling_down(redis_client, user_id, channel_uuid):
     return int(ttl) if ttl and int(ttl) > 0 else 0
 
 
-def make_room(user, channel, redis_client):
-    """Before minting: None to go on as stock; else ("refused", body) or ("moving", candidate)."""
+def make_room(user, channel, redis_client, device=None):
+    """Before minting: None to go on as stock; else ("refused", body) or ("moving", candidate).
+
+    `device` is the asking device's key (app_devices.device_key) when the app says which it is.
+    """
     enabled, _notify = settings()
     if not enabled or redis_client is None:
         return None
+    asker = Asker(user.id, device)
     if has_room(channel, redis_client):
         # The other viewer left: whatever cooldown there was is over
         redis_client.delete(cooldown_key(user.id, channel.uuid))
         return None
-    if not others_holding(channel, user.id, redis_client):
+    _accounts, archive_profiles = _catchup_profiles(channel)
+    for profile in archive_profiles:
+        own = askers_own(redis_client, profile.id, asker)
+        if own:
+            # The asker's own live channel holds the archive's provider: it is leaving it
+            close_askers_own(redis_client, own, f"{channel.name}'s look back needs profile {profile.id}")
+            redis_client.delete(cooldown_key(user.id, channel.uuid))
+            return None
+    if not others_holding(channel, asker, redis_client):
         redis_client.delete(cooldown_key(user.id, channel.uuid))
         return None
     left = cooling_down(redis_client, user.id, channel.uuid)
     if left:
         return "refused", {"error": REFUSED_TEXT, "reason": "viewing_priorities", "retry_after": left}
-    found = candidates(channel, redis_client, user.id)
+    found = candidates(channel, redis_client, asker)
     if not found:
         logger.info(f"Look-back priority: no live viewer on {channel.name}'s archive providers can move; refused")
         return "refused", refuse(redis_client, user.id, channel.uuid)
@@ -272,11 +360,15 @@ def run_move(session_id, user_id, channel, found, redis_client, sleep=gevent.sle
         provider = _provider_name(old_profile_id)
         if number:  # the first was written by start_move, before the mint answered
             write_step(redis_client, session_id, "found", provider=provider, channel=holding.name)
-        for stream, profile in alternatives:
+        for stream, profile, askers in alternatives:
             write_step(redis_client, session_id, "moving", stream=stream.name, provider=provider)
             redis_client.set(moved_key(channel_uuid), "1", ex=MOVED_RECENTLY_SECONDS)
             logger.info(f"Look-back priority: moving {holding.name} to {stream.name} (profile {profile.id}) "
                         f"so {channel.name}'s look back can use {provider}")
+            if askers:
+                close_askers_own(redis_client, askers, f"{holding.name} moves to profile {profile.id}")
+                if not _wait_for_room(profile, redis_client, sleep=sleep):
+                    continue
             if not _switch(channel_uuid, stream, profile):
                 continue
             write_step(redis_client, session_id, "moved", stream=stream.name)
