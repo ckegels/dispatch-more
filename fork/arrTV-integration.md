@@ -775,8 +775,11 @@ arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playi
   "starting", "loading model", "listening", "ended", "error". `DELETE` on the same URL when the
   TV is done (channel change, captions off, player closed). A server without it answers a plain
   404. arrTV shows a line while the frame on screen has its stream time.
-- **Planned (2026-10-02):** translated captions -- the same poll with `&lang=<code>` returns the
-  cues translated, same `seq` and times (`fork/subtitles.md` §9 step 4).
+- **Translated captions (v248):** the same poll with `&lang=<two letters>` returns the cues
+  translated, same `seq` and times, each with its `original`, and `translation: {"to", "from",
+  "state", "engine"}` (`state`: `translated`, `same language`, `waiting for the language` -- no
+  cues until the model knows the programme's language --, `not available` or `failed`, both with
+  the original lines and a `reason`). Without `lang`, nothing changes.
 
 ## Server rewind (v248)
 

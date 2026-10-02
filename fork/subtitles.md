@@ -4,7 +4,7 @@ Designed 2026-10-01, against release v242. **Step 1 (§2 and the tab's list, §3
 v243; step 2 (teletext) in arrTV arr.72; the first half of step 3 -- the caption worker, what it
 finds out and measures, the proposal and the installer (§5b.1-§5b.3, §5b.6) -- in v244;
 captions while a TV watches, delivered to arrTV and shown in step with the picture (3b) -- in
-v247 and arrTV arr.75.** Translation is planned (§9 step 4); the per-channel setting and the finer
+v247 and arrTV arr.75.** Translation is built in v248 (§9 step 4); the per-channel setting and the finer
 points of keeping up are not built yet. This is the hand-over for
 the work: what the user asked for, how it fits Stream Check, the Channel Manager and arrTV,
 the models, and what is still to decide (§8). Read `fork/HANDOVER.md` (§2, §3, §5.7, §5.11)
@@ -432,7 +432,7 @@ are shown.
      - Still to do: the per-channel setting (§3.2), smaller-model fallback when behind
        (§5b.5), translation (step 4), playing a few seconds further behind live when captions
        are on, more engines (whisper.cpp, Vosk, Parakeet, cloud).
-4. **Translation (§6.2, §7.2) -- planned 2026-10-02, next to build.** The user: "subtitles work
+4. **Translation (§6.2, §7.2) -- built in v248** (what was built is at the end of this item). The user: "subtitles work
    but there is no translation yet". The plan, fitted to what 3b built:
    - **What a TV asks for.** arrTV gets Settings -> Player -> **Caption language** (Original /
      the TV's own language / a list), and the Subtitles menu shows "Generated captions" and, when
@@ -461,6 +461,20 @@ are shown.
      setting Original keeps today's behaviour.
    - **Tests**: the per-language cue list (seq/stream times kept, sentences joined), engine
      choice, the `lang` parameter, Opus-MT on a Dutch sample (worker, skipped without the model).
+   - **Built (v248)**: `apps/channels/captions/translate.py` -- `translated(answer, channel, lang)`
+     on the poll's answer: per (channel, language) a Redis hash `captions:tr:<uuid>:<lang>`
+     (seq -> text, 10 min), one TV translating a piece at a time (`:lock`), lines out in order
+     (an untranslated line holds back the later ones until the next poll), each cue keeping its
+     `original`; `translation: {to, from, state, engine}` with states `translated`, `same
+     language`, `waiting for the language`, `not available`, `failed` (the original lines then).
+     `engine()`: the card's `translator` ("" automatic, deepl, ollama, opus-mt, off) -- DeepL
+     (`api-free` for `:fx` keys), Ollama `/api/generate` asked for a JSON list one line per line
+     (`ollama_model`, or its first), the worker's `POST /translate` (Opus-MT: the pair's original
+     Marian weights, linked from its Hugging Face card, converted by CTranslate2's
+     `OpusMTConverter` to int8 -- nl-en is 82 MB and translates two lines in 0.04 s on a CPU here;
+     through English when there is no direct pair, nl-de checked; `sentencepiece` added to the
+     worker's install). Not built: joining a sentence cut over two pieces, multi-target Opus-MT
+     models. Tests: `apps/channels/tests/test_caption_translation.py`.
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 
 Tests, as always: the full backend suite (baseline `FAILED (errors=26)`, all `/data`) on a test

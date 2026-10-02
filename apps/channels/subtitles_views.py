@@ -61,7 +61,7 @@ def captions_live(request, channel_uuid):
     """
     Captions while a TV watches (captions/live.py). GET ?since=<seq>: the lines made since
     then, each with the stream time it belongs to; asking keeps the channel's job going and
-    starts it. DELETE: the TV is done (changed channel, turned captions off, closed).
+    starts it. &lang=nl: the same lines translated (captions/translate.py). DELETE: the TV is done (changed channel, turned captions off, closed).
     """
     from .captions import live
     from .models import Channel
@@ -75,4 +75,4 @@ def captions_live(request, channel_uuid):
         since = int(request.GET.get("since") or 0)
     except ValueError:
         since = 0
-    return JsonResponse(live.poll(channel, since))
+    return JsonResponse(live.poll(channel, since, (request.GET.get("lang") or "")[:5]))

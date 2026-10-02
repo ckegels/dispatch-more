@@ -103,7 +103,8 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   memory, measures each model there, and proposes the one that fits. Nothing is installed
   until you ask. Installed, arrTV offers **Generated captions** in its Subtitles menu: text made
   from the sound of the channel you watch, in step with the picture, without an extra provider
-  connection.
+  connection -- **translated** into the TV's language if you like (DeepL, a model in Ollama, or
+  small Opus-MT models the worker fetches itself), once per channel and language for every TV.
 - **Server rewind** — while a TV watches a channel, the server records it to its own disk
   (no re-encoding, no extra provider connection) and arrTV pauses and rewinds on that
   recording instead of its own: a pause of hours resumes where it stopped, even on a TV with

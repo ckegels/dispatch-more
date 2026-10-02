@@ -33,6 +33,10 @@ DEFAULTS = {
     "quality": "balanced",  # best / balanced / channels
     "languages": [],  # the TVs' languages to translate to (step 4)
     "ollama_url": "http://127.0.0.1:11434",
+    # Translated captions (captions/translate.py): "" = the first there is of DeepL, Ollama,
+    # Opus-MT in the worker; or one of them; "off" = never translated
+    "translator": "",
+    "ollama_model": "",  # "" = the first model the Ollama server has
     # Captions while a TV watches (captions/live.py): TVs may ask for them. Off: nothing is
     # captioned, whatever a TV asks
     "live": True,
@@ -71,6 +75,8 @@ def save(values):
             value = value if value in QUALITIES else "balanced"
         elif key == "model":
             value = value if value in machine_info.MODELS else ""
+        elif key == "translator":
+            value = value if value in ("", "off", "deepl", "ollama", "opus-mt") else ""
         elif key == "languages":
             value = [str(v).strip().lower() for v in (value or []) if str(v).strip()][:10]
         else:
@@ -153,7 +159,7 @@ def docker_compose(gpu=False):
     (§5b.6). It fetches this release's worker.py; models stay in a folder of their own."""
     release = _record().get("release") or "feature/probation-slots"
     url = f"{REPOSITORY_RAW}/{release}/apps/channels/captions/worker.py"
-    packages = "faster-whisper" + (" nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'" if gpu else "")
+    packages = "faster-whisper sentencepiece" + (" nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'" if gpu else "")
     lines = [
         "  dispatch-more-captions:",
         "    image: python:3.12-slim",

@@ -35,6 +35,20 @@ const QUALITY = [
   { value: 'best', label: 'Best text: the largest model that keeps up' },
   { value: 'channels', label: 'Most channels at once' },
 ];
+const TRANSLATORS = [
+  {
+    value: '',
+    label: 'Automatic: DeepL if its key is set, else Ollama, else Opus-MT',
+  },
+  { value: 'deepl', label: 'DeepL (Service keys)' },
+  { value: 'ollama', label: 'A model in Ollama' },
+  {
+    value: 'opus-mt',
+    label: 'Opus-MT in the worker (about 300 MB per language pair)',
+  },
+  { value: 'off', label: 'Off: the original lines' },
+];
+
 const TRANSLATION = {
   ollama: 'a language model in Ollama',
   'opus-mt': 'small translation models (Opus-MT)',
@@ -271,6 +285,35 @@ const CaptionsCard = () => {
                   value={settings.quality}
                   onChange={(e) => save({ quality: e.currentTarget.value })}
                 />
+              </Group>
+
+              <Group align="flex-end" gap="md">
+                <NativeSelect
+                  label="Translate captions"
+                  description="A TV asking for its own language gets the lines translated, once per channel and language for every TV"
+                  w={420}
+                  data={TRANSLATORS}
+                  value={settings.translator || ''}
+                  onChange={(e) => save({ translator: e.currentTarget.value })}
+                />
+                {(settings.translator || '') !== 'off' &&
+                  (status.translation.ollama || []).length > 0 && (
+                    <NativeSelect
+                      label="Ollama model"
+                      w={240}
+                      data={[
+                        { value: '', label: 'The first one' },
+                        ...status.translation.ollama.map((m) => ({
+                          value: m,
+                          label: m,
+                        })),
+                      ]}
+                      value={settings.ollama_model || ''}
+                      onChange={(e) =>
+                        save({ ollama_model: e.currentTarget.value })
+                      }
+                    />
+                  )}
               </Group>
 
               <Box>

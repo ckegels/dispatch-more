@@ -20,6 +20,10 @@ POST /benchmark?model=small  time it on the test clip (in the background)
 POST /transcribe?model=small&offset=12.5[&language=nl]
      body: 16 kHz mono 16-bit PCM, or a WAV file
      -> {"language", "segments": [{"start", "end", "text"}]}, times plus the offset
+POST /translate  {"lines": [...], "source": "nl", "target": "en"}
+     -> {"lines": [...], "via": ["nl-en"]}  Opus-MT (Helsinki-NLP) through CTranslate2: a small
+     model per language pair, fetched and converted on first use, through English when there is
+     no direct pair (fork/subtitles.md §9 step 4)
 """
 
 import argparse
@@ -490,6 +494,98 @@ def jobs_now():
                 for job in jobs.values() if not job.finished() and not job.idle()]
 
 
+# ── Translation: Opus-MT (fork/subtitles.md §9 step 4) ──────────────────────────
+
+# The original Marian weights are linked from each pair's model card; CTranslate2 converts them
+# without PyTorch, and SentencePiece (source.spm / target.spm in the same zip) cuts the text
+OPUS_CARD = "https://huggingface.co/Helsinki-NLP/opus-mt-{pair}/raw/main/README.md"
+translators = {}  # pair -> (Translator, source spm, target spm)
+translate_lock = threading.Lock()
+missing_pairs = set()
+
+
+def _opus_dir(models_dir, pair):
+    return os.path.join(models_dir, "opus-mt", pair)
+
+
+def opus_pair(models_dir, pair):
+    """The pair's translator, fetched and converted the first time; None when there is no
+    such pair (or no CTranslate2 / SentencePiece here)."""
+    if pair in translators:
+        return translators[pair]
+    if pair in missing_pairs:
+        return None
+    try:
+        import ctranslate2
+        import sentencepiece
+        from ctranslate2.converters import OpusMTConverter
+    except ImportError:
+        return None
+    folder = _opus_dir(models_dir, pair)
+    converted = os.path.join(folder, "ct2")
+    if not os.path.isdir(converted):
+        import re
+        import zipfile
+
+        try:
+            with urllib.request.urlopen(OPUS_CARD.format(pair=pair), timeout=20) as answer:
+                card = answer.read().decode("utf-8", "replace")
+        except OSError:
+            missing_pairs.add(pair)
+            return None
+        link = re.search(r"https://object\.pouta\.csc\.fi/[^)\s]+\.zip", card)
+        if not link or ">>id<<" in card:  # multi-language targets need a token; not these
+            missing_pairs.add(pair)
+            return None
+        os.makedirs(folder, exist_ok=True)
+        archive = os.path.join(folder, "model.zip")
+        urllib.request.urlretrieve(link.group(0), archive)
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(os.path.join(folder, "marian"))
+        OpusMTConverter(os.path.join(folder, "marian")).convert(converted + ".tmp", quantization="int8", force=True)
+        for name in ("source.spm", "target.spm"):
+            shutil.copy(os.path.join(folder, "marian", name), os.path.join(folder, name))
+        os.rename(converted + ".tmp", converted)
+        shutil.rmtree(os.path.join(folder, "marian"), ignore_errors=True)
+        os.remove(archive)
+    translators[pair] = (
+        ctranslate2.Translator(converted, device="cpu", inter_threads=1),
+        sentencepiece.SentencePieceProcessor(model_file=os.path.join(folder, "source.spm")),
+        sentencepiece.SentencePieceProcessor(model_file=os.path.join(folder, "target.spm")),
+    )
+    return translators[pair]
+
+
+def _run_pair(found, lines):
+    model, source, target = found
+    out = model.translate_batch([source.encode(line, out_type=str) for line in lines], beam_size=2)
+    return [target.decode(o.hypotheses[0]) for o in out]
+
+
+def translate_lines(models_dir, lines, source, target):
+    """Lines in `source` (two letters) into `target`: the direct pair, else through English."""
+    if not lines or source == target:
+        return {"lines": list(lines), "via": []}
+    with translate_lock:
+        direct = opus_pair(models_dir, f"{source}-{target}")
+        if direct is not None:
+            return {"lines": _run_pair(direct, lines), "via": [f"{source}-{target}"]}
+        if "en" not in (source, target):
+            first, second = opus_pair(models_dir, f"{source}-en"), opus_pair(models_dir, f"en-{target}")
+            if first is not None and second is not None:
+                return {"lines": _run_pair(second, _run_pair(first, lines)), "via": [f"{source}-en", f"en-{target}"]}
+    return {"error": f"no Opus-MT model from {source} to {target}"}
+
+
+def can_translate():
+    try:
+        import ctranslate2  # noqa: F401
+        import sentencepiece  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 # ── HTTP ───────────────────────────────────────────────────────────────────────
 
 def make_handler(models_dir, token):
@@ -517,7 +613,8 @@ def make_handler(models_dir, token):
             if urlparse(self.path).path == "/status":
                 return self._send(200, {"machine": state["machine"], "models": state["models"],
                                         "catalogue": MODELS, "version": VERSION, "device": device(),
-                                        "cuda_failed": state.get("cuda_failed", ""), "jobs": jobs_now()})
+                                        "cuda_failed": state.get("cuda_failed", ""), "jobs": jobs_now(),
+                                        "translate": can_translate()})
             if urlparse(self.path).path == "/jobs":
                 return self._send(200, {"jobs": jobs_now()})
             self._send(404, {"error": "unknown"})
@@ -546,6 +643,15 @@ def make_handler(models_dir, token):
                     return self._send(400, {"error": str(e)})
             if url.path == "/jobs/stop":
                 return self._send(200, {"stopped": stop_job(query.get("key", ""))})
+            if url.path == "/translate":
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    answer = translate_lines(models_dir, [str(x) for x in body.get("lines") or []],
+                                             str(body.get("source") or ""), str(body.get("target") or ""))
+                except Exception as e:
+                    return self._send(500, {"error": f"translation failed: {e}"})
+                return self._send(200 if "lines" in answer else 404, answer)
             if url.path in ("/download", "/benchmark", "/transcribe") and name not in MODELS:
                 return self._send(400, {"error": f"unknown model: {name}"})
             if url.path == "/download":

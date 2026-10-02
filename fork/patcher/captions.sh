@@ -101,6 +101,8 @@ install() {
 
   say installing "Installing faster-whisper (about 250 MB)"
   "${pip[@]}" faster-whisper >>"$LOG" 2>&1 || { say failed "Could not install faster-whisper (see $LOG)"; return 1; }
+  # Translation with Opus-MT (fork/subtitles.md §9 step 4): CTranslate2 came with faster-whisper
+  "${pip[@]}" sentencepiece >>"$LOG" 2>&1 || true
 
   # The worker puts these on its library path itself (worker.cuda_libraries)
   local libs=""

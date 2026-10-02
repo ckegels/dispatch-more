@@ -2563,8 +2563,9 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   server records watched channels as an HLS event stream (`ffmpeg -c copy` from its own proxy,
   wall-time stamped segments under `/data/rewind`), arrTV plays that window when paused or
   rewinding, a disk budget and a maximum pause, look back as the fallback where an archive exists.
-- **Translation of the generated captions** -- `fork/subtitles.md` §9 step 4: per (channel,
-  language) cue lists, DeepL / Ollama / Opus-MT in the worker, `&lang=` on the poll.
+- **Translation of the generated captions: built (v248)** -- `fork/subtitles.md` §9 step 4:
+  `captions/translate.py` (per (channel, language) cues in Redis, DeepL / Ollama / Opus-MT in the
+  worker's `POST /translate`), `&lang=` on the poll, "Translate captions" on the captions card.
 - Look back on arrTV (arr.87, not published): timestamps smoothed through archive seams
   (`TsTimestampSmoothingDataSource`); at the Food Network seam it plays on but skips about a
   minute ahead (the archive repeats a stretch) -- to look at. A busy provider still shows

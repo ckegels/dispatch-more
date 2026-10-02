@@ -66,7 +66,7 @@ def playing(channel_uuid):
         return False
 
 
-def poll(channel, since=0):
+def poll(channel, since=0, lang=""):
     """What a TV gets: {"state", "cues": [{seq, start, end, text}], ...}. States: "off" (not
     switched on, or no worker), "not playing", "busy" (every caption slot in use), and the
     worker's own: "starting", "loading model", "listening", "ended", "error"."""
@@ -95,6 +95,10 @@ def poll(channel, since=0):
         return {"state": "off", "cues": [], "reason": "The caption worker does not answer."}
     if answer.get("error") and "state" not in answer:
         return {"state": "error", "cues": [], "reason": answer["error"]}
+    if lang:
+        from .translate import translated
+
+        return translated(answer, key, lang, settings=settings)
     return answer
 
 
