@@ -171,10 +171,16 @@ request() {
   [ -f "$REQUEST" ] || return 0
   local wants
   wants="$(sed -n 's/.*"action": *"\([a-z]*\)".*/\1/p' "$REQUEST" | head -1)"
+  # Say what happens before the request goes: the tab, looking in between, saw no request and
+  # the old "removed" and stopped looking (2026-10-02)
+  case "$wants" in
+    install) say installing "Starting the installer" ;;
+    remove) say removing "Removing the worker" ;;
+  esac
   rm -f "$REQUEST"
   case "$wants" in
     install) install || true ;;
-    remove) say removing "Removing the worker"; remove ;;
+    remove) remove ;;
     *) echo "Unknown caption request: $wants" ;;
   esac
 }

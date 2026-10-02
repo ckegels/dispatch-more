@@ -86,6 +86,9 @@ const CaptionsCard = () => {
   const [error, setError] = useState(null);
   const [open, setOpen] = useState(false);
   const [address, setAddress] = useState(null);
+  // After Install / Remove / Download / Measure, keep looking a while whatever the first
+  // answer says: the installer may not have said anything yet
+  const [watchUntil, setWatchUntil] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -102,12 +105,13 @@ const CaptionsCard = () => {
 
   // While something is being installed, downloaded or measured, look again every few seconds
   useEffect(() => {
-    if (!open || !busy(status)) return undefined;
+    if (!open || !(busy(status) || Date.now() < watchUntil)) return undefined;
     const timer = setTimeout(load, 3000);
     return () => clearTimeout(timer);
-  }, [open, status, load]);
+  }, [open, status, load, watchUntil]);
 
   const act = async (action, model) => {
+    setWatchUntil(Date.now() + 30000);
     try {
       setStatus(await API.captionsAction(action, model));
       setError(null);
@@ -427,7 +431,13 @@ const CaptionsCard = () => {
                 )}
               </Box>
 
-              {worker.running && (
+              {!worker.running && (
+                <Text size="sm" c="dimmed">
+                  The models below can be downloaded and measured once the
+                  worker runs.
+                </Text>
+              )}
+              {status.models.length > 0 && (
                 <Table striped withTableBorder={false} verticalSpacing={4}>
                   <Table.Thead>
                     <Table.Tr>
@@ -466,7 +476,7 @@ const CaptionsCard = () => {
                           </Text>
                         </Table.Td>
                         <Table.Td>
-                          {m.downloading ? (
+                          {!worker.running ? null : m.downloading ? (
                             <Text size="xs" c="dimmed">
                               Downloading…
                             </Text>

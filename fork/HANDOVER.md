@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v248** (2026-10-02, published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v249** (2026-10-02). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 

@@ -473,7 +473,7 @@ are shown.
      Marian weights, linked from its Hugging Face card, converted by CTranslate2's
      `OpusMTConverter` to int8 -- nl-en is 82 MB and translates two lines in 0.04 s on a CPU here;
      through English when there is no direct pair, nl-de checked; `sentencepiece` added to the
-     worker's install). Not built: joining a sentence cut over two pieces, multi-target Opus-MT
+     worker's install). v249: the captions card lists the models even before the worker runs, and keeps looking for 30 s after Install / Remove (captions.sh says "installing" before it drops the request; the card had stopped at the old "removed"). Not built: joining a sentence cut over two pieces, multi-target Opus-MT
      models. Tests: `apps/channels/tests/test_caption_translation.py`.
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 
