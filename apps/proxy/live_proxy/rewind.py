@@ -111,8 +111,49 @@ def watch(uuid, viewer, paused_at_ms=None, redis_client=None):
         entry["paused_at"] = int(paused_at_ms)
     redis_client.hset(_viewers_key(uuid), str(viewer), json.dumps(entry))
     redis_client.expire(_viewers_key(uuid), VIEWER_TTL * 4)
-    ensure_recorder(uuid, redis_client)
+    if channel_running(uuid, redis_client) and needed(uuid, viewers(uuid, redis_client), redis_client):
+        ensure_recorder(uuid, redis_client)
     return window(uuid)
+
+
+def _people_on(uuid, redis_client):
+    """Whether anybody but Dispatch More's own helpers is a client of the live channel."""
+    from apps.channels.captions import is_caption_client
+
+    from .probation import _channel_clients
+
+    return any(not is_caption_client(c.get("user_agent")) for c in _channel_clients(redis_client, str(uuid)))
+
+
+def channel_running(uuid, redis_client):
+    """The live channel runs (it has a state, and not a failed or ending one). The recorder only
+    ever reads a running channel: its own request to a stopped channel started it again, with
+    nobody on it -- ┃NL┃ 24KITCHEN at 19:55:17, 20:24:36 and 20:26:01 on 2026-10-02."""
+    from .constants import ChannelMetadataField, ChannelState
+    from .redis_keys import RedisKeys
+
+    state = redis_client.hget(RedisKeys.channel_metadata(str(uuid)), ChannelMetadataField.STATE)
+    state = state.decode() if isinstance(state, bytes) else state
+    return bool(state) and state not in (ChannelState.ERROR, ChannelState.STOPPING, ChannelState.STOPPED)
+
+
+def needed(uuid, watching, redis_client):
+    """Whether the recording has a reason to run: a TV paused or behind live in it (it plays the
+    recording, not the channel), or somebody on the live channel itself.
+
+    A TV only saying it watches was not enough: on 2026-10-02 the Shield watched ┃NL┃ 24KITCHEN
+    on a stream of its own (app_own_streams), its keep-alive named the channel, and the recorder
+    held the channel -- and Digitalizard's only connection -- open for nobody; others it kept
+    running after their viewers had gone.
+    """
+    if not watching:
+        return False
+    if any(e.get("paused_at") for e in watching.values()):
+        return True
+    try:
+        return _people_on(uuid, redis_client)
+    except Exception:
+        return False
 
 
 def leave(uuid, viewer, redis_client=None):
@@ -242,9 +283,18 @@ class Recorder:
                 watching = viewers(self.uuid, self.redis)
                 if not conf["enabled"]:
                     break
-                if watching:
-                    self.idle_since = None
-                    if self.process is None or self.process.poll() is not None:
+                if needed(self.uuid, watching, self.redis):
+                    ended = self.process is None or self.process.poll() is not None
+                    if ended and not channel_running(self.uuid, self.redis):
+                        # The channel stopped or failed: never start it again from here (the
+                        # recording stays for a paused TV until FILES_GRACE)
+                        self._kill()
+                        self.idle_since = self.idle_since or time.time()
+                        if time.time() - self.idle_since > FILES_GRACE:
+                            shutil.rmtree(self.dir, ignore_errors=True)
+                            break
+                    elif ended:
+                        self.idle_since = None
                         if self.process is not None:
                             err = _tail(os.path.join(self.dir, "recorder.log"))
                             logger.info(f"Rewind: recorder of {self.uuid} ended ({err.strip() or 'no message'}); restarting")
@@ -472,6 +522,6 @@ def usage():
             # A TV still watches and a recorder holds the lease: the recorder object and its
             # lease outlive ffmpeg by FILES_GRACE, which read as "recording" for five minutes
             # after the last viewer left (2026-10-02)
-            "recording": bool(viewers(d)) and (d in _recorders or bool(_redis().get(_owner_key(d)))),
+            "recording": needed(d, viewers(d), _redis()) and (d in _recorders or bool(_redis().get(_owner_key(d)))),
         })
     return out

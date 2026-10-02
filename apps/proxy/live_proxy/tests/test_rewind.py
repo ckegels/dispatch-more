@@ -27,6 +27,9 @@ class FakeRedis:
     def hgetall(self, key):
         return dict(self.data.get(key) or {})
 
+    def hget(self, key, field):
+        return (self.data.get(key) or {}).get(field)
+
     def hdel(self, key, field):
         (self.data.get(key) or {}).pop(field, None)
 
@@ -142,7 +145,9 @@ class BudgetTests(_Folder):
 class WatchTests(_Folder):
     def test_one_recorder_per_channel_across_workers(self):
         redis = FakeRedis()
-        with mock.patch.object(rewind.Recorder, "start") as start:
+        with mock.patch.object(rewind.Recorder, "start") as start, \
+             mock.patch.object(rewind, "_people_on", return_value=True), \
+             mock.patch.object(rewind, "channel_running", return_value=True):
             rewind.watch(self.uuid, "1:tv", redis_client=redis)
             rewind.watch(self.uuid, "2:tv", redis_client=redis)
             self.assertEqual(start.call_count, 1)
@@ -153,6 +158,36 @@ class WatchTests(_Folder):
         self.assertEqual(set(rewind.viewers(self.uuid, redis)), {"1:tv", "2:tv"})
         rewind.leave(self.uuid, "1:tv", redis)
         self.assertEqual(set(rewind.viewers(self.uuid, redis)), {"2:tv"})
+
+    def test_a_keep_alive_alone_never_holds_a_channel(self):
+        # 2026-10-02: the TV watched a stream of its own, or had left; the recorder kept the
+        # channel and its provider connection open for nobody
+        redis = FakeRedis()
+        with mock.patch.object(rewind.Recorder, "start") as start, \
+             mock.patch.object(rewind, "_people_on", return_value=False), \
+             mock.patch.object(rewind, "channel_running", return_value=True):
+            rewind.watch(self.uuid, "1:tv", redis_client=redis)
+            start.assert_not_called()
+            self.assertFalse(rewind.needed(self.uuid, rewind.viewers(self.uuid, redis), redis))
+            # Paused, the TV plays the recording itself: it is kept
+            rewind.watch(self.uuid, "1:tv", paused_at_ms=1_790_000_000_000, redis_client=redis)
+            start.assert_called_once()
+        self.assertFalse(rewind.needed(self.uuid, {}, redis))
+
+    def test_never_starts_a_channel_that_does_not_run(self):
+        # Its own request to a stopped channel started it again for nobody (2026-10-02)
+        redis = FakeRedis()
+        with mock.patch.object(rewind.Recorder, "start") as start, \
+             mock.patch.object(rewind, "_people_on", return_value=True):
+            for state in (None, "error", "stopping", "stopped"):
+                redis.data.pop("live:channel:%s:metadata" % self.uuid, None)
+                if state:
+                    redis.hset("live:channel:%s:metadata" % self.uuid, "state", state)
+                rewind.watch(self.uuid, "1:tv", paused_at_ms=1_790_000_000_000, redis_client=redis)
+            start.assert_not_called()
+            redis.hset("live:channel:%s:metadata" % self.uuid, "state", "active")
+            rewind.watch(self.uuid, "1:tv", redis_client=redis)
+            start.assert_called_once()
 
     def test_off_records_nothing(self):
         with mock.patch.object(rewind, "settings", lambda: {**CONF, "enabled": False}), \

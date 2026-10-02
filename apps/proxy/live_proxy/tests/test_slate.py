@@ -9,7 +9,7 @@ from redis import Redis
 
 from apps.proxy.live_proxy import slate
 
-UUID = "slate-test-channel"
+UUID = "6f4c3991-f5e6-474e-8e00-a970a654c1d2"
 CHANNEL = SimpleNamespace(uuid=UUID, name="BE 24KITCHEN")
 SLATE_STREAM, SLATE_PROFILE = 900, 90
 REAL = [(SimpleNamespace(id=11, name="first"), SimpleNamespace(id=1)),
@@ -130,3 +130,11 @@ class OnSlateTests(SimpleTestCase):
 
     def test_a_channel_of_own_streams_only_is_not_on_a_slate(self):
         self.assertFalse(slate.on_slate(self.channel([(8, True), (9, True)]), 9))
+
+
+class NotAChannelTests(SimpleTestCase):
+    def test_a_stream_run_on_its_own_is_passed_over(self):
+        with mock.patch.object(slate, "settings") as settings:
+            self.assertEqual(slate.tick(Redis(), "8f4176400099aac88834e9112e616ddc2e855d24"), "not a channel")
+        settings.assert_not_called()
+

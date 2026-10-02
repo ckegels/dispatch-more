@@ -22,6 +22,7 @@ Off (Stream Check's `slate_retry`): nothing here runs, the slate plays as stock.
 """
 
 import logging
+import re
 import time
 
 import gevent
@@ -38,6 +39,7 @@ TRYING_TTL = 60
 ENDED_KEY = "live:slate:ended:{channel_uuid}"
 ENDED_SECONDS = 30 * 60
 VERIFY_SECONDS = 10
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 def _s(value):
@@ -110,6 +112,10 @@ def tick(redis_client, channel_uuid, now=None):
     """Looks at one channel this worker owns. Returns what it did, for the log and the tests."""
     from apps.channels.models import Channel
 
+    if not _UUID.match(str(channel_uuid)):
+        # A stream run on its own (app_own_streams, a preview) is keyed by its hash: no channel,
+        # no slate. Looking it up as a channel raised every ten seconds (2026-10-02)
+        return "not a channel"
     enabled, retry_seconds, limit_seconds = settings()
     key = SINCE_KEY.format(channel_uuid=channel_uuid)
     if not enabled:

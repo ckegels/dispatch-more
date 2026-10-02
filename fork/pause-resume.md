@@ -180,3 +180,17 @@ re-mints at the paused position, which `commitScrubCatchup` already does for a s
 
 Resume-at-pause is what pause means; no switch for that. The longer ring while paused uses the
 existing Live Rewind switch and depth.
+
+### v252: the recorder never holds or starts a channel for nobody
+
+Seen 2026-10-02 (evening): channels stayed open with only `DispatchMore-Rewind/1` on them, one
+holding Digitalizard's only connection. The arrTV keep-alive went on naming a channel the TV no
+longer watched on it (it watched a stream of its own, `app_own_streams`, or had left), and the
+recorder counted that as a viewer; when the channel failed or stopped, the recorder's ffmpeg
+reconnected every 5 s and its request started the channel again from cold (┃NL┃ 24KITCHEN at
+19:55:17, 20:24:36, 20:26:01 UTC; GUSTO on its slate likewise). Now (`rewind.needed`,
+`rewind.channel_running`): the recording runs only while a TV is paused or behind live in it,
+or somebody is on the live channel itself; it is only started, and ffmpeg only restarted, while
+the channel runs (a state other than error/stopping/stopped). A channel that stopped stays
+stopped; what was recorded stays for a paused TV until FILES_GRACE.
+
