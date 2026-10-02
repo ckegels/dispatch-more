@@ -2548,7 +2548,11 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   viewer to another stream of theirs (verified, moved back if it fails), shows the look-back
   viewer each step, and refuses with a 5-minute cooldown when it cannot ("unavailable due to
   current viewing priorities"). Seen: Food Network UK's archive is on Digitalizard only (1
-  connection), held by a BRAVIA's live channel.
+  connection), held by a BRAVIA's live channel. **Server side built (v248)**:
+  `apps/timeshift/priority.py` (`make_room` before the mint: 409 refused / 202 making_room;
+  `run_move` in a greenlet: switch with `ChannelService.change_stream_url`, verify bytes from the
+  new stream within 10 s, switch back on failure), `GET /api/catchup/sessions/<id>/room/`, the
+  socket message `lookback_moved`; tests `apps/timeshift/tests/test_priority.py`.
 - **Server rewind: server side built (v248)** -- `live_proxy/rewind.py` (recorder per watched
   channel, HLS window, budget), `POST/GET/DELETE /api/channels/rewind/<uuid>/`,
   `/proxy/ts/rewind/<uuid>/index.m3u8`; arrTV's side next. Details in `fork/pause-resume.md` §4.3.

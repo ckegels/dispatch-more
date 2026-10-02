@@ -16,6 +16,11 @@ urlpatterns = [
         name="catchup-session-position",
     ),
     path(
+        "sessions/<str:session_id>/room/",
+        api_views.CatchupSessionRoomAPIView.as_view(),
+        name="catchup-session-room",
+    ),
+    path(
         "sessions/<str:session_id>/",
         api_views.CatchupSessionDestroyAPIView.as_view(),
         name="catchup-session-destroy",

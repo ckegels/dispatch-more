@@ -12,6 +12,7 @@ from apps.channels.utils import get_channel_catchup_streams, is_catchup_enabled
 from core.utils import RedisClient
 from dispatcharr.utils import network_access_allowed
 
+from . import priority
 from .helpers import MAX_DURATION_MINUTES, parse_catchup_timestamp
 from .sessions import (
     HANDSHAKE_TTL_SECONDS,
@@ -150,6 +151,15 @@ class CatchupSessionCreateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Fork: look-back priority (priority.py) -- every archive provider busy with live
+        # viewers: move one of them, or refuse with a cooldown. Off, or nothing busy: stock.
+        try:
+            room = priority.make_room(user, channel, RedisClient.get_client())
+        except Exception:
+            room = None
+        if room and room[0] == "refused":
+            return Response(room[1], status=status.HTTP_409_CONFLICT)
+
         try:
             payload = create_catchup_session(
                 user=user,
@@ -161,6 +171,14 @@ class CatchupSessionCreateAPIView(APIView):
             return Response(
                 {"error": "Session service unavailable"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if room and room[0] == "moving":
+            step = priority.start_move(payload["session_id"], user.id, channel, room[1], RedisClient.get_client())
+            return Response(
+                {**CatchupSessionResponseSerializer(payload).data, "state": "making_room", "room": step,
+                 "room_url": f"/api/catchup/sessions/{payload['session_id']}/room/"},
+                status=status.HTTP_202_ACCEPTED,
             )
 
         return Response(
@@ -278,3 +296,18 @@ class CatchupSessionPositionAPIView(APIView):
 
         _trigger_timeshift_stats_update(RedisClient.get_client())
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CatchupSessionRoomAPIView(APIView):
+    """Fork: how making room for a look back is going (priority.py), polled by arrTV."""
+
+    permission_classes = [IsStandardUser]
+
+    @extend_schema(exclude=True)
+    def get(self, request, session_id):
+        if not user_owns_catchup_session(session_id, request.user.id):
+            return Response({"error": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+        room = priority.read_room(session_id, RedisClient.get_client())
+        if room is None:
+            return Response({"error": "Nothing is being moved"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(room)

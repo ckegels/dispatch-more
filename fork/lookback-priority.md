@@ -1,6 +1,6 @@
 # Look back gets a provider: moving another viewer to a stream of their own
 
-Planned 2026-10-02, against release v247 and arrTV arr.87. Nothing here is built yet.
+Planned 2026-10-02, against release v247 and arrTV arr.87. **Server side built in v248** (§6).
 
 ## 1. What happened, and what the user wants
 
@@ -131,3 +131,22 @@ Server: `apps/timeshift/api_views.py` (mint), a new `apps/timeshift/priority.py`
 making), `apps/proxy/live_proxy/...` (the switch and its verification, reused), settings in
 `app_devices.DEFAULTS`, the arrTV settings page. arrTV: `CatchupPlaybackResolver` (202 and the
 room poll), the catch-up loading card (`PlayerScreen` / `CatchupUnavailableCard`), the toast.
+
+## 6. Built in v248 (server side)
+
+- `apps/timeshift/priority.py`. `make_room(user, channel)`, called by the mint before it makes
+  the session: off, or a catch-up profile with room (`pool_has_capacity_for_profile`) -> stock
+  (and the cooldown is deleted); cooldown running -> 409; `candidates()` -> none: 409 and a
+  5-minute cooldown. Candidates: live channels (`probation._active_channels`) on a profile of an
+  account keeping the archive, not recorded, not moved for a look back in the last 10 minutes,
+  with a non-custom stream on another account whose profile has room; fewest viewers first.
+- 202 with the session, `state: making_room`, `room` (the first step) and `room_url`;
+  `run_move` in a greenlet: `found` -> `moving` -> switch (`ChannelService.change_stream_url`,
+  as Channel Switch Overlap's `_migrate_to_free_profile`) -> `moved` -> `verify` (metadata names
+  the new stream, `active`, buffer index grows, 10 s) -> `verified` -> `ready` when the archive's
+  profile has room. Not playing: `reverting`, switch back, verify, then `refused` with the
+  cooldown. Steps in Redis `timeshift:api-room:<session>` (2 min).
+- Not built: holding the freed slot for the player's GET (the player asks within a second of
+  `ready`; the 503 retry covers a race), the Diagnostics listing.
+- Tests: `apps/timeshift/tests/test_priority.py`.
+

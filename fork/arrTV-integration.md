@@ -788,13 +788,17 @@ channel. Paused or rewinding, arrTV plays `playlist` (`/proxy/ts/rewind/<uuid>/i
 EVENT playlist with `#EXT-X-PROGRAM-DATE-TIME`), seeking by wall time; Live goes back to the normal
 stream. A server without it answers 404.
 
-## Look back that needs a busy provider (planned 2026-10-02)
+## Look back that needs a busy provider (v248)
 
-Designed in `fork/lookback-priority.md`, not built. `POST /api/catchup/sessions/` may answer
+Designed in `fork/lookback-priority.md`, built in v248 (`apps/timeshift/priority.py`). `POST /api/catchup/sessions/` may answer
 **202** `{"state": "making_room", ...}` when every catch-up provider of the channel is held by
 another viewer's live channel; arrTV then polls `GET /api/catchup/sessions/<id>/room/` (0.5 s)
 for `{"step": "found" | "moving" | "moved" | "verified" | "ready" | "refused", "text",
 "retry_after"}`, shows each step on the loading screen, plays on `ready`, and shows the refusal
 ("unavailable due to current viewing priorities", "try again in N min") on `refused`. A moved
-viewer's arrTV may get a socket message to show "Moved to {stream} for another viewer". A
-server without it answers 201 as today.
+viewer's arrTV gets a socket message on `updates`: `{"type": "lookback_moved", "channel":
+"<uuid>", "stream", "text"}` (with `look_back_priority_notify` on). Refused at once (another
+viewer could not be moved, or the cooldown runs): **409** `{"error", "reason":
+"viewing_priorities", "retry_after"}`. The room status also carries `steps` (every step so
+far, with its text) and `state` (`making_room` / `ready` / `refused`). A server without it, or
+with the switch off, answers 201 as today.
