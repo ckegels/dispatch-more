@@ -2163,6 +2163,13 @@ ExoPlayer showed one frame and waited for good. Three parts:
 
 **The review of v207–v209 against everything else** (v210). Every place the three hook into
 stock or the fork was read again for what it does to what was there. Five faults, all fixed:
+- **The rewind recorder locked a device out of its own channel** (v250, found on the Shield
+  2026-10-02). After arrTV restarted, RTL LIVING ran with only `DispatchMore-Rewind/1` on it
+  (arrTV's rewind keep-alive kept the recorder going) on a stream above the Shield's quality
+  limit, so `own_stream_for` sent the Shield to "its own stream" -- one whose record was in
+  `error` -- and every request was a 503. Now `_running` needs a state other than
+  error/stopping/stopped, and a channel whose clients are only helpers (`is_caption_client`:
+  rewind recorder, caption worker) is joined (`_only_helpers`).
 - **A stream of its own could open an uncounted provider connection** (the serious one). A
   stream another *channel* was playing counted as "already running, free". It is not: stock's
   `Stream.get_stream` sees `stream_profile:<id>` and reserves nothing, while the stream run on

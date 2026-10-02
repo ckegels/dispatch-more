@@ -139,6 +139,21 @@ class OwnStreamTests(TestCase):
         self.free[self.one.id] = False
         self.assertIsNone(self.own())
 
+    def test_a_failed_own_stream_is_not_gone_back_to(self):
+        self.assertEqual(self.own(), "DE| RTL ZWEI FHD")
+        stream = self.streams["DE| RTL ZWEI FHD"]
+        self.redis.hset(f"live:channel:{stream.stream_hash}:metadata", "state", "error")
+        self.assertEqual(app_own_streams.session_for(self.redis, self.chromecast(), str(self.channel.uuid)), "")
+
+    def test_a_channel_only_dispatch_mores_helpers_read_is_joined(self):
+        # The rewind recorder kept the channel running after its viewer left (2026-10-02)
+        helpers = [{"user_agent": "DispatchMore-Rewind/1"}, {"user_agent": "DispatchMore-Captions/1"}]
+        with mock.patch("apps.proxy.live_proxy.probation._channel_clients", return_value=iter(helpers)):
+            self.assertIsNone(self.own())
+        people = helpers + [{"user_agent": "Plex"}]
+        with mock.patch("apps.proxy.live_proxy.probation._channel_clients", return_value=iter(people)):
+            self.assertEqual(self.own(), "DE| RTL ZWEI FHD")
+
     def test_joins_what_it_can_play(self):
         self.playing("DE| RTL ZWEI HD")
         self.assertIsNone(self.own())

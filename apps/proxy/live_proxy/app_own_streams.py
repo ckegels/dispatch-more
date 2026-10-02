@@ -56,7 +56,22 @@ def _who(viewer):
 
 
 def _running(redis_client, session_id):
-    return bool(redis_client.exists(f"live:channel:{session_id}:metadata"))
+    """Its stream runs, not one that failed or is stopping: going back to that one was a 503
+    for as long as its record lasted (2026-10-02, "DE| RTL LIVING SD" in error)."""
+    state = _text(redis_client.hget(f"live:channel:{session_id}:metadata", "state"))
+    return bool(state) and state not in ("error", "stopping", "stopped")
+
+
+def _only_helpers(redis_client, channel_uuid):
+    """Nobody watches the channel: its clients are Dispatch More's own helpers (the rewind
+    recorder, the caption worker), which read along with a viewer -- usually this very one,
+    whose rewind kept the channel running. Joining it then takes nothing from anybody."""
+    from apps.channels.captions import is_caption_client
+
+    from .probation import _channel_clients
+
+    clients = list(_channel_clients(redis_client, channel_uuid))
+    return bool(clients) and all(is_caption_client(c.get("user_agent")) for c in clients)
 
 
 def session_for(redis_client, viewer, channel_uuid):
@@ -122,6 +137,8 @@ def own_stream_for(redis_client, viewer, channel):
             return None
         current = Stream.objects.select_related("m3u_account").filter(id=int(current_id)).first()
         if current is None or _fits(current, limit)[0]:
+            return None
+        if _only_helpers(redis_client, channel_uuid):
             return None
 
         return _pick(redis_client, viewer, channel, current, limit)
