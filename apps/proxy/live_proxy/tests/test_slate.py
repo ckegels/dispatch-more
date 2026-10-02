@@ -116,3 +116,17 @@ class TryTests(SimpleTestCase):
              mock.patch.object(slate, "_current", return_value=(SLATE_STREAM, SLATE_PROFILE)):
             self.assertFalse(slate.try_stream(self.redis, CHANNEL, *REAL[0], SLATE_STREAM, SLATE_PROFILE))
         switch.assert_called_once()
+
+
+class OnSlateTests(SimpleTestCase):
+    def channel(self, rows):
+        streams = mock.Mock()
+        streams.order_by.return_value.values_list.return_value = rows
+        return SimpleNamespace(streams=streams)
+
+    def test_the_last_custom_stream_after_real_ones(self):
+        self.assertTrue(slate.on_slate(self.channel([(1, False), (9, True)]), 9))
+        self.assertFalse(slate.on_slate(self.channel([(1, False), (9, True)]), 1))
+
+    def test_a_channel_of_own_streams_only_is_not_on_a_slate(self):
+        self.assertFalse(slate.on_slate(self.channel([(8, True), (9, True)]), 9))

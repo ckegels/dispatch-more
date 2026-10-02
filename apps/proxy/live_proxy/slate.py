@@ -67,9 +67,11 @@ def _current(redis_client, channel_uuid):
 
 
 def on_slate(channel, stream_id):
-    """The stream is custom and the channel's last: the fallback."""
+    """The stream is custom and the channel's last, after real ones: the fallback. A channel of
+    custom streams only (somebody's own stream) is not on a slate, it is what it shows."""
     streams = list(channel.streams.order_by("channelstream__order").values_list("id", "is_custom"))
-    return bool(streams) and streams[-1] == (stream_id, True)
+    return (bool(streams) and streams[-1] == (stream_id, True)
+            and any(not custom for _id, custom in streams))
 
 
 def candidates(channel, redis_client):
