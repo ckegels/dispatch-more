@@ -9,6 +9,12 @@ Written 2026-09-19, kept current to **release v249** (2026-10-02). The commit me
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
+> **Work in progress on 2026-10-02 -- read [`fork/handover-2026-10-02.md`](handover-2026-10-02.md)
+> first.** It holds where things stand right now (v248 published and installed, v249 built and
+> not published, an uncommitted look-back priority fix, arrTV arr.89 committed but not built,
+> the open look-back grey screen), everything built in v244-v249 and arr.73-arr.89 in detail,
+> the commands that work, and the test plan.
+
 ---
 
 ## 1. What this is
