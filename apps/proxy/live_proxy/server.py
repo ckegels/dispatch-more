@@ -25,7 +25,7 @@ from .client_manager import ClientManager
 from .output.fmp4.manager import FMP4RemuxManager
 from .output.profile.manager import OutputProfileManager, PROFILE_STATE_ACTIVE
 from .redis_keys import RedisKeys
-from . import media_servers, probation
+from . import media_servers, probation, slate
 from .constants import ChannelState, EventType, StreamType, ChannelMetadataField, REDIS_TTL_DEFAULT
 from .config_helper import ConfigHelper
 from .utils import get_logger
@@ -1878,6 +1878,14 @@ class ProxyServer:
                             # === OWNER CHANNEL HANDLING ===
                             # Extend ownership lease
                             self.extend_ownership(channel_id)
+
+                            # A channel left on the "Could Not Dispatch" slate looks for a
+                            # real stream, and ends after a while (slate.py)
+                            if self.redis_client:
+                                try:
+                                    slate.look(self.redis_client, channel_id)
+                                except Exception as slate_error:
+                                    logger.warning(f"Slate check for {channel_id} failed: {slate_error}")
 
                             # Get channel state from metadata hash
                             channel_state = "unknown"

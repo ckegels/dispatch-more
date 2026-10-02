@@ -1636,6 +1636,16 @@ no longer play. Summary of how it works now:
   watches through first ("stay on" for the length of the check, without touching the account's
   saved "When Switching Channels"), the checked one last (still used when it is the only one
   with room; `make_way` frees it). One Redis lookup when no check runs.
+- **Leaving the fallback slate** (v250, `slate_retry`, on; Stream Check settings "Leave the
+  fallback slate", `slate_retry_seconds` 60, `slate_limit_minutes` 15, 0 = never). Seen
+  2026-10-02: ┃BE┃ 24KITCHEN streamed the "Could Not Dispatch" slate 12+ hours to an arrTV.
+  `live_proxy/slate.py`, called from the owner's cleanup loop (`slate.look`, every 10 s per
+  channel): on the slate = the playing stream is custom and the channel's last. Every
+  `slate_retry_seconds` the next real stream with a free connection (in turn) is switched to
+  (`priority._switch`) in a greenlet and must show bytes within 10 s (`priority.verify`);
+  otherwise back to the slate, unless failover already moved on. After the limit the channel
+  is stopped and `live:slate:ended:<uuid>` (30 min) stops it at once if it lands on the slate
+  again (an unattended TV reconnecting). Off: stock. Tests `live_proxy/tests/test_slate.py`.
 - **Failover during a check** (v245, `failover_makes_way`, on; the setting "Failover takes the
   connection from a check"). Stock failover (`input/manager._try_next_stream`) only takes
   alternates with a free connection and never asked a check to let go, so a channel whose only

@@ -169,6 +169,13 @@ DEFAULTS = {
     # provider as full and gave up. On: it asks the check to let go and waits a few seconds
     # for the connection, and tries the provider being checked last, as a channel start does.
     "failover_makes_way": True,
+    # A channel that ended on the "Could Not Dispatch" slate (its last, custom stream) keeps
+    # looking for a real stream every slate_retry_seconds, and is stopped after
+    # slate_limit_minutes on it (0 = no limit). Off: the slate plays for as long as somebody
+    # is connected, as stock (live_proxy/slate.py).
+    "slate_retry": True,
+    "slate_retry_seconds": 60,
+    "slate_limit_minutes": 15,
 }
 
 # ── Redis keys, all short-lived: what outlives a run is written to CoreSettings ──
@@ -382,6 +389,8 @@ def save_settings(given):
         values["remove_above"] = min(100, max(0, int(values["remove_above"])))
         values["picture_seconds"] = min(20, max(PICTURE_LEAST + 1, float(values["picture_seconds"])))
         values["picture_every_days"] = min(60, max(0, float(values["picture_every_days"])))
+        values["slate_retry_seconds"] = min(900, max(30, int(values["slate_retry_seconds"])))
+        values["slate_limit_minutes"] = min(1440, max(0, int(values["slate_limit_minutes"])))
         if values["providers_at_once"] != "auto":
             values["providers_at_once"] = min(20, max(0, int(values["providers_at_once"])))
     except (TypeError, ValueError):

@@ -90,7 +90,9 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
   while nothing plays), so your other providers stay free for watching, and keeps a viewer on
   the provider they are on while it runs. It never touches a provider someone is watching, and can put
   dead streams aside automatically. It also records each stream's resolution, codec, frame rate
-  and audio, which the Stats page shows even on the Proxy profile.
+  and audio, which the Stats page shows even on the Proxy profile. A channel that ended on its fallback
+  slate (the "Could Not Dispatch" screen) keeps trying its real streams and is stopped after
+  15 minutes there, instead of streaming the slate for as long as a TV stays connected.
 - **Show Groups** — groups by what is on right now: Cooking, Travel, Movies, Documentaries,
   Sport, Kids and more, plus groups you add. A group holds every channel airing that kind of
   show and lets it go when the show ends (never while someone watches). Channels can be kept in

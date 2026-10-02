@@ -69,6 +69,35 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
           <Switch
             size="xs"
             color="green"
+            label="Leave the fallback slate"
+            description="A channel that ended on its last, custom stream (the &quot;Could Not Dispatch&quot; screen) keeps trying its real streams, one at a time, and is stopped after a while on the slate. Off: the slate plays for as long as anybody stays connected."
+            checked={draft.slate_retry !== false}
+            onChange={(e) => set({ slate_retry: e.currentTarget.checked })}
+          />
+          {draft.slate_retry !== false && (
+            <Group grow gap="xs">
+              <NumberInput
+                size="xs"
+                label="Try a real stream every (seconds)"
+                min={30}
+                max={900}
+                value={draft.slate_retry_seconds ?? 60}
+                onChange={number('slate_retry_seconds')}
+              />
+              <NumberInput
+                size="xs"
+                label="Stop after (minutes)"
+                description="0 = never."
+                min={0}
+                max={1440}
+                value={draft.slate_limit_minutes ?? 15}
+                onChange={number('slate_limit_minutes')}
+              />
+            </Group>
+          )}
+          <Switch
+            size="xs"
+            color="green"
             label="Believe the playlist"
             description="On: a stream its provider has stopped listing is taken as gone, without a connection being opened for it -- Dispatcharr already marks those on every refresh, and deletes them by itself after the account's stale days. Off: they are opened and checked like any other."
             checked={!!draft.trust_the_playlist}
