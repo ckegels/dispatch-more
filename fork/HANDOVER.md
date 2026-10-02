@@ -2551,7 +2551,11 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   connection), held by a BRAVIA's live channel.
 - **Pause for as long as you like** -- **`fork/pause-resume.md`**: a 20-minute live pause resumed
   live. Reproduce with arrTV's log recorded live first; likely the Live Rewind filler stopping
-  (frozen head -> `goLive()`), the ring length, or the app stopping while paused.
+  (frozen head -> `goLive()`), the ring length, or the app stopping while paused -- and the TVs'
+  disks (the Shield: 1 GB free). The user chose **server rewind** for long pauses (§4.3): the
+  server records watched channels as an HLS event stream (`ffmpeg -c copy` from its own proxy,
+  wall-time stamped segments under `/data/rewind`), arrTV plays that window when paused or
+  rewinding, a disk budget and a maximum pause, look back as the fallback where an archive exists.
 - **Translation of the generated captions** -- `fork/subtitles.md` §9 step 4: per (channel,
   language) cue lists, DeepL / Ollama / Opus-MT in the worker, `&lang=` on the poll.
 - Look back on arrTV (arr.87, not published): timestamps smoothed through archive seams

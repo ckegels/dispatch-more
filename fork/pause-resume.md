@@ -76,18 +76,70 @@ space while paused). Beyond what the ring can hold, in this order:
    is still used while it holds the position (instant, no provider connection).
 2. **No archive: resume from the oldest moment still held**, saying so on screen ("Paused 52
    min; the TV kept the last 30 -- continuing from 30 min ago"), never silently live.
-3. **The server's own ring** (§4.3) for channels without an archive, if 1 and 2 are not enough
-   for the user.
+3. **The server's own recording** (§4.3, server rewind) -- the user's choice (2026-10-02),
+   since the TVs do not have the space.
 
 The ring's growth while paused (§4.2) stays within the disk budget; on a full box it simply
 stops growing and (1) or (2) takes over.
 
-### 4.3 A server-side alternative (only if the device cannot hold it)
+### 4.3 Server rewind: the server keeps the recording (the user, 2026-10-02: "devices don't have enough space")
 
-Dispatch More keeping a per-channel ring itself (on disk, minutes to hours, wall-time addressed),
-which any player can resume from (`/proxy/ts/stream/<uuid>?at=<wall>`): the pause would survive the
-device and the app entirely. Much bigger (disk on the server, per-channel recording while
-watched); worth it only if §4.2 cannot cover the cases the user hits.
+The TV's disk is what ends a long pause (the Shield: 1 GB free). The server has the disk, already
+has the stream, and can keep it for every TV at once.
+
+**What it is.** While a channel is watched, Dispatch More records it to the server's disk as an
+**HLS event stream**: `ffmpeg -c copy` (no re-encoding, a few % of one core) reading the channel
+from its own proxy -- one more client of the channel the TV already plays, no provider
+connection of its own, the way the caption worker reads -- writing 6-second segments, each
+stamped with its wall time (`#EXT-X-PROGRAM-DATE-TIME`), into `/data/rewind/<channel>/`
+(`DISPATCHARR_REWIND_DIR`; a Docker volume like `/data` already is). ffmpeg cuts on keyframes and
+marks discontinuities (`#EXT-X-DISCONTINUITY`) itself, which is what the device's ring and the
+look-back archives struggle with.
+
+**How arrTV uses it.** Instead of its own ring, arrTV plays
+`/proxy/ts/rewind/<uuid>/index.m3u8` when the user pauses or rewinds: ExoPlayer's HLS player
+handles pause of any length, seeking anywhere in the window, the jump back to live and the
+discontinuities -- all things it already does well for HLS. Resume after an hour is just
+"unpause". The live picture stays on the normal stream until the user pauses or rewinds, so
+zapping is not slowed down.
+
+**When it records.**
+- While any TV watches the channel (so rewinding into the minutes *before* the pause works too),
+  keeping the last **N minutes** (setting, default 60).
+- While a paused or rewinding viewer is behind live, it keeps recording and keeps everything from
+  that viewer's position on, up to a **maximum pause** (setting, default 4 h).
+- After the last viewer leaves (and no paused viewer needs it), it stops after a grace of a few
+  minutes (a quick flip back still finds the recording), and the files go.
+- One recording per channel, shared by every TV watching it.
+
+**Disk.** About 1-1.5 GB per hour for an SD / 720p channel, 3-4 GB for 1080p, 6-8 GB for 4K. A
+**disk budget** (setting, default 20 GB, never more than the disk's free space minus a margin):
+over it, the oldest unused minutes of the least-watched channel go first; a channel a paused
+viewer needs is the last to be trimmed. The arrTV settings page shows what is recorded and its
+size.
+
+**Provider connections.** None extra while someone watches. A **paused** viewer alone keeps the
+channel open (the recorder is a client), so the provider's connection stays in use during the
+pause -- exactly as the TV's own ring does today. It counts as "in use" for Stream Check and for
+look-back priority (`fork/lookback-priority.md`: a paused rewind is not moved). Force Close and the
+viewer checks pass the recorder by, as they do the caption worker (`is_caption_client`), and a
+viewer changing channel stops the old channel's recording unless someone paused it.
+
+**Works with the rest.**
+- Channels with a provider archive: a pause longer than the maximum (or after a restart of the
+  server) still resumes through look back (§4.2b 1).
+- Captions (3b) can read the recording instead of the live stream, and translation can run a few
+  seconds behind without the viewer seeing it.
+- Docker and Linux alike: ffmpeg is in both, the folder is under `/data`.
+
+**Switch.** "Server rewind" on the arrTV settings page (Dispatch More), with the minutes, the
+maximum pause and the disk budget; arrTV uses it when the server offers it and falls back to its
+own ring otherwise (and when switched off on the TV). Off = stock: nothing is recorded.
+
+**Order of work.** (1) The recorder and its housekeeping (start / stop / trim / budget), with the
+HLS window served under `/proxy/ts/rewind/`; tests with a sample stream. (2) arrTV: pause and
+rewind switch to the HLS window and back to live. (3) The settings page and the disk view.
+(4) Captions reading from the recording (optional).
 
 ### 4.4 Look back
 
