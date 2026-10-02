@@ -61,6 +61,27 @@ fix; likely more than one.
 - **Server closed the channel (4)**: the filler is a normal client of the live proxy and reads
   continuously; if the server closes it, that is a server bug to fix there.
 
+### 4.2b Longer than the TV can hold (the user, 2026-10-02: "might have been longer than 30 min")
+
+The TV's ring is bounded by its disk: the Shield had **1.0 GB free** (12 GB, 92 % used) on
+2026-10-02, and 30 minutes of HD is 1-2 GB -- on that box the free space, not the depth setting,
+may be what ends a pause (so it is the first thing §4.1 checks: `enforceBudget` and the free
+space while paused). Beyond what the ring can hold, in this order:
+
+1. **Resume through look back.** When the channel has a provider archive (catch-up days > 0 on
+   any of its streams -- 24KITCHEN, Food Network UK on Digitalizard, ...), resume at the paused
+   wall time as a look-back session (`playCatchup` at that time, the programme's info from the
+   guide), with the Live button to jump back to live. Any pause length within the archive (days)
+   then resumes exactly where it stopped, and nothing has to be kept on the TV at all. The ring
+   is still used while it holds the position (instant, no provider connection).
+2. **No archive: resume from the oldest moment still held**, saying so on screen ("Paused 52
+   min; the TV kept the last 30 -- continuing from 30 min ago"), never silently live.
+3. **The server's own ring** (§4.3) for channels without an archive, if 1 and 2 are not enough
+   for the user.
+
+The ring's growth while paused (§4.2) stays within the disk budget; on a full box it simply
+stops growing and (1) or (2) takes over.
+
 ### 4.3 A server-side alternative (only if the device cannot hold it)
 
 Dispatch More keeping a per-channel ring itself (on disk, minutes to hours, wall-time addressed),
