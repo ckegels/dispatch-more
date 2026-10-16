@@ -821,6 +821,17 @@ def stream_vod(request, content_type, content_id, session_id=None, profile_id=No
             except Exception:
                 pass
 
+        # Dispatch More: a login held to one arrTV device at a time (app_one_device, off unless
+        # users are chosen): a movie holds a provider connection like a live channel does
+        if user:
+            from core.utils import RedisClient as _OneDeviceRedis
+            from apps.proxy.live_proxy import app_one_device
+
+            replaced = app_one_device.check_request(_OneDeviceRedis.get_client(), request, user, session_id)
+            if replaced is not None:
+                close_old_connections()
+                return JsonResponse(replaced, status=409)
+
         if user:
             if not check_user_stream_limits(user, session_id, media_id=content_id):
                 return JsonResponse(

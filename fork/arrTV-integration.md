@@ -44,7 +44,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 (two tiers from v214) | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 | Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
-| One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254) | built (arr.98; stops at once on the socket message from arr.99): "Playing on …" with Watch here | §5a |
+| One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254; look back and movies v255) | built (arr.98; stops at once on the socket message, Watch here on TV, a channel picked takes over, look back and movies: arr.99) | §5a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
@@ -250,7 +250,7 @@ the tile before it. With it:
 - When Multiview **closes** and one tile goes full screen, the next ordinary request (no session
   header) lets Force Close tidy up the device's leftover channels as usual.
 
-## 5a. One device at a time (server v253, the socket message from v254)
+## 5a. One device at a time (server v253, the socket message from v254, look back and movies from v255)
 
 Server setting: Settings → Streaming → arrTV → **One arrTV device at a time**, a list of logins
 (`one_device_users`, user ids; empty by default). Needs `devices`: only a device that says who
@@ -258,11 +258,18 @@ it is can be told apart from another on the same login. `capabilities` says
 `"one_device": true` while it is in use for anyone (it does not say whether *this* login is
 chosen; the app needs nothing from it).
 
-What the server does, on every live stream request of a declared device of a chosen login:
+What the server does, on every stream request of a declared device of a chosen login -- live
+(`/proxy/ts/stream/`), look back (`/proxy/catchup/`, and the Xtream timeshift paths) and movies
+and episodes (`/proxy/vod/`), since each holds a provider connection (v255; live only before):
 
-1. **Another device of the login is watching:** its live streams are closed (a channel only it
+1. **Another device of the login is watching:** its streams are closed. A live channel only it
    watches is stopped whole, its slot free at once; one someone else is on, a recording is on,
-   or the one this request asks for, only loses that device's connection). That device is
+   or the one this request asks for, only loses that device's connection. A look back is
+   stopped as the admin's Stats page stops one viewer (`stop_timeshift_client`), a movie as
+   the user's stream limit stops one (its stop key). Look back and movies have no device in
+   stock's records, so the server keeps the device each session's requests said
+   (`live:app_devices:client_device:<session>`): the app must send the device headers on
+   those requests too (`DispatchMore.playbackHeaders`). That device is
    remembered as *replaced by* this one, with this device's name.
 2. **This device was replaced, and the device that replaced it is still watching:** the
    request is refused:
@@ -303,10 +310,16 @@ What arrTV does (`DispatcharrConnectionLimit` Kind `OTHER_DEVICE`, `DispatchMore
   device at a time, and a **Watch here** button. Nothing retries by itself: that would take
   the stream back from the other device at every reconnect, and it back again.
 - **Watch here** sends `X-Dispatch-Take-Over: 1` on the next stream request only (the full
-  player, the mini player and a Multiview tile alike). Later reconnects do not carry it.
+  player, the mini player, a Multiview tile and the on-demand player alike). So does a channel
+  the viewer picks (guide, list, up/down, number keys), a look back or movie the viewer opens,
+  and a scrub into another look-back window: each is the viewer saying "watch here". A press
+  is good for 10 s; later automatic reconnects and retries never carry it.
+- On a TV, OK is the notice's button while it is up (the bare-video OK handling took it for
+  the info bar before, and the button never got it).
 
-Not covered: movies, series and catch-up (they are not proxied live streams), and players that
-do not declare a device (a browser, VLC): the setting is about arrTV devices.
+Not covered: players that do not declare a device (a browser, VLC): the setting is about
+arrTV devices. Nor a channel's Redirect stream profile, where the player fetches from the
+provider itself and the server holds no connection.
 
 ## 6. Leaving a channel
 

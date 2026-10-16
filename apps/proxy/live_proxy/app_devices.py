@@ -374,6 +374,13 @@ def remember_name(redis_client, key, request, username=""):
     try:
         import json
 
+        if not name:
+            # A request that does not say the name again (a look back or a movie from an
+            # older arrTV) keeps the one the device gave: it is what "Playing on ..." shows
+            raw = redis_client.hget(NAMES_KEY, key)
+            if raw:
+                name = json.loads(raw.decode() if isinstance(raw, bytes) else raw).get("name") or ""
+
         redis_client.hset(NAMES_KEY, key, json.dumps({
             "name": name, "user": username or "", "seen": time.time(),
         }))

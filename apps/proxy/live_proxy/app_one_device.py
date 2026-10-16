@@ -1,9 +1,10 @@
 """One arrTV device at a time, for the logins the admin chose (Settings → arrTV).
 
 Some logins are meant for one screen: a family member's account, one shared with a friend. An
-admin who chooses them here has arrTV play live TV on one device of that login at a time.
-When a second device starts a channel, the first one's live streams are closed and it is
-told why: the next request it makes -- arrTV reconnects at once when a stream ends -- is
+admin who chooses them here has arrTV play on one device of that login at a time: live TV,
+look back (catch-up) and movies and series alike -- whatever holds a provider connection, which
+is what one device at a time is for. When a second device starts any of them, the first one's
+streams are closed and it is told why: the next request it makes -- arrTV reconnects at once when a stream ends -- is
 refused with 409 and `device_replaced`, naming the device that took over, and arrTV shows that
 instead of reconnecting. It plays again when its viewer presses "Watch here", which sends
 `X-Dispatch-Take-Over` and moves the stream back the same way.
@@ -41,6 +42,12 @@ REPLACED_TTL = 24 * 3600
 # cold one), and the replaced one reconnects within a second of being closed: for this long it
 # is refused whether or not the new device is seen watching yet, or it would slip back in
 STARTING_SECONDS = 60
+
+# Which device a look back session or a movie connection is from. Live clients carry their
+# device in Dispatcharr's own client record (record_client_viewer); look back and movies have no
+# such field, so the device each request said is kept here by the session it streams under
+CLIENT_DEVICE_KEY = "live:app_devices:client_device:{client_id}"
+CLIENT_DEVICE_TTL = 12 * 3600
 
 # What arrTV shows when the device that took over never said its name
 UNNAMED = "another device"
@@ -109,6 +116,55 @@ def live_clients_by_device(redis_client, user_id):
     return devices
 
 
+def note_client(redis_client, client_id, device_key):
+    """Remember that this look back session or movie connection is this device's."""
+    if redis_client is None or not client_id:
+        return
+    try:
+        redis_client.set(CLIENT_DEVICE_KEY.format(client_id=client_id), device_key, ex=CLIENT_DEVICE_TTL)
+    except Exception as e:
+        logger.debug(f"One device: could not note {client_id}: {e}")
+
+
+def streams_by_device(redis_client, user_id):
+    """
+    {device key: [(kind, channel or content, client id), ...]}: everything of this login that
+    a declared device holds a provider connection with. kind is "live", "timeshift" (look back)
+    or "vod" (a movie or an episode). Stock lists look back and movies by login
+    (get_user_active_connections, which the user's own stream limit counts with); the device
+    each is from is what note_client kept.
+    """
+    devices = {
+        device: [("live", channel, client) for channel, client in clients]
+        for device, clients in live_clients_by_device(redis_client, user_id).items()
+    }
+    from apps.proxy.utils import get_user_active_connections
+
+    for conn in get_user_active_connections(user_id):
+        if conn.get("type") not in ("timeshift", "vod"):
+            continue
+        device = _as_str(redis_client.get(CLIENT_DEVICE_KEY.format(client_id=conn["client_id"])))
+        if app_devices.is_declared(device):
+            devices.setdefault(device, []).append((conn["type"], str(conn["media_id"]), conn["client_id"]))
+    return devices
+
+
+def _close_stream(redis_client, kind, media, client_id, device_key, keep_channel):
+    """Close one stream of the device being replaced, the way stock stops one of its kind."""
+    if kind == "timeshift":
+        # What the admin's Stats page does for one look back viewer
+        from apps.proxy.utils import stop_timeshift_client
+
+        stop_timeshift_client(redis_client, media, client_id)
+    elif kind == "vod":
+        # What the admin's Stats page and the user's stream limit do for one movie
+        from apps.proxy.vod_proxy.multi_worker_connection_manager import get_vod_client_stop_key
+
+        redis_client.setex(get_vod_client_stop_key(client_id), 60, "true")
+    else:
+        _close(redis_client, media, client_id, device_key, keep_channel)
+
+
 def _close(redis_client, channel_uuid, client_id, device_key, keep_channel):
     """
     Close one client of the device being replaced. A channel only that device watches is
@@ -165,22 +221,26 @@ def refusal(name):
     }
 
 
-def check(redis_client, request, viewer, channel_uuids):
+def check(redis_client, request, viewer, channel_uuids, client_id=None):
     """
-    Called for each live stream request before the user's own stream limit. Returns the body
-    of a 409 refusal when this device was replaced and has not taken over, or None to go on
-    -- after closing the login's other devices' live streams when there are any.
+    Called for each live, look back and movie stream request before the user's own stream
+    limit. Returns the body of a 409 refusal when this device was replaced and has not taken
+    over, or None to go on -- after closing the login's other devices' streams when there are
+    any.
 
-    channel_uuids: the channel asked for, and the stream of its own it may be given instead
-    (app_own_streams). Another device on that very channel only loses its connection to it,
-    so the channel goes on running for this one.
+    channel_uuids: for live, the channel asked for and the stream of its own it may be given
+    instead (app_own_streams); another device on that very channel only loses its connection to
+    it, so the channel goes on running for this one. client_id: for look back and movies, the
+    session this request streams under, kept as this device's (note_client).
     """
     user_id = applies_to(viewer)
     if user_id is None or redis_client is None:
         return None
     me = viewer.server_device
     try:
-        holding = live_clients_by_device(redis_client, user_id)
+        if client_id:
+            note_client(redis_client, client_id, me)
+        holding = streams_by_device(redis_client, user_id)
         others = {device: clients for device, clients in holding.items() if device != me}
         mine = _replaced_key(user_id, me)
         replaced = redis_client.get(mine)
@@ -203,7 +263,7 @@ def check(redis_client, request, viewer, channel_uuids):
         asked = {str(c) for c in channel_uuids if c}
         for device, clients in others.items():
             logger.info(
-                f"One device: {app_devices.device_name(redis_client, me) or me} starts a channel; "
+                f"One device: {app_devices.device_name(redis_client, me) or me} starts a stream; "
                 f"closing {len(clients)} stream(s) of {app_devices.device_name(redis_client, device) or device}"
             )
             redis_client.set(
@@ -211,18 +271,18 @@ def check(redis_client, request, viewer, channel_uuids):
                 json.dumps({"by": me, "name": my_name, "at": time.time()}),
                 ex=REPLACED_TTL,
             )
-            for channel_uuid, client_id in clients:
+            for kind, media, their_client in clients:
                 try:
-                    _close(redis_client, channel_uuid, client_id, device, keep_channel=channel_uuid in asked)
+                    _close_stream(redis_client, kind, media, their_client, device, keep_channel=media in asked)
                 except Exception as e:
-                    logger.warning(f"One device: could not close {client_id} on {channel_uuid}: {e}")
+                    logger.warning(f"One device: could not close {kind} {their_client} on {media}: {e}")
             tell(user_id, device, my_name)
             try:
                 from . import probation
 
                 probation.record_event(
                     redis_client, viewer, "replaced another device (one device at a time)",
-                    channel=",".join(sorted({c for c, _ in clients})), result="closed",
+                    channel=",".join(sorted({m for _k, m, _c in clients})), result="closed",
                 )
             except Exception:
                 pass
@@ -230,3 +290,18 @@ def check(redis_client, request, viewer, channel_uuids):
         # Never costs the new device its stream: at worst both play, as without the switch
         logger.warning(f"One device: could not check user {user_id}: {e}", exc_info=True)
     return None
+
+
+def check_request(redis_client, request, user, client_id):
+    """
+    check() for a look back or movie request: the viewer as the live proxy sees it (the device
+    the app declared, with the login), and the session the request streams under.
+    """
+    if user is None or not app_devices.declared_device(request):
+        return None
+    from dispatcharr.utils import get_client_ip
+
+    from . import probation
+
+    viewer = probation.viewer_from_request(request, user, get_client_ip(request), redis_client)
+    return check(redis_client, request, viewer, (), client_id=client_id)

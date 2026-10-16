@@ -29,6 +29,14 @@ class OneDeviceTests(TestCase):
         app_devices.save_settings({"devices": True, "one_device_users": str(self.kids.id)})
         self._name(LIVING_ROOM, "Living room SHIELD")
         self._name(BEDROOM, "Bedroom TV")
+        # Look back and movies, as stock lists them by login (get_user_active_connections)
+        self.connections = []
+        patcher = patch(
+            "apps.proxy.utils.get_user_active_connections",
+            side_effect=lambda user_id: [c for c in self.connections if c.pop("_user", user_id) == user_id],
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     # ── helpers ──
 
@@ -67,7 +75,7 @@ class OneDeviceTests(TestCase):
         self._watching("orf1", "c1", LIVING_ROOM)
         with self.assertLogs("live_proxy", level="INFO") as logs:
             self.assertIsNone(self._ask(BEDROOM))
-        self.assertTrue(any("closing 1 stream(s) of kids · Living room SHIELD" in line for line in logs.output))
+        self.assertTrue(any("starts a stream; closing 1 stream(s) of kids · Living room SHIELD" in line for line in logs.output))
         # Closed whole, since the living room was its only viewer: its slot is free at once
         release.assert_called_once()
         stop_client.assert_not_called()
@@ -174,6 +182,54 @@ class OneDeviceTests(TestCase):
         self._ask(BEDROOM, channel="orf2")
         self._watching("orf2", "c2", BEDROOM)
         self.assertEqual(self._ask(LIVING_ROOM)["by"], "another device")
+
+    # ── Look back and movies: they hold a provider connection too ──
+
+    def _session(self, kind, media, client, device):
+        """A look back session ("timeshift") or a movie ("vod") the device streams under."""
+        self.connections.append({"media_id": media, "client_id": client, "connected_at": 1.0, "type": kind})
+        app_one_device.note_client(self.redis, client, self._key(device))
+
+    def _ask_session(self, device, client, take_over=False):
+        headers = {"HTTP_X_DISPATCH_DEVICE": device}
+        if take_over:
+            headers["HTTP_X_DISPATCH_TAKE_OVER"] = "1"
+        request = RequestFactory().get("/proxy/catchup/x", REMOTE_ADDR="192.168.65.3", **headers)
+        return app_one_device.check_request(self.redis, request, self.kids, client)
+
+    @patch("apps.proxy.utils.stop_timeshift_client")
+    def test_a_look_back_on_the_first_device_is_closed_like_a_channel(self, stop_timeshift, stop_client, release, _spawn):
+        self._session("timeshift", "42_20261016T2000", "sess-living", LIVING_ROOM)
+        self.assertIsNone(self._ask(BEDROOM))
+        stop_timeshift.assert_called_once_with(self.redis, "42_20261016T2000", "sess-living")
+        self.assertEqual(self._replaced(LIVING_ROOM)["name"], "Bedroom TV")
+
+    def test_a_movie_on_the_first_device_is_closed_like_a_channel(self, stop_client, release, _spawn):
+        from apps.proxy.vod_proxy.multi_worker_connection_manager import get_vod_client_stop_key
+
+        self._session("vod", "content-uuid", "vod_1_1", LIVING_ROOM)
+        self.assertIsNone(self._ask(BEDROOM))
+        self.assertEqual(self.redis.get(get_vod_client_stop_key("vod_1_1")), "true")
+
+    def test_starting_a_look_back_takes_over_and_a_replaced_look_back_is_refused(self, stop_client, release, _spawn):
+        self._watching("orf1", "c1", LIVING_ROOM)
+        self.assertIsNone(self._ask_session(BEDROOM, "sess-bedroom"))
+        release.assert_called_once()
+        # The living room's own look back is refused until it takes over, and Watch here works
+        self.assertEqual(self._ask_session(LIVING_ROOM, "sess-living")["by"], "Bedroom TV")
+        self._session("timeshift", "42_x", "sess-bedroom", BEDROOM)
+        with patch("apps.proxy.utils.stop_timeshift_client") as stop_timeshift:
+            self.assertIsNone(self._ask_session(LIVING_ROOM, "sess-living", take_over=True))
+        stop_timeshift.assert_called_once_with(self.redis, "42_x", "sess-bedroom")
+
+    def test_a_session_of_a_player_that_never_said_its_device_is_left_alone(self, stop_client, release, _spawn):
+        self.connections.append({"media_id": "m", "client_id": "unknown", "connected_at": 1.0, "type": "vod"})
+        self.assertIsNone(self._ask(BEDROOM))
+        self.assertIsNone(self.redis.get("vod_proxy:client:unknown:stop"))
+
+    def test_a_request_that_does_not_say_the_name_keeps_the_one_given(self, stop_client, release, _spawn):
+        self._ask_session(BEDROOM, "sess-bedroom")
+        self.assertEqual(app_one_device.plain_name(self.redis, self._key(BEDROOM)), "Bedroom TV")
 
     def test_a_failure_never_costs_the_new_device_its_stream(self, stop_client, release, _spawn):
         broken = MagicMock()

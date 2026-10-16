@@ -492,6 +492,14 @@ def _serve_catchup(request, user, channel, timestamp, client_duration_hint=None)
                 range_header or "(none)", client_ip,
             )
 
+    # Dispatch More: a login held to one arrTV device at a time (app_one_device, off unless
+    # users are chosen): a look back holds a provider connection like a live channel does
+    from apps.proxy.live_proxy import app_one_device
+
+    replaced = app_one_device.check_request(redis_client, request, user, client_id)
+    if replaced is not None:
+        return _finalize_timeshift_response(JsonResponse(replaced, status=409))
+
     # Displace this user's prior catch-up on other positions of this channel.
     _terminate_previous_timeshift_sessions(
         redis_client, user, channel.id, media_id, effective_session_id,

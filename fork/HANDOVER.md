@@ -2082,7 +2082,14 @@ real server 2026-10-16 (Shield + Pixel 9 on admin), the server closed the Shield
 moment the phone started, but the Shield played its buffer for 10-20 s before it noticed --
 "it doesn't stop anything". So `tell()` sends `device_replaced` on the socket, with the
 replaced device's own id, and `dispatcharr.consumers.user_may_receive_update` delivers it to
-that login's sockets only (a hook in stock code, one comparison, only for that type). **Why the refusal:** a closed stream is a clean end to the player,
+that login's sockets only (a hook in stock code, one comparison, only for that type). **Look
+back and movies (v255):** the user's rule is "anything where the user is using a provider
+connection". `_serve_catchup` and `stream_vod` call `check_request` before the user's limit;
+`streams_by_device` adds stock's look back and movie connections (`get_user_active_connections`)
+to the live clients, each with the device its session's requests said (`note_client`, since
+stock records no device for them), and they are stopped as stock stops one of each
+(`stop_timeshift_client`, the VOD stop key). `remember_name` keeps a device's name when a
+request does not repeat it, or the replaced TV read "Playing on another device". **Why the refusal:** a closed stream is a clean end to the player,
 and arrTV rightly reconnects then; without it the two TVs would take the stream from each
 other forever. Only declared devices take part, never a recording, another login or another
 player; any failure lets the new device play (both play, as without the setting).
