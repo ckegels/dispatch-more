@@ -2051,7 +2051,7 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
-### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
+### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `app_one_device.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
 
 arrTV is the user's own Android / Google TV player, a fork of AerioTV
 (https://github.com/jonzey231/AerioTV-Android) built to work with this server. Everything
@@ -2062,6 +2062,25 @@ Settings → Streaming → **arrTV** (`/api/core/arrtv/`, `CoreSettings` "app-in
 every switch off: no other app sends any of it, and off is stock. **What arrTV has built of
 it** is the table at the top of that file ("Where arrTV stands"): as of 2026-09-28 (arr.63)
 the app has built every part of it, each behind a switch of its own in the app.
+
+**One arrTV device at a time** (next release, v253; `app_one_device.py`, contract
+`fork/arrTV-integration.md` §5a). The user asked (2026-10-16) for logins of their choosing to
+watch on one TV at a time: a new stream on another TV stops the first and tells it so. A list
+of user ids on the arrTV page (`one_device_users`, empty = stock; needs `devices`). In
+`stream_ts`, after the surfing delay (a request it drops closes nothing) and before the user's
+own stream limit: the login's other declared devices' live clients are closed -- a channel
+only that device watches stopped whole with no slot hold (`_stop_channel_now(hold_slot=False)`)
+and its client records deleted, as `leave_previous_channel` does, so the limit does not count
+them; a shared, recorded or the very channel asked for only loses that client
+(`ChannelService.stop_client`) -- and the closed device is remembered as replaced
+(`live:app_devices:replaced:<user>:<device key>`, a day at most). Its reconnect is refused
+with 409 `device_replaced` naming the new device until it sends `X-Dispatch-Take-Over` or the
+new device stops watching -- but never in the first `STARTING_SECONDS` (60) after the takeover,
+since the new device is no client of its channel until that has started and the closed one
+reconnects within a second (it slipped back in, and both played). **Why the refusal:** a closed stream is a clean end to the player,
+and arrTV rightly reconnects then; without it the two TVs would take the stream from each
+other forever. Only declared devices take part, never a recording, another login or another
+player; any failure lets the new device play (both play, as without the setting).
 
 **How "quality" is judged** everywhere below (`channel_manager.quality_of`): a measured
 resolution when there is one -- only recorded when a stream plays through ffmpeg, so on the

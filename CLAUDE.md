@@ -76,7 +76,7 @@ the mistakes not to repeat.
 - `docs/channel-switch-overlap.md` — design of the first feature.
 - Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health,
   diagnostics, and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
-  app_alternatives, app_guides) and `apps/channels/` (logo_library, channel_manager,
+  app_alternatives, app_guides, app_one_device) and `apps/channels/` (logo_library, channel_manager,
   pairings, guide_manager, guide_layout, epg_grabber, stream_check, show_groups/,
   subtitles, captions/ -- the caption worker runs apart, in its own venv or container).
 - `fork/handover-2026-10-02.md` — **the work in progress (2026-10-02): read it first**; where

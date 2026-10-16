@@ -44,6 +44,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 (two tiers from v214) | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 | Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
+| One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`) | next release (v253) | built (`feature/one-device`): "Playing on …" with Watch here | §5a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
@@ -248,6 +249,50 @@ the tile before it. With it:
 - When a tile is **removed**, close its connection (release the player). Nothing to send.
 - When Multiview **closes** and one tile goes full screen, the next ordinary request (no session
   header) lets Force Close tidy up the device's leftover channels as usual.
+
+## 5a. One device at a time (server: next release, v253)
+
+Server setting: Settings → Streaming → arrTV → **One arrTV device at a time**, a list of logins
+(`one_device_users`, user ids; empty by default). Needs `devices`: only a device that says who
+it is can be told apart from another on the same login. `capabilities` says
+`"one_device": true` while it is in use for anyone (it does not say whether *this* login is
+chosen; the app needs nothing from it).
+
+What the server does, on every live stream request of a declared device of a chosen login:
+
+1. **Another device of the login is watching:** its live streams are closed (a channel only it
+   watches is stopped whole, its slot free at once; one someone else is on, a recording is on,
+   or the one this request asks for, only loses that device's connection). That device is
+   remembered as *replaced by* this one, with this device's name.
+2. **This device was replaced, and the device that replaced it is still watching:** the
+   request is refused:
+
+   ```
+   HTTP 409
+   {"error": "Playing on another device: Bedroom TV", "device_replaced": true, "by": "Bedroom TV"}
+   ```
+
+   `by` is the other device's `X-Dispatch-Device-Name`, or "another device" when it never
+   said one. Once the other device stops watching, the next request plays again by itself.
+   For the first 60 s after the takeover it is refused even before the other device is seen
+   watching: that device's channel may still be starting, and the replaced one reconnects
+   within a second.
+3. **The request carries `X-Dispatch-Take-Over: 1`** (or `dm_take_over=1`): the refusal does
+   not apply, and step 1 closes the other device instead, which is then the replaced one.
+
+What arrTV does (`DispatcharrConnectionLimit` Kind `OTHER_DEVICE`, `DispatchMore.takeOver`):
+
+- Its stream simply ends when the other device takes over; it reconnects once at once, as for
+  any clean end, and that reconnect gets the 409. It is recognised by the body
+  (`device_replaced` true), on Direct Connect and Xtream playlists alike, and shown like the
+  stream-limit notices: **"Playing on Bedroom TV"**, a line saying the login watches on one
+  device at a time, and a **Watch here** button. Nothing retries by itself: that would take
+  the stream back from the other device at every reconnect, and it back again.
+- **Watch here** sends `X-Dispatch-Take-Over: 1` on the next stream request only (the full
+  player, the mini player and a Multiview tile alike). Later reconnects do not carry it.
+
+Not covered: movies, series and catch-up (they are not proxied live streams), and players that
+do not declare a device (a browser, VLC): the setting is about arrTV devices.
 
 ## 6. Leaving a channel
 

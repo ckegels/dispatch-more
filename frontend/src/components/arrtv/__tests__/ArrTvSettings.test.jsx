@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
 import ArrTvSettings from '../ArrTvSettings.jsx';
 import API from '../../../api';
+import useUsersStore from '../../../store/users';
 
 vi.mock('../../../api', () => ({
   default: {
@@ -35,7 +36,35 @@ const draw = () =>
 Element.prototype.scrollIntoView = vi.fn();
 
 describe('ArrTvSettings', () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    useUsersStore.setState({ users: [] });
+  });
+
+  it('holds the chosen logins to one device, only with the devices recognised', async () => {
+    useUsersStore.setState({
+      users: [
+        { id: 3, username: 'kids' },
+        { id: 7, username: 'friend' },
+      ],
+    });
+    API.getArrTvSettings.mockResolvedValue({ devices: true, one_device_users: '7' });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.saveArrTvSettings.mockResolvedValue({ devices: true, one_device_users: '7,3' });
+    draw();
+
+    const picker = await screen.findByRole('textbox', { name: 'One arrTV device at a time' });
+    // The chosen login is shown by its name, not its id
+    expect(screen.getAllByText('friend').length).toBeGreaterThan(0);
+    fireEvent.click(picker);
+    // Still in its opening transition, which hides it from the accessible tree
+    fireEvent.click(await screen.findByRole('option', { name: 'kids', hidden: true }));
+    await waitFor(() =>
+      expect(API.saveArrTvSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ one_device_users: '7,3' })
+      )
+    );
+  });
 
   it('shows server rewind with what it keeps now, and look-back priority', async () => {
     API.getArrTvSettings.mockResolvedValue({
@@ -80,10 +109,11 @@ describe('ArrTvSettings', () => {
     const [devices, hints] = screen.getAllByRole('switch');
     expect(devices).not.toBeChecked();
     expect(hints).toBeDisabled();
-    // Every switch under it (channel change, stutter, faster failover, alternatives) says what it needs
+    // Every switch under it (channel change, stutter, faster failover, alternatives, one
+    // device at a time) says what it needs
     expect(
       screen.getAllByText(/Needs "Recognise each arrTV device"/)
-    ).toHaveLength(4);
+    ).toHaveLength(5);
 
     fireEvent.click(devices);
     await waitFor(() =>

@@ -21,6 +21,7 @@ import useVideoStore from '../../store/useVideoStore';
 import useSettingsStore from '../../store/settings';
 import { getShowVideoUrl } from '../../utils/cards/RecordingCardUtils';
 import useEPGsStore from '../../store/epgs';
+import useUsersStore from '../../store/users';
 import AppReports from '../diagnostics/AppReports';
 import { copy } from '../diagnostics/copyText';
 
@@ -413,6 +414,12 @@ const ArrTvSettings = () => {
   const guideSources = Object.values(epgs || {})
     .filter((epg) => epg.source_type !== 'dummy' && epg.is_active !== false)
     .map((epg) => ({ value: String(epg.id), label: epg.name }));
+  // The logins that may be held to one arrTV device at a time
+  const users = useUsersStore((s) => s.users);
+  const userChoices = (users || []).map((u) => ({
+    value: String(u.id),
+    label: u.username,
+  }));
 
   useEffect(() => {
     API.getArrTvSettings()
@@ -489,6 +496,27 @@ const ArrTvSettings = () => {
             onChange={(on) => change({ stall_switch: on })}
           />
           {settings.devices && settings.stall_switch && <HeldDevices />}
+        </Box>
+        <Box pl="xl">
+          <MultiSelect
+            size="xs"
+            maw={520}
+            label="One arrTV device at a time"
+            description={
+              settings.devices
+                ? 'These logins watch live TV on one arrTV device at a time. When a second device starts a channel, the first one stops and shows which device took over, with "Watch here" to take it back. Recordings, other people on the same channel and other players are never stopped.'
+                : 'Needs "Recognise each arrTV device": only a device that said who it is can be told apart from another on the same login.'
+            }
+            placeholder={settings.devices ? 'No login' : ''}
+            data={userChoices}
+            value={String(settings.one_device_users || '')
+              .split(',')
+              .filter(Boolean)}
+            onChange={(ids) => change({ one_device_users: ids.join(',') })}
+            disabled={!settings.devices}
+            clearable
+            searchable
+          />
         </Box>
         <Box pl="xl">
           <Setting

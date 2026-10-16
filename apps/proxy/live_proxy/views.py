@@ -227,6 +227,17 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
                 {"error": "A newer channel was requested by this player"}, status=409
             )
 
+        # A login held to one arrTV device at a time (app_one_device, off unless users are
+        # chosen): this device takes over from the login's other one, or -- replaced by it
+        # and not asking to take over -- is told so instead of taking it back by reconnecting
+        from . import app_one_device
+
+        replaced = app_one_device.check(
+            proxy_server.redis_client, request, viewer, (asked_for, channel_id)
+        )
+        if replaced is not None:
+            return JsonResponse(replaced, status=409)
+
         # An app that said which channel it is leaving (app_devices, off unless switched on):
         # close that one now, so its slot is free for this one. Before the user's own stream
         # limit, which would otherwise count the channel being left and refuse the switch.

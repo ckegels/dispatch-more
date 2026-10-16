@@ -24,6 +24,9 @@ changes nothing):
 - **own_stream**: an arrTV device that cannot use the stream a channel is playing gets another
   stream of that channel to itself (app_own_streams). What it cannot use includes what it says
   it cannot decode (`X-Dispatch-Max-Video`, read with devices on).
+- **one_device_users** (needs devices): the logins held to one arrTV device at a time; a
+  second device starting a channel closes the first one's, and the first is told
+  (app_one_device). `X-Dispatch-Take-Over` is how a replaced device takes it back.
 
 Every header also works as a query parameter (`dm_device`, `dm_device_name`, `dm_multiview`,
 `dm_previous`), for what plays a link without letting the app set headers (a Cast receiver).
@@ -57,12 +60,15 @@ SETTINGS_KEY = "app-integration"
 # guide_choice: whoever watches a channel in arrTV may put it on another guide, from the
 # guides that have something on now (see app_guides); guide_choice_sources: the EPG source
 # ids to offer from, comma separated ("" is every active one that is not a dummy)
+# one_device_users: the user ids held to one arrTV device at a time, comma separated ("" is
+# none, as stock) -- see app_one_device
 DEFAULTS = {
     "devices": False, "switch_hints": False, "reports": False,
     "home_networks": "", "outside_max_quality": "", "stall_switch": False,
     "own_stream": False, "fast_failover": False, "alternatives": False,
     "fast_grace": 5, "fast_grace_many": 3,
     "guide_choice": False, "guide_choice_sources": "",
+    "one_device_users": "",
     "keep_past_days": 0,
     # Server rewind (live_proxy/rewind.py, fork/pause-resume.md §4.3): watched channels kept on
     # the server so a TV can pause and rewind without its own disk. Minutes always kept, the
@@ -114,6 +120,8 @@ HEADERS = {
     "multiview": ("HTTP_X_DISPATCH_MULTIVIEW", "dm_multiview"),
     "previous": ("HTTP_X_DISPATCH_PREVIOUS_CHANNEL", "dm_previous"),
     "max_video": ("HTTP_X_DISPATCH_MAX_VIDEO", "dm_max_video"),
+    # A device that was replaced on a login held to one device asks for its stream back
+    "take_over": ("HTTP_X_DISPATCH_TAKE_OVER", "dm_take_over"),
 }
 
 
@@ -135,7 +143,7 @@ def _as_kind(key, value):
             return max(low, min(high, int(float(value))))
         except (TypeError, ValueError):
             return DEFAULTS[key]
-    if key == "guide_choice_sources":
+    if key in ("guide_choice_sources", "one_device_users"):
         # Ids only: given as a list by the settings page, kept as text like the other rows
         parts = value if isinstance(value, (list, tuple)) else str(value or "").split(",")
         return ",".join(str(int(p)) for p in parts if str(p).strip().isdigit())
@@ -213,6 +221,11 @@ def declared_device(request):
     if not device or not load_settings()["devices"]:
         return ""
     return device if _DEVICE_ID.match(device) else ""
+
+
+def declared_take_over(request):
+    """Whether the device asks to take the stream back from the device that replaced it."""
+    return _said(request, "take_over").lower() in ("1", "true", "yes")
 
 
 def declared_multiview(request):
@@ -627,6 +640,9 @@ def capabilities():
         # Generated captions (captions/live.py), and look back moving another viewer
         "captions_url": "/api/channels/captions/live/",
         "look_back_priority": settings["look_back_priority"],
+        # Some logins are held to one arrTV device at a time (app_one_device): a replaced
+        # device is refused with 409 and device_replaced until it sends take_over
+        "one_device": bool(settings["devices"] and settings["one_device_users"]),
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
