@@ -173,3 +173,19 @@ class SeekSessionTests(SimpleTestCase):
         self.assertEqual(entry.get("final_url"), "http://cdn/archive-opened-at-20-00.ts")
         # 31 s of an hour's 600 MB, on a TS packet boundary
         self.assertEqual(scrub["byte_offset"], (int(31 / 3600 * 600000000) // 188) * 188)
+
+    def test_a_whole_minute_opens_the_providers_archive_at_that_minute(self):
+        """arrTV moves a minute a press: the provider serves that minute exactly."""
+        self.assertTrue(views._open_at_its_minute(
+            self.redis, self.new, self.old, "8_2026-10-16T20-12-00Z", "2026-10-16T20:12:00Z"))
+        self.assertIsNone(self.redis.hget(views._pool_key(self.old), "final_url"))
+
+    def test_a_start_with_seconds_or_the_pools_own_or_an_xtream_one_keeps_the_open_archive(self):
+        url = "http://cdn/archive-opened-at-20-00.ts"
+        self.assertFalse(views._open_at_its_minute(
+            self.redis, self.new, self.old, "8_2026-10-16T20-12-31Z", "2026-10-16T20:12:31Z"))
+        self.assertFalse(views._open_at_its_minute(
+            self.redis, self.new, self.old, "8_2026-10-16-20-00", "2026-10-16:20-00"))
+        self.assertFalse(views._open_at_its_minute(
+            self.redis, "xtream-301-session", self.old, "8_x", "2026-10-16T20:12:00Z"))
+        self.assertEqual(self.redis.hget(views._pool_key(self.old), "final_url"), url)

@@ -1949,21 +1949,28 @@ behaviour, so no switch: without a match nothing changes. Tests:
 `apps/timeshift/tests/test_session_adoption.py`. arrTV's half (it stopped reporting on that
 first 404) is arr.73 (`fix/catchup-session`).
 
-**A seek plays where it was asked (v257).** The match itself served seeks wrongly. The user
-(2026-10-16): "if I go forward one click it either plays the same thing again, or it just
-randomly jumps to a different timestamp". In the log, each forward press's new session was
-fingerprint-matched *again on every request* -- it never gets a pool entry of its own -- so its
-opening GET, range probes and next GET went to three different old pools, each somewhere else in
-the programme (the 416s in the log were their range maps clashing). Now `_held_pool` keeps an API
-session on the pool `adopted_by` says it was handed. On that pool the session's start is served
-as stock does for an Xtream player's new start: a byte offset into the archive the pool has open
-(`_resolve_session_archive_scrub`), to the second. **Not a fresh archive:** v256 also cleared
-the pool's archive URL so each seek opened the archive at the session's own start, and the
-Shield then played the same minute again on every +30 s press -- provider URLs carry the minute
-only (`%Y-%m-%d:%H-%M`, helpers.convert_timestamp_to_provider_tz), so 18:35:31 and 18:36:40
-asked for 18:35 and 18:36. The first open is the programme's start, a whole minute, covering the
-programme, so every seek within it is an offset. Also a fix to stock behaviour without a
-switch, like the rest of 5.7c. Tests: `SeekSessionTests` in the same file.
+**A seek plays where it was asked (v258).** The user (2026-10-16): "if I go forward one click
+it either plays the same thing again, or it just randomly jumps to a different timestamp".
+Three causes, in the order they were found on the Shield:
+1. Each forward press's new session was fingerprint-matched *again on every request* -- it
+   never gets a pool entry of its own -- so its opening GET, range probes and next GET went to
+   three different old pools, each somewhere else in the programme (the 416s in the log were
+   their range maps clashing). `_held_pool` keeps an API session on the pool `adopted_by` says
+   it was handed (v256).
+2. Provider catch-up URLs carry the **minute** only (`%Y-%m-%d:%H-%M`,
+   `helpers.convert_timestamp_to_provider_tz`): arrTV's +30 s presses asked for 18:35:31 and
+   18:36:40, which open as 18:35 and 18:36 -- the same minute again. v256 opened a fresh archive
+   for every seek and showed exactly that.
+3. The stock alternative, a byte offset into the archive the pool has open
+   (`_resolve_session_archive_scrub`, from the archive's reported length; v257 went back to
+   it), also landed on the minute it started from on the user's provider.
+So arrTV now moves **a whole minute a press** (`CatchupMinuteStep`, arr.99), the finest start
+the provider has, and `_open_at_its_minute` has a session starting on a whole minute open the
+provider's archive at exactly that minute, on the same provider connection (the pool's
+`final_url` is cleared, so the request goes to the portal). A start with seconds (resuming)
+keeps the byte offset; Xtream sessions (no API session) are served as stock serves them. A fix
+to stock behaviour without a switch, like the rest of 5.7c. Tests: `SeekSessionTests` in the
+same file.
 
 ### 5.8 Misc
 
