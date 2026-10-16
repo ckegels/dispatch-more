@@ -127,3 +127,48 @@ class AdoptedSessionTests(SimpleTestCase):
         sessions.adopt(self.new, self.old, redis_client=self.redis)
         views._finalize_playback_session_auth(self.redis, self.old)
         self.assertFalse(self.redis.exists(TimeshiftRedisKeys.api_session(self.new)))
+
+
+class SeekSessionTests(SimpleTestCase):
+    """
+    Dispatch More: arrTV mints an API session for every seek (its archive stream cannot be
+    seeked in). Seen on the real server (2026-10-16): one such session's requests were served
+    by three different old sessions' pools, each at another position, and the pool it got
+    estimated a byte offset in its own archive -- a forward press played the same part again
+    or jumped to a random time.
+    """
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        self.old, self.new = "QXBold", "LSsNew"
+        self.redis.hset(TimeshiftRedisKeys.api_session(self.new),
+                        mapping={"user_id": "3", "channel_uuid": "u", "start": "x"})
+        self.redis.hset(views._pool_key(self.old), mapping={
+            "user_id": "3", "profile_id": "12", "media_id": "8_2026-10-16-20-00",
+            "final_url": "http://cdn/archive-opened-at-20-00.ts", "archive_anchor_ts": "2026-10-16:20-00",
+        })
+
+    def test_every_request_of_a_session_stays_on_the_pool_it_was_handed(self):
+        self.assertIsNone(views._held_pool(self.redis, self.new, 3))
+        sessions.adopt(self.new, self.old, redis_client=self.redis)
+        self.assertEqual(views._held_pool(self.redis, self.new, 3), self.old)
+        # Not another viewer's pool, nor one that is gone
+        self.assertIsNone(views._held_pool(self.redis, self.new, 4))
+        self.redis.delete(views._pool_key(self.old))
+        self.assertIsNone(views._held_pool(self.redis, self.new, 3))
+
+    def test_a_session_at_another_position_opens_the_archive_at_its_own_start(self):
+        self.assertTrue(views._reanchor_for(self.redis, self.new, self.old, "8_2026-10-16-20-12"))
+        # No archive URL left to estimate a byte offset in: the request goes to the portal
+        self.assertIsNone(self.redis.hget(views._pool_key(self.old), "final_url"))
+        self.assertIsNone(views._resolve_session_archive_scrub(
+            views._get_pool_entry(self.redis, self.old), "2026-10-16:20-12"))
+
+    def test_a_session_at_the_pools_own_position_keeps_its_archive(self):
+        self.assertFalse(views._reanchor_for(self.redis, self.new, self.old, "8_2026-10-16-20-00"))
+        self.assertEqual(self.redis.hget(views._pool_key(self.old), "final_url"),
+                         "http://cdn/archive-opened-at-20-00.ts")
+
+    def test_an_xtream_player_without_an_api_session_is_left_as_stock_serves_it(self):
+        self.assertFalse(views._reanchor_for(self.redis, "xtream-301-session", self.old, "8_2026-10-16-20-12"))
+        self.assertIsNotNone(self.redis.hget(views._pool_key(self.old), "final_url"))
