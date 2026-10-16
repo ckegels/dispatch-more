@@ -476,11 +476,10 @@ def _serve_catchup(request, user, channel, timestamp, client_duration_hint=None)
             effective_session_id = matched
             client_id = matched
             # Dispatch More: the player's own session is kept alive with the pool it now
-            # streams under (sessions.adopt), and plays from its own start (_reanchor_for)
+            # streams under (sessions.adopt), and stays on it (_held_pool)
             from .sessions import adopt
 
             adopt(session_id, matched, redis_client=redis_client)
-            _reanchor_for(redis_client, session_id, matched, media_id)
 
     if debug:
         if effective_session_id != session_id:
@@ -1811,6 +1810,12 @@ def _held_pool(redis_client, session_id, user_id):
     (2026-10-16) the opening GET, the range probes and the GET after them of one session were
     served by three different old pools, each somewhere else in the programme -- a forward
     press played the same part again or jumped to a random time.
+
+    On that one pool the session's start is served from the archive the pool has open, by a
+    byte offset (_resolve_session_archive_scrub): to the second, where a fresh archive could
+    only be opened at the minute (provider URLs carry %H-%M), and a +30 s press then played
+    the same minute again. The first open is the programme's start, a whole minute, and covers
+    the programme, so every seek within it is such an offset.
     """
     if redis_client is None or not session_id:
         return None
@@ -1823,28 +1828,6 @@ def _held_pool(redis_client, session_id, user_id):
     if not entry or not _pool_entry_owned_by_user(entry, user_id):
         return None
     return held
-
-
-def _reanchor_for(redis_client, session_id, pool_session_id, media_id):
-    """
-    Dispatch More: an API session names the second it plays from. Handed a pool opened at
-    another position, it was served by estimating a byte offset into that other archive
-    (_resolve_session_archive_scrub, made for Xtream players rebuilding the URL with a new
-    start) -- a guess from the archive's reported length, which played the wrong part. The
-    pool forgets its archive URL, so this request opens the archive at the session's own start,
-    on the same provider connection. A session at the pool's own position keeps it as it is.
-    """
-    if redis_client is None or not catchup_session_exists(session_id, redis_client=redis_client):
-        return False
-    entry = _get_pool_entry(redis_client, pool_session_id) or {}
-    if str(entry.get("media_id") or "") == str(media_id):
-        return False
-    _clear_pool_final_url(redis_client, pool_session_id)
-    logger.info(
-        "Timeshift: session %s plays from its own start, not %s's open archive",
-        session_id, pool_session_id,
-    )
-    return True
 
 
 def _find_matching_pool_session(

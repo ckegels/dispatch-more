@@ -157,18 +157,19 @@ class SeekSessionTests(SimpleTestCase):
         self.redis.delete(views._pool_key(self.old))
         self.assertIsNone(views._held_pool(self.redis, self.new, 3))
 
-    def test_a_session_at_another_position_opens_the_archive_at_its_own_start(self):
-        self.assertTrue(views._reanchor_for(self.redis, self.new, self.old, "8_2026-10-16-20-12"))
-        # No archive URL left to estimate a byte offset in: the request goes to the portal
-        self.assertIsNone(self.redis.hget(views._pool_key(self.old), "final_url"))
-        self.assertIsNone(views._resolve_session_archive_scrub(
-            views._get_pool_entry(self.redis, self.old), "2026-10-16:20-12"))
-
-    def test_a_session_at_the_pools_own_position_keeps_its_archive(self):
-        self.assertFalse(views._reanchor_for(self.redis, self.new, self.old, "8_2026-10-16-20-00"))
-        self.assertEqual(self.redis.hget(views._pool_key(self.old), "final_url"),
-                         "http://cdn/archive-opened-at-20-00.ts")
-
-    def test_an_xtream_player_without_an_api_session_is_left_as_stock_serves_it(self):
-        self.assertFalse(views._reanchor_for(self.redis, "xtream-301-session", self.old, "8_2026-10-16-20-12"))
-        self.assertIsNotNone(self.redis.hget(views._pool_key(self.old), "final_url"))
+    def test_a_seek_is_served_to_the_second_in_the_archive_the_pool_has_open(self):
+        """
+        Not by opening a new archive: provider URLs carry the minute only, so a +30 s press
+        from the start of a minute asked for that same minute again (the Shield, 2026-10-16).
+        """
+        sessions.adopt(self.new, self.old, redis_client=self.redis)
+        self.redis.hset(views._pool_key(self.old), mapping={
+            "content_length": "600000000", "archive_duration_secs": "3600",
+            "archive_anchor_ts": "2026-10-16T20:00:00Z",
+        })
+        entry = views._get_pool_entry(self.redis, views._held_pool(self.redis, self.new, 3))
+        scrub = views._resolve_session_archive_scrub(entry, "2026-10-16T20:00:31Z")
+        self.assertEqual(scrub["kind"], "scrub")
+        self.assertEqual(entry.get("final_url"), "http://cdn/archive-opened-at-20-00.ts")
+        # 31 s of an hour's 600 MB, on a TS packet boundary
+        self.assertEqual(scrub["byte_offset"], (int(31 / 3600 * 600000000) // 188) * 188)
