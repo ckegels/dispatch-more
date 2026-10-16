@@ -75,6 +75,16 @@ class OneDeviceTests(TestCase):
         self.assertEqual(self.redis.hgetall(RedisKeys.client_metadata("orf1", "c1")), {})
         self.assertEqual(self._replaced(LIVING_ROOM)["name"], "Bedroom TV")
 
+    def test_the_replaced_device_is_told_at_once_on_the_socket(self, stop_client, release, _spawn):
+        """Not only when it has played what it had buffered, seconds later."""
+        self._watching("orf1", "c1", LIVING_ROOM)
+        with patch("core.utils.send_websocket_update") as send:
+            self._ask(BEDROOM)
+        send.assert_called_once_with("updates", "update", {
+            "type": "device_replaced", "user_id": self.kids.id,
+            "device": LIVING_ROOM, "by": "Bedroom TV",
+        })
+
     def test_the_replaced_device_is_refused_when_it_reconnects_rather_than_taking_it_back(self, stop_client, release, _spawn):
         """Otherwise the two would take the stream from each other at every reconnect."""
         self._watching("orf1", "c1", LIVING_ROOM)
@@ -228,3 +238,13 @@ class OneDeviceStreamRequestTests(SimpleTestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(json.loads(response.content)["by"], "Bedroom TV")
         limits.assert_not_called()
+
+
+class OneDeviceSocketTests(SimpleTestCase):
+    def test_only_that_login_receives_it(self):
+        from dispatcharr.consumers import user_may_receive_update
+
+        message = {"type": "device_replaced", "user_id": 7, "device": LIVING_ROOM, "by": "Bedroom TV"}
+        self.assertTrue(user_may_receive_update(MagicMock(id=7, user_level=0), message))
+        self.assertFalse(user_may_receive_update(MagicMock(id=8, user_level=10), message))
+        self.assertFalse(user_may_receive_update(None, message))

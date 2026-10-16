@@ -44,7 +44,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 (two tiers from v214) | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 | Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
-| One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`) | next release (v253) | built (`feature/one-device`): "Playing on …" with Watch here | §5a |
+| One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254) | built (arr.98; stops at once on the socket message from arr.99): "Playing on …" with Watch here | §5a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
@@ -250,7 +250,7 @@ the tile before it. With it:
 - When Multiview **closes** and one tile goes full screen, the next ordinary request (no session
   header) lets Force Close tidy up the device's leftover channels as usual.
 
-## 5a. One device at a time (server: next release, v253)
+## 5a. One device at a time (server v253, the socket message from v254)
 
 Server setting: Settings → Streaming → arrTV → **One arrTV device at a time**, a list of logins
 (`one_device_users`, user ids; empty by default). Needs `devices`: only a device that says who
@@ -280,7 +280,21 @@ What the server does, on every live stream request of a declared device of a cho
 3. **The request carries `X-Dispatch-Take-Over: 1`** (or `dm_take_over=1`): the refusal does
    not apply, and step 1 closes the other device instead, which is then the replaced one.
 
+4. **At the moment it closes the other device** (v254), the server says so on its `/ws/` socket,
+   to that login's sockets only:
+
+   ```
+   {"type": "update", "data": {"type": "device_replaced", "user_id": 1,
+    "device": "<the replaced device's X-Dispatch-Device>", "by": "Pixel 9"}}
+   ```
+
+   Without it the replaced TV went on playing what it had buffered -- 10 to 20 s on the Shield
+   (tested 2026-10-16), and more with Live Rewind -- and looked as if nothing had stopped.
+
 What arrTV does (`DispatcharrConnectionLimit` Kind `OTHER_DEVICE`, `DispatchMore.takeOver`):
+
+- On the socket message whose `device` is its own (arr.99), the player stops at once and shows
+  the notice below. Live only; not while playing from the local rewind buffer.
 
 - Its stream simply ends when the other device takes over; it reconnects once at once, as for
   any clean end, and that reconnect gets the 409. It is recognised by the body

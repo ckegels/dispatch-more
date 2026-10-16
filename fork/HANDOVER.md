@@ -2063,7 +2063,7 @@ every switch off: no other app sends any of it, and off is stock. **What arrTV h
 it** is the table at the top of that file ("Where arrTV stands"): as of 2026-09-28 (arr.63)
 the app has built every part of it, each behind a switch of its own in the app.
 
-**One arrTV device at a time** (next release, v253; `app_one_device.py`, contract
+**One arrTV device at a time** (v253, the socket message v254; `app_one_device.py`, contract
 `fork/arrTV-integration.md` §5a). The user asked (2026-10-16) for logins of their choosing to
 watch on one TV at a time: a new stream on another TV stops the first and tells it so. A list
 of user ids on the arrTV page (`one_device_users`, empty = stock; needs `devices`). In
@@ -2077,7 +2077,12 @@ them; a shared, recorded or the very channel asked for only loses that client
 with 409 `device_replaced` naming the new device until it sends `X-Dispatch-Take-Over` or the
 new device stops watching -- but never in the first `STARTING_SECONDS` (60) after the takeover,
 since the new device is no client of its channel until that has started and the closed one
-reconnects within a second (it slipped back in, and both played). **Why the refusal:** a closed stream is a clean end to the player,
+reconnects within a second (it slipped back in, and both played). **Told at once (v254):** tested on the
+real server 2026-10-16 (Shield + Pixel 9 on admin), the server closed the Shield's stream the
+moment the phone started, but the Shield played its buffer for 10-20 s before it noticed --
+"it doesn't stop anything". So `tell()` sends `device_replaced` on the socket, with the
+replaced device's own id, and `dispatcharr.consumers.user_may_receive_update` delivers it to
+that login's sockets only (a hook in stock code, one comparison, only for that type). **Why the refusal:** a closed stream is a clean end to the player,
 and arrTV rightly reconnects then; without it the two TVs would take the stream from each
 other forever. Only declared devices take part, never a recording, another login or another
 player; any failure lets the new device play (both play, as without the setting).

@@ -14,6 +14,11 @@ the stream from each other at every reconnect, forever. The device that was repl
 remembered until it takes over or the device that replaced it stops watching, so a TV that was
 simply left on gets its stream back by itself the next time it asks once the other is done.
 
+The replaced device is also told at once, on Dispatcharr's socket (`device_replaced`, only to
+that login's sockets): a closed stream reaches the screen only once the player has played
+what it had buffered, ten or twenty seconds on a TV and more with its own Live Rewind, and on
+the real installation that looked like nothing was stopped at all.
+
 Only devices that said who they are (app_devices, "Recognise each arrTV device") take part:
 without that the server cannot tell two TVs on one login apart. Recordings are never closed,
 nor anyone else's viewing of a shared channel, nor any other player on that login. Off -- no
@@ -130,6 +135,26 @@ def _close(redis_client, channel_uuid, client_id, device_key, keep_channel):
         redis_client.delete(RedisKeys.client_metadata(channel_uuid, _as_str(other)))
 
 
+def tell(user_id, device_key, by_name):
+    """
+    Tell the replaced device now, on the socket arrTV keeps open, rather than when its buffer
+    runs dry: `device_replaced` with the device's own id (which arrTV compares with its own)
+    and the name of the device that took over. Only the login's own sockets receive it
+    (dispatcharr.consumers.user_may_receive_update). Never raises: the refusal still tells it.
+    """
+    try:
+        from core.utils import send_websocket_update
+
+        send_websocket_update("updates", "update", {
+            "type": "device_replaced",
+            "user_id": user_id,
+            "device": str(device_key).split("|", 2)[-1],
+            "by": by_name or UNNAMED,
+        })
+    except Exception as e:
+        logger.debug(f"One device: could not tell {device_key}: {e}")
+
+
 def refusal(name):
     """The answer a replaced device gets until it takes over: what arrTV reads and shows."""
     name = name or UNNAMED
@@ -191,6 +216,7 @@ def check(redis_client, request, viewer, channel_uuids):
                     _close(redis_client, channel_uuid, client_id, device, keep_channel=channel_uuid in asked)
                 except Exception as e:
                     logger.warning(f"One device: could not close {client_id} on {channel_uuid}: {e}")
+            tell(user_id, device, my_name)
             try:
                 from . import probation
 
