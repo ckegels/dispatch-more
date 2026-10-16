@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247; latest release v247) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258; latest release v258) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -250,7 +250,10 @@ the tile before it. With it:
 - When Multiview **closes** and one tile goes full screen, the next ordinary request (no session
   header) lets Force Close tidy up the device's leftover channels as usual.
 
-## 5a. One device at a time (server v253, the socket message from v254, look back and movies from v255)
+## 5a. One device at a time (server v258)
+
+First published in v258; the v253-v257 named below were test builds on the user's server, never
+published, kept here for the history.
 
 Server setting: Settings → Streaming → arrTV → **One arrTV device at a time**, a list of logins
 (`one_device_users`, user ids; empty by default). Needs `devices`: only a device that says who
