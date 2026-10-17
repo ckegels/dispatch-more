@@ -155,15 +155,32 @@ def join(redis_client, user_id, device_key, other_device_id):
 
 
 def leave(redis_client, user_id, device_key):
-    """This device stops watching together; a group of one is no group."""
+    """
+    This device stops watching together (its viewer chose to, or it left the app); a group of
+    one is no group, and the one left is told (`link_ended`, that login only), so it stops
+    offering "Stop watching together" and comparing positions with nobody. It plays on.
+    """
     if redis_client is None or not user_id:
         return
     link_key = LINK_KEY.format(user_id=user_id)
     try:
+        if device_key not in members(redis_client, user_id):
+            return
         redis_client.hdel(link_key, device_key)
-        if len(members(redis_client, user_id)) < 2:
+        left = members(redis_client, user_id)
+        if len(left) < 2:
             redis_client.delete(link_key)
             redis_client.delete(CHANNEL_KEY.format(user_id=user_id))
+            redis_client.delete(POSITION_KEY.format(user_id=user_id))
+            if left:
+                from core.utils import send_websocket_update
+
+                send_websocket_update("updates", "update", {
+                    "type": "link_ended",
+                    "user_id": user_id,
+                    "devices": sorted(_device_id(d) for d in left),
+                })
+        logger.info(f"Watch together: {app_devices.device_name(redis_client, device_key) or device_key} left")
     except Exception as e:
         logger.debug(f"Watch together: could not take {device_key} out: {e}")
 

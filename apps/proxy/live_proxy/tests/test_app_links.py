@@ -89,6 +89,14 @@ class WatchTogetherTests(TestCase):
         app_links.leave(self.redis, self.user.id, self._key(PIXEL))
         self.assertEqual(app_links.members(self.redis, self.user.id), set())
         self.assertIsNone(app_links.channel_of(self.redis, self.user.id))
+        # The one left is told, and plays on
+        self.sent.assert_called_with("updates", "update", {
+            "type": "link_ended", "user_id": self.user.id, "devices": [SHIELD],
+        })
+        # Leaving again (the app leaves at every exit) says nothing more
+        self.sent.reset_mock()
+        app_links.leave(self.redis, self.user.id, self._key(PIXEL))
+        self.sent.assert_not_called()
 
     @patch("apps.proxy.utils.get_user_active_connections", return_value=[])
     @patch("apps.proxy.live_proxy.probation.gevent.spawn", side_effect=lambda fn, *args: None)

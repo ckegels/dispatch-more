@@ -343,7 +343,7 @@ The device is the one the request's device header names (the API client sends it
 |---|---|
 | `GET link_url` | `{"linked": bool, "channel": uuid or null, "offers": [{"device", "name", "channel", "channel_name"}]}` -- the login's other devices watching one live channel now |
 | `POST link_url {"join": "<device id>"}` | `{"linked": true, "channel", "name", "channel_name"}`, or 404 when that device is not watching a channel |
-| `DELETE link_url` | this device stops watching together (a group of one is no group) |
+| `DELETE link_url` | this device stops watching together; a group of one is no group, and the one left is told on the socket (v261): `{"type": "update", "data": {"type": "link_ended", "user_id": 1, "devices": ["<the one left>"]}}` |
 | `POST link_url {"position": {"pts": <90 kHz>, "at": <epoch ms>}}` (v261) | `{"others": [{"device", "name", "pts", "at"}]}` -- the other linked devices' latest reports (under 30 s old) on the very channel this device's live client is on |
 
 Once linked, a live stream request of a member for another channel than the group's makes it
@@ -367,7 +367,10 @@ What arrTV does (`DispatchMoreLinks`, `WatchTogether`):
   a device of the login that is watching. A link left from before ends at that start.
 - A `linked_channel` naming this device: the open player tunes to it in place; otherwise the app
   opens the player on it.
-- **Stop watching together** in the player's Options menu while linked.
+- **Stop watching together** in the player's Options menu while linked. Leaving the app (Home,
+  another app, closing it) leaves too (arr.102), so a TV that comes back later does not follow
+  the other on its next channel change; the other plays on, and on `link_ended` stops offering
+  it.
 - **In step** (arr.102, server v261): every 10 s while linked, the PTS of the frame on screen
   (`LivePtsProbe`: the live connection's first PES timestamp, from which Media3 counts the
   player's position, plus that position) is reported; ahead of the furthest-behind other device
