@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
-import CaptionsCard, { machineLine } from '../CaptionsCard.jsx';
+import CaptionsCard, { machineLine, modelInUse } from '../CaptionsCard.jsx';
 import API from '../../../api';
 
 vi.mock('../../../api', () => ({
@@ -129,8 +129,46 @@ describe('CaptionsCard', () => {
     API.captionsAction.mockResolvedValue(status({ worker: { running: true } }));
     await open();
     expect(await screen.findByText(/17 channels at once \(0.03 s per second of sound, card\)/)).toBeInTheDocument();
-    expect(screen.getByText('Worker running on the card')).toBeInTheDocument();
+    // Which model it is, said where the card is shut as well
+    expect(screen.getByText('Whisper tiny on the card')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Download' }));
     await waitFor(() => expect(API.captionsAction).toHaveBeenCalledWith('download', 'small'));
+  });
+
+  it('knows the model in use: the one picked, else the one that fits', () => {
+    expect(modelInUse({ model: '' }, { model: 'large-v3-turbo' })).toBe('large-v3-turbo');
+    expect(modelInUse({ model: 'medium' }, { model: 'large-v3-turbo' })).toBe('medium');
+    expect(modelInUse(null, null)).toBe('');
+  });
+
+  it('says which model is in use, and a downloaded one can be picked instead', async () => {
+    const running = (settings = {}) =>
+      status({
+        settings: { ...status().settings, model: '', ...settings },
+        worker: { running: true, device: 'cuda', jobs: [{ key: 'abcdef1234', state: 'live', model: 'large-v3-turbo', language: 'fr' }] },
+        models: [
+          model('small', { downloaded: true }),
+          model('medium'),
+          model('large-v3-turbo', { downloaded: true }),
+        ],
+        proposal: { model: 'large-v3-turbo', measured: false, why: 'A card with 12 GB.', translation: '' },
+      });
+    API.getCaptions.mockResolvedValue(running());
+    API.setCaptions.mockResolvedValue(running({ model: 'small' }));
+    await open();
+    expect(await screen.findByText('Whisper large-v3-turbo on the card')).toBeInTheDocument();
+    expect(screen.getByText('in use')).toBeInTheDocument();
+    expect(screen.getByText(/abcdef12… \(live, large-v3-turbo, fr\)/)).toBeInTheDocument();
+    const picker = screen.getByLabelText(/^Model/);
+    // Automatic, and the downloaded ones only: one that is not would be fetched while a TV waits
+    expect([...picker.options].map((o) => o.textContent)).toEqual([
+      'Automatic (now Whisper large-v3-turbo)',
+      'Whisper small',
+      'Whisper large-v3-turbo',
+    ]);
+    fireEvent.change(picker, { target: { value: 'small' } });
+    await waitFor(() => expect(API.setCaptions).toHaveBeenCalledWith({ model: 'small' }));
+    expect(await screen.findByText('Whisper small on the card')).toBeInTheDocument();
+    expect(screen.getByText('Always this one, whatever fits')).toBeInTheDocument();
   });
 });

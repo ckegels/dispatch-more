@@ -75,6 +75,11 @@ export const machineLine = (machine) => {
   return parts.join(' · ');
 };
 
+// The model captions are made with: the one picked, else the one that fits this server
+// (captions/live.py chosen_model asks the same proposal)
+export const modelInUse = (settings, proposal) =>
+  settings?.model || proposal?.model || '';
+
 const busy = (status) =>
   status &&
   (status.install?.requested ||
@@ -133,6 +138,9 @@ const CaptionsCard = () => {
   const install = status?.install || {};
   const proposal = status?.proposal;
   const settings = status?.settings;
+  const inUse = modelInUse(settings, proposal);
+  const labelOf = (name) =>
+    (status?.models || []).find((m) => m.name === name)?.label || name;
 
   return (
     <Paper style={PANEL}>
@@ -152,7 +160,7 @@ const CaptionsCard = () => {
                 color={worker.running ? 'green' : 'gray'}
               >
                 {worker.running
-                  ? `Worker running${worker.device === 'cuda' ? ' on the card' : ' on the processor'}`
+                  ? `${labelOf(inUse)} on the ${worker.device === 'cuda' ? 'card' : 'processor'}`
                   : 'Not installed'}
               </Badge>
             )}
@@ -184,8 +192,6 @@ const CaptionsCard = () => {
                 A caption worker turns a channel's sound into text with a speech
                 model. It runs apart from Dispatcharr and only when installed;
                 what fits depends on this machine, so it is measured here.
-                Making captions while a TV watches comes in the next release;
-                this sets the worker up and shows what it can do.
               </Text>
 
               <Box>
@@ -254,6 +260,28 @@ const CaptionsCard = () => {
                 </Alert>
               )}
 
+              <NativeSelect
+                label="Model"
+                description={
+                  settings.model
+                    ? 'Always this one, whatever fits'
+                    : 'Automatic follows this server and what was measured'
+                }
+                w={420}
+                value={settings.model || ''}
+                onChange={(e) => save({ model: e.currentTarget.value })}
+                data={[
+                  {
+                    value: '',
+                    label: `Automatic (now ${labelOf(proposal?.model)})`,
+                  },
+                  // Downloaded ones only: one that is not would be fetched while a TV waits
+                  ...status.models
+                    .filter((m) => m.downloaded || m.name === settings.model)
+                    .map((m) => ({ value: m.name, label: m.label })),
+                ]}
+              />
+
               <Switch
                 checked={settings.live !== false}
                 onChange={(e) => save({ live: e.currentTarget.checked })}
@@ -266,7 +294,7 @@ const CaptionsCard = () => {
                   {worker.jobs
                     .map(
                       (j) =>
-                        `${j.key.slice(0, 8)}… (${j.state}${j.language ? `, ${j.language}` : ''}${j.behind ? `, ${j.behind}s behind` : ''})`
+                        `${j.key.slice(0, 8)}… (${j.state}${j.model ? `, ${j.model}` : ''}${j.language ? `, ${j.language}` : ''}${j.behind ? `, ${j.behind}s behind` : ''})`
                     )
                     .join(', ')}
                 </Text>
@@ -453,6 +481,11 @@ const CaptionsCard = () => {
                         <Table.Td>
                           <Group gap={6}>
                             <Text size="sm">{m.label}</Text>
+                            {inUse === m.name && (
+                              <Badge size="xs" variant="filled" color="green">
+                                in use
+                              </Badge>
+                            )}
                             {proposal?.model === m.name && (
                               <Badge size="xs" variant="light">
                                 fits

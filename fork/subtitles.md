@@ -479,3 +479,10 @@ are shown.
 
 Tests, as always: the full backend suite (baseline `FAILED (errors=26)`, all `/data`) on a test
 database of our own (`POSTGRES_DB=dispatcharr_claude`), vitest green, and the patcher release.
+
+**Which model is in use, on the card (v265).** The card never said: the model setting was
+empty (automatic, the proposal) and only the proposal's "fits" badge hinted at it. Now the
+header says it ("Whisper large-v3-turbo on the card"), the model list marks it "in use", each job
+under "Captioning now" names its model, and a **Model** picker offers "Automatic (now …)" or any
+downloaded model (`settings.model`, which the server already took; one not downloaded is not
+offered, since it would be fetched while a TV waits).
