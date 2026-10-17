@@ -2282,7 +2282,9 @@ first and remembers it for the device, at home and away apart (`HELD_KEY`, 24 h;
 `quality_limit_for` applies it at the next start; Settings → arrTV lists and forgets them).
 Never on a channel somebody else watches fine: only when the device is alone on it or every
 other viewer is an arrTV device that stuttered in the last 30 s. At most two moves per channel
-within 10 minutes (v264, §5.7e). Recorded in Channel health's What happened, with the app's numbers.
+within 10 minutes (v264, §5.7e). Dispatch More's own readers (the rewind recorder, the caption worker:
+`is_caption_client`) are nobody watching (v265): the recorder is on every channel a TV watches,
+and counting it as a viewer "without trouble" turned down every stutter since server rewind (v248). Recorded in Channel health's What happened, with the app's numbers.
 
 **What a device can decode, and a stream of its own** (v208). Measured: RTL ZWEI's first
 stream is 4K and a Chromecast with Google TV HD cannot decode it. Every start began on it;

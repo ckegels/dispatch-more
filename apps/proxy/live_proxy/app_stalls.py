@@ -243,9 +243,16 @@ def report(redis_client, viewer, data):
     if began and now - began < SETTLE_SECONDS:
         return {"action": "none", "reason": "The stream has only just started."}
 
-    # Everyone else on the channel has to be stuttering too, or they lose a good picture
+    # Everyone else on the channel has to be stuttering too, or they lose a good picture --
+    # but not Dispatch More's own readers alongside (the rewind recorder, the caption worker):
+    # they watch nothing, and the recorder is on every channel a TV watches, so counting it
+    # turned every stutter down ("Someone else is watching", the Chromecast HD, 2026-10-17)
+    from apps.channels.captions import is_caption_client
+
     stalled = {_text(k): _text(v) for k, v in (redis_client.hgetall(stalled_key) or {}).items()}
     for client in clients:
+        if is_caption_client(_text(client.get("user_agent"))):
+            continue
         other = _client_viewer(client).server_device
         if other == device:
             continue

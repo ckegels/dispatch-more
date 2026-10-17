@@ -79,11 +79,11 @@ class StutterTests(TestCase):
         # A switch a while ago, unless it is said to be now
         self.redis.hset(key, "stream_switch_time", started if started else time.time() - 60)
 
-    def watching(self, device, client="c1"):
+    def watching(self, device, client="c1", user_agent="AerioTV/-arr.", ip="192.168.65.3"):
         self.redis.sadd(RedisKeys.clients(self.uuid), client)
         self.redis.hset(
             RedisKeys.client_metadata(self.uuid, client),
-            mapping={"ip_address": "192.168.65.3", "user_id": "1", "user_agent": "AerioTV/-arr.",
+            mapping={"ip_address": ip, "user_id": "1", "user_agent": user_agent,
                      **({"server_device": device} if device else {})},
         )
 
@@ -178,6 +178,14 @@ class StutterTests(TestCase):
         self.watching(None, client="plex")
         self.assertIn("Someone else", self.stutter()["reason"])
         self.assertEqual(self.switched, [])
+
+    def test_the_rewind_recorder_and_caption_worker_are_nobody_watching(self):
+        # On every channel a TV watches with server rewind on: it never stood in the way
+        # until v265, when it stood in the way of every stutter
+        from apps.proxy.live_proxy import rewind
+
+        self.watching(None, client="rewind", user_agent=rewind.USER_AGENT, ip="127.0.0.1")
+        self.assertEqual(self.stutter()["action"], "switched")
 
     def test_everyone_on_it_stuttering_moves_it(self):
         self.watching(PHONE, client="c2")
