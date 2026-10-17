@@ -30,6 +30,7 @@ import StreamCheckSettings from '../forms/StreamCheckSettings';
 import ProviderLimits from '../forms/ProviderLimits';
 import { CustomTable, useTable } from './CustomTable';
 import { Logo, Watch } from './StreamParts';
+import PictureCompare from './PictureCompare';
 
 // The Channel Manager's second tab, laid out like its first. Each row is a channel with a
 // stream that did not play, opening to every stream on it as it was last found; or, under
@@ -307,6 +308,15 @@ const Expanded = ({ row, onAct }) => {
               >
                 Check all
               </Button>
+              {/* Whether they are all the same channel: watched side by side, since
+                  names are what put a Canadian MTV on a French one */}
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                onClick={() => onAct('pictures', real, row.channel)}
+              >
+                Compare pictures
+              </Button>
               <Button
                 size="compact-xs"
                 variant="light"
@@ -408,11 +418,13 @@ const removeText = (stream, channel) => {
     ? ''
     : ` ${channel ? `comes off "${channel.name}"` : 'comes off every channel'}`;
   return {
-    title: many ? 'Remove every stream of this channel?' : 'Remove this stream?',
+    title: many
+      ? 'Remove every stream of this channel?'
+      : 'Remove this stream?',
     message: `${what}${many ? ' come off it' : where} for good. ${
       many ? 'The streams themselves stay' : 'The stream itself stays'
     } in Dispatcharr, since ${
-      many ? 'they are the provider\'s' : 'it is the provider\'s'
+      many ? "they are the provider's" : "it is the provider's"
     }. Park ${many ? 'them' : 'it'} instead to have ${
       many ? 'them' : 'it'
     } checked again and put back if ${many ? 'they work' : 'it works'}.${
@@ -648,8 +660,12 @@ const StreamCheckTable = () => {
   };
 
   // Removing and forgetting cannot be undone here, so they are asked about first
+  // The channel whose streams are being compared picture against picture
+  const [comparing, setComparing] = useState(null);
+
   const ask = (action, stream, channel = null) => {
-    if (ACT_TEXT[action]) setAsking({ action, stream, channel });
+    if (action === 'pictures') setComparing(channel);
+    else if (ACT_TEXT[action]) setAsking({ action, stream, channel });
     else act(action, stream, channel);
   };
 
@@ -1521,6 +1537,8 @@ const StreamCheckTable = () => {
           </Paper>
         </Stack>
       </Box>
+
+      <PictureCompare channel={comparing} onClose={() => setComparing(null)} />
 
       <ConfirmationDialog
         opened={!!asking}

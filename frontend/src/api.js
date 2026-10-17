@@ -3391,6 +3391,20 @@ export default class API {
     });
   }
 
+  static async getPictureCompare(channelId) {
+    // What comparing a channel's streams found, or how it is going (picture_compare.py)
+    return await request(
+      `${host}/api/channels/stream-check/pictures/?channel_id=${channelId}`
+    );
+  }
+
+  static async startPictureCompare(channelId) {
+    return await request(`${host}/api/channels/stream-check/pictures/`, {
+      method: 'POST',
+      body: { channel_id: channelId },
+    });
+  }
+
   static async streamCheckChannels(action, channelIds) {
     // Whole channels: "park" takes every stream off them, backups too, into Parked;
     // "remove" deletes the channels. The page asks first.

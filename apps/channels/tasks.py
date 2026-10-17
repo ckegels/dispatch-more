@@ -4537,6 +4537,27 @@ def build_logo_library():
 
 
 @shared_task
+def compare_channel_pictures(channel_id):
+    """Whether a channel's streams show the same thing (picture_compare), asked from Stream Check."""
+    from core.utils import RedisClient
+
+    from .picture_compare import LOCK_KEY, compare_channel
+
+    redis_client = RedisClient.get_client()
+    try:
+        compare_channel(channel_id, redis_client)
+    except Exception as e:
+        logger.exception(f"Picture compare of channel {channel_id} failed: {e}")
+        from .picture_compare import _save, load
+
+        state = load(redis_client, channel_id) or {"results": []}
+        state.update(state="done", error=f"It went wrong: {e}")
+        _save(redis_client, channel_id, state)
+    finally:
+        redis_client.delete(LOCK_KEY)
+
+
+@shared_task
 def run_stream_check(only=None, looks=0, waits=0):
     """
     A batch of the Stream Check round going, or a check of the streams given (see

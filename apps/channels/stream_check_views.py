@@ -195,3 +195,36 @@ def stream_check_channels(request):
     if action == "remove":
         return JsonResponse({"done": "remove", **stream_check.remove_channels(channel_ids)})
     return JsonResponse({"error": f"Unknown action: {action}"}, status=400)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def stream_check_pictures(request):
+    """
+    Whether a channel's streams show the same thing (picture_compare). POST {"channel_id"}
+    starts a comparison -- a minute and a half per session, one at a time -- and GET
+    ?channel_id= says how it is going and what it found. It only says; nothing changes.
+    """
+    from . import picture_compare
+    from .tasks import compare_channel_pictures
+
+    redis_client = RedisClient.get_client()
+    source = request.data if request.method == "POST" else request.GET
+    try:
+        channel_id = int(source.get("channel_id"))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "A channel is given by id"}, status=400)
+    if request.method == "GET":
+        return JsonResponse({"result": picture_compare.load(redis_client, channel_id)})
+    if redis_client.exists(stream_check.RUN_KEY):
+        return JsonResponse(
+            {"error": "Stream Check is reading streams now and holds the connections. Try again once it pauses."},
+            status=409,
+        )
+    if not redis_client.set(picture_compare.LOCK_KEY, str(channel_id), nx=True, ex=picture_compare.LOCK_TTL):
+        return JsonResponse({"error": "Another channel is being compared. One at a time."}, status=409)
+    picture_compare._save(redis_client, channel_id, {
+        "channel": {"id": channel_id}, "state": "queued", "results": [], "session": 0, "sessions": 0, "error": "",
+    })
+    compare_channel_pictures.delay(channel_id)
+    return JsonResponse({"started": True})

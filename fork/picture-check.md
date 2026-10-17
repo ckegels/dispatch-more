@@ -1,7 +1,27 @@
 # Picture check: is this stream really that channel? (design, not built)
 
-Status: **proposed, waiting for the user's decision** (2026-09-28). Connections are not a
-concern: the user is fine with it running at night.
+Status (2026-10-17): **the user decided -- build it, flagging only, in Stream Check**. Step 1
+("Compare pictures" on a channel, `apps/channels/picture_compare.py`) is built in v265; steps 2
+(the nightly run and a Picture view) and 3 (the spoken language through the caption worker as
+the tie-breaker) wait for the thresholds measured on the user's streams with step 1. The user's
+rules: two logins of one provider are not compared with each other (the same stream); a
+provider's HD/FHD/SD are, after the providers; never one frame -- a sequence, the delay found;
+nothing acted on.
+
+**As built (step 1).** `record`: ffmpeg reads the URL for 90 s -- 2 pictures a second as 9x8 grey
+difference hashes, loudness 10 times a second, a 192 px JPEG every 10 s. `compare`: the
+reference's *changing* moments (6+ bits from a second before) are compared at every offset to
++-60 s; same = 60 % of them within 12 bits at the best offset, clear of every other offset by 30
+points, and the sound not saying otherwise (correlation under 0.2 at that delay: can't tell);
+different = no offset clear by 15 points and under half at the best; fewer than 15 changing
+moments: can't tell. On made-up programmes (tests): the same one 7 s ahead at twice the size with
+a logo 100 % / clear 0.81 / sound 0.99; different programmes 16-32 % / clear 0.01-0.05.
+`plan_sessions`: the channel's first stream is the reference; one copy per (provider, name), on
+whichever login is free; each 90 s session opens the reference and one stream on every other
+login (one connection each). Connections are taken with `reserve_profile_slot` and given back;
+a viewer finding a provider full sets Stream Check's make-way key (now also while comparing), and
+the session stops. Results in Redis (`picture-compare:<channel>`, 14 days); one comparison at a
+time; refused while a Stream Check batch reads.
 
 ## Why
 

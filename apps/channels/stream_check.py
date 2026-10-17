@@ -1104,8 +1104,11 @@ def make_way(redis_client):
     is worth waiting a moment and asking again for, and a provider refusing for any other
     reason is not.
     """
+    from .picture_compare import LOCK_KEY as COMPARING
+
     try:
-        if redis_client and redis_client.exists(RUN_KEY):
+        # A picture comparison holds connections too, for a minute and a half at a time
+        if redis_client and (redis_client.exists(RUN_KEY) or redis_client.exists(COMPARING)):
             redis_client.set(YIELD_KEY, "1", ex=YIELD_SECONDS)
             logger.info("Stream Check: a viewer needs a connection, checks are making way")
             return True
