@@ -1,4 +1,4 @@
-# Picture check: is this stream really that channel? (design, not built)
+# Picture check: is this stream really that channel? (step 1 built in v265)
 
 Status (2026-10-17): **the user decided -- build it, flagging only, in Stream Check**. Step 1
 ("Compare pictures" on a channel, `apps/channels/picture_compare.py`) is built in v265; steps 2
