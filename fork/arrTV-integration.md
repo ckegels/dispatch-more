@@ -377,8 +377,10 @@ What arrTV does (`DispatchMoreLinks`, `WatchTogether`):
   once (the joiner joins; the device joined does on `link_joined`), and a channel change is a
   fresh tune on both. Every 10 s while linked the PTS on screen (`LivePtsProbe`: the live
   connection's first PES timestamp, from which Media3 counts the player's position, plus that
-  position) is reported, and a device more than 1.5 s **behind** the other tunes afresh -- never
-  a wait (arr.102 made the one ahead pause the difference: a black screen, and the paused player
+  position) is reported, and a device more than 6 s **behind** the other tunes afresh (arr.105: at most once
+  every 2 min, and not again on that channel when a catch-up took away less than 3 s -- a
+  device's own delay, a slower start or a deeper buffer, is no stall; with 1.5 s a Pixel 9
+  reconnected every 30 s) -- never a wait (arr.102 made the one ahead pause the difference: a black screen, and the paused player
   lost its connection and jumped to live again). Not measured while playing from a rewind buffer.
 
 ## 6. Leaving a channel
