@@ -55,6 +55,7 @@ phones) that works with any Dispatcharr, but talks to Dispatch More directly. Us
 | **Instant updates** | New channels, Show Groups and guide changes reach the TV within seconds, without restarting the app. |
 | **Recordings with ad skipping** | Commercial breaks marked on the server are skipped during playback; the recording itself is never cut. |
 | **Away from home** | Viewers outside your home network get a quality your connection can carry. |
+| **Pictures compared** | Stream Check's "Compare pictures" watches a channel's streams side by side for a minute and a half and says whether they show the same thing, with the delay between providers. It only tells you. |
 | **Stalling streams left** | A stream that keeps stopping and coming back (three stalls in five minutes) is left for the channel's next one, for viewers and recordings alike (Settings → Proxy, off by default). |
 | **Recordings checked** | Each recording is checked when it ends: missing picture or sound and its length, shown on the DVR page (Healthy, Minor gaps, Damaged). |
 | **Watch together** | A second TV on the same login can join the first: from then on, whichever changes channel, the other follows. |
