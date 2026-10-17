@@ -684,6 +684,8 @@ class CoreSettings(models.Model):
             "post_offset_minutes": 0,
             "series_rules": [],
             "output_profile_id": None,
+            # Dispatch More: check each recording's file when it ends (apps.channels.recording_health)
+            "health_check_enabled": False,
         })
 
     @classmethod
@@ -709,6 +711,11 @@ class CoreSettings(models.Model):
     @classmethod
     def get_dvr_comskip_enabled(cls):
         return bool(cls.get_dvr_settings().get("comskip_enabled", False))
+
+    @classmethod
+    def get_dvr_health_check_enabled(cls):
+        """Dispatch More: check each recording's file when it ends (recording_health)."""
+        return bool(cls.get_dvr_settings().get("health_check_enabled", False))
 
     @classmethod
     def get_dvr_comskip_mode(cls):

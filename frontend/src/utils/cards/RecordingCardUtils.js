@@ -71,6 +71,26 @@ export const runComSkip = async (recording) => {
   await API.runComskip(recording.id);
 };
 
+// Dispatch More: the recording health check (custom_properties.health)
+export const checkRecordingHealth = async (recording) => {
+  await API.checkRecordingHealth(recording.id);
+};
+
+export const HEALTH_BADGE = {
+  ok: { color: 'green.7', label: 'Healthy' },
+  minor: { color: 'yellow.7', label: 'Minor gaps' },
+  damaged: { color: 'orange.7', label: 'Damaged' },
+  failed: { color: 'red.7', label: 'Failed check' },
+};
+
+// What the badge's tooltip says: the problems, or that nothing was wrong
+export const healthSummary = (health) => {
+  if (!health) return '';
+  const problems = health.problems || [];
+  if (!problems.length) return 'Picture and sound run through, and the length is as scheduled.';
+  return problems.join('\n');
+};
+
 export const deleteRecordingById = async (recordingId) => {
   await API.deleteRecording(recordingId);
 };

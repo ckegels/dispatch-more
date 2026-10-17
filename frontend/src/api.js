@@ -4057,6 +4057,19 @@ export default class API {
     }
   }
 
+  // Dispatch More: check a recording's file now (apps.channels.recording_health)
+  static async checkRecordingHealth(recordingId) {
+    try {
+      return await request(
+        `${host}/api/channels/recordings/${recordingId}/health/`,
+        { method: 'POST' }
+      );
+    } catch (e) {
+      errorNotification('Failed to check the recording', e);
+      throw e;
+    }
+  }
+
   static async runComskip(recordingId) {
     try {
       const resp = await request(

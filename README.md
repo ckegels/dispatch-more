@@ -55,6 +55,7 @@ phones) that works with any Dispatcharr, but talks to Dispatch More directly. Us
 | **Instant updates** | New channels, Show Groups and guide changes reach the TV within seconds, without restarting the app. |
 | **Recordings with ad skipping** | Commercial breaks marked on the server are skipped during playback; the recording itself is never cut. |
 | **Away from home** | Viewers outside your home network get a quality your connection can carry. |
+| **Recordings checked** | Each recording is checked when it ends: missing picture or sound and its length, shown on the DVR page (Healthy, Minor gaps, Damaged). |
 | **Watch together** | A second TV on the same login can join the first: from then on, whichever changes channel, the other follows. |
 | **One TV at a time** | Logins you choose watch live TV on one TV at a time: starting a channel on a second TV stops the first, which says which TV took over and offers Watch here. |
 

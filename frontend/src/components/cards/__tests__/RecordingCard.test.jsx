@@ -28,6 +28,14 @@ vi.mock('../../../utils/cards/RecordingCardUtils.js', () => ({
   getShowVideoUrl: vi.fn(),
   removeRecording: vi.fn(),
   runComSkip: vi.fn(),
+  checkRecordingHealth: vi.fn(),
+  HEALTH_BADGE: {
+    ok: { color: 'green.7', label: 'Healthy' },
+    minor: { color: 'yellow.7', label: 'Minor gaps' },
+    damaged: { color: 'orange.7', label: 'Damaged' },
+    failed: { color: 'red.7', label: 'Failed check' },
+  },
+  healthSummary: (health) => (health?.problems || []).join('\n'),
   stopRecordingById: vi.fn(),
 }));
 
@@ -623,6 +631,39 @@ describe('RecordingCard', () => {
       render(<RecordingCard recording={recording} channel={null} />);
       fireEvent.click(screen.getByText('Watch Live'));
       expect(mockShowVideo).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Health check (Dispatch More) ───────────────────────────────────────────
+
+  describe('health check', () => {
+    it('shows a damaged recording, with what is wrong', () => {
+      const recording = makeRecording({
+        custom_properties: {
+          status: 'completed',
+          health: {
+            status: 'damaged',
+            checked_at: '2026-10-17T15:00:00Z',
+            problems: ['Sound missing for 20 min of 43 min (584 holes, the first at 15:28, the longest 10 s)'],
+          },
+        },
+      });
+      setupMocks({ recording });
+      render(<RecordingCard recording={recording} channel={makeChannel()} />);
+      const badge = screen.getByText('Damaged');
+      expect(badge.closest('[data-tooltip]').getAttribute('data-tooltip')).toContain('Sound missing for 20 min');
+      expect(screen.getByText('Check again')).toBeInTheDocument();
+    });
+
+    it('checks a recording on demand', async () => {
+      vi.mocked(RecordingCardUtils.checkRecordingHealth).mockResolvedValue(undefined);
+      const recording = makeRecording();
+      setupMocks({ recording });
+      render(<RecordingCard recording={recording} channel={makeChannel()} />);
+      fireEvent.click(screen.getByText('Check health'));
+      await waitFor(() =>
+        expect(RecordingCardUtils.checkRecordingHealth).toHaveBeenCalledWith(recording)
+      );
     });
   });
 

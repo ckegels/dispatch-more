@@ -51,6 +51,7 @@ const GROUP_CONFIG = {
       tv_fallback_template: { type: 'raw', default: '' },
       movie_fallback_template: { type: 'raw', default: '' },
       comskip_enabled: { type: 'bool', default: false },
+      health_check_enabled: { type: 'bool', default: false },
       comskip_custom_path: { type: 'raw', default: '' },
       comskip_mode: { type: 'string', default: 'cut' },
       comskip_hw_accel: {

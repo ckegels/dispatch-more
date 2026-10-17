@@ -40,6 +40,9 @@ import {
   getShowVideoUrl,
   removeRecording,
   runComSkip,
+  checkRecordingHealth,
+  HEALTH_BADGE,
+  healthSummary,
   stopRecordingById,
 } from './../../utils/cards/RecordingCardUtils.js';
 
@@ -62,6 +65,8 @@ const areRecordingPropsEqual = (prev, next) => {
     pcp.file_url === ncp.file_url &&
     pcp.output_file_url === ncp.output_file_url &&
     pcp.comskip?.status === ncp.comskip?.status &&
+    pcp.health?.status === ncp.health?.status &&
+    pcp.health?.checked_at === ncp.health?.checked_at &&
     pcp.program?.title === ncp.program?.title &&
     prev.channel?.id === next.channel?.id &&
     prev.canManage === next.canManage
@@ -151,6 +156,21 @@ const RecordingCard = ({
       });
     } catch (error) {
       console.error('Failed to queue comskip for recording', error);
+    }
+  };
+
+  const handleCheckHealth = async (e) => {
+    e?.stopPropagation?.();
+    try {
+      await checkRecordingHealth(recording);
+      notifications.show({
+        title: 'Checking the recording',
+        message: 'Its picture, sound and length are being checked',
+        color: 'blue.5',
+        autoClose: 2000,
+      });
+    } catch (error) {
+      console.error('Failed to queue the health check', error);
     }
   };
 
@@ -347,6 +367,21 @@ const RecordingCard = ({
                   : 'Completed'}
           </Badge>
           {isInterrupted && <AlertTriangle size={16} color="#ffa94d" />}
+          {customProps.health && HEALTH_BADGE[customProps.health.status] && (
+            <Tooltip
+              label={healthSummary(customProps.health)}
+              multiline
+              w={320}
+              style={{ whiteSpace: 'pre-line' }}
+            >
+              <Badge
+                color={HEALTH_BADGE[customProps.health.status].color}
+                variant="light"
+              >
+                {HEALTH_BADGE[customProps.health.status].label}
+              </Badge>
+            </Tooltip>
+          )}
           <Stack gap={2} flex={1} miw={0}>
             <Group gap={8} wrap="nowrap">
               <Text fw={600} lineClamp={1} title={recordingName}>
@@ -518,6 +553,21 @@ const RecordingCard = ({
                   onClick={handleRunComskip}
                 >
                   Remove commercials
+                </Button>
+              )}
+            {canManage &&
+              !isUpcoming &&
+              !isInProgress &&
+              (customProps?.status === 'completed' ||
+                customProps?.status === 'stopped' ||
+                customProps?.status === 'interrupted') && (
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  color="gray"
+                  onClick={handleCheckHealth}
+                >
+                  {customProps?.health ? 'Check again' : 'Check health'}
                 </Button>
               )}
           </Group>

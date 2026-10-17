@@ -70,6 +70,7 @@ describe('DvrSettingsFormUtils', () => {
         tv_fallback_template: '',
         movie_fallback_template: '',
         comskip_enabled: false,
+        health_check_enabled: false,
         comskip_custom_path: '',
         comskip_mode: 'cut',
         comskip_hw_accel: 'none',

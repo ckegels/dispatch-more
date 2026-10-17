@@ -3405,6 +3405,7 @@ class RecordingViewSet(viewsets.ModelViewSet):
             'stop',
             'extend',
             'comskip',
+            'health',
             'refresh_artwork',
             'update_metadata',
         ):
@@ -3448,6 +3449,18 @@ class RecordingViewSet(viewsets.ModelViewSet):
         return recordings_queryset_for_user(
             Recording.objects.filter(pk=recording.pk), user
         ).exists()
+
+    @action(detail=True, methods=["post"], url_path="health")
+    def health(self, request, pk=None):
+        """Dispatch More: check this recording's file now (recording_health), e.g. one recorded
+        before the check was switched on."""
+        from .tasks import recording_health_check
+        rec = get_object_or_404(Recording, pk=pk)
+        try:
+            recording_health_check.delay(rec.id)
+            return Response({"success": True, "queued": True})
+        except Exception as e:
+            return Response({"success": False, "error": str(e)}, status=400)
 
     @action(detail=True, methods=["post"], url_path="comskip")
     def comskip(self, request, pk=None):

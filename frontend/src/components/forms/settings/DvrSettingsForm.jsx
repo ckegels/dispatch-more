@@ -152,6 +152,15 @@ const DvrSettingsForm = React.memo(({ active }) => {
           <Alert variant="light" color="green" title="Saved Successfully" />
         )}
         <Switch
+          label="Check each recording when it ends"
+          description="Reads the finished file for missing picture or sound and checks its length against the schedule, before Comskip. The result shows on each recording (Healthy, Minor gaps, Damaged, Failed check), with what is wrong."
+          {...form.getInputProps('health_check_enabled', {
+            type: 'checkbox',
+          })}
+          id="health_check_enabled"
+          name="health_check_enabled"
+        />
+        <Switch
           label="Enable Comskip (commercial detection after recording)"
           {...form.getInputProps('comskip_enabled', {
             type: 'checkbox',

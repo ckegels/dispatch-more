@@ -2941,8 +2941,18 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
     # for it -- arrTV sends custom_properties.comskip = true with "Remove commercials", and
     # stock read only the server-wide switch, so the app's choice did nothing with it off.
     # With the switch on, every recording is still processed, as in stock.
+    # Dispatch More: the health check (DVR settings, off by default) runs first: cutting
+    # commercials out of the file would look like holes in it (recording_health)
     try:
-        if CoreSettings.get_dvr_comskip_enabled() or comskip_asked_for(recording_id):
+        comskip_wanted = CoreSettings.get_dvr_comskip_enabled() or comskip_asked_for(recording_id)
+        if CoreSettings.get_dvr_health_check_enabled():
+            from celery import chain
+
+            steps = [recording_health_check.si(recording_id)]
+            if comskip_wanted:
+                steps.append(comskip_process_recording.si(recording_id))
+            chain(*steps).delay()
+        elif comskip_wanted:
             comskip_process_recording.delay(recording_id)
     except Exception:
         pass
@@ -3224,6 +3234,16 @@ def _comskip_hw_accel_flag(hw_accel: str) -> str | None:
     if not hw_accel or hw_accel == "none":
         return None
     return _COMSKIP_HW_ACCEL_FLAGS.get(hw_accel)
+
+
+@shared_task
+def recording_health_check(recording_id: int):
+    """Dispatch More: check a finished recording's file (apps.channels.recording_health). Never
+    raises, so Comskip chained after it still runs."""
+    from .recording_health import check_recording
+
+    check_recording(recording_id)
+    return recording_id
 
 
 @shared_task

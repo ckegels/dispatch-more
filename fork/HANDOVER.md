@@ -1972,6 +1972,30 @@ keeps the byte offset; Xtream sessions (no API session) are served as stock serv
 to stock behaviour without a switch, like the rest of 5.7c. Tests: `SeekSessionTests` in the
 same file.
 
+### 5.7d A recording's health — `apps/channels/recording_health.py` (v263)
+
+The user (2026-10-17): "there is some issues with the dvr ... after a show is recorded it needs a
+health check". On their server a recording of Saturday Night Live (CANAL+) was "completed" with
+its sound missing for 20 of its 44 minutes: 15 minutes in the provider (lzrdns3) dropped the
+channel, failover moved it to another provider's stream (azerty-live), and that stalled for 11 s
+every 20-40 s until the end ("Stream unhealthy - no data for 11.7s" / "restored after 3.6s",
+about 30 times) -- each stall a hole in the file, one of them a timestamp jump that broke the
+HLS->MKV remux (rc=183; the MP4 fallback worked) and crashed Comskip (SIGSEGV). Nothing said so.
+The stalls stayed under the switch threshold and every "restored" counted as recovered, so the
+channel never left the bad stream; that flapping is not dealt with yet (to propose).
+
+The check (DVR settings, "Check each recording when it ends", `health_check_enabled`, off) runs
+in Celery right after the recording, chained before Comskip (cutting commercials would look like
+holes). ffprobe reads the file once, decoding nothing: its streams, its length against the
+schedule, and every packet's timestamp, picture and sound apart (a step over 1 s forward is a
+hole, over 0.5 s back a jump). `custom_properties.health`: status ok / minor (under 30 s or 1%
+missing: a reconnect in a long match) / damaged / failed (no picture, unreadable, not half the
+scheduled length), the summaries and the problems in plain words. The DVR page shows a badge with
+them, and "Check health" / "Check again" (`POST /api/channels/recordings/<id>/health/`, a DVR
+manager). On the user's recordings: Saturday Night Live damaged ("Sound missing for 20 min of 43
+min (584 holes, the first at 15:28, the longest 10 s)"), the rugby minor (7 s at 2:17:39).
+Tests: `apps/channels/tests/test_recording_health.py`.
+
 ### 5.8 Misc
 
 - **Modified-build label:** `version.py` `__build__` ("Dispatch More dev", stamped "Dispatch
