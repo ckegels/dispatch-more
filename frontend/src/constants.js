@@ -76,6 +76,12 @@ export const PROXY_SETTINGS_OPTIONS = {
     description:
       'Before Redirect handoff, probe the provider URL with a HEAD (then GET) request and try alternate streams if it fails. Disable for providers that close probe connections or add channel-change latency. Failover probing is skipped when disabled.',
   },
+  leave_stalling_streams: {
+    label: 'Leave a Stream That Keeps Stalling',
+    type: 'boolean',
+    description:
+      "A stream that stops sending for 10 seconds or more three times within five minutes is left for the channel's next stream, for viewers and recordings alike. Only for a stream not tried yet, never the custom fallback; when every other stream was tried, the channel stays where it is. Off: a stream that keeps stopping and coming back is kept, as in Dispatcharr.",
+  },
 };
 
 export const USER_LIMITS_OPTIONS = {

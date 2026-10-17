@@ -390,6 +390,7 @@ class FastFailoverTests(TestCase):
         )
         fake._fast_start_grace = types.MethodType(StreamManager._fast_start_grace, fake)
         fake._health_inactivity_threshold = types.MethodType(StreamManager._health_inactivity_threshold, fake)
+        fake._note_stall = types.MethodType(StreamManager._note_stall, fake)
         return fake
 
     def test_off_marks_nothing_and_the_stock_grace_applies(self):

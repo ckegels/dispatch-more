@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); latest release v263) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); latest release v264) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -673,6 +673,8 @@ What the server does, so the app need not:
 - The first 10 s after a start or a switch are ignored: the swap itself makes the player
   wait, and that is not stutter. So a stall right after a switch is expected and harmless.
 - A stream left for stuttering is not gone back to for 10 minutes.
+- At most two moves per channel within 10 minutes (server v264): a third stutter is answered
+  `none` ("The channel already changed stream twice for stutter; it stays.").
 - Stuttering again goes down in quality, and **that device starts every channel within
   that quality for 24 hours** (learned at home and away apart). An admin can forget it.
 - Never on a channel someone else watches without trouble: only when this device is alone

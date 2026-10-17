@@ -774,6 +774,7 @@ class CoreSettings(models.Model):
             "channel_client_wait_period": 5,
             "new_client_behind_seconds": 5,
             "validate_redirect_urls": True,
+            "leave_stalling_streams": False,
         })
 
     @classmethod

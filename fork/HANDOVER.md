@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v263** (2026-10-17; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v264** (2026-10-17; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1982,7 +1982,7 @@ every 20-40 s until the end ("Stream unhealthy - no data for 11.7s" / "restored 
 about 30 times) -- each stall a hole in the file, one of them a timestamp jump that broke the
 HLS->MKV remux (rc=183; the MP4 fallback worked) and crashed Comskip (SIGSEGV). Nothing said so.
 The stalls stayed under the switch threshold and every "restored" counted as recovered, so the
-channel never left the bad stream; that flapping is not dealt with yet (to propose).
+channel never left the bad stream; v264 leaves such a stream (§5.7e).
 
 The check (DVR settings, "Check each recording when it ends", `health_check_enabled`, off) runs
 in Celery right after the recording, chained before Comskip (cutting commercials would look like
@@ -1995,6 +1995,37 @@ them, and "Check health" / "Check again" (`POST /api/channels/recordings/<id>/he
 manager). On the user's recordings: Saturday Night Live damaged ("Sound missing for 20 min of 43
 min (584 holes, the first at 15:28, the longest 10 s)"), the rugby minor (7 s at 2:17:39).
 Tests: `apps/channels/tests/test_recording_health.py`.
+
+### 5.7e A stream that keeps stalling is left — `apps/proxy/live_proxy/stalling.py` (v264)
+
+Why the fork's earlier answers to unstable streams did not catch the SNL recording (§5.7d) or
+TF1's and Laurent's buffering the same day:
+- **Stock failover** moves on only when a stream stays silent through three health checks in a
+  row (and 30 s between actions). A stream that stops for 10-15 s and comes back resets that
+  count every time, so it is kept for as long as it keeps doing that.
+- **arrTV's stutter switch** (§5.11, v207) is the device saying its picture stopped: nothing
+  says so for a recording, Plex or Jellyfin, and only on a channel the device has to itself.
+- **Faster failover** (v212) is about a stream that never starts; **Stream Check** judges
+  streams offline, not one playing now.
+
+With Settings → Proxy, "Leave a Stream That Keeps Stalling" (`leave_stalling_streams`, off), the
+health monitor counts each time a running stream goes unhealthy (no data for the connection
+timeout, 10 s): `STALL_COUNT` (3) within `STALL_WINDOW_SECONDS` (5 min) and the channel moves to
+its next stream as a failover does (`_try_next_stream(real_only=True)`, the failover's own order,
+viewers and a recording keep their connection, switch reason `stream_stalling`, "stream keeps
+stalling" in Channel health). Only to a real stream not tried yet -- never the custom fallback,
+never round again; with nothing left it stays (logged). The count is per stream (cleared on every
+URL switch) and only once data came (`buffer.index`): at the start the failover's waits decide.
+The flag survives the "health restored" that clears stock's own (`_leaving_stalling`), since
+coming back is what such a stream does. The setting is read only when a running stream stalls
+(`TSConfig.get_proxy_settings` closes the database connection). Tests:
+`apps/proxy/live_proxy/tests/test_stalling.py`.
+
+**And the stutter switch now stops after two moves** (`app_stalls.MAX_SWITCHES`, within
+`LEFT_TTL`, 10 min): Laurent's Fire TV (2026-10-17) went round CANAL+ SPORT's four streams six
+times in three minutes, buffering at each reconnect -- stuttering on a third stream is the
+device's connection or the provider as a whole. Answered `{"action": "none"}` ("... changed
+stream twice for stutter; it stays").
 
 ### 5.8 Misc
 
@@ -2241,8 +2272,8 @@ through every stream. A **second** stutter (a stream was already left) takes a l
 first and remembers it for the device, at home and away apart (`HELD_KEY`, 24 h;
 `quality_limit_for` applies it at the next start; Settings → arrTV lists and forgets them).
 Never on a channel somebody else watches fine: only when the device is alone on it or every
-other viewer is an arrTV device that stuttered in the last 30 s. Recorded in Channel health's
-What happened, with the app's numbers.
+other viewer is an arrTV device that stuttered in the last 30 s. At most two moves per channel
+within 10 minutes (v264, §5.7e). Recorded in Channel health's What happened, with the app's numbers.
 
 **What a device can decode, and a stream of its own** (v208). Measured: RTL ZWEI's first
 stream is 4K and a Chromecast with Google TV HD cannot decode it. Every start began on it;

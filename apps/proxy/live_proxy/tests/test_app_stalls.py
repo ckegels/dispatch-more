@@ -154,6 +154,18 @@ class StutterTests(TestCase):
             app_stalls.forget_held(self.redis, SHIELD)
             self.assertEqual(app_devices.quality_limit_for(self.viewer()), "")
 
+    def test_two_moves_then_it_stays(self):
+        # Laurent's Fire TV (2026-10-17) went round a channel's streams six times in three
+        # minutes: stuttering on every one is the connection, and each move a reconnect
+        self.stutter()
+        self.settled()
+        self.stutter()
+        self.settled()
+        answer = self.stutter()
+        self.assertEqual(answer["action"], "none")
+        self.assertIn("twice", answer["reason"])
+        self.assertEqual(len(self.switched), 2)
+
     def test_held_at_home_and_away_apart(self):
         app_devices.save_settings({"home_networks": "192.168.2.0/24"})
         self.stutter()

@@ -26,6 +26,10 @@ The rules, each for a reason:
   and away apart): the first switch may have been the provider's fault, which another stream
   of the same quality fixes; stuttering again on that one says the device's connection
   cannot carry it. The next channel it starts begins within that quality (app_devices).
+- **Two moves, then it stays** (MAX_SWITCHES within LEFT_TTL). Stuttering on a third stream of
+  the same channel says it is the device's connection or the provider as a whole, not one
+  stream, and every move costs a reconnect the viewer feels: Laurent's Fire TV (2026-10-17)
+  went round CANAL+ SPORT's four streams six times in three minutes, buffering at each.
 - **Only a channel the device has to itself**, or one where every other viewer is an arrTV
   device stuttering too. A switch is felt by everyone on the channel, and somebody watching
   it fine should not lose their picture for somebody else's connection.
@@ -46,6 +50,8 @@ SETTLE_SECONDS = 10
 # The streams a channel left because arrTV stuttered on them: {channel: set of stream ids}
 LEFT_KEY = "live:app_stalls:left:{channel_uuid}"
 LEFT_TTL = 10 * 60
+# Moves for stutter on one channel within LEFT_TTL; then it stays on the stream it is on
+MAX_SWITCHES = 2
 # When each arrTV device on a channel last stuttered: {device key: time}
 STALLED_KEY = "live:app_stalls:stalled:{channel_uuid}"
 # Another device's stall this recent means it is stuttering too
@@ -277,6 +283,13 @@ def _switch(redis_client, viewer, channel_uuid, metadata, data):
         current_id = int(current_id) if current_id else None
     except ValueError:
         current_id = None
+    if len(left) >= MAX_SWITCHES:
+        name = app_devices.device_name(redis_client, device) or device.split("|")[-1]
+        logger.info(
+            f"arrTV stutter on channel {channel_uuid} ({name}): already moved {len(left)} times; "
+            f"staying on this stream"
+        )
+        return {"action": "none", "reason": "The channel already changed stream twice for stutter; it stays."}
     # Stuttering again after a switch here: the device's connection, not the provider
     again = bool(left)
     picked = _next_stream(channel_uuid, current_id, left, lower_first=again)

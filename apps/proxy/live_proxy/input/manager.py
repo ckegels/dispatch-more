@@ -16,6 +16,7 @@ from ..utils import detect_stream_type, get_logger
 from ..redis_keys import RedisKeys
 from .. import health
 from .. import probation
+from .. import stalling
 from .. import timing
 from ..constants import ChannelState, EventType, StreamType, ChannelMetadataField, TS_PACKET_SIZE
 from ..config_helper import ConfigHelper
@@ -86,6 +87,10 @@ class StreamManager:
         self.needs_reconnect = False
         self.needs_stream_switch = False
         self.last_health_action_time = 0
+        # Dispatch More: the stalls of the stream it is on, and whether the switch asked for
+        # is leaving one that keeps stalling (stalling.py)
+        self._stalls = stalling.StallCounter()
+        self._leaving_stalling = False
 
         # Add to your __init__ method
         self._buffer_check_timers = []
@@ -514,8 +519,11 @@ class StreamManager:
                 if hasattr(self, 'needs_stream_switch') and self.needs_stream_switch and not self.url_switching:
                     logger.info(f"Health monitor requested stream switch for channel {self.channel_id}")
                     self.needs_stream_switch = False
+                    leaving_stalling = getattr(self, '_leaving_stalling', False)
+                    self._leaving_stalling = False
 
-                    if self._try_next_stream_with_cooldown():
+                    if (self._try_next_stream(real_only=True) if leaving_stalling
+                            else self._try_next_stream_with_cooldown()):
                         logger.info(f"Health-requested stream switch successful for channel {self.channel_id}")
                         stream_switch_attempts += 1
                         self._clear_connection_failure_history()
@@ -1539,6 +1547,9 @@ class StreamManager:
             return False
 
         logger.info(f"Switching stream URL from {self.url} to {new_url} for channel {self.channel_id}")
+        # Another stream: its stalls are its own (stalling.py)
+        if hasattr(self, '_stalls'):
+            self._stalls.clear()
 
         # Import both models for proper resource management
         from apps.channels.models import Stream, Channel
@@ -1692,6 +1703,7 @@ class StreamManager:
                     if self.healthy:
                         logger.warning(f"Stream unhealthy for channel {self.channel_id} - no data for {inactivity_duration:.1f}s")
                         self.healthy = False
+                        self._note_stall(now)
 
                     consecutive_unhealthy_checks += 1
 
@@ -1726,9 +1738,11 @@ class StreamManager:
                     logger.info(f"Stream health restored for channel {self.channel_id} - data resumed after {inactivity_duration:.1f}s")
                     self.healthy = True
                     consecutive_unhealthy_checks = 0
-                    # Clear recovery flags when healthy again
+                    # Clear recovery flags when healthy again -- but not the move away from
+                    # a stream that keeps stalling: coming back is what it keeps doing
                     self.needs_reconnect = False
-                    self.needs_stream_switch = False
+                    if not getattr(self, '_leaving_stalling', False):
+                        self.needs_stream_switch = False
 
                 if self.healthy:
                     consecutive_unhealthy_checks = 0
@@ -1737,6 +1751,41 @@ class StreamManager:
                 logger.error(f"Error in health monitor: {e}")
 
             gevent.sleep(self.health_check_interval)
+
+    def _note_stall(self, now):
+        """
+        The stream just stalled (Dispatch More, stalling.py): the third time within five
+        minutes, with the setting on, the channel moves to its next real stream not tried yet.
+        Only once a stream has started: at the start, the failover's own waits decide.
+        """
+        # The start first: the setting is read from the database, which closes its connection
+        if getattr(self.buffer, 'index', 0) == 0 or not stalling.enabled():
+            return
+        if not hasattr(self, '_stalls'):
+            self._stalls = stalling.StallCounter()
+        if not self._stalls.stalled(now):
+            return
+        stalls = len(self._stalls.stalls)
+        self._stalls.clear()
+        if stalling.real_alternative(self.channel_id, self.current_stream_id, self.tried_stream_ids) is None:
+            logger.info(
+                f"Stream keeps stalling for channel {self.channel_id} ({stalls} stalls in "
+                f"{stalling.STALL_WINDOW_SECONDS // 60} min), but every other stream was tried; staying on it"
+            )
+            return
+        logger.warning(
+            f"Stream keeps stalling for channel {self.channel_id} ({stalls} stalls in "
+            f"{stalling.STALL_WINDOW_SECONDS // 60} min); moving to its next stream"
+        )
+        health.record_event(
+            getattr(getattr(self, "buffer", None), "redis_client", None),
+            self.channel_id,
+            "stream keeps stalling",
+            f"{stalls} stalls in {stalling.STALL_WINDOW_SECONDS // 60} minutes; moving to the next stream",
+        )
+        self._leaving_stalling = True
+        self.needs_stream_switch = True
+        self.last_health_action_time = now
 
     def _attempt_reconnect(self):
         """Attempt to reconnect to the current stream"""
@@ -2132,10 +2181,12 @@ class StreamManager:
             logger.error(f"Error in buffer check for channel {self.channel_id}: {e}")
             return False
 
-    def _try_next_stream(self):
+    def _try_next_stream(self, real_only=False):
         """
         Try to switch to the next available stream for this channel.
         Will iterate through multiple alternate streams if needed to find one with a different URL.
+        real_only (Dispatch More, leaving a stream that keeps stalling): only streams not tried
+        yet and not the custom fallback, and never round again.
 
         Returns:
             bool: True if successfully switched to a new stream, False otherwise
@@ -2156,6 +2207,11 @@ class StreamManager:
 
             # Filter out streams we've already tried
             untried_streams = [s for s in alternate_streams if s['stream_id'] not in self.tried_stream_ids]
+            if real_only:
+                untried_streams = stalling.real_streams(untried_streams)
+                if not untried_streams:
+                    logger.info(f"No other real stream to move to for channel {self.channel_id}; staying")
+                    return False
             if untried_streams:
                 ids_to_try = ', '.join([str(s['stream_id']) for s in untried_streams])
                 logger.info(f"Found {len(untried_streams)} untried streams for channel {self.channel_id}: [{ids_to_try}]")
@@ -2274,7 +2330,7 @@ class StreamManager:
                         ChannelMetadataField.M3U_PROFILE: str(profile_id),  # Use the profile_id from get_alternate_streams
                         ChannelMetadataField.STREAM_ID: str(stream_id),
                         ChannelMetadataField.STREAM_SWITCH_TIME: str(time.time()),
-                        ChannelMetadataField.STREAM_SWITCH_REASON: "max_retries_exceeded"
+                        ChannelMetadataField.STREAM_SWITCH_REASON: "stream_stalling" if real_only else "max_retries_exceeded"
                     })
 
                     # Log the switch
