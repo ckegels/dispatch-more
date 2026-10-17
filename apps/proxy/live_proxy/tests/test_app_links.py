@@ -330,13 +330,44 @@ class WatchTogetherWithPeopleTests(TestCase):
         self.assertEqual(declined["devices"], [PIXEL])
         self.assertEqual(app_links.linked_with(self.redis, self.y.id, self.pixel), set())
 
-    def test_the_leader_changing_channel_is_followed(self):
+    def test_the_leader_changing_channel_asks_the_other_too(self):
+        # The user: "lets do the 10 seconds ask in both directions"
         self._linked()
         request = RequestFactory().get("/")
         self.assertTrue(app_links.mirror(self.redis, request, self._viewer(self.shield, self.x), self.france2))
+        self.assertEqual(self._messages("linked_channel"), [])
+        (asked,) = self._messages("link_follow_request")
+        self.assertEqual((asked["devices"], asked["channel"], asked["by"]), ([PIXEL], self.france2, SHIELD))
+        self.assertIn(self.y.id, asked["user_ids"])
+        # The group is on the leader's channel; the other following asks nobody
+        self.assertEqual(app_links.channel_of(self.redis, str(self.x.id)), self.france2)
+        self.sent.reset_mock()
+        self.assertFalse(app_links.mirror(self.redis, request, self._viewer(self.pixel, self.y), self.france2))
+        self.sent.assert_not_called()
+
+    def test_the_other_staying_when_the_leader_changed_leaves_and_the_leader_hears_why(self):
+        self._linked()
+        app_links.mirror(self.redis, RequestFactory().get("/"), self._viewer(self.shield, self.x), self.france2)
+        y_client = APIClient()
+        y_client.force_authenticate(user=self.y)
+        with patch("core.utils.RedisClient.get_client", return_value=self.redis):
+            y_client.post("/api/core/app-link/", {"stay": SHIELD}, format="json", HTTP_X_DISPATCH_DEVICE=PIXEL)
+        self.assertEqual(app_links.linked_with(self.redis, self.x.id, self.shield), set())
+        told = [m for m in self._messages("link_ended") if m["devices"] == [SHIELD]]
+        self.assertEqual((told[-1]["reason"], told[-1]["name"]), ("stayed", "Pixel 9"))
+
+    def test_ones_own_devices_still_follow_the_leader_at_once(self):
+        x_tv = app_devices.device_key(self.x.id, "bedroom-tv")
+        self.redis.hset(app_devices.NAMES_KEY, x_tv, json.dumps({"name": "Bedroom", "user": "x"}))
+        self._linked()
+        self._watching(self.tf1, "c3", x_tv, self.x)
+        app_links.join(self.redis, self.x.id, x_tv, SHIELD)
+        self.sent.reset_mock()
+        app_links.mirror(self.redis, RequestFactory().get("/"), self._viewer(self.shield, self.x), self.france2)
         (follow,) = self._messages("linked_channel")
-        self.assertEqual((follow["devices"], follow["channel"]), ([PIXEL], self.france2))
-        self.assertIn(self.y.id, follow["user_ids"])
+        self.assertEqual(follow["devices"], ["bedroom-tv"])
+        (asked,) = self._messages("link_follow_request")
+        self.assertEqual(asked["devices"], [PIXEL])
 
     def test_the_one_who_joined_changing_channel_asks_and_staying_takes_him_out(self):
         self._linked()

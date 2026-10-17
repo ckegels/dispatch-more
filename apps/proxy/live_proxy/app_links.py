@@ -14,10 +14,11 @@ may watch himself. Between people it is not two-way: the user's rules (2026-10-1
 
 - joining another person's device asks that device first (`link_request`): Allow / Decline,
   and no answer within ten seconds is Allow;
-- the one joined leads: its channel changes are followed at once, as between one's own devices;
-- the one who joined changing channel asks the leader (`link_follow_request`): follow, or
-  stay -- and staying (or Decline) takes the one who joined out (`stay`); no answer within ten
-  seconds is follow, which the app does by tuning the channel;
+- the one joined leads: the group's channel is the leader's;
+- either side changing channel asks the other (`link_follow_request`, "the 10 seconds ask in
+  both directions"): follow, or stay; no answer within ten seconds is follow, which the app does
+  by tuning the channel. Staying (`stay`) parts them: the leader staying takes the other out,
+  the other staying leaves;
 - either side can end it: the one who joined leaves, the leader can take him out (`remove`).
 
 **A group** is kept under its leader's login id, the same keys as before for a login's own
@@ -397,7 +398,10 @@ def answer(redis_client, user_id, device_key, asking_device_id, allow):
 
 
 def _drop(redis_client, device_key, tell_others, reason=""):
-    """Take this device out of its group; a group of one, or without its leader, ends."""
+    """
+    Take this device out of its group; a group of one, or without its leader, ends, and the
+    ones left are told -- with the reason and who, when this one left for one ("stayed").
+    """
     group = group_of(redis_client, device_key)
     link_key = LINK_KEY.format(user_id=group)
     if device_key not in members(redis_client, group):
@@ -414,20 +418,24 @@ def _drop(redis_client, device_key, tell_others, reason=""):
         for other in left:
             redis_client.delete(GROUP_KEY.format(device=other))
         if left and tell_others:
-            _send(group, left, {"type": "link_ended", "devices": sorted(_device_id(d) for d in left)})
+            message = {"type": "link_ended", "devices": sorted(_device_id(d) for d in left)}
+            if reason:
+                message.update(reason=reason, by=_device_id(device_key), name=_plain(redis_client, device_key))
+            _send(group, left | {device_key}, message)
     return True
 
 
-def leave(redis_client, user_id, device_key):
+def leave(redis_client, user_id, device_key, reason=""):
     """
-    This device stops watching together (its viewer chose to, or it left the app); a group of
-    one is no group, and the one left is told (`link_ended`, those logins only), so it stops
-    offering "Stop watching together" and comparing positions with nobody. It plays on.
+    This device stops watching together (its viewer chose to, or it left the app, or -- another
+    person's group -- it stayed on its channel when the leader changed, `reason` "stayed"); a
+    group of one is no group, and the one left is told (`link_ended`, those logins only), so it
+    stops offering "Stop watching together" and comparing positions with nobody. It plays on.
     """
     if redis_client is None or not user_id:
         return
     try:
-        if _drop(redis_client, device_key, tell_others=True):
+        if _drop(redis_client, device_key, tell_others=True, reason=reason):
             logger.info(f"Watch together: {app_devices.device_name(redis_client, device_key) or device_key} left")
     except Exception as e:
         logger.debug(f"Watch together: could not take {device_key} out: {e}")
@@ -517,13 +525,29 @@ def report_position(redis_client, user_id, device_key, report):
     return answer_
 
 
+def _ask_to_follow(redis_client, group, device, asked, channel_uuid):
+    """Ask these devices whether to follow this one to the channel: Follow, or Stay (and leave)."""
+    names = _channel_names({channel_uuid})
+    _send(group, asked | {device}, {
+        "type": "link_follow_request",
+        "channel": channel_uuid,
+        "channel_name": names.get(channel_uuid, ""),
+        "by": _device_id(device),
+        "name": _plain(redis_client, device),
+        "user": _user_names({_user_of(device)}).get(_user_of(device), ""),
+        "devices": sorted(_device_id(d) for d in asked),
+    })
+
+
 def mirror(redis_client, request, viewer, channel_uuid):
     """
     A live stream request of a declared device: when it watches together with others and asks
-    for another channel than the group's, a leader's is the group's channel now and the others
-    are told to follow (those of another person who may not watch it are taken out); another
-    person's asks the leaders whether to follow (`link_follow_request`). Requests for the
-    group's channel tell nobody. Never raises; costs a header lookup for every other request.
+    for another channel than the group's, a leader's is the group's channel now. The leader's
+    own login's devices follow at once (`linked_channel`); another person's are asked whether
+    to follow (`link_follow_request`, the user: "lets do the 10 seconds ask in both directions"),
+    and those who may not watch it are taken out. Another person's change asks the leaders the
+    same way. Requests for the group's channel tell nobody. Never raises; costs a header lookup
+    for every other request.
     """
     if (
         redis_client is None
@@ -549,16 +573,7 @@ def mirror(redis_client, request, viewer, channel_uuid):
             return False
         if not leads(redis_client, device):
             leaders = {d for d in others if _user_of(d) == str(group)}
-            names = _channel_names({channel_uuid})
-            _send(group, leaders | {device}, {
-                "type": "link_follow_request",
-                "channel": channel_uuid,
-                "channel_name": names.get(channel_uuid, ""),
-                "by": _device_id(device),
-                "name": _plain(redis_client, device),
-                "user": _user_names({_user_of(device)}).get(_user_of(device), ""),
-                "devices": sorted(_device_id(d) for d in leaders),
-            })
+            _ask_to_follow(redis_client, group, device, leaders, channel_uuid)
             logger.info(f"Watch together: {_plain(redis_client, device)} changed to {channel_uuid}; the leader is asked")
             return True
         redis_client.set(CHANNEL_KEY.format(user_id=group), channel_uuid, ex=LINK_TTL)
@@ -568,15 +583,21 @@ def mirror(redis_client, request, viewer, channel_uuid):
         others = linked_with(redis_client, viewer.user_id, device)
         if not others:
             return True
-        _send(group, others | {device}, {
-            "type": "linked_channel",
-            "channel": channel_uuid,
-            "by": _device_id(device),
-            "devices": sorted(_device_id(d) for d in others),
-        })
+        # One's own devices follow; another person is asked
+        own = {o for o in others if _user_of(o) == _user_of(device)}
+        asked = others - own
+        if own:
+            _send(group, own | {device}, {
+                "type": "linked_channel",
+                "channel": channel_uuid,
+                "by": _device_id(device),
+                "devices": sorted(_device_id(d) for d in own),
+            })
+        if asked:
+            _ask_to_follow(redis_client, group, device, asked, channel_uuid)
         logger.info(
             f"Watch together: {app_devices.device_name(redis_client, device) or device} "
-            f"changed to {channel_uuid}; {len(others)} other device(s) follow"
+            f"changed to {channel_uuid}; {len(own)} follow, {len(asked)} asked"
         )
         return True
     except Exception as e:

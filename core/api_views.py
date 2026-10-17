@@ -638,7 +638,11 @@ def app_link(request):
             return JsonResponse({"error": "That request ran out"}, status=404)
         return JsonResponse({"answered": True})
     if request.method == "POST" and data.get("stay"):
-        app_links.remove(redis_client, request.user.id, me, str(data["stay"]), reason="stayed")
+        # Stay on this channel: a leader takes the other person's device out; the other leaves
+        if app_links.leads(redis_client, me):
+            app_links.remove(redis_client, request.user.id, me, str(data["stay"]), reason="stayed")
+        else:
+            app_links.leave(redis_client, request.user.id, me, reason="stayed")
         return JsonResponse({"stayed": True})
     if request.method == "POST":
         other = str(data.get("join") or "").strip()

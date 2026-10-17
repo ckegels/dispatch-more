@@ -2015,9 +2015,9 @@ Chromecast and the Pixel; a phone on the road over the VPN gets its own). Only c
 joining login may watch (`may_watch`, Dispatcharr's level + channel-profile rule).
 
 The user's rules for two people: the one joined is asked first (Allow / Decline, ten seconds
-unanswered is Allow) and leads -- its channel changes are followed; the one who joined changing
-channel asks the leader (Follow / Stay, ten seconds unanswered is Follow; Stay or dismissed takes
-the other out); either can end it (leave; the leader's Disconnect). A login's own devices stay
+unanswered is Allow) and leads -- its channel changes are followed; either one changing channel asks the
+other (Follow / Stay, ten seconds unanswered is Follow -- "lets do the 10 seconds ask in both
+directions"; the leader staying takes the other out, the other staying leaves); either can end it (leave; the leader's Disconnect). A login's own devices stay
 two-way, unasked (§5.11).
 
 A group lives under its leader's login id, with the keys a login's own group always had, so
