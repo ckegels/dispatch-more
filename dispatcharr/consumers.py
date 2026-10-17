@@ -49,9 +49,10 @@ def user_may_receive_update(user, data):
     event_type = data.get("type")
     if event_type in ADMIN_ONLY_UPDATE_TYPES:
         return user_is_admin(user)
-    # Dispatch More: "another arrTV device of yours took over" is for that login only
-    # (apps.proxy.live_proxy.app_one_device); never sent with the feature off
-    if event_type == "device_replaced":
+    # Dispatch More: "another arrTV device of yours took over" and "the device you watch
+    # together with changed channel" are for that login only (apps.proxy.live_proxy
+    # app_one_device, app_links); never sent with the features off
+    if event_type in ("device_replaced", "linked_channel"):
         return getattr(user, "id", None) is not None and getattr(user, "id", None) == data.get("user_id")
     if event_type == "system_notification":
         notification = data.get("notification") or {}

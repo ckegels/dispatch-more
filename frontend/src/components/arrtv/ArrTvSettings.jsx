@@ -520,6 +520,19 @@ const ArrTvSettings = () => {
         </Box>
         <Box pl="xl">
           <Setting
+            label="Watch together"
+            description={
+              settings.devices
+                ? 'When a second arrTV device of the same login starts watching, it can join the first: the two are linked, and whichever changes channel, the other follows. Both are always on the same channel, one provider connection, so this also works for logins held to one device at a time. Live channels only; a look back or a movie leaves it.'
+                : 'Needs "Recognise each arrTV device": only devices that said who they are can be linked.'
+            }
+            checked={settings.link_devices}
+            disabled={!settings.devices}
+            onChange={(on) => change({ link_devices: on })}
+          />
+        </Box>
+        <Box pl="xl">
+          <Setting
             label="Faster failover when arrTV starts a channel"
             description={
               settings.devices

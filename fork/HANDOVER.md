@@ -2074,7 +2074,7 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
-### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `app_one_device.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
+### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `app_one_device.py`, `app_links.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
 
 arrTV is the user's own Android / Google TV player, a fork of AerioTV
 (https://github.com/jonzey231/AerioTV-Android) built to work with this server. Everything
@@ -2123,6 +2123,18 @@ request does not repeat it, or the replaced TV read "Playing on another device".
 and arrTV rightly reconnects then; without it the two TVs would take the stream from each
 other forever. Only declared devices take part, never a recording, another login or another
 player; any failure lets the new device play (both play, as without the setting).
+
+**Watch together** (v260; `app_links.py`, contract `fork/arrTV-integration.md` §5b). The user
+(2026-10-17): when a second TV of the same login starts, offer to join, and once joined, whichever
+changes channel the other follows. A switch (`link_devices`, off; needs `devices`), for any login.
+A login has one group in Redis (`live:app_devices:links:<user>`, the channel in
+`live:app_devices:link_channel:<user>`). `GET/POST/DELETE /api/core/app-link/` (any logged-in
+user, by the request's device header) offers, joins and leaves. `stream_ts` calls `mirror` right
+after the one-device check: a member asking for another channel than the group's makes it the
+group's and sends `linked_channel` to the others (consumers: that login only). Linked devices are
+on one channel, one provider connection, so `app_one_device` leaves them out of each other's
+replacement; `device_replaced` now carries `by_device` for the app's Join. A look back or a movie
+leaves the group (`check_request`). Tests: `tests/test_app_links.py`.
 
 **How "quality" is judged** everywhere below (`channel_manager.quality_of`): a measured
 resolution when there is one -- only recorded when a stream plays through ffmpeg, so on the

@@ -110,10 +110,10 @@ describe('ArrTvSettings', () => {
     expect(devices).not.toBeChecked();
     expect(hints).toBeDisabled();
     // Every switch under it (channel change, stutter, faster failover, alternatives, one
-    // device at a time) says what it needs
+    // device at a time, watch together) says what it needs
     expect(
       screen.getAllByText(/Needs "Recognise each arrTV device"/)
-    ).toHaveLength(5);
+    ).toHaveLength(6);
 
     fireEvent.click(devices);
     await waitFor(() =>

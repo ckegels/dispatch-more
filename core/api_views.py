@@ -591,6 +591,45 @@ def arrtv_settings(request):
     return JsonResponse(app_devices.load_settings())
 
 
+@api_view(["GET", "POST", "DELETE"])
+@permission_classes([IsAuthenticated])
+def app_link(request):
+    """
+    Watch together (apps.proxy.live_proxy.app_links), for the arrTV device the request says it
+    is: GET what it may join (the login's other devices watching a channel) and whether it is
+    linked; POST {"join": <device id>} joins that device, answering its channel; DELETE stops
+    watching together. Any logged-in user, since a TV app is usually not an admin; refused
+    while switched off.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_devices, app_links
+    from core.utils import RedisClient
+
+    if not app_links.enabled():
+        return JsonResponse({"error": "Watch together is switched off on this server"}, status=403)
+    device = app_devices.declared_device(request)
+    if not device:
+        return JsonResponse({"error": "Only an arrTV device that says which device it is"}, status=400)
+    me = app_devices.device_key(request.user.id, device)
+    redis_client = RedisClient.get_client()
+    if request.method == "DELETE":
+        app_links.leave(redis_client, request.user.id, me)
+        return JsonResponse({"linked": False})
+    if request.method == "POST":
+        other = str((request.data or {}).get("join") or "").strip()
+        joined = app_links.join(redis_client, request.user.id, me, other) if other else None
+        if joined is None:
+            return JsonResponse({"error": "That device is not watching a channel now"}, status=404)
+        return JsonResponse({"linked": True, **joined})
+    linked = bool(app_links.linked_with(redis_client, request.user.id, me))
+    return JsonResponse({
+        "linked": linked,
+        "channel": app_links.channel_of(redis_client, request.user.id) if linked else None,
+        "offers": app_links.offers(redis_client, request.user.id, me),
+    })
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def app_stall(request):

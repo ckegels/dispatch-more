@@ -91,6 +91,8 @@ class OneDeviceTests(TestCase):
         send.assert_called_once_with("updates", "update", {
             "type": "device_replaced", "user_id": self.kids.id,
             "device": LIVING_ROOM, "by": "Bedroom TV",
+            # Which device took over, so the replaced one can offer to join it (app_links)
+            "by_device": BEDROOM,
         })
 
     def test_the_replaced_device_is_refused_when_it_reconnects_rather_than_taking_it_back(self, stop_client, release, _spawn):
@@ -103,6 +105,7 @@ class OneDeviceTests(TestCase):
         self.assertEqual(answer["by"], "Bedroom TV")
         self.assertTrue(answer["device_replaced"])
         self.assertEqual(answer["error"], "Playing on another device: Bedroom TV")
+        self.assertEqual(answer["by_device"], BEDROOM)
         # The bedroom keeps watching
         release.assert_not_called()
         stop_client.assert_not_called()

@@ -44,6 +44,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | How many other streams a channel has (`X-Dispatch-Alternatives`) | v213 (two tiers from v214) | built (arr.43): the picture wait follows it, switch "Wait less when a channel has more streams", the seconds editable | §8.8 |
 | Wrong guide? Choose another (`/api/core/app-guide/`) | v216, v217 (widening, Load more) | built (arr.57, Load more arr.60) | §7a |
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
+| Watch together: join another device of the login, follow its channel (`/api/core/app-link/`, socket `linked_channel`) | v260 | built (`feature/one-device`): Join on the other-device notice and at start, follow, Stop watching together | §5b |
 | One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254; look back and movies v255) | built (arr.98; stops at once on the socket message, Watch here on TV, a channel picked takes over, look back and movies: arr.99) | §5a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
@@ -329,6 +330,43 @@ What arrTV does (`DispatcharrConnectionLimit` Kind `OTHER_DEVICE`, `DispatchMore
 Not covered: players that do not declare a device (a browser, VLC): the setting is about
 arrTV devices. Nor a channel's Redirect stream profile, where the player fetches from the
 provider itself and the server holds no connection.
+
+## 5b. Watch together (server v260)
+
+Server switch: Settings → Streaming → arrTV → **Watch together** (`link_devices`, off; needs
+`devices`). `capabilities` says `"link_devices": true` and `"link_url": "/api/core/app-link/"`.
+For any login, not only those held to one device. Live channels only.
+
+The device is the one the request's device header names (the API client sends it):
+
+| Call | Answer |
+|---|---|
+| `GET link_url` | `{"linked": bool, "channel": uuid or null, "offers": [{"device", "name", "channel", "channel_name"}]}` -- the login's other devices watching one live channel now |
+| `POST link_url {"join": "<device id>"}` | `{"linked": true, "channel", "name", "channel_name"}`, or 404 when that device is not watching a channel |
+| `DELETE link_url` | this device stops watching together (a group of one is no group) |
+
+Once linked, a live stream request of a member for another channel than the group's makes it
+the group's channel, and the server sends on its socket, to that login only:
+
+```
+{"type": "update", "data": {"type": "linked_channel", "user_id": 1, "channel": "<uuid>",
+ "by": "<device id>", "devices": ["<the others' device ids>"]}}
+```
+
+A device in `devices` tunes to the channel as a remote press would; its own request for it then
+matches the group's channel and tells nobody. Linked devices never replace each other (§5a), and
+`device_replaced` (socket and 409) now also carries `by_device`, the device that took over, so the
+replaced one can offer to join it. A look back or a movie leaves the group. Multiview tiles
+neither lead nor follow.
+
+What arrTV does (`DispatchMoreLinks`, `WatchTogether`):
+
+- **Join** beside **Watch here** on the other-device notice (on a TV Left / Right choose, OK
+  presses), and at the start of the app (after the capabilities probe) a dialog offering to join
+  a device of the login that is watching. A link left from before ends at that start.
+- A `linked_channel` naming this device: the open player tunes to it in place; otherwise the app
+  opens the player on it.
+- **Stop watching together** in the player's Options menu while linked.
 
 ## 6. Leaving a channel
 

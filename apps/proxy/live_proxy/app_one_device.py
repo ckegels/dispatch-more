@@ -198,7 +198,7 @@ def _close(redis_client, channel_uuid, client_id, device_key, keep_channel):
         redis_client.delete(RedisKeys.client_metadata(channel_uuid, _as_str(other)))
 
 
-def tell(user_id, device_key, by_name):
+def tell(user_id, device_key, by_name, by_device=None):
     """
     Tell the replaced device now, on the socket arrTV keeps open, rather than when its buffer
     runs dry: `device_replaced` with the device's own id (which arrTV compares with its own)
@@ -208,12 +208,15 @@ def tell(user_id, device_key, by_name):
     try:
         from core.utils import send_websocket_update
 
-        send_websocket_update("updates", "update", {
+        message = {
             "type": "device_replaced",
             "user_id": user_id,
             "device": str(device_key).split("|", 2)[-1],
             "by": by_name or UNNAMED,
-        })
+        }
+        if by_device:
+            message["by_device"] = str(by_device).split("|", 2)[-1]
+        send_websocket_update("updates", "update", message)
     except Exception as e:
         logger.debug(f"One device: could not tell {device_key}: {e}")
 
@@ -239,14 +242,20 @@ def joins_running_channel(redis_client, channel_uuid):
     )
 
 
-def refusal(name):
-    """The answer a replaced device gets until it takes over: what arrTV reads and shows."""
+def refusal(name, by_device=None):
+    """
+    The answer a replaced device gets until it takes over: what arrTV reads and shows.
+    by_device: the id of the device that took over, so arrTV can offer to join it (app_links).
+    """
     name = name or UNNAMED
-    return {
+    answer = {
         "error": f"Playing on another device: {name}",
         "device_replaced": True,
         "by": name,
     }
+    if by_device:
+        answer["by_device"] = str(by_device).split("|", 2)[-1]
+    return answer
 
 
 def check(redis_client, request, viewer, channel_uuids, client_id=None):
@@ -271,22 +280,27 @@ def check(redis_client, request, viewer, channel_uuids, client_id=None):
         # stream of its own is the last of channel_uuids)
         if channel_uuids and joins_running_channel(redis_client, str(channel_uuids[-1])):
             return None
+        from . import app_links
+
         if client_id:
             note_client(redis_client, client_id, me)
+        # Devices watching together are on one channel, one connection: never each other's
+        # replacement (app_links)
+        together = app_links.linked_with(redis_client, user_id, me)
         holding = streams_by_device(redis_client, user_id)
-        others = {device: clients for device, clients in holding.items() if device != me}
+        others = {device: clients for device, clients in holding.items() if device != me and device not in together}
         mine = _replaced_key(user_id, me)
         replaced = redis_client.get(mine)
         if replaced:
             by = json.loads(_as_str(replaced))
-            if app_devices.declared_take_over(request):
+            if app_devices.declared_take_over(request) or by.get("by") in together:
                 redis_client.delete(mine)
             elif by.get("by") in others or time.time() - float(by.get("at") or 0) < STARTING_SECONDS:
                 logger.info(
                     f"One device: {app_devices.device_name(redis_client, me) or me} was replaced "
                     f"by {by.get('name') or by.get('by')}; refused until it takes over"
                 )
-                return refusal(by.get("name"))
+                return refusal(by.get("name"), by.get("by"))
             else:
                 # The device that took over is no longer watching: this one may again
                 redis_client.delete(mine)
@@ -309,7 +323,7 @@ def check(redis_client, request, viewer, channel_uuids, client_id=None):
                     _close_stream(redis_client, kind, media, their_client, device, keep_channel=media in asked)
                 except Exception as e:
                     logger.warning(f"One device: could not close {kind} {their_client} on {media}: {e}")
-            tell(user_id, device, my_name)
+            tell(user_id, device, my_name, me)
             try:
                 from . import probation
 
@@ -337,4 +351,10 @@ def check_request(redis_client, request, user, client_id):
     from . import probation
 
     viewer = probation.viewer_from_request(request, user, get_client_ip(request), redis_client)
+    # Watching together is for live channels only: a look back or a movie leaves it, for any
+    # login (app_links), whether or not it is held to one device
+    from . import app_links
+
+    if viewer is not None and viewer.server_device and app_links.enabled():
+        app_links.leave(redis_client, user.id, viewer.server_device)
     return check(redis_client, request, viewer, (), client_id=client_id)

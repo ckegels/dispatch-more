@@ -237,6 +237,11 @@ def stream_ts(request, channel_id, user=None, force_output_format=None):
         )
         if replaced is not None:
             return JsonResponse(replaced, status=409)
+        # Watch together (app_links, off unless switched on): devices linked with this one
+        # follow it to this channel
+        from . import app_links
+
+        app_links.mirror(proxy_server.redis_client, request, viewer, asked_for)
 
         # An app that said which channel it is leaving (app_devices, off unless switched on):
         # close that one now, so its slot is free for this one. Before the user's own stream

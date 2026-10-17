@@ -85,7 +85,7 @@ class AppDevicesTests(TestCase):
             {"devices": False, "switch_hints": False, "reports": False,
              "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
              "alternatives": False, "fast_grace": 5, "fast_grace_many": 3,
-             "guide_choice": False, "guide_choice_sources": "", "one_device_users": "", "keep_past_days": 0,
+             "guide_choice": False, "guide_choice_sources": "", "one_device_users": "", "link_devices": False, "keep_past_days": 0,
              "rewind": True, "rewind_minutes": 60, "rewind_max_pause_minutes": 240, "rewind_budget_gb": 20,
              "look_back_priority": True, "look_back_priority_notify": True},
         )
@@ -93,7 +93,7 @@ class AppDevicesTests(TestCase):
         self.assertEqual(answer, {"devices": True, "switch_hints": False, "reports": False,
                                   "home_networks": "", "outside_max_quality": "", "stall_switch": False, "own_stream": False, "fast_failover": False,
              "alternatives": False, "fast_grace": 5, "fast_grace_many": 3,
-             "guide_choice": False, "guide_choice_sources": "", "one_device_users": "", "keep_past_days": 0,
+             "guide_choice": False, "guide_choice_sources": "", "one_device_users": "", "link_devices": False, "keep_past_days": 0,
              "rewind": True, "rewind_minutes": 60, "rewind_max_pause_minutes": 240, "rewind_budget_gb": 20,
              "look_back_priority": True, "look_back_priority_notify": True})
         # Only an admin changes them

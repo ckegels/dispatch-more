@@ -69,6 +69,9 @@ DEFAULTS = {
     "fast_grace": 5, "fast_grace_many": 3,
     "guide_choice": False, "guide_choice_sources": "",
     "one_device_users": "",
+    # Watch together (app_links): arrTV devices of one login may join each other, and then
+    # follow each other's channel changes
+    "link_devices": False,
     "keep_past_days": 0,
     # Server rewind (live_proxy/rewind.py, fork/pause-resume.md §4.3): watched channels kept on
     # the server so a TV can pause and rewind without its own disk. Minutes always kept, the
@@ -650,6 +653,9 @@ def capabilities():
         # Some logins are held to one arrTV device at a time (app_one_device): a replaced
         # device is refused with 409 and device_replaced until it sends take_over
         "one_device": bool(settings["devices"] and settings["one_device_users"]),
+        # Watch together (app_links): join another device of the login, follow its channel
+        "link_devices": bool(settings["devices"] and settings["link_devices"]),
+        "link_url": "/api/core/app-link/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
