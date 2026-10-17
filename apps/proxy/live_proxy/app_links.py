@@ -16,6 +16,13 @@ are told on Dispatcharr's socket (`linked_channel`, to that login's sockets only
 dispatcharr.consumers.user_may_receive_update); arrTV tunes to it as a remote press would. A
 member that starts a look back or a movie leaves the group (live channels only, for now).
 
+In step: each linked device reports, every few seconds, the stream timestamp (PTS, 90 kHz) of
+the frame it shows and when (report_position). Both get the same bytes from the channel's buffer,
+so the timestamps compare; the answer gives a device the others' latest reports, and the one
+that is ahead waits the difference (the user, 2026-10-17: the two were half a minute apart --
+each player's own buffer and every stall it ever had add to how far behind live it plays). Only
+devices on the same running channel compare: a stream of its own has other timestamps.
+
 Only declared devices (app_devices, "Recognise each arrTV device"), only while switched on: off
 is stock, a header lookup at most.
 """
@@ -32,6 +39,10 @@ LINK_KEY = "live:app_devices:links:{user_id}"
 CHANNEL_KEY = "live:app_devices:link_channel:{user_id}"
 # A group nobody has changed channel in or asked about for this long is forgotten
 LINK_TTL = 12 * 3600
+# In step: the latest position report of each linked device, {device key: json}
+POSITION_KEY = "live:app_devices:link_positions:{user_id}"
+# A report older than this says nothing about where that device is now
+POSITION_FRESH_SECONDS = 30
 
 
 def enabled():
@@ -155,6 +166,50 @@ def leave(redis_client, user_id, device_key):
             redis_client.delete(CHANNEL_KEY.format(user_id=user_id))
     except Exception as e:
         logger.debug(f"Watch together: could not take {device_key} out: {e}")
+
+
+def report_position(redis_client, user_id, device_key, report):
+    """
+    Keep this device's report ({"pts": 90 kHz, "at": epoch ms}) and answer the others' fresh
+    reports, each with the device's name: those on the very channel this device's live client
+    is on now. Nothing for a device that is not linked.
+    """
+    from . import app_one_device
+
+    others = linked_with(redis_client, user_id, device_key)
+    if not others:
+        return []
+    try:
+        pts = int(report.get("pts"))
+        at = int(report.get("at"))
+    except (TypeError, ValueError):
+        return []
+    watching = app_one_device.live_clients_by_device(redis_client, user_id)
+    mine = {c for c, _ in watching.get(device_key, [])}
+    if len(mine) != 1:
+        return []
+    key = POSITION_KEY.format(user_id=user_id)
+    redis_client.hset(key, device_key, json.dumps({"pts": pts, "at": at, "channel": next(iter(mine))}))
+    redis_client.expire(key, LINK_TTL)
+    now_ms = time.time() * 1000
+    answer = []
+    for other in others:
+        raw = redis_client.hget(key, other)
+        if not raw:
+            continue
+        said = json.loads(_as_str(raw))
+        theirs = {c for c, _ in watching.get(other, [])}
+        if theirs != mine or said.get("channel") not in mine:
+            continue
+        if now_ms - float(said.get("at") or 0) > POSITION_FRESH_SECONDS * 1000:
+            continue
+        answer.append({
+            "device": _device_id(other),
+            "name": app_one_device.plain_name(redis_client, other) or app_one_device.UNNAMED,
+            "pts": said["pts"],
+            "at": said["at"],
+        })
+    return answer
 
 
 def mirror(redis_client, request, viewer, channel_uuid):

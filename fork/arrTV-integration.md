@@ -344,6 +344,7 @@ The device is the one the request's device header names (the API client sends it
 | `GET link_url` | `{"linked": bool, "channel": uuid or null, "offers": [{"device", "name", "channel", "channel_name"}]}` -- the login's other devices watching one live channel now |
 | `POST link_url {"join": "<device id>"}` | `{"linked": true, "channel", "name", "channel_name"}`, or 404 when that device is not watching a channel |
 | `DELETE link_url` | this device stops watching together (a group of one is no group) |
+| `POST link_url {"position": {"pts": <90 kHz>, "at": <epoch ms>}}` (v261) | `{"others": [{"device", "name", "pts", "at"}]}` -- the other linked devices' latest reports (under 30 s old) on the very channel this device's live client is on |
 
 Once linked, a live stream request of a member for another channel than the group's makes it
 the group's channel, and the server sends on its socket, to that login only:
@@ -367,6 +368,13 @@ What arrTV does (`DispatchMoreLinks`, `WatchTogether`):
 - A `linked_channel` naming this device: the open player tunes to it in place; otherwise the app
   opens the player on it.
 - **Stop watching together** in the player's Options menu while linked.
+- **In step** (arr.102, server v261): every 10 s while linked, the PTS of the frame on screen
+  (`LivePtsProbe`: the live connection's first PES timestamp, from which Media3 counts the
+  player's position, plus that position) is reported; ahead of the furthest-behind other device
+  by more than 1.5 s (up to 15 min), this device waits the difference, as a pause of the remote
+  would (with Live Rewind or server rewind it then plays on from the recording), and says so
+  ("Waiting 28 s to stay in step with SHIELD"). Only the one ahead moves. Not measured while
+  playing from a rewind buffer.
 
 ## 6. Leaving a channel
 

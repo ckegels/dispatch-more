@@ -144,3 +144,67 @@ class WatchTogetherSocketTests(SimpleTestCase):
         message = {"type": "linked_channel", "user_id": 1, "channel": "tf1", "by": SHIELD, "devices": [PIXEL]}
         self.assertTrue(user_may_receive_update(MagicMock(id=1, user_level=0), message))
         self.assertFalse(user_may_receive_update(MagicMock(id=2, user_level=10), message))
+
+
+class InStepTests(TestCase):
+    """Linked devices report the PTS they show; each hears the others' on the same channel."""
+
+    def setUp(self):
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        self.redis = FakeRedis()
+        self.user = User.objects.create_user(username="admin", password="x")
+        app_devices.save_settings({"devices": True, "link_devices": True})
+        self.redis.hset(app_devices.NAMES_KEY, self._key(SHIELD), json.dumps({"name": "SHIELD"}))
+        patcher = patch("core.utils.send_websocket_update")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _key(self, device):
+        return app_devices.device_key(self.user.id, device)
+
+    def _watching(self, channel, client, device):
+        self.redis.hset(RedisKeys.channel_metadata(channel), "state", "active")
+        self.redis.sadd(RedisKeys.clients(channel), client)
+        self.redis.hset(RedisKeys.client_metadata(channel, client), mapping={
+            "ip_address": "192.168.65.3", "user_id": str(self.user.id), "server_device": self._key(device),
+        })
+
+    def test_each_hears_the_others_fresh_position_on_the_same_channel(self):
+        import time as _time
+
+        self._watching("france2", "c1", SHIELD)
+        app_links.join(self.redis, self.user.id, self._key(PIXEL), SHIELD)
+        self._watching("france2", "c2", PIXEL)
+        now = int(_time.time() * 1000)
+        # The first to report hears nobody yet
+        self.assertEqual(app_links.report_position(self.redis, self.user.id, self._key(SHIELD), {"pts": 900000, "at": now}), [])
+        heard = app_links.report_position(self.redis, self.user.id, self._key(PIXEL), {"pts": 3600000, "at": now})
+        self.assertEqual(heard, [{"device": SHIELD, "name": "SHIELD", "pts": 900000, "at": now}])
+
+    def test_a_device_on_another_stream_or_not_linked_compares_with_nobody(self):
+        import time as _time
+
+        now = int(_time.time() * 1000)
+        self._watching("france2", "c1", SHIELD)
+        self.assertEqual(app_links.report_position(self.redis, self.user.id, self._key(PIXEL), {"pts": 1, "at": now}), [])
+        app_links.join(self.redis, self.user.id, self._key(PIXEL), SHIELD)
+        app_links.report_position(self.redis, self.user.id, self._key(SHIELD), {"pts": 1, "at": now})
+        # The phone on a stream of its own (another channel id): other timestamps
+        self._watching("own-stream-hash", "c2", PIXEL)
+        self.assertEqual(app_links.report_position(self.redis, self.user.id, self._key(PIXEL), {"pts": 2, "at": now}), [])
+
+    def test_the_api_answers_the_others_positions(self):
+        import time as _time
+
+        self._watching("france2", "c1", SHIELD)
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        with patch("core.utils.RedisClient.get_client", return_value=self.redis):
+            client.post("/api/core/app-link/", {"join": SHIELD}, format="json", HTTP_X_DISPATCH_DEVICE=PIXEL)
+            self._watching("france2", "c2", PIXEL)
+            now = int(_time.time() * 1000)
+            client.post("/api/core/app-link/", {"position": {"pts": 5, "at": now}}, format="json", HTTP_X_DISPATCH_DEVICE=SHIELD)
+            answer = client.post("/api/core/app-link/", {"position": {"pts": 9, "at": now}}, format="json",
+                                 HTTP_X_DISPATCH_DEVICE=PIXEL).json()
+        self.assertEqual(answer["others"][0]["pts"], 5)

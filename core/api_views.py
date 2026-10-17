@@ -616,6 +616,10 @@ def app_link(request):
     if request.method == "DELETE":
         app_links.leave(redis_client, request.user.id, me)
         return JsonResponse({"linked": False})
+    if request.method == "POST" and isinstance((request.data or {}).get("position"), dict):
+        # In step: this device's position, answered with the others' (app_links.report_position)
+        return JsonResponse({"others": app_links.report_position(
+            redis_client, request.user.id, me, request.data["position"])})
     if request.method == "POST":
         other = str((request.data or {}).get("join") or "").strip()
         joined = app_links.join(redis_client, request.user.id, me, other) if other else None

@@ -2134,7 +2134,12 @@ after the one-device check: a member asking for another channel than the group's
 group's and sends `linked_channel` to the others (consumers: that login only). Linked devices are
 on one channel, one provider connection, so `app_one_device` leaves them out of each other's
 replacement; `device_replaced` now carries `by_device` for the app's Join. A look back or a movie
-leaves the group (`check_request`). Tests: `tests/test_app_links.py`.
+leaves the group (`check_request`). Tests: `tests/test_app_links.py`. **In step (v261):** the
+two were half a minute apart on the real server (each player's own buffer and every stall it ever
+had add to how far behind live it plays). Both get the same bytes, so the stream timestamps
+compare: a linked device POSTs the PTS on screen and gets the others' back (`report_position`,
+only devices on the same running channel -- a stream of its own has other timestamps), and the
+one ahead waits the difference (the app side is in the contract, §5b).
 
 **How "quality" is judged** everywhere below (`channel_manager.quality_of`): a measured
 resolution when there is one -- only recorded when a stream plays through ffmpeg, so on the
