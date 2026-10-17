@@ -58,8 +58,9 @@ CHANNEL_KEY = "live:app_devices:link_channel:{user_id}"
 GROUP_KEY = "live:app_devices:link_group:{device}"
 # Asked of a device of another login: {device id of the one asking: json}
 REQUEST_KEY = "live:app_devices:link_requests:{device}"
-# What a device asks before it gets an answer, and how long it waits for one
-REQUEST_TTL = 30
+# What a device asks before it gets an answer, and how long it waits for one: long enough for a
+# device whose socket is down to find it in its status (asked every 10 s) and answer
+REQUEST_TTL = 45
 # A group nobody has changed channel in or asked about for this long is forgotten
 LINK_TTL = 12 * 3600
 # In step: the latest position report of each linked device, {device key: json}
@@ -305,8 +306,10 @@ def join(redis_client, user_id, device_key, other_device_id, ip=None):
             "device": _device_id(device_key),
             "key": device_key,
             "name": app_devices.device_name(redis_client, device_key) or _device_id(device_key),
+            "plain": _plain(redis_client, device_key),
             "user": names.get(str(user_id), ""),
             "channel": offer["channel"],
+            "channel_name": offer["channel_name"],
             "at": time.time(),
         }
         asked = REQUEST_KEY.format(device=other_key)
@@ -483,7 +486,34 @@ def state(redis_client, user_id, device_key, ip=None):
         "leads": leads(redis_client, device_key),
         "together": together,
         "offers": offers(redis_client, user_id, device_key, ip),
+        # Asked of this device and not answered yet: a device whose socket is down finds them here
+        "requests": requests_for(redis_client, device_key),
     }
+
+
+def requests_for(redis_client, device_key):
+    """The requests to join this device that wait for its answer, oldest first."""
+    try:
+        raw = redis_client.hgetall(REQUEST_KEY.format(device=device_key)) or {}
+    except Exception:
+        return []
+    now = time.time()
+    found = []
+    for value in raw.values():
+        try:
+            request = json.loads(_as_str(value))
+        except (TypeError, ValueError):
+            continue
+        if now - float(request.get("at") or 0) > REQUEST_TTL:
+            continue
+        found.append({
+            "by": request.get("device", ""),
+            "name": request.get("plain") or request.get("name", ""),
+            "user": request.get("user", ""),
+            "channel_name": request.get("channel_name", ""),
+            "at": request.get("at"),
+        })
+    return sorted(found, key=lambda r: r.get("at") or 0)
 
 
 def report_position(redis_client, user_id, device_key, report):

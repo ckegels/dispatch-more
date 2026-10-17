@@ -2025,6 +2025,15 @@ that case is byte-for-byte what it was; a device of another login points at it w
 `GROUP_KEY`. Socket messages of a mixed group carry `user_ids`, which `user_may_receive_update`
 accepts. Contract: `fork/arrTV-integration.md` §5c. Tests: `WatchTogetherWithPeopleTests`.
 
+v268: the socket is not to be relied on. On the real server (2026-10-18) the Shield was let in and
+never heard, and the next time the Pixel never heard the question: their sockets were refused at
+login with HTTP 429. Dispatcharr's `login` throttle is 3 a minute per address, successful logins
+included, and every device of the other house (plus Claude's checks) is one VPN address. So,
+while Watch together is on, only failed logins count (`apps/accounts/throttling.failures_only`,
+`note_failed_login` from the JWT view and the admin login); off, stock. And the link state lists
+the requests waiting for this device (`requests_for`, kept 45 s), which arrTV shows from its
+status when the socket missed them.
+
 ### 5.7e A stream that keeps stalling is left — `apps/proxy/live_proxy/stalling.py` (v264)
 
 Why the fork's earlier answers to unstable streams did not catch the SNL recording (§5.7d) or

@@ -322,6 +322,15 @@ class WatchTogetherWithPeopleTests(TestCase):
         # An answer once more, or to nobody, is no answer
         self.assertFalse(app_links.answer(self.redis, self.x.id, self.shield, PIXEL, True))
 
+    def test_a_request_waits_in_the_state_for_a_device_whose_socket_is_down(self):
+        self._watching(self.tf1, "c1", self.shield, self.x)
+        app_links.join(self.redis, self.y.id, self.pixel, SHIELD, "192.168.65.3")
+        (waiting,) = app_links.state(self.redis, self.x.id, self.shield, "192.168.65.3")["requests"]
+        self.assertEqual((waiting["by"], waiting["name"], waiting["user"], waiting["channel_name"]),
+                         (PIXEL, "Pixel 9", "Yves", "TF1"))
+        app_links.answer(self.redis, self.x.id, self.shield, PIXEL, True)
+        self.assertEqual(app_links.state(self.redis, self.x.id, self.shield, "192.168.65.3")["requests"], [])
+
     def test_declined_the_one_asking_is_told_and_nothing_is_linked(self):
         self._watching(self.tf1, "c1", self.shield, self.x)
         app_links.join(self.redis, self.y.id, self.pixel, SHIELD, "192.168.65.3")

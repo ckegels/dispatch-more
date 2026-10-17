@@ -54,3 +54,44 @@ class LoginThrottleSpoofingTests(TestCase):
         # A fourth distinct real peer is unaffected by the other three.
         response = self._post_token("noise, 203.0.113.42")
         self.assertNotEqual(response.status_code, 429)
+
+
+class LoginThrottleFailuresOnlyTests(TestCase):
+    """Dispatch More: while Watch together is on, correct logins never use up the budget."""
+
+    def setUp(self):
+        from apps.proxy.live_proxy import app_devices
+
+        cache.clear()
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        self.api = APIClient()
+        User.objects.create_superuser(username="tv", password="right", user_level=10)
+
+    def tearDown(self):
+        cache.clear()
+
+    def _login(self, password):
+        return self.api.post("/api/accounts/token/", {"username": "tv", "password": password}, format="json")
+
+    def test_with_watch_together_off_every_login_counts_as_in_stock(self):
+        for _ in range(3):
+            self.assertEqual(self._login("right").status_code, 200)
+        self.assertEqual(self._login("right").status_code, 429)
+
+    def test_with_watch_together_on_correct_logins_never_lock_the_address_out(self):
+        from apps.proxy.live_proxy import app_devices
+
+        app_devices.save_settings({"devices": True, "link_devices": True})
+        for _ in range(6):
+            self.assertEqual(self._login("right").status_code, 200)
+
+    def test_with_watch_together_on_three_wrong_passwords_still_lock_it(self):
+        from apps.proxy.live_proxy import app_devices
+
+        app_devices.save_settings({"devices": True, "link_devices": True})
+        for _ in range(3):
+            self.assertEqual(self._login("wrong").status_code, 401)
+        self.assertEqual(self._login("wrong").status_code, 429)
+        # ...and a correct one from there too, until the minute is over
+        self.assertEqual(self._login("right").status_code, 429)

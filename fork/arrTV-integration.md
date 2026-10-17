@@ -407,6 +407,13 @@ Between people the one joined **leads**:
 | the other person's channel change | socket `link_follow_request` to the leaders: `{"by", "name", "user", "channel", "channel_name", "devices": ["<leaders>"]}` -- show "*user* switched to *channel_name*": **Follow / Stay**, no answer within 10 s is Follow (tune the channel: that makes it the group's, and tells nobody new). Stay, or the pop-up dismissed: `POST link_url {"stay": "<by>"}` -- that one leaves |
 | `DELETE link_url?device=<theirs>` | a leader takes another person's device out (Disconnect); it hears `link_ended` with `"reason": "removed"` (or `"stayed"`), `by` and `name` |
 
+**Without the socket** (v268): `GET link_url` also answers `"requests": [{"by", "name", "user", "channel_name", "at"}]`
+-- requests to join this device not answered yet (kept 45 s), so a device whose socket is down
+shows the pop-up from its status (arr.114 asks every 10 s); the one asking also finds itself
+`linked` in its status once let in. And while Watch together is on, only failed logins count
+toward Dispatcharr's login limit (3 a minute per address): a house over the VPN is one address,
+and with every login counted, devices restarting after an update locked each other's sockets out.
+
 Socket messages of a group of several logins carry `"user_ids"` (every login in it) besides
 `user_id`; Dispatcharr sends them to those logins only.
 

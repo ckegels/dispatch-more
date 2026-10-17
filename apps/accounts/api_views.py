@@ -11,7 +11,7 @@ from drf_spectacular.types import OpenApiTypes
 import json
 import secrets
 from .permissions import IsAdmin, Authenticated
-from .throttling import LoginRateThrottle
+from .throttling import LoginRateThrottle, note_failed_login
 from dispatcharr.utils import (
     SETUP_ALLOWED_IP_ENV,
     get_client_ip,
@@ -114,6 +114,7 @@ class TokenObtainPairView(TokenObtainPairView):
                     reason='Invalid credentials',
                 )
                 logger.info(f"Login failed: user={username} ip={client_ip}")
+                note_failed_login(request)
 
             return response
 
@@ -127,6 +128,7 @@ class TokenObtainPairView(TokenObtainPairView):
                 reason=f'Authentication error: {str(e)[:100]}',
             )
             logger.error(f"Login error for user={username}: {e}")
+            note_failed_login(request)
             raise  # Re-raise the exception to maintain normal error flow
 
 

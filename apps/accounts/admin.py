@@ -5,7 +5,7 @@ from django.contrib.auth.models import Group
 from django.views.decorators.cache import never_cache
 
 from .models import User
-from .throttling import enforce_login_rate_limit
+from .throttling import enforce_login_rate_limit, note_failed_login
 
 
 @admin.register(User)
@@ -32,7 +32,11 @@ if not getattr(admin.site, "_dispatcharr_login_rate_limited", False):
             throttled = enforce_login_rate_limit(request)
             if throttled is not None:
                 return throttled
-        return _original_admin_login(request, extra_context=extra_context)
+        response = _original_admin_login(request, extra_context=extra_context)
+        # A failed admin login is the form again; a correct one redirects
+        if request.method == "POST" and getattr(response, "status_code", 200) != 302:
+            note_failed_login(request)
+        return response
 
     admin.site.login = _rate_limited_admin_login
     admin.site._dispatcharr_login_rate_limited = True
