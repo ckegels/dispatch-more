@@ -136,12 +136,23 @@ class OneDeviceTests(TestCase):
         self.assertIsNone(self._ask(LIVING_ROOM, channel="orf1"))
         self.assertIsNone(self._replaced(LIVING_ROOM))
 
-    def test_the_same_channel_goes_on_running_for_the_new_device(self, stop_client, release, _spawn):
-        """Closing the channel whole would answer the new device "Channel is stopping"."""
-        self._watching("orf1", "c1", LIVING_ROOM)
-        self.assertIsNone(self._ask(BEDROOM, channel="orf1"))
-        stop_client.assert_called_once_with("orf1", "c1")
+    def test_joining_the_same_channel_is_allowed_it_costs_no_provider_connection(self, stop_client, release, _spawn):
+        """The user: "it's the same channel of course that is allowed, it's using the same provider"."""
+        self._watching("france2", "c1", LIVING_ROOM)
+        self.assertIsNone(self._ask(BEDROOM, channel="france2"))
+        stop_client.assert_not_called()
         release.assert_not_called()
+        self.assertIsNone(self._replaced(LIVING_ROOM))
+
+    def test_any_channel_already_playing_costs_nothing_even_for_a_replaced_device(self, stop_client, release, _spawn):
+        self._watching("orf1", "c1", LIVING_ROOM)
+        self._ask(BEDROOM, channel="orf2")
+        self._watching("orf2", "c2", BEDROOM)
+        # The living room was replaced, but the bedroom's own channel is playing: joining it
+        # opens nothing, so it is let in
+        self.assertIsNone(self._ask(LIVING_ROOM, channel="orf2"))
+        # Its old channel was closed for the bedroom: going back to it is a connection again
+        self.assertEqual(self._ask(LIVING_ROOM, channel="orf1")["by"], "Bedroom TV")
 
     def test_a_channel_someone_else_or_a_recording_is_on_keeps_running(self, stop_client, release, _spawn):
         self._watching("orf1", "c1", LIVING_ROOM)

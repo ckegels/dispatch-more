@@ -265,7 +265,13 @@ What the server does, on every stream request of a declared device of a chosen l
 (`/proxy/ts/stream/`), look back (`/proxy/catchup/`, and the Xtream timeshift paths) and movies
 and episodes (`/proxy/vod/`), since each holds a provider connection (v255; live only before):
 
-1. **Another device of the login is watching:** its streams are closed. A live channel only it
+0. **The request joins a channel that is already playing** (v259) -- the other device's, one
+   someone else is on, one being recorded: it opens no provider connection, so it is let in,
+   nobody is stopped and nobody is marked replaced. What is held to one is the provider
+   connection, not the screen. (v258 stopped the Chromecast when the phone joined the channel
+   it was watching.)
+1. **Another device of the login is watching** (and this request opens a connection: another
+   channel, a look back, a movie): its streams are closed. A live channel only it
    watches is stopped whole, its slot free at once; one someone else is on, a recording is on,
    or the one this request asks for, only loses that device's connection. A look back is
    stopped as the admin's Stats page stops one viewer (`stop_timeshift_client`), a movie as
@@ -284,7 +290,7 @@ and episodes (`/proxy/vod/`), since each holds a provider connection (v255; live
 
    `by` is the other device's `X-Dispatch-Device-Name`, or "another device" when it never
    said one. Once the other device stops watching, the next request plays again by itself.
-   For the first 60 s after the takeover it is refused even before the other device is seen
+   For the first 20 s after the takeover (60 s before v259) it is refused even before the other device is seen
    watching: that device's channel may still be starting, and the replaced one reconnects
    within a second.
 3. **The request carries `X-Dispatch-Take-Over: 1`** (or `dm_take_over=1`): the refusal does

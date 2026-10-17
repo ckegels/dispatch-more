@@ -20,6 +20,12 @@ that login's sockets): a closed stream reaches the screen only once the player h
 what it had buffered, ten or twenty seconds on a TV and more with its own Live Rewind, and on
 the real installation that looked like nothing was stopped at all.
 
+What is held to one is the provider connection, not the screen: a device joining a channel that
+is already playing -- the other device's, one someone else is on, one being recorded -- opens
+no connection, so it is let in and nobody is stopped (the user, 2026-10-17: "it's the same
+channel of course that is allowed, it's using the same provider"). A different channel, a look
+back or a movie opens one, and that is when the login's other device is stopped.
+
 Only devices that said who they are (app_devices, "Recognise each arrTV device") take part:
 without that the server cannot tell two TVs on one login apart. Recordings are never closed,
 nor anyone else's viewing of a shared channel, nor any other player on that login. Off -- no
@@ -38,10 +44,11 @@ logger = logging.getLogger("live_proxy")
 REPLACED_KEY = "live:app_devices:replaced:{user_id}:{device}"
 # A day at most: by then nobody is waiting on that TV for an answer
 REPLACED_TTL = 24 * 3600
-# The new device is not yet a client of its channel while that channel starts (seconds, for a
-# cold one), and the replaced one reconnects within a second of being closed: for this long it
-# is refused whether or not the new device is seen watching yet, or it would slip back in
-STARTING_SECONDS = 60
+# The new device is not yet a client of its channel while that channel starts (1-2 s, about
+# 10 s for a cold one), and the replaced one reconnects within a second of being closed: for
+# this long it is refused whether or not the new device is seen watching yet, or it would slip
+# back in. Not longer: 60 s kept a Chromecast off after the phone that replaced it had stopped
+STARTING_SECONDS = 20
 
 # Which device a look back session or a movie connection is from. Live clients carry their
 # device in Dispatcharr's own client record (record_client_viewer); look back and movies have no
@@ -211,6 +218,27 @@ def tell(user_id, device_key, by_name):
         logger.debug(f"One device: could not tell {device_key}: {e}")
 
 
+def joins_running_channel(redis_client, channel_uuid):
+    """
+    Whether a live request for this channel joins one that is already playing, and so opens
+    no provider connection of its own: it is starting or running and not being stopped.
+    """
+    if redis_client is None or not channel_uuid:
+        return False
+    from .constants import ChannelMetadataField, ChannelState
+    from .redis_keys import RedisKeys
+
+    from . import probation
+
+    state = _as_str(redis_client.hget(RedisKeys.channel_metadata(channel_uuid), ChannelMetadataField.STATE))
+    if state != ChannelState.ACTIVE and state not in ChannelState.PRE_ACTIVE:
+        return False
+    return not (
+        probation._dispatcharr_is_stopping(redis_client, channel_uuid)
+        or redis_client.exists(probation._skipped_stopping_key(channel_uuid))
+    )
+
+
 def refusal(name):
     """The answer a replaced device gets until it takes over: what arrTV reads and shows."""
     name = name or UNNAMED
@@ -238,6 +266,11 @@ def check(redis_client, request, viewer, channel_uuids, client_id=None):
         return None
     me = viewer.server_device
     try:
+        # A channel already playing costs no provider connection: nothing to free, nobody
+        # replaced, whoever else of the login is watching (the channel actually streamed: a
+        # stream of its own is the last of channel_uuids)
+        if channel_uuids and joins_running_channel(redis_client, str(channel_uuids[-1])):
+            return None
         if client_id:
             note_client(redis_client, client_id, me)
         holding = streams_by_device(redis_client, user_id)

@@ -2105,7 +2105,14 @@ real server 2026-10-16 (Shield + Pixel 9 on admin), the server closed the Shield
 moment the phone started, but the Shield played its buffer for 10-20 s before it noticed --
 "it doesn't stop anything". So `tell()` sends `device_replaced` on the socket, with the
 replaced device's own id, and `dispatcharr.consumers.user_may_receive_update` delivers it to
-that login's sockets only (a hook in stock code, one comparison, only for that type). **Look
+that login's sockets only (a hook in stock code, one comparison, only for that type). **The
+same channel is free (v259):** on the real server (2026-10-17) the phone joined France 2, which
+the Chromecast was playing on one provider connection, and v258 stopped the Chromecast -- the
+user: "it's the same channel of course that is allowed, it's using the same provider; if it's
+using 1 provider it is fine, that was the whole point". `joins_running_channel` lets a live
+request for a channel already starting or running (not being stopped) through untouched: no
+close, no replaced mark. And `STARTING_SECONDS` is 20, not 60: the 60 s kept the Chromecast
+refused for half a minute after the phone had already stopped. **Look
 back and movies (v255):** the user's rule is "anything where the user is using a provider
 connection". `_serve_catchup` and `stream_vod` call `check_request` before the user's limit;
 `streams_by_device` adds stock's look back and movie connections (`get_user_active_connections`)
