@@ -371,13 +371,15 @@ What arrTV does (`DispatchMoreLinks`, `WatchTogether`):
   another app, closing it) leaves too (arr.102), so a TV that comes back later does not follow
   the other on its next channel change; the other plays on, and on `link_ended` stops offering
   it.
-- **In step** (arr.102, server v261): every 10 s while linked, the PTS of the frame on screen
-  (`LivePtsProbe`: the live connection's first PES timestamp, from which Media3 counts the
-  player's position, plus that position) is reported; ahead of the furthest-behind other device
-  by more than 1.5 s (up to 15 min), this device waits the difference, as a pause of the remote
-  would (with Live Rewind or server rewind it then plays on from the recording), and says so
-  ("Waiting 28 s to stay in step with SHIELD"). Only the one ahead moves. Not measured while
-  playing from a rewind buffer.
+- **In step** (arr.104, server v262): a fresh connection to a running channel starts as far behind
+  live as any fresh connection does, on any device, so two devices tuned fresh are in step; one
+  only falls behind afterwards (a stall, a pause, a rewind). So on joining both tune afresh at
+  once (the joiner joins; the device joined does on `link_joined`), and a channel change is a
+  fresh tune on both. Every 10 s while linked the PTS on screen (`LivePtsProbe`: the live
+  connection's first PES timestamp, from which Media3 counts the player's position, plus that
+  position) is reported, and a device more than 1.5 s **behind** the other tunes afresh -- never
+  a wait (arr.102 made the one ahead pause the difference: a black screen, and the paused player
+  lost its connection and jumped to live again). Not measured while playing from a rewind buffer.
 
 ## 6. Leaving a channel
 
