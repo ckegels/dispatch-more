@@ -72,6 +72,9 @@ DEFAULTS = {
     # Watch together (app_links): arrTV devices of one login may join each other, and then
     # follow each other's channel changes
     "link_devices": False,
+    # Watch together with other people (app_links, v266): the user ids who may join each other's
+    # devices in the same house, comma separated ("" is none)
+    "link_users": "",
     "keep_past_days": 0,
     # Server rewind (live_proxy/rewind.py, fork/pause-resume.md §4.3): watched channels kept on
     # the server so a TV can pause and rewind without its own disk. Minutes always kept, the
@@ -146,7 +149,7 @@ def _as_kind(key, value):
             return max(low, min(high, int(float(value))))
         except (TypeError, ValueError):
             return DEFAULTS[key]
-    if key in ("guide_choice_sources", "one_device_users"):
+    if key in ("guide_choice_sources", "one_device_users", "link_users"):
         # Ids only: given as a list by the settings page, kept as text like the other rows
         parts = value if isinstance(value, (list, tuple)) else str(value or "").split(",")
         return ",".join(str(int(p)) for p in parts if str(p).strip().isdigit())
@@ -655,6 +658,8 @@ def capabilities():
         "one_device": bool(settings["devices"] and settings["one_device_users"]),
         # Watch together (app_links): join another device of the login, follow its channel
         "link_devices": bool(settings["devices"] and settings["link_devices"]),
+        # v266: other people in the house too, asked first, the one joined leading
+        "link_people": bool(settings["devices"] and settings["link_devices"] and settings["link_users"]),
         "link_url": "/api/core/app-link/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},

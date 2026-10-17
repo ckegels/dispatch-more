@@ -52,8 +52,15 @@ def user_may_receive_update(user, data):
     # Dispatch More: "another arrTV device of yours took over" and "the device you watch
     # together with changed channel" are for that login only (apps.proxy.live_proxy
     # app_one_device, app_links); never sent with the features off
-    if event_type in ("device_replaced", "linked_channel", "link_ended", "link_joined"):
-        return getattr(user, "id", None) is not None and getattr(user, "id", None) == data.get("user_id")
+    # Watching together across logins (v266) names every login of the group in user_ids
+    if event_type in ("device_replaced", "linked_channel", "link_ended", "link_joined",
+                      "link_request", "link_accepted", "link_declined", "link_follow_request"):
+        me = getattr(user, "id", None)
+        if me is None:
+            return False
+        if "user_ids" in data:
+            return me in (data.get("user_ids") or [])
+        return me == data.get("user_id")
     if event_type == "system_notification":
         notification = data.get("notification") or {}
         if notification.get("admin_only"):

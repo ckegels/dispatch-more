@@ -2005,6 +2005,26 @@ manager). On the user's recordings: Saturday Night Live damaged ("Sound missing 
 min (584 holes, the first at 15:28, the longest 10 s)"), the rugby minor (7 s at 2:17:39).
 Tests: `apps/channels/tests/test_recording_health.py`.
 
+### 5.7f Watch together with other people in the house — `apps/proxy/live_proxy/app_links.py` (v266)
+
+The user (2026-10-17): Y may join X's TV when both are chosen (`link_users`) and in the same
+house -- "but i want to limit this to in house, tho we can expand this in the future". The
+house is what the server sees: the home networks are one house, any other address is its own
+(every remote site comes over the VPN under one address, 192.168.65.3 for the house with the
+Chromecast and the Pixel; a phone on the road over the VPN gets its own). Only channels the
+joining login may watch (`may_watch`, Dispatcharr's level + channel-profile rule).
+
+The user's rules for two people: the one joined is asked first (Allow / Decline, ten seconds
+unanswered is Allow) and leads -- its channel changes are followed; the one who joined changing
+channel asks the leader (Follow / Stay, ten seconds unanswered is Follow; Stay or dismissed takes
+the other out); either can end it (leave; the leader's Disconnect). A login's own devices stay
+two-way, unasked (§5.11).
+
+A group lives under its leader's login id, with the keys a login's own group always had, so
+that case is byte-for-byte what it was; a device of another login points at it with
+`GROUP_KEY`. Socket messages of a mixed group carry `user_ids`, which `user_may_receive_update`
+accepts. Contract: `fork/arrTV-integration.md` §5c. Tests: `WatchTogetherWithPeopleTests`.
+
 ### 5.7e A stream that keeps stalling is left — `apps/proxy/live_proxy/stalling.py` (v264)
 
 Why the fork's earlier answers to unstable streams did not catch the SNL recording (§5.7d) or

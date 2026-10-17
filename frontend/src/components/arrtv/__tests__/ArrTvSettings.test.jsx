@@ -1,5 +1,5 @@
 // With the real Mantine: the switches, their order of dependence, and the reports under them
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
@@ -58,10 +58,46 @@ describe('ArrTvSettings', () => {
     expect(screen.getAllByText('friend').length).toBeGreaterThan(0);
     fireEvent.click(picker);
     // Still in its opening transition, which hides it from the accessible tree
-    fireEvent.click(await screen.findByRole('option', { name: 'kids', hidden: true }));
+    // The picker's own list: the people who watch together pick from the same users
+    const list = await waitFor(() => {
+      const found = document.getElementById(picker.getAttribute('aria-controls'));
+      if (!found) throw new Error('not open yet');
+      return found;
+    });
+    fireEvent.click(within(list).getByRole('option', { name: 'kids', hidden: true }));
     await waitFor(() =>
       expect(API.saveArrTvSettings).toHaveBeenCalledWith(
         expect.objectContaining({ one_device_users: '7,3' })
+      )
+    );
+  });
+
+  it('lets chosen users watch together with each other, only with watch together on', async () => {
+    useUsersStore.setState({
+      users: [
+        { id: 3, username: 'kids' },
+        { id: 7, username: 'friend' },
+      ],
+    });
+    API.getArrTvSettings.mockResolvedValue({ devices: true, link_devices: true, link_users: '7' });
+    API.getAppReports.mockResolvedValue({ reports: [] });
+    API.saveArrTvSettings.mockResolvedValue({ devices: true, link_devices: true, link_users: '7,3' });
+    draw();
+
+    const picker = await screen.findByRole('textbox', {
+      name: 'Watch together with other people in the house',
+    });
+    expect(picker).not.toBeDisabled();
+    fireEvent.click(picker);
+    const list = await waitFor(() => {
+      const found = document.getElementById(picker.getAttribute('aria-controls'));
+      if (!found) throw new Error('not open yet');
+      return found;
+    });
+    fireEvent.click(within(list).getByRole('option', { name: 'kids', hidden: true }));
+    await waitFor(() =>
+      expect(API.saveArrTvSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ link_users: '7,3' })
       )
     );
   });

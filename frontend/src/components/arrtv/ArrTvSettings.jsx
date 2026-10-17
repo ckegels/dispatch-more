@@ -532,6 +532,29 @@ const ArrTvSettings = () => {
           />
         </Box>
         <Box pl="xl">
+          <MultiSelect
+            size="xs"
+            maw={520}
+            label="Watch together with other people in the house"
+            description={
+              settings.devices && settings.link_devices
+                ? "These users can also join each other's arrTV devices, when both are in the same house as the server sees it (both on the home networks, or both coming from the same address, as a site over the VPN does) and only on a channel the one joining may watch. The one joined is asked first, and leads: the other follows its channel changes; when the one who joined changes channel, the leader is asked whether to follow (no answer within ten seconds follows), and staying takes the other out. Either can stop at any time."
+                : 'Needs "Watch together".'
+            }
+            placeholder={
+              settings.devices && settings.link_devices ? 'Nobody' : ''
+            }
+            data={userChoices}
+            value={String(settings.link_users || '')
+              .split(',')
+              .filter(Boolean)}
+            onChange={(ids) => change({ link_users: ids.join(',') })}
+            disabled={!settings.devices || !settings.link_devices}
+            clearable
+            searchable
+          />
+        </Box>
+        <Box pl="xl">
           <Setting
             label="Faster failover when arrTV starts a channel"
             description={

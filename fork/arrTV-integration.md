@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); latest release v265) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); latest release v265; other people in the house from v266) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -382,6 +382,33 @@ What arrTV does (`DispatchMoreLinks`, `WatchTogether`):
   device's own delay, a slower start or a deeper buffer, is no stall; with 1.5 s a Pixel 9
   reconnected every 30 s) -- never a wait (arr.102 made the one ahead pause the difference: a black screen, and the paused player
   lost its connection and jumped to live again). Not measured while playing from a rewind buffer.
+
+
+### 5c. Watch together with other people in the house (server v266)
+
+Server setting: **Watch together with other people in the house** (`link_users`: the users who
+may, needs `link_devices`); `capabilities` says `"link_people": true` when any are chosen. Two of
+those users' devices may join each other when both are in the same house as the server sees it:
+both on the home networks (`home_networks`), or both from the same address (a site over the VPN
+is one address; a phone on the road over the VPN is its own) -- and only on a channel the login
+joining may watch (its level, its channel profiles). A login's own devices work as in §5b.
+
+Between people the one joined **leads**:
+
+| Call / socket | |
+|---|---|
+| `GET link_url` | as §5b, plus `"leads": bool` and `"together": [{"device", "name", "user", "leads"}]` (who this device is linked with; `user` empty for the login's own). An offer of another person's device also has `"user"` (the name to show) and `"user_id"` |
+| `POST link_url {"join": "<their device>"}` | **202** `{"pending": true, "name", "user", "channel", "channel_name"}`: that device is asked first |
+| socket `link_request` to the one asked | `{"by": "<device asking>", "name", "user", "channel", "channel_name", "devices": ["<the one asked>"]}` -- show "*user* (*name*) wants to watch with you": **Allow / Decline**; no answer within 10 s is Allow. The request lasts 30 s |
+| `POST link_url {"answer": "<device asking>", "allow": bool}` | 200, or 404 when it ran out |
+| socket `link_accepted` to the one asking | `{"by", "name", "channel", "devices": ["<the one asking>"]}` -- linked now: tune `channel` afresh (the others tune afresh on the `link_joined` that follows) |
+| socket `link_declined` to the one asking | `{"by", "name", "devices", "reason"?}` -- `reason` `not_allowed` when its login may not watch that channel |
+| a leader's channel change | `linked_channel` as §5b: followed at once. A member of another login who may not watch the new channel is taken out (`link_ended` with `"reason": "not_allowed"`) |
+| the other person's channel change | socket `link_follow_request` to the leaders: `{"by", "name", "user", "channel", "channel_name", "devices": ["<leaders>"]}` -- show "*user* switched to *channel_name*": **Follow / Stay**, no answer within 10 s is Follow (tune the channel: that makes it the group's, and tells nobody new). Stay, or the pop-up dismissed: `POST link_url {"stay": "<by>"}` -- that one leaves |
+| `DELETE link_url?device=<theirs>` | a leader takes another person's device out (Disconnect); it hears `link_ended` with `"reason": "removed"` (or `"stayed"`), `by` and `name` |
+
+Socket messages of a group of several logins carry `"user_ids"` (every login in it) besides
+`user_id`; Dispatcharr sends them to those logins only.
 
 ## 6. Leaving a channel
 
