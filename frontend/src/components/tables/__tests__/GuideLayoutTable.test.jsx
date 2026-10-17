@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
-import GuideLayoutTable, { intoColumns } from '../GuideLayoutTable.jsx';
+import GuideLayoutTable, { intoColumns, toEndOf } from '../GuideLayoutTable.jsx';
 import API from '../../../api';
 
 vi.mock('../../../api', () => ({
@@ -96,6 +96,25 @@ describe('intoColumns', () => {
 
   it('is one column where there is no room for two', () => {
     expect(intoColumns(shut(4), () => false, 1)).toHaveLength(1);
+  });
+});
+
+// A shut group takes a drop on its name: there is nowhere in it to drop between, and
+// opening both groups, in one column, had become the only way across (v145-v264)
+describe('toEndOf', () => {
+  it('takes the channel out of its group and puts it last in the other', () => {
+    expect(toEndOf({ 1: [11, 12, 13], 2: [21] }, 12, 2)).toEqual({
+      1: [11, 13],
+      2: [21, 12],
+    });
+  });
+
+  it('moves it to the end when it is dropped on its own group', () => {
+    expect(toEndOf({ 1: [11, 12, 13] }, 11, 1)).toEqual({ 1: [12, 13, 11] });
+  });
+
+  it('starts a group that has no channels yet', () => {
+    expect(toEndOf({ 1: [11], 3: [] }, 11, 3)).toEqual({ 1: [], 3: [11] });
   });
 });
 

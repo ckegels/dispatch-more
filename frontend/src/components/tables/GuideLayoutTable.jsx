@@ -4,6 +4,7 @@ import {
   DndContext,
   KeyboardSensor,
   MouseSensor,
+  pointerWithin,
   TouchSensor,
   useDroppable,
   useSensor,
@@ -171,6 +172,52 @@ const GroupBox = ({ id, children }) => {
   );
 };
 
+// A shut group takes a drop on its name: the channel goes to the end of it. Its channels
+// are not drawn, so there is nowhere in it to drop between -- and opening both groups,
+// in one column, was the only way across once groups were shut and in two columns (v145).
+const SHUT = 'shut-';
+
+const ShutDrop = ({ id, shut, children }) => {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `${SHUT}${id}`,
+    disabled: !shut,
+  });
+  return (
+    <Box
+      ref={setNodeRef}
+      style={
+        isOver
+          ? {
+              outline: '1px solid var(--mantine-color-blue-6)',
+              borderRadius: 4,
+            }
+          : undefined
+      }
+    >
+      {children}
+    </Box>
+  );
+};
+
+// The name of a shut group under the pointer wins; otherwise the nearest channel, as
+// before, so dragging within a group is unchanged
+const collide = (args) => {
+  const shut = pointerWithin(args).filter((one) =>
+    String(one.id).startsWith(SHUT)
+  );
+  return shut.length ? shut : closestCorners(args);
+};
+
+// The arrangement once a channel is dropped at the end of a group: out of wherever it
+// is now, last in that one
+export const toEndOf = (order, channelId, to) => {
+  const next = {};
+  for (const [group, ids] of Object.entries(order))
+    next[group] = ids.filter((id) => id !== channelId);
+  next[to] = [...(next[to] || []), channelId];
+  return next;
+};
+
 // Two columns, each group going to whichever is shorter at the time, rather than a grid
 // of rows. A grid gives every row the height of its tallest cell, so one group opened put
 // a column of air beside it and pushed everything else below the pair. Filled this way an
@@ -281,6 +328,7 @@ const GuideLayoutTable = () => {
     (id) => {
       const text = String(id);
       if (text.startsWith('group-')) return Number(text.slice(6));
+      if (text.startsWith(SHUT)) return Number(text.slice(SHUT.length));
       const found = Object.entries(order).find(([, ids]) => ids.includes(id));
       return found ? Number(found[0]) : null;
     },
@@ -291,7 +339,8 @@ const GuideLayoutTable = () => {
   // what would happen. Where it lands within the group is settled on the drop.
   const onDragOver = (event) => {
     const { active, over } = event;
-    if (!over) return;
+    // A shut group is joined on the drop: its channels are not drawn to move among
+    if (!over || String(over.id).startsWith(SHUT)) return;
     const from = groupOf(active.id);
     const to = groupOf(over.id);
     if (from == null || to == null || from === to) return;
@@ -309,6 +358,17 @@ const GuideLayoutTable = () => {
     if (!over) return;
     const to = groupOf(over.id);
     if (to == null) return;
+    if (String(over.id).startsWith(SHUT)) {
+      const next = toEndOf(order, active.id, to);
+      setOrder(next);
+      // Opened, so where it went can be seen and moved on from
+      setOpen((all) => new Set(all).add(to));
+      if (byId[active.id] && byId[active.id].group_id !== to) {
+        setMoves((all) => ({ ...all, [active.id]: to }));
+      }
+      arrange({ order: next[to], moved: active.id });
+      return;
+    }
     const ids = order[to] || [];
     const at = ids.indexOf(active.id);
     const onto = ids.indexOf(over.id);
@@ -553,8 +613,9 @@ const GuideLayoutTable = () => {
             // into another rather than only up and down within it
             <DndContext
               sensors={sensors}
-              collisionDetection={closestCorners}
-              modifiers={[restrictToVerticalAxis]}
+              collisionDetection={collide}
+              // Up and down only in one column; in two, the other group may be beside it
+              modifiers={wide ? undefined : [restrictToVerticalAxis]}
               onDragOver={onDragOver}
               onDragEnd={onDragEnd}
             >
@@ -573,126 +634,132 @@ const GuideLayoutTable = () => {
                   <Stack key={at} gap="lg" style={{ flex: 1, minWidth: 0 }}>
                     {column.map((one) => (
                       <Box key={one.id}>
-                        <Group
-                          justify="space-between"
-                          mb={4}
-                          wrap="wrap"
-                          gap="xs"
-                        >
-                          <Group gap="xs">
-                            <UnstyledButton
-                              onClick={() =>
-                                setOpen((all) => {
-                                  const now = new Set(all);
-                                  if (now.has(one.id)) now.delete(one.id);
-                                  else now.add(one.id);
-                                  return now;
-                                })
-                              }
-                              aria-label={`${open.has(one.id) ? 'Close' : 'Open'} ${one.name}`}
+                        <ShutDrop id={one.id} shut={!open.has(one.id)}>
+                          <Group
+                            justify="space-between"
+                            mb={4}
+                            wrap="wrap"
+                            gap="xs"
+                          >
+                            <Group gap="xs">
+                              <UnstyledButton
+                                onClick={() =>
+                                  setOpen((all) => {
+                                    const now = new Set(all);
+                                    if (now.has(one.id)) now.delete(one.id);
+                                    else now.add(one.id);
+                                    return now;
+                                  })
+                                }
+                                aria-label={`${open.has(one.id) ? 'Close' : 'Open'} ${one.name}`}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                {open.has(one.id) ? (
+                                  <ChevronDown size={14} />
+                                ) : (
+                                  <ChevronRight size={14} />
+                                )}
+                                <Text size="sm" fw={600}>
+                                  {one.name}
+                                </Text>
+                              </UnstyledButton>
+                              {open.has(one.id) && (
+                                <TextInput
+                                  size="xs"
+                                  aria-label={`Name for ${one.name}`}
+                                  defaultValue={one.name}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter')
+                                      renameGroup(
+                                        one.id,
+                                        event.currentTarget.value
+                                      );
+                                  }}
+                                  placeholder="Rename this group"
+                                  style={{ width: 200 }}
+                                />
+                              )}
+                              <Text size="xs" c="dimmed">
+                                {one.channels.length} channel
+                                {one.channels.length === 1 ? '' : 's'}
+                                {one.first != null &&
+                                  ` · ${one.first}–${one.last}`}
+                                {one.room_after != null &&
+                                  ` · room for ${one.room_after}`}
+                              </Text>
+                              {one.channels.some((c) => c.clashes) && (
+                                <Badge size="xs" color="red" variant="light">
+                                  same numbers
+                                </Badge>
+                              )}
+                            </Group>
+                            <Group
+                              gap="xs"
+                              align="flex-end"
                               style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 4,
+                                display: open.has(one.id) ? undefined : 'none',
                               }}
                             >
-                              {open.has(one.id) ? (
-                                <ChevronDown size={14} />
-                              ) : (
-                                <ChevronRight size={14} />
-                              )}
-                              <Text size="sm" fw={600}>
-                                {one.name}
-                              </Text>
-                            </UnstyledButton>
-                            {open.has(one.id) && (
+                              <NumberInput
+                                size="xs"
+                                label="From"
+                                aria-label={`Renumber ${one.name} from`}
+                                value={from}
+                                onChange={(value) =>
+                                  setFrom(Number(value) || 1)
+                                }
+                                style={{ width: 90 }}
+                              />
+                              <NumberInput
+                                size="xs"
+                                label="Step"
+                                aria-label={`Renumber ${one.name} in steps of`}
+                                min={1}
+                                value={step}
+                                onChange={(value) =>
+                                  setStep(Number(value) || 1)
+                                }
+                                style={{ width: 80 }}
+                              />
+                              <Button
+                                size="xs"
+                                variant="default"
+                                aria-label={`Renumber every channel of ${one.name}`}
+                                onClick={() => renumber(one.id)}
+                              >
+                                Renumber them all
+                              </Button>
                               <TextInput
                                 size="xs"
-                                aria-label={`Name for ${one.name}`}
-                                defaultValue={one.name}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter')
-                                    renameGroup(
-                                      one.id,
-                                      event.currentTarget.value
-                                    );
-                                }}
-                                placeholder="Rename this group"
-                                style={{ width: 200 }}
+                                label="Take out of every name"
+                                description="Typed as it is written, not as a pattern"
+                                aria-label={`Take out of every name in ${one.name}`}
+                                value={takeOff[one.id] || ''}
+                                onChange={(event) =>
+                                  setTakeOff((all) => ({
+                                    ...all,
+                                    [one.id]: event.currentTarget.value,
+                                  }))
+                                }
+                                placeholder="┃DE┃"
+                                style={{ width: 170 }}
                               />
-                            )}
-                            <Text size="xs" c="dimmed">
-                              {one.channels.length} channel
-                              {one.channels.length === 1 ? '' : 's'}
-                              {one.first != null &&
-                                ` · ${one.first}–${one.last}`}
-                              {one.room_after != null &&
-                                ` · room for ${one.room_after}`}
-                            </Text>
-                            {one.channels.some((c) => c.clashes) && (
-                              <Badge size="xs" color="red" variant="light">
-                                same numbers
-                              </Badge>
-                            )}
+                              <Button
+                                size="xs"
+                                variant="default"
+                                disabled={!(takeOff[one.id] || '').trim()}
+                                aria-label={`See what taking that out of ${one.name} would leave`}
+                                onClick={() => takeOutOf(one.id, false)}
+                              >
+                                Show me
+                              </Button>
+                            </Group>
                           </Group>
-                          <Group
-                            gap="xs"
-                            align="flex-end"
-                            style={{
-                              display: open.has(one.id) ? undefined : 'none',
-                            }}
-                          >
-                            <NumberInput
-                              size="xs"
-                              label="From"
-                              aria-label={`Renumber ${one.name} from`}
-                              value={from}
-                              onChange={(value) => setFrom(Number(value) || 1)}
-                              style={{ width: 90 }}
-                            />
-                            <NumberInput
-                              size="xs"
-                              label="Step"
-                              aria-label={`Renumber ${one.name} in steps of`}
-                              min={1}
-                              value={step}
-                              onChange={(value) => setStep(Number(value) || 1)}
-                              style={{ width: 80 }}
-                            />
-                            <Button
-                              size="xs"
-                              variant="default"
-                              aria-label={`Renumber every channel of ${one.name}`}
-                              onClick={() => renumber(one.id)}
-                            >
-                              Renumber them all
-                            </Button>
-                            <TextInput
-                              size="xs"
-                              label="Take out of every name"
-                              description="Typed as it is written, not as a pattern"
-                              aria-label={`Take out of every name in ${one.name}`}
-                              value={takeOff[one.id] || ''}
-                              onChange={(event) =>
-                                setTakeOff((all) => ({
-                                  ...all,
-                                  [one.id]: event.currentTarget.value,
-                                }))
-                              }
-                              placeholder="┃DE┃"
-                              style={{ width: 170 }}
-                            />
-                            <Button
-                              size="xs"
-                              variant="default"
-                              disabled={!(takeOff[one.id] || '').trim()}
-                              aria-label={`See what taking that out of ${one.name} would leave`}
-                              onClick={() => takeOutOf(one.id, false)}
-                            >
-                              Show me
-                            </Button>
-                          </Group>
-                        </Group>
+                        </ShutDrop>
                         {open.has(one.id) && (
                           <GroupBox id={one.id}>
                             <SortableContext

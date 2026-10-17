@@ -1383,6 +1383,15 @@ once two are open the rest fall in under both. With everything shut every group 
 line, so they alternate and read across the page exactly as the grid did. One column below
 `75em`, where there is no room for two.
 
+**Dragging into another group broke in v145 and works again from v265** (the user: "i used to be
+able to switch between groups"). Two columns and shut groups had left two ways across closed:
+drags were still locked to the vertical axis (right in v142's single column, so a group in the
+other column could not be reached), and a shut group draws no channels, so it had nothing to
+drop on. Now the lock is only on in one column, and a shut group's name takes a drop
+(`ShutDrop`, `shut-<id>`, `toEndOf`): the channel goes last in that group and the group opens.
+`collide` lets a shut group's name under the pointer win and is `closestCorners` otherwise, so
+dragging within a group is as before. The drag itself is dnd-kit's and only `toEndOf` is tested.
+
 The page also says what nothing else does: **two channels on one number**. `channel_number`
 is a float and its uniqueness is only checked within a group, by `clean()`, which `save()`
 does not call -- so clashes across groups are easy to make and a media server, seeing one
