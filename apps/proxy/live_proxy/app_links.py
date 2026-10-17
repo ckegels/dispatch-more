@@ -151,6 +151,20 @@ def join(redis_client, user_id, device_key, other_device_id):
         f"Watch together: {app_devices.device_name(redis_client, device_key) or device_key} joins "
         f"{app_devices.device_name(redis_client, other_key) or other_key} on {offer['channel']}"
     )
+    # The devices joined are linked too, and have to know it: only a linked device reports its
+    # position, and on the real server (2026-10-17) the TV the phone joined never did -- the
+    # phone heard nobody, and the two stayed half a minute apart
+    try:
+        from core.utils import send_websocket_update
+
+        send_websocket_update("updates", "update", {
+            "type": "link_joined",
+            "user_id": user_id,
+            "by": _device_id(device_key),
+            "devices": sorted(_device_id(d) for d in members(redis_client, user_id) - {device_key}),
+        })
+    except Exception as e:
+        logger.debug(f"Watch together: could not tell the joined device: {e}")
     return {"channel": offer["channel"], "name": offer["name"], "channel_name": offer["channel_name"]}
 
 

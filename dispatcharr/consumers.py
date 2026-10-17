@@ -52,7 +52,7 @@ def user_may_receive_update(user, data):
     # Dispatch More: "another arrTV device of yours took over" and "the device you watch
     # together with changed channel" are for that login only (apps.proxy.live_proxy
     # app_one_device, app_links); never sent with the features off
-    if event_type in ("device_replaced", "linked_channel", "link_ended"):
+    if event_type in ("device_replaced", "linked_channel", "link_ended", "link_joined"):
         return getattr(user, "id", None) is not None and getattr(user, "id", None) == data.get("user_id")
     if event_type == "system_notification":
         notification = data.get("notification") or {}

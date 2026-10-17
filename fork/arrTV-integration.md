@@ -342,7 +342,7 @@ The device is the one the request's device header names (the API client sends it
 | Call | Answer |
 |---|---|
 | `GET link_url` | `{"linked": bool, "channel": uuid or null, "offers": [{"device", "name", "channel", "channel_name"}]}` -- the login's other devices watching one live channel now |
-| `POST link_url {"join": "<device id>"}` | `{"linked": true, "channel", "name", "channel_name"}`, or 404 when that device is not watching a channel |
+| `POST link_url {"join": "<device id>"}` | `{"linked": true, "channel", "name", "channel_name"}`, or 404 when that device is not watching a channel; the devices joined hear it on the socket (v262): `{"type": "link_joined", "user_id", "by": "<joiner>", "devices": ["<the others>"]}`, so they count as linked and report their position too |
 | `DELETE link_url` | this device stops watching together; a group of one is no group, and the one left is told on the socket (v261): `{"type": "update", "data": {"type": "link_ended", "user_id": 1, "devices": ["<the one left>"]}}` |
 | `POST link_url {"position": {"pts": <90 kHz>, "at": <epoch ms>}}` (v261) | `{"others": [{"device", "name", "pts", "at"}]}` -- the other linked devices' latest reports (under 30 s old) on the very channel this device's live client is on |
 

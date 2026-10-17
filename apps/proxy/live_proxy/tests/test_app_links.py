@@ -59,10 +59,15 @@ class WatchTogetherTests(TestCase):
         self.assertEqual(app_links.linked_with(self.redis, self.user.id, self._key(PIXEL)), {self._key(SHIELD)})
         self.assertEqual(app_links.channel_of(self.redis, self.user.id), "france2")
         self.assertIsNone(app_links.join(self.redis, self.user.id, self._key(PIXEL), "not-watching"))
+        # The device joined hears it: it is linked too, and reports its position from now on
+        self.sent.assert_any_call("updates", "update", {
+            "type": "link_joined", "user_id": self.user.id, "by": PIXEL, "devices": [SHIELD],
+        })
 
     def test_a_channel_change_is_followed_by_the_other(self):
         self._watching("france2", "c1", SHIELD)
         app_links.join(self.redis, self.user.id, self._key(PIXEL), SHIELD)
+        self.sent.reset_mock()  # the join's own message
         request = RequestFactory().get("/proxy/ts/stream/tf1")
         self.assertTrue(app_links.mirror(self.redis, request, self._viewer(SHIELD), "tf1"))
         self.sent.assert_called_once_with("updates", "update", {
@@ -78,6 +83,7 @@ class WatchTogetherTests(TestCase):
         self.assertFalse(app_links.mirror(self.redis, request, self._viewer(SHIELD), "tf1"))
         self._watching("france2", "c1", SHIELD)
         app_links.join(self.redis, self.user.id, self._key(PIXEL), SHIELD)
+        self.sent.reset_mock()  # the join's own message
         self.assertFalse(app_links.mirror(self.redis, request, self._viewer(SHIELD, multiview="mv"), "tf1"))
         app_devices.save_settings({"link_devices": False})
         self.assertFalse(app_links.mirror(self.redis, request, self._viewer(SHIELD), "tf1"))
