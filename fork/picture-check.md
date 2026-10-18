@@ -23,7 +23,7 @@ goes is queued first for the check instead of refused. Measured on made-up progr
 10 different programmes PENDING, the same one 0-6 s apart SAME every time. Silent streams:
 ffmpeg refused an empty sound output and the whole reading failed; read again without sound.
 
-**Fix after v270 (2026-10-18 evening, for v271): the long look no longer starves a provider of one
+**v271 (2026-10-18 evening): the long look no longer starves a provider of one
 connection.** On the user's server TiviBridge (logins of 1 connection) was checked by nothing for
 hours: every batch opened it for the long look first, the provider went on counting that closed
 connection for a while, and its turn -- asking the provider before each stream -- took it for a
