@@ -5,12 +5,12 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v269** (2026-10-18; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v270** (2026-10-18; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
 > **Read [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) first** (2026-10-18): v269 published
-> and installed, v270 committed locally and not published, arrTV arr.115 built and not published, and
+> and installed, v270 published (2026-10-18, install pending), arrTV arr.115 built and not published, and
 > the upstream AerioTV ports on arrTV's `feature/upstream-picks` -- exactly what is on the branch and
 > what is still open. The 2026-10-02 handover below is history.
 >
