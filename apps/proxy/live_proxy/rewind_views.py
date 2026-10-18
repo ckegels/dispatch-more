@@ -24,6 +24,11 @@ def rewind_channel(request, channel_uuid):
     if request.method == "DELETE":
         rewind.leave(channel_uuid, viewer)
         return JsonResponse({"left": True})
+    # A login rewind is not for (Settings -> arrTV, "Server rewind is not for"): nothing recorded
+    from . import app_devices
+
+    if not app_devices.rewind_for(request.user):
+        return JsonResponse({"error": "Server rewind is not on for this login"}, status=403)
     if request.method == "POST":
         try:
             paused = int(request.data.get("paused_at") or 0) or None

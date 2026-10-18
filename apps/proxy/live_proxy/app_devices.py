@@ -80,6 +80,9 @@ DEFAULTS = {
     # the server so a TV can pause and rewind without its own disk. Minutes always kept, the
     # longest pause kept, and the disk budget in GB
     "rewind": True, "rewind_minutes": 60, "rewind_max_pause_minutes": 240, "rewind_budget_gb": 20,
+    # The users server rewind is not for (comma separated ids, "" is everybody gets it): arrTV
+    # uses the server's rewind whenever it is offered, whatever the TV's own setting says
+    "rewind_excluded_users": "",
     # Look back gets a provider (fork/lookback-priority.md): another viewer's live channel may be
     # moved to a stream of its own so a look back can have the only provider with the archive;
     # the moved viewer is told
@@ -149,7 +152,7 @@ def _as_kind(key, value):
             return max(low, min(high, int(float(value))))
         except (TypeError, ValueError):
             return DEFAULTS[key]
-    if key in ("guide_choice_sources", "one_device_users", "link_users"):
+    if key in ("guide_choice_sources", "one_device_users", "link_users", "rewind_excluded_users"):
         # Ids only: given as a list by the settings page, kept as text like the other rows
         parts = value if isinstance(value, (list, tuple)) else str(value or "").split(",")
         return ",".join(str(int(p)) for p in parts if str(p).strip().isdigit())
@@ -616,8 +619,17 @@ def commercial_breaks():
             "marks": installed and mode == "mark"}
 
 
-def capabilities():
-    """What an app may rely on here, for GET /api/core/capabilities/."""
+def rewind_for(user, settings=None):
+    """Whether server rewind is on for this login: on, and the login not excluded."""
+    settings = settings or load_settings()
+    if not settings.get("rewind"):
+        return False
+    excluded = {u for u in str(settings.get("rewind_excluded_users") or "").split(",") if u}
+    return str(getattr(user, "id", "")) not in excluded
+
+
+def capabilities(user=None):
+    """What an app may rely on here, for GET /api/core/capabilities/ (for the login asking)."""
     try:
         from version import __build__, __version__
     except Exception:
@@ -648,7 +660,7 @@ def capabilities():
         # when Comskip is installed here, switched on and in "mark" mode (it never cuts then)
         "commercial_breaks": commercial_breaks(),
         # Server rewind (rewind.py): a TV may pause and rewind on the server's recording
-        "rewind": settings["rewind"],
+        "rewind": rewind_for(user, settings) if user is not None else settings["rewind"],
         "rewind_url": "/api/channels/rewind/",
         # Generated captions (captions/live.py), and look back moving another viewer
         "captions_url": "/api/channels/captions/live/",

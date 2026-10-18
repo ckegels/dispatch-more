@@ -953,6 +953,12 @@ arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playi
 
 ## Server rewind (v248)
 
+v269: on for every login (`capabilities.rewind` is per login now) unless the login is on
+Settings → arrTV "Server rewind is not for" (`rewind_excluded_users`); an excluded login is
+refused (403) by `rewind_url`. arr.115 uses the server's rewind whenever offered, whatever the
+TV's own Live Rewind switch says; that switch is only for the TV's own buffer elsewhere.
+
+
 While a TV watches a channel and server rewind is on, arrTV says so every ~20 s:
 `POST /api/channels/rewind/<uuid>/ {"viewer": "<device id>", "paused_at": <wall ms, while paused>}`
 -> `{"enabled", "recording", "tail_wall_ms", "head_wall_ms", "playlist"}` (`enabled: false`: the

@@ -233,3 +233,32 @@ class ViewTests(TestCase):
         self.assertEqual((segment.status_code, segment["Content-Type"]), (200, "video/mp2t"))
         self.assertEqual(self.client.delete(f"/api/channels/rewind/{self.uuid}/", {"viewer": "shield"}, format="json").json(),
                          {"left": True})
+
+
+class RewindForLoginTests(TestCase):
+    """On for everybody, unless the login is on the exclusion list (Settings -> arrTV)."""
+
+    def setUp(self):
+        from apps.proxy.live_proxy import app_devices
+
+        app_devices._HELD.update(at=0.0, value=None)
+        self.addCleanup(app_devices._HELD.update, at=0.0, value=None)
+        self.user = get_user_model().objects.create_user(username="laurent", password="x", user_level=1)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.uuid = "6f4c3991-f5e6-474e-8e00-a970a654c1d1"
+
+    def test_on_by_default_and_said_so_to_that_login(self):
+        self.assertTrue(self.client.get("/api/core/capabilities/").json()["rewind"])
+
+    def test_an_excluded_login_is_not_offered_it_and_is_refused(self):
+        from apps.proxy.live_proxy import app_devices
+
+        app_devices.save_settings({"rewind_excluded_users": str(self.user.id)})
+        self.assertFalse(self.client.get("/api/core/capabilities/").json()["rewind"])
+        answer = self.client.post(f"/api/channels/rewind/{self.uuid}/", {"viewer": "firetv"}, format="json")
+        self.assertEqual(answer.status_code, 403)
+        # Somebody else still has it
+        other = APIClient()
+        other.force_authenticate(get_user_model().objects.create_user(username="kids", password="x", user_level=1))
+        self.assertTrue(other.get("/api/core/capabilities/").json()["rewind"])

@@ -568,7 +568,7 @@ def capabilities(request):
 
     from apps.proxy.live_proxy import app_devices
 
-    return JsonResponse(app_devices.capabilities())
+    return JsonResponse(app_devices.capabilities(request.user))
 
 
 @api_view(["GET", "PUT"])

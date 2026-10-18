@@ -689,12 +689,29 @@ const ArrTvSettings = () => {
         />
         <Setting
           label="Server rewind"
-          description="While a TV watches a channel, the server keeps a recording of it, so arrTV can pause for as long as it likes and rewind without using the TV's own storage. Read from the channel the TV already plays: no extra provider connection while someone watches; a paused TV alone keeps its channel open. Off: nothing is recorded and arrTV uses its own buffer."
+          description="While a TV watches a channel, the server keeps a recording of it, so arrTV can pause for as long as it likes and rewind without using the TV's own storage. On for every user, whatever the TV's own Live Rewind setting says. Read from the channel the TV already plays: no extra provider connection while someone watches; a paused TV alone keeps its channel open. Off: nothing is recorded and arrTV uses its own buffer."
           checked={settings.rewind}
           onChange={(on) => change({ rewind: on })}
         />
         {settings.rewind && (
           <Box pl="md">
+            <MultiSelect
+              size="xs"
+              maw={520}
+              mb="sm"
+              label="Server rewind is not for"
+              description="These users get no server rewind: nothing is recorded for them, and arrTV uses the TV's own Live Rewind setting instead."
+              placeholder="Nobody: everyone has it"
+              data={userChoices}
+              value={String(settings.rewind_excluded_users || '')
+                .split(',')
+                .filter(Boolean)}
+              onChange={(ids) =>
+                change({ rewind_excluded_users: ids.join(',') })
+              }
+              clearable
+              searchable
+            />
             <Group gap="md" align="flex-start">
               <Seconds
                 label="Always kept"
