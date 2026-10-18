@@ -1477,6 +1477,40 @@ class RunTests(_Setup):
         self.assertEqual(final["ended"], "done")
         self.assertEqual(probe.call_count, 3)
 
+    @mock.patch.object(stream_check, "PROVIDER_ASK_EVERY", 0.01)
+    @mock.patch.object(stream_check, "PROVIDER_LINGER", 2)
+    def test_the_long_compare_s_own_connection_is_waited_out_not_taken_for_a_viewer(self):
+        """
+        TiviBridge, one connection, was checked by nothing for hours: every batch opened it
+        for the long look first, the provider went on counting that connection a moment,
+        and its turn took it for a viewer and sat out the batch.
+        """
+        from apps.channels import picture_compare
+
+        self._as_xc(self.a)
+        stream_check.save_settings({"compare_pictures": True})
+        stream_check.start_round(self.redis, force=True)
+        self.redis.zadd(stream_check.LONGER_KEY, {str(self.orf1.id): 0})
+        login_a = M3UAccountProfile.objects.get(m3u_account=self.a)
+        lingering = []
+
+        def long_way(channel_id, redis_client, may_open=None, opened=None, should_stop=None, **kwargs):
+            opened(login_a)
+            lingering.extend([1, 1])
+            return {"channel": {"id": channel_id, "name": "ORF 1"}, "state": "done", "long": True,
+                    "at": time.time(), "reference": {"id": self.first.id}, "error": "", "results": []}
+
+        def provider(account, profile, agent):
+            return {"auth": 1, "status": "Active", "active_cons": lingering.pop(0) if lingering else 0}
+
+        with mock.patch.object(picture_compare, "compare_channel", side_effect=long_way), \
+                mock.patch.object(stream_check, "_xc_user_info", side_effect=provider), \
+                mock.patch.object(stream_check, "probe", side_effect=_answers({})) as probe:
+            stream_check.run(self.redis)
+        called = {c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}
+        self.assertIn("ORF1A", called)
+        self.assertNotEqual(self._status("Provider A")["status"], "in use")
+
     @staticmethod
     def _refusal(should_stop=None):
         return {"ok": False, "reason": "The provider answered HTTP 407: Proxy Authentication Required",

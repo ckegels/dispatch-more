@@ -2804,6 +2804,11 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   `SHORT_BLOCK`; a limit has to be seen twice alike, `candidate`; `LIMITS_VERSION` 4 drops the old
   ones). A provider left for the round says so, why and since when. Picture compare while
   checking: `fork/picture-check.md` (v270 section).
+- **Stream Check, after v270 (not released yet, for v271)**: TiviBridge (logins of one connection)
+  was checked by nothing for hours: the long picture look at each batch's start never told the
+  provider count the connection was its own, so the provider's lingering count of it was taken
+  for a viewer and TiviBridge sat out every batch. Fixed (`check_ended` after `compare_channel`);
+  `fork/picture-check.md` ("Fix after v270").
 - **Picture check** (designed 2026-09-28, the user is deciding): confirm or refute that two
   providers' streams are one channel by sampling both at night (a frame hash a second and the
   loudness, slid along each other for the providers' delay). Confirmed pairs go into the

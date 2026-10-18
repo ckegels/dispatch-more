@@ -23,6 +23,17 @@ goes is queued first for the check instead of refused. Measured on made-up progr
 10 different programmes PENDING, the same one 0-6 s apart SAME every time. Silent streams:
 ffmpeg refused an empty sound output and the whole reading failed; read again without sound.
 
+**Fix after v270 (2026-10-18 evening, for v271): the long look no longer starves a provider of one
+connection.** On the user's server TiviBridge (logins of 1 connection) was checked by nothing for
+hours: every batch opened it for the long look first, the provider went on counting that closed
+connection for a while, and its turn -- asking the provider before each stream -- took it for a
+viewer ("the provider says one of its logins is in use") and sat out the batch. The quick looks
+and the normal checks tell the provider count that the connection was the check's own
+(`_ProviderCount.check_ended`, so `free()` waits up to `PROVIDER_LINGER`); the long look did not.
+Now `pictures_first` records the providers `compare_channel` opened and calls `check_ended` for
+each once it is over. Test: `RunTests.test_the_long_compare_s_own_connection_is_waited_out_not_taken_for_a_viewer`
+(fails without the fix).
+
 Status (2026-10-17): **the user decided -- build it, flagging only, in Stream Check**. Step 1
 ("Compare pictures" on a channel, `apps/channels/picture_compare.py`) is built in v265; steps 2
 (the nightly run and a Picture view) and 3 (the spoken language through the caption worker as

@@ -3143,14 +3143,27 @@ def run(redis_client, only=None, batch_seconds=None):
                     redis_client.expire(RUN_KEY, RUN_TTL)
                     return stop_asked() or someone_watching()
 
+                # The providers it opened, told once it is over that the connection the
+                # provider may go on counting was this check's own (as the quick looks do):
+                # taken for a viewer, a provider of one login sat out every batch's turn
+                # after the long look, and TiviBridge was checked by nothing else for hours
+                used = set()
+
+                def opened_long(login):
+                    used.add(providers.provider_of(login.m3u_account_id))
+                    opened(login)
+
                 try:
                     state = picture_compare.compare_channel(
-                        channel_id, redis_client, may_open=may_open, opened=opened, should_stop=stop_comparing,
+                        channel_id, redis_client, may_open=may_open, opened=opened_long, should_stop=stop_comparing,
                     )
                 except Exception as e:
                     logger.info(f"Stream Check: the pictures of channel {channel_id} could not be compared: {e}")
                     redis_client.zrem(LONGER_KEY, str(channel_id))
                     state = None
+                finally:
+                    for key in used:
+                        provider_counts.setdefault(key, _ProviderCount()).check_ended()
                 if state is not None:
                     error = state.get("error") or ""
                     if error.startswith(("Stopped", "The reference's login")):
