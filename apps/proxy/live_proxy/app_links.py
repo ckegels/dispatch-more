@@ -555,6 +555,14 @@ def report_position(redis_client, user_id, device_key, report):
     return answer_
 
 
+def _not_on(redis_client, devices, channel_uuid):
+    """These devices but those already watching the channel."""
+    if not devices:
+        return set()
+    watching = _devices_watching(redis_client, {_user_of(d) for d in devices})
+    return {d for d in devices if channel_uuid not in watching.get(d, {}).get("channels", set())}
+
+
 def _ask_to_follow(redis_client, group, device, asked, channel_uuid):
     """Ask these devices whether to follow this one to the channel: Follow, or Stay (and leave)."""
     names = _channel_names({channel_uuid})
@@ -602,8 +610,9 @@ def mirror(redis_client, request, viewer, channel_uuid):
         if channel_of(redis_client, group) == channel_uuid:
             return False
         if not leads(redis_client, device):
-            leaders = {d for d in others if _user_of(d) == str(group)}
-            _ask_to_follow(redis_client, group, device, leaders, channel_uuid)
+            leaders = _not_on(redis_client, {d for d in others if _user_of(d) == str(group)}, channel_uuid)
+            if leaders:
+                _ask_to_follow(redis_client, group, device, leaders, channel_uuid)
             logger.info(f"Watch together: {_plain(redis_client, device)} changed to {channel_uuid}; the leader is asked")
             return True
         redis_client.set(CHANNEL_KEY.format(user_id=group), channel_uuid, ex=LINK_TTL)
@@ -613,9 +622,10 @@ def mirror(redis_client, request, viewer, channel_uuid):
         others = linked_with(redis_client, viewer.user_id, device)
         if not others:
             return True
-        # One's own devices follow; another person is asked
+        # One's own devices follow; another person is asked -- unless already there: the leader
+        # following the other's channel asked the other to follow it to where it was (2026-10-18)
         own = {o for o in others if _user_of(o) == _user_of(device)}
-        asked = others - own
+        asked = _not_on(redis_client, others - own, channel_uuid)
         if own:
             _send(group, own | {device}, {
                 "type": "linked_channel",

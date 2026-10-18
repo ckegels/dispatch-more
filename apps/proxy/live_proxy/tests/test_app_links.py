@@ -392,6 +392,17 @@ class WatchTogetherWithPeopleTests(TestCase):
         told = [m for m in self._messages("link_ended") if m["devices"] == [PIXEL]]
         self.assertEqual(told[-1]["reason"], "stayed")
 
+    def test_nobody_is_asked_to_follow_to_where_it_already_is(self):
+        # The leader following the other's channel asked the other to follow it there (2026-10-18)
+        self._linked()
+        request = RequestFactory().get("/")
+        app_links.mirror(self.redis, request, self._viewer(self.pixel, self.y), self.france2)
+        self._watching(self.france2, "c2", self.pixel, self.y)
+        self.redis.delete(RedisKeys.client_metadata(self.tf1, "c2"))
+        self.sent.reset_mock()
+        app_links.mirror(self.redis, request, self._viewer(self.shield, self.x), self.france2)
+        self.assertEqual(self._messages("link_follow_request"), [])
+
     def test_following_is_the_leader_tuning_the_channel(self):
         self._linked()
         request = RequestFactory().get("/")
