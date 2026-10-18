@@ -2790,6 +2790,16 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   something sending `apps.plugins.tasks.run_plugin_action`. Both belong to Django admin ->
   Periodic tasks; nothing in the API lists them.
 
+- **Stream Check, v270 (2026-10-18)**: a round crawled (1334 of 6024 in 5 days, "73 days
+  left"). Found in the logs: one ConnectionError asking about a login left both TiviBridge logins
+  out of the round (now `_NoAnswer`: rest `LOGIN_RETRY_SECONDS`, asked again); the refusal count
+  at the longest wait carried over to the next round (`_forget_blocks` at `start_round`);
+  Digitalizard (one connection) "learned" 8 every 57 min from two refusals the moment a viewer
+  started, and 20 every 196 min from a block that lifted in a minute (now: not a limit while a
+  viewer or the provider's count says the login is in use, nor when it answers again within
+  `SHORT_BLOCK`; a limit has to be seen twice alike, `candidate`; `LIMITS_VERSION` 4 drops the old
+  ones). A provider left for the round says so, why and since when. Picture compare while
+  checking: `fork/picture-check.md` (v270 section).
 - **Picture check** (designed 2026-09-28, the user is deciding): confirm or refute that two
   providers' streams are one channel by sampling both at night (a frame hash a second and the
   loudness, slid along each other for the providers' delay). Confirmed pairs go into the

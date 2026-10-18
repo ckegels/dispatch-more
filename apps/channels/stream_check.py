@@ -176,6 +176,15 @@ DEFAULTS = {
     "slate_retry": True,
     "slate_retry_seconds": 60,
     "slate_limit_minutes": 15,
+    # Compare a channel's streams picture against picture while checking them
+    # (picture_compare): its streams are opened together, one on every free login, the ten
+    # seconds each check reads anyway are fingerprinted, and a stream not matching the
+    # channel's first in those ten seconds is watched longer -- a minute and a half -- once
+    # the logins are free again. A stream showing another channel is marked "Different
+    # picture"; nothing on the channel changes. Off unless turned on.
+    "compare_pictures": False,
+    # A channel compared within this many days is checked the usual way, stream by stream
+    "compare_every_days": 7,
 }
 
 # ── Redis keys, all short-lived: what outlives a run is written to CoreSettings ──
@@ -201,6 +210,9 @@ ROUND_TTL = 7 * 86400
 # How long one batch runs before it makes room for other work
 BATCH_SECONDS = 240
 LIVE_RESULTS_KEY = "stream-check:live-results"
+# Channels whose pictures are to be watched the long way (picture_compare.compare_channel),
+# oldest first: not matched in a quick look, or asked for from the page while a round goes
+LONGER_KEY = "stream-check:pictures-longer"
 
 # What a provider answers when it will not give another connection -- too many open on the
 # login, or the login blocked for a moment -- rather than when a stream is gone. Not the
@@ -258,12 +270,25 @@ LEAST_TO_LEARN = 8
 # Slower than this is not a rate limit, it is something else being wrong, and writing it
 # down as one is how a round came to say "2 streams every 215 min" and want eighteen hours.
 LEAST_AN_HOUR = 6
+# A provider that answers again this soon after refusing was not at a limit counted over
+# hours: on a real installation Digitalizard answered a minute after a refusal, and that was
+# written down as "20 streams every 196 min" -- the 196 being nothing but the time since the
+# last block. A refusal that short is rested on and forgotten.
+SHORT_BLOCK = 180
+# A limit is believed when it is seen twice, alike (within this factor of each other), within
+# this many days. Once is a moment -- a viewer, another app on the login -- not what a
+# provider allows, and a wrong limit costs a whole lineup days.
+CANDIDATE_ALIKE = 2
+CANDIDATE_DAYS = 7
 # Limits learned before a refused channel could be told from a provider at its limit may be
 # nothing but a dead channel: they are not used. Limits set by hand are always kept.
 # Version 3: what was learned before could be nonsense -- the window was measured to
 # whenever we next happened to ask rather than to the last refusal, and any number of
 # streams, however small, could become a limit. "2 streams every 215 min" was one.
-LIMITS_VERSION = 3
+# Version 4: learned from one refusal, which could be a viewer or another app on a login of
+# one connection, and from refusals that lifted within a minute ("8 every 57 min" and "20
+# every 196 min" for a provider a viewer zapped through freely).
+LIMITS_VERSION = 4
 # A provider can go on counting a connection for a while after it is closed. After a check,
 # a login the provider still counts as in use is waited on this long before it is taken to
 # be someone else's.
@@ -391,6 +416,7 @@ def save_settings(given):
         values["picture_every_days"] = min(60, max(0, float(values["picture_every_days"])))
         values["slate_retry_seconds"] = min(900, max(30, int(values["slate_retry_seconds"])))
         values["slate_limit_minutes"] = min(1440, max(0, int(values["slate_limit_minutes"])))
+        values["compare_every_days"] = min(60, max(1, float(values["compare_every_days"])))
         if values["providers_at_once"] != "auto":
             values["providers_at_once"] = min(20, max(0, int(values["providers_at_once"])))
     except (TypeError, ValueError):
@@ -537,8 +563,8 @@ class _Providers:
 
     def in_use(self, provider, holding=None):
         """
-        Whether anyone but the check is on this provider. holding: the login the check has
-        a connection on, which is its own and not a viewer's.
+        Whether anyone but the check is on this provider. holding: the login (or logins) the
+        check has a connection on, which are its own and not a viewer's.
 
         With nothing playing anywhere, a count left above zero is one a stream that ended
         badly failed to give back (it happens), not a viewer; trusting it would leave that
@@ -554,7 +580,8 @@ class _Providers:
             if profile.id in self.live_profiles:
                 return True
             open_here += get_profile_connection_count(profile, self.redis)
-        own = 1 if holding is not None and holding.max_streams > 0 else 0
+        held = holding if isinstance(holding, (list, tuple, set)) else ([holding] if holding is not None else [])
+        own = sum(1 for login in held if login.max_streams > 0)
         return open_here - own > 0
 
 
@@ -663,6 +690,13 @@ class _ProviderCount:
                 return False
             time.sleep(PROVIDER_ASK_EVERY)
 
+    def busy_now(self, logins):
+        """Whether the provider, asked now rather than half a minute ago, says any of its
+        logins is in use. One that cannot be asked says nothing either way."""
+        for _, profile, _ in logins:
+            self.asked.pop(profile.id, None)
+        return any((self._open(*login) or 0) > 0 for login in logins)
+
     def check_ended(self):
         # What was asked stays good until PROVIDER_ASK_EVERY has passed: our own check is off
         # the provider's count as soon as it closes, and anyone else is seen at the next ask
@@ -699,6 +733,30 @@ def _change_limits(change):
         row.value = limits
         row.save(update_fields=["value"])
     return answer
+
+
+# What a provider's being blocked is made of: how far it got, how long it has been tried for,
+# how often it said no at the longest wait. Each belongs to the block it was counted in.
+BLOCK_FIELDS = ("blocked_since", "count", "span", "step", "at_cap", "next_try", "last_no")
+
+
+def _forget_blocks():
+    """
+    A round starts clean: no provider is still resting on a block counted in the round
+    before. The count of refusals at the longest wait was kept with what the provider
+    allows, from round to round, so a round started on a real installation with TiviBridge
+    already "refused four times" -- and it was left out six seconds in, on the first no.
+    What a provider allows, learned or set by hand, is kept.
+    """
+    def change(limits):
+        for state in limits.values():
+            for field in BLOCK_FIELDS:
+                state.pop(field, None)
+
+    try:
+        _change_limits(change)
+    except Exception as e:
+        logger.warning(f"Stream Check could not start the providers afresh: {e}")
 
 
 def set_limit(key, name, limit=None, window_minutes=None):
@@ -864,23 +922,49 @@ class _Budget:
             if known and count <= known:
                 # Hit even under what was learned: the provider allows less than it seemed
                 count = known
-            why_not = self._not_a_limit(count, window)
+            # How long it refused for: to the moment it answered, or the last no if later
+            answered_after = max(now, said_no_last) - blocked_since
+            why_not = self._not_a_limit(count, window) or (
+                f"it answered again {int(answered_after)} s after refusing, which no limit "
+                f"counted over hours does" if answered_after <= SHORT_BLOCK else ""
+            )
+            seen = self.state.get(f"{prefix}candidate") or {}
+            seen_count = int(seen.get("count") or 0)
+            alike = (
+                seen_count > 0
+                and now - float(seen.get("at") or 0) < CANDIDATE_DAYS * 86400
+                and count <= CANDIDATE_ALIKE * seen_count
+                and seen_count <= CANDIDATE_ALIKE * count
+            )
             if why_not:
                 logger.info(
                     f"Stream Check: {self.name} answers again after {count} stream(s) in "
                     f"{window // 60} min; not written down as a limit -- {why_not}"
                 )
+            elif not alike:
+                # Once is a moment, not what the provider allows: kept to compare the next
+                # refusal with, and nothing is held back meanwhile
+                self.state[f"{prefix}candidate"] = {"count": count, "window": window, "at": now}
+                self.state["v"] = LIMITS_VERSION
+                logger.info(
+                    f"Stream Check: {self.name} answers again after {count} streams in "
+                    f"{window // 60} min; kept to {count} only if it refuses alike again"
+                )
             else:
+                # Seen twice: the smaller of the two, over its own window
+                if seen_count < count:
+                    count, window = seen_count, int(seen.get("window") or window)
                 learned = max(1, int(count * LIMIT_MARGIN))
+                self.state.pop(f"{prefix}candidate", None)
                 self.state.update({
                     f"{prefix}limit": learned, f"{prefix}window": window,
                     "how": "learned", "at": _now(), "v": LIMITS_VERSION,
                 })
                 logger.info(
                     f"Stream Check: {self.name} allows about {count} streams every "
-                    f"{window // 60} min{' as well' if long_one else ''}; keeping to {learned}"
+                    f"{window // 60} min{' as well' if long_one else ''}, seen twice; keeping to {learned}"
                 )
-        for field in ("blocked_since", "count", "span", "step", "at_cap", "next_try", "last_no"):
+        for field in BLOCK_FIELDS:
             self.state.pop(field, None)
         self.state["clear_since"] = now
         self._save()
@@ -926,6 +1010,20 @@ def provider_limits(redis_client):
 
 class NoLogin(ValueError):
     """An Xtream Codes profile whose login cannot be worked out: nothing to ask with."""
+
+
+class _NoAnswer(str):
+    """
+    Why a login could not be used that is the provider not answering just now -- a timeout,
+    a dropped connection, a page instead of an answer -- rather than anything wrong with the
+    login. Asked again in a few minutes (LOGIN_RETRY_SECONDS), never a reason to leave the
+    provider for the round: one ConnectionError on a real installation left both TiviBridge
+    logins out of a round for five days while a viewer could zap through them all along.
+    """
+
+
+# How long a provider that did not answer about its login is left before it is asked again
+LOGIN_RETRY_SECONDS = 300
 
 
 def _xc_user_info(account, profile, user_agent):
@@ -974,7 +1072,7 @@ def _login_problem(account, profile, user_agent, now=None):
     except NoLogin as e:
         return str(e)
     except (requests.exceptions.RequestException, ValueError) as e:
-        return f"the provider did not answer when asked about the login ({type(e).__name__})"
+        return _NoAnswer(f"the provider did not answer when asked about the login ({type(e).__name__})")
     if str(info.get("auth", "1")) != "1":
         return "the provider refused the login"
     status = str(info.get("status") or "Active")
@@ -985,19 +1083,22 @@ def _login_problem(account, profile, user_agent, now=None):
 
 def _usable_logins(account, profiles, user_agent):
     """
-    The account's logins that can be checked with, and why none can when none can.
+    The account's logins that can be checked with, and why none can when none can -- a
+    _NoAnswer when every one of them only went unanswered (see _NoAnswer).
     Asked once per account per batch: a provider's login does not come and go by the minute.
     """
-    usable, problems = [], []
+    usable, problems, unanswered = [], [], 0
     for profile in profiles:
         problem = _login_problem(account, profile, user_agent)
         if problem:
+            unanswered += isinstance(problem, _NoAnswer)
             problems.append(f"{profile.name}: {problem}" if len(profiles) > 1 else problem)
         else:
             usable.append(profile)
     if not profiles:
         problems.append("it has no active profile")
-    return usable, "; ".join(problems)
+    said = "; ".join(problems)
+    return usable, (_NoAnswer(said) if profiles and unanswered == len(profiles) else said)
 
 
 def providers_at_once(settings, idle_only=None):
@@ -1629,7 +1730,7 @@ def _retry_after(value):
 
 
 def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0,
-          frozen_confirm_seconds=0, done_reading=None):
+          frozen_confirm_seconds=0, done_reading=None, fingerprint_seconds=0):
     """
     Whether url plays: {"ok", "reason", "kind", "resolution", "codec", "bytes", "seconds"}.
 
@@ -1647,6 +1748,10 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
     the connection this check was allowed was being held for all of it. A viewer arriving
     in that window was refused by our own counting, and asking the check to let go could
     not help: there was nothing left to let go of, and nothing in ffprobe ever looks.
+
+    With fingerprint_seconds, what was read is fingerprinted for comparing with the
+    channel's other streams (picture_compare.fingerprint) and returned as "print": the same
+    read, no connection of its own.
     """
     import requests
 
@@ -1715,6 +1820,13 @@ def probe(url, user_agent="", timeout=12, should_stop=lambda: False, picture_sec
         elif found["video"]:
             result.update(ok=True, resolution=found["resolution"], codec=found["codec"],
                           details=found.get("details") or {})
+            if fingerprint_seconds:
+                from . import picture_compare
+
+                try:
+                    result["print"] = picture_compare.fingerprint(data, fingerprint_seconds)
+                except Exception as e:
+                    logger.debug(f"Stream Check could not fingerprint the picture: {e}")
             picture = _picture(data) if picture_seconds else None
             if picture and picture["length"] >= PICTURE_LEAST:
                 result["frame"] = picture["frame"]
@@ -2089,6 +2201,9 @@ def _record(redis_client, results, stream, outcome, settings, round_id=None):
         "history": history,
         "name": stream.name,
     }
+    if previous.get("picture"):
+        # What comparing the pictures found is the comparison's, not this check's
+        record["picture"] = previous["picture"]
     if suspect and not outcome["ok"] and suspect.get("kind") in PICTURE_KINDS + ("transient",):
         record["reason"] = f"{outcome['reason']}, again when looked at later"
         # Said outright rather than left in the wording: it is the strongest single piece
@@ -2267,6 +2382,7 @@ def start_round(redis_client, force=False, only=None):
         round_.update(only=[int(i) for i in only], kind="recheck")
     redis_client.set(ROUND_KEY, json.dumps(round_), ex=ROUND_TTL)
     redis_client.delete(STOP_KEY)
+    _forget_blocks()
     _progress(
         redis_client, state="running", started_at=_now(), finished_at="", total=total,
         done=0, broken=0, accounts={}, waiting=False, message="",
@@ -2489,6 +2605,17 @@ def run(redis_client, only=None, batch_seconds=None):
         for key, streams in by_provider.items():
             entry = accounts.setdefault(_key_text(key), {"name": names[key], "done": 0})
             entry.update(name=names[key], left=len(streams), now="", status="checking", reason="")
+        # A provider left for the round says so, why and since when, rather than the
+        # "checking" its last batch left on the page: TiviBridge read "checking, 3576 left"
+        # for five days on a real installation while nothing of it was looked at
+        for account_id, left_out in unavailable.items():
+            key = providers.provider_of(int(account_id))
+            entry = accounts.get(_key_text(key))
+            if key in by_provider or entry is None:
+                continue
+            entry.update(status="unavailable", now="", until="", since=left_out.get("at", ""),
+                         reason=f"{left_out.get('reason')}; tried again next round")
+        _progress(redis_client, accounts=accounts)
 
         def stop_asked():
             # Stop ends a round; a stream checked by hand is not part of one and goes on
@@ -2588,31 +2715,43 @@ def run(redis_client, only=None, batch_seconds=None):
                 set_status(entry, status, reason)
 
             def logins_of(account_id, account):
+                """The account's usable logins; [] when it is left for the round, None when
+                the provider did not answer about them and is asked again in a few minutes."""
                 if account_id not in logins:
                     account_of[account_id] = account
                     usable, problem = _usable_logins(account, profiles[account_id], agents[account_id])
+                    if not usable and isinstance(problem, _NoAnswer):
+                        # Not kept: the next batch asks again
+                        rest("resting", f"{problem}; asked again in a few minutes", LOGIN_RETRY_SECONDS)
+                        return None
                     logins[account_id] = usable
                     if not usable:
                         _unavailable(redis_client, round_, account_id, account.name, problem, lock)
                         given_up.add(account_id)
                 return logins[account_id]
 
+            def xc_logins_here():
+                """[(account, login, user agent)]: this provider's Xtream Codes logins known to
+                work, which the provider can be asked about."""
+                return [
+                    (account_of[a], login, agents[a])
+                    for a, usable_here in logins.items() if account_of[a].account_type == "XC"
+                    for login in usable_here or ()
+                ]
+
             def attempt(stream):
                 """Open one stream as a viewer would: its outcome, "busy" when the provider
                 cannot be used now (the status says why), or "stopped" when someone came."""
                 account_id = stream.m3u_account_id
                 usable = logins_of(account_id, stream.m3u_account)
+                if usable is None:
+                    return "busy"
                 if not usable:
                     return None
                 if providers.in_use(key):
                     rest("in use", "someone is watching through it")
                     return "busy"
-                xc_logins = [
-                    (account_of[a], login, agents[a])
-                    for a, usable_here in logins.items() if account_of[a].account_type == "XC"
-                    for login in usable_here
-                ]
-                if not provider_counts[key].free(xc_logins, lambda: stop_asked() or someone_watching() or providers.in_use(key)):
+                if not provider_counts[key].free(xc_logins_here(), lambda: stop_asked() or someone_watching() or providers.in_use(key)):
                     rest("in use", "the provider says one of its logins is in use")
                     return "busy"
                 profile = _take_connection(usable, redis_client)
@@ -2808,7 +2947,19 @@ def run(redis_client, only=None, batch_seconds=None):
                             if other in ("busy", "stopped"):
                                 return
                             if other is not None and other.get("refused"):
-                                # Both refused: the provider will not give any. Its limit.
+                                # Both refused: the provider will not give any -- its limit, or
+                                # a connection someone else has. A viewer starting on it this
+                                # moment, or the provider counting a login as in use (another app
+                                # on the same login), is not a limit, and on a login of one
+                                # connection either refuses everything. Taken for a limit, that
+                                # was "8 streams every 57 min" for a provider a viewer could zap
+                                # through freely.
+                                if providers.in_use(key) or redis_client.exists(YIELD_KEY):
+                                    rest("in use", "someone started watching through it")
+                                    return
+                                if provider_counts[key].busy_now(xc_logins_here()):
+                                    rest("in use", "it refused while the provider said one of its logins was in use", RETRY_WAITING)
+                                    return
                                 budget.hit(outcome.get("retry_after") or other.get("retry_after"))
                                 rest("resting", f"{budget.describe()} ({outcome['reason']})", budget.resting())
                                 return
@@ -2905,6 +3056,312 @@ def run(redis_client, only=None, batch_seconds=None):
                 # Under gevent a "thread" can share the batch's own, which must stay open.
                 if connections["default"] is not own_connection:
                     connections["default"].close()
+
+        def pictures_first():
+            """
+            Before the providers' turns, with Compare pictures on (picture_compare): a
+            channel's streams opened together, one on every free login, each read as its
+            check reads it and fingerprinted from those same bytes, then compared with the
+            channel's first. What does not match in ten seconds is watched the long way --
+            a minute and a half -- once the logins are free, one channel a batch, before
+            any quick look. Each stream read here counts as checked, as if its provider's
+            turn had come; a refused one is left to its provider's turn, which can tell a
+            refused stream from a provider that refuses everything.
+
+            It only ever takes a login nobody is on, and stops the moment a viewer needs one.
+            Returns quietly; anything it did not get to, the providers' turns do as usual.
+            """
+            from apps.m3u.connection_pool import release_profile_slot as give_back_slot
+
+            from . import picture_compare
+            from .models import ChannelStream
+            from .show_groups.live import copy_group_ids
+
+            def interrupted():
+                return stop_asked() or someone_watching() or bool(redis_client.exists(YIELD_KEY))
+
+            if interrupted():
+                return
+            agent_of, logins_cache, names = {}, {}, {}
+
+            def agent(account):
+                if account.id not in agent_of:
+                    agent_of[account.id] = agents[account.id] if account.id in agents else (account.get_user_agent_string() or "")
+                return agent_of[account.id]
+
+            def usable(account):
+                """The account's logins usable now; none when it is left for the round or
+                its provider did not answer about them."""
+                if account.id not in logins_cache:
+                    names[account.id] = account.name
+                    if str(account.id) in unavailable:
+                        logins_cache[account.id] = []
+                    else:
+                        found, _ = _usable_logins(account, profiles.get(account.id) or _profiles_of(account), agent(account))
+                        logins_cache[account.id] = found
+                return logins_cache[account.id]
+
+            def may_open(login):
+                """A login nobody is on, of a provider not resting and under what it allows."""
+                key = providers.provider_of(login.m3u_account_id)
+                if providers.in_use(key):
+                    return False
+                budget = budgets.get(key)
+                if budget is not None and (budget.resting() is not None or budget.wait() > 0):
+                    return False
+                if login.m3u_account.account_type == "XC":
+                    asking = provider_counts.setdefault(key, _ProviderCount())
+                    if not asking.free([(login.m3u_account, login, agent(login.m3u_account))], lambda: True):
+                        return False
+                return True
+
+            def opened(login):
+                budget = budgets.get(providers.provider_of(login.m3u_account_id))
+                if budget is not None:
+                    budget.note_open()
+
+            def note(found):
+                """What comparing found, onto each stream's record."""
+                with lock:
+                    for stream_id, verdict in found.items():
+                        record = results.get(str(stream_id))
+                        if record:
+                            record["picture"] = verdict
+                            redis_client.hset(LIVE_RESULTS_KEY, str(stream_id), json.dumps(record))
+
+            def key_of(stream):
+                return providers.provider_of(stream.m3u_account_id), picture_compare._same_name(stream.name)
+
+            # ── The long way first: one channel a batch, asked for or not matched quickly
+            waiting_long = [int(m) for m in redis_client.zrange(LONGER_KEY, 0, 0)]
+            if waiting_long and deadline - time.monotonic() > picture_compare.RECORD_SECONDS + 30:
+                channel_id = waiting_long[0]
+
+                def stop_comparing():
+                    # The batch is busy for a minute and a half: still running, as far as
+                    # anything that waits on it is concerned
+                    redis_client.expire(RUN_KEY, RUN_TTL)
+                    return stop_asked() or someone_watching()
+
+                try:
+                    state = picture_compare.compare_channel(
+                        channel_id, redis_client, may_open=may_open, opened=opened, should_stop=stop_comparing,
+                    )
+                except Exception as e:
+                    logger.info(f"Stream Check: the pictures of channel {channel_id} could not be compared: {e}")
+                    redis_client.zrem(LONGER_KEY, str(channel_id))
+                    state = None
+                if state is not None:
+                    error = state.get("error") or ""
+                    if error.startswith(("Stopped", "The reference's login")):
+                        # Its turn comes again when the logins are free
+                        return
+                    redis_client.zrem(LONGER_KEY, str(channel_id))
+                    note(picture_compare.verdicts(state))
+                    differ = [r["name"] for r in state.get("results") or [] if r.get("verdict") == picture_compare.DIFFERENT]
+                    logger.info(
+                        f"Stream Check: watched the pictures of {state.get('channel', {}).get('name') or channel_id} "
+                        f"for {picture_compare.RECORD_SECONDS} s"
+                        + (f"; showing something else: {', '.join(differ)}" if differ else "")
+                    )
+
+            if not settings.get("compare_pictures") or interrupted():
+                return
+
+            # ── Quick looks: the channels of this batch's streams, each with every stream
+            due = {stream.id for streams in by_provider.values() for stream in streams}
+            links = ChannelStream.objects.filter(stream_id__in=due).exclude(channel__channel_group_id__in=copy_group_ids())
+            groups = [int(g) for g in settings.get("channel_groups") or ()]
+            if groups:
+                links = links.filter(channel__channel_group_id__in=groups)
+            channel_ids = set(links.values_list("channel_id", flat=True))
+            if not channel_ids:
+                return
+            queued = {int(m) for m in redis_client.zrange(LONGER_KEY, 0, -1)}
+            cutoff = time.time() - float(settings.get("compare_every_days") or 7) * 86400
+            by_channel = {}
+            for link in (
+                ChannelStream.objects.filter(
+                    channel_id__in=channel_ids, stream__is_custom=False,
+                    stream__m3u_account__isnull=False, stream__m3u_account__is_active=True,
+                )
+                .select_related("stream__m3u_account", "channel")
+                .order_by("channel_id", "order")
+            ):
+                by_channel.setdefault(link.channel_id, (link.channel, []))[1].append(link.stream)
+            chosen_channels = []
+            for channel_id, (channel, streams) in by_channel.items():
+                if channel_id in queued or len({s.m3u_account_id for s in streams}) < 2:
+                    continue
+                first_key = key_of(streams[0])
+                # Every copy compared lately: checked the usual way, stream by stream
+                lately = [
+                    float(((results.get(str(s.id)) or {}).get("picture") or {}).get("at") or 0) > cutoff
+                    for s in streams[1:] if key_of(s) != first_key
+                ]
+                if not lately or all(lately):
+                    continue
+                chosen_channels.append((-sum(1 for s in streams if s.id in due), channel_id, channel, streams))
+            chosen_channels.sort(key=lambda c: (c[0], c[1]))
+            counted = set()
+
+            def look(channel, streams):
+                """One channel's streams together; False when it was stopped for a viewer."""
+                ref = streams[0]
+                ref_key = key_of(ref)
+                ref_logins = [login for login in usable(ref.m3u_account) if may_open(login)]
+                if not ref_logins:
+                    return True
+                plan = {ref_logins[0].id: (ref_logins[0], ref)}
+                keys = {ref_key}
+                every_login = {}
+                for stream in streams:
+                    for login in usable(stream.m3u_account):
+                        every_login.setdefault(login.id, (login, []))[1].append(stream)
+                for login_id, (login, its) in every_login.items():
+                    if login_id in plan:
+                        continue
+                    taken = {stream.id for _, stream in plan.values()}
+                    left = [s for s in its if s.id not in taken]
+                    if not left:
+                        continue
+                    # A copy not yet in the session first, then one due anyway
+                    best = min(left, key=lambda s: (key_of(s) in keys, s.id not in due))
+                    if key_of(best) in keys and best.id not in due:
+                        continue
+                    if not may_open(login):
+                        continue
+                    plan[login_id] = (login, best)
+                    keys.add(key_of(best))
+                if len(plan) < 2:
+                    return True
+                for login, stream in plan.values():
+                    agent(stream.m3u_account)
+                held, outcomes, stopped = {}, {}, []
+                mine = {}
+                handed_back = {}
+                shared = threading.Lock()
+                try:
+                    for login_id, (login, stream) in plan.items():
+                        got = _take_connection([login], redis_client)
+                        if got is not None:
+                            held[login_id] = (got, stream)
+                            mine.setdefault(providers.provider_of(got.m3u_account_id), []).append(got)
+                    if ref_logins[0].id not in held or len(held) < 2:
+                        return True
+                    if any(providers.in_use(key, holding=list(logins)) for key, logins in mine.items()):
+                        return True
+                    for key in mine:
+                        entry = accounts.get(_key_text(key))
+                        if entry is not None:
+                            entry.update(now=f"{channel.name} (comparing pictures)", status="checking", reason="", until="")
+                    _progress(redis_client, accounts=accounts)
+
+                    def read(login_id, login, stream):
+                        key = providers.provider_of(login.m3u_account_id)
+
+                        def give_back():
+                            with shared:
+                                if handed_back.get(login_id):
+                                    return
+                                handed_back[login_id] = True
+                                if login in mine.get(key, []):
+                                    mine[key].remove(login)
+                            if login.max_streams > 0:
+                                give_back_slot(login.id, redis_client)
+
+                        try:
+                            url = _url_for(stream, login)
+                            if not (url and url.startswith(("http://", "https://"))):
+                                return
+                            opened(login)
+                            outcomes[login_id] = probe(
+                                url, agent_of[stream.m3u_account_id],
+                                max(float(settings["timeout_seconds"]), picture_compare.QUICK_SECONDS + 3),
+                                lambda: interrupted() or providers.in_use(key, holding=list(mine.get(key, []))),
+                                picture_seconds=picture_compare.QUICK_SECONDS,
+                                fingerprint_seconds=picture_compare.QUICK_SECONDS,
+                                done_reading=give_back,
+                            )
+                        except Stopped:
+                            stopped.append(login_id)
+                        except Exception:
+                            logger.exception(f"Stream Check: comparing the pictures of {channel.name} stopped on an error")
+                        finally:
+                            give_back()
+                            provider_counts.setdefault(key, _ProviderCount()).check_ended()
+
+                    readers = [
+                        threading.Thread(target=read, args=(login_id, login, stream), daemon=True, name="stream-check")
+                        for login_id, (login, stream) in held.items()
+                    ]
+                    for reader in readers:
+                        reader.start()
+                    for reader in readers:
+                        reader.join()
+                finally:
+                    for login_id, (login, _) in held.items():
+                        if not handed_back.get(login_id) and login.max_streams > 0:
+                            handed_back[login_id] = True
+                            give_back_slot(login.id, redis_client)
+                if stopped:
+                    # Cut short says nothing about any of them: looked at again later
+                    return False
+
+                prints = {}
+                for login_id, (login, stream) in held.items():
+                    outcome = outcomes.get(login_id)
+                    if not outcome or outcome.get("refused"):
+                        continue
+                    prints[stream.id] = outcome.pop("print", None)
+                    with lock:
+                        count(stream, outcome)
+                        if stream.id in due and stream.id not in counted:
+                            counted.add(stream.id)
+                            entry = accounts.get(_key_text(providers.provider_of(stream.m3u_account_id)))
+                            if entry is not None:
+                                entry["done"] = entry.get("done", 0) + 1
+                                entry["left"] = entry.get("left", 0) - 1
+                            _progress(redis_client, accounts=accounts, done=progress(redis_client).get("done", 0) + 1)
+
+                ref_print = prints.get(ref.id)
+                if not ref_print or not ref_print.get("frames"):
+                    return True
+                ref_provider = providers.provider_of(ref.m3u_account_id)
+                others = [
+                    ({"id": stream.id, "name": stream.name, "account_id": stream.m3u_account_id,
+                      "same_provider": providers.provider_of(stream.m3u_account_id) == ref_provider},
+                     prints[stream.id])
+                    for _, (_, stream) in held.items()
+                    if stream.id != ref.id and key_of(stream) != ref_key
+                    and (prints.get(stream.id) or {}).get("frames")
+                ]
+                if not others:
+                    return True
+                rows = picture_compare.quick_rows(ref_print, others, lambda account_id: names.get(account_id, ""))
+                state = picture_compare.save_quick(
+                    redis_client, {"id": channel.id, "name": channel.name},
+                    {"id": ref.id, "name": ref.name, "account": names.get(ref.m3u_account_id, "")}, rows,
+                )
+                if state.get("quick"):
+                    note(picture_compare.verdicts(state))
+                if any(row["verdict"] == picture_compare.PENDING for row in rows):
+                    redis_client.zadd(LONGER_KEY, {str(channel.id): time.time()})
+                return True
+
+            gap = float(settings["gap_seconds"])
+            for _, _, channel, streams in chosen_channels:
+                if time.monotonic() > deadline - picture_compare.QUICK_SECONDS - 15 or interrupted():
+                    break
+                if not look(channel, streams):
+                    break
+                _pause(gap, interrupted)
+
+        if only is None:
+            try:
+                pictures_first()
+            except Exception:
+                logger.exception("Stream Check: comparing pictures stopped on an error")
 
         # Whose turn it is: a few providers at a time (providers_at_once), in an order that
         # carries on from the last batch; one that rests hands its turn to the next in line
@@ -3057,8 +3514,9 @@ def _unavailable(redis_client, round_, account_id, name, reason, lock):
         return
     with lock:
         current = current_round(redis_client) or round_
-        current.setdefault("unavailable", {})[str(account_id)] = {"name": name, "reason": reason}
-        round_.setdefault("unavailable", {})[str(account_id)] = {"name": name, "reason": reason}
+        left_out = {"name": name, "reason": reason, "at": _now()}
+        current.setdefault("unavailable", {})[str(account_id)] = left_out
+        round_.setdefault("unavailable", {})[str(account_id)] = left_out
         redis_client.set(ROUND_KEY, json.dumps(current), ex=ROUND_TTL)
 
 
@@ -3648,7 +4106,12 @@ def _channels_worth_showing(results, believed, keep=()):
         for stream_id, record in results.items()
         if str(stream_id).isdigit()
         and record
-        and (record.get("suspect") or (not record.get("ok") and not record.get("skipped")))
+        and (
+            record.get("suspect")
+            or (not record.get("ok") and not record.get("skipped"))
+            # Showing another channel, which only comparing the pictures can tell
+            or (record.get("picture") or {}).get("verdict") == "different"
+        )
     }
     if believed:
         wanted |= set(
@@ -3726,6 +4189,13 @@ def issues(redis_client, show="problems", keep=()):
         suspects = [s for s in real if s["state"] == "suspect"]
         # Failing in a way autopark never acts on: refused, or playing the wrong picture
         needs_you = [s for s in bad if (s.get("result") or {}).get("kind") not in ("", None, DEAD)]
+        # What comparing the pictures found (picture_compare): a stream showing something else
+        # than the channel's first is for a person to look at, whatever its check says
+        def picture(s):
+            return ((s.get("result") or {}).get("picture") or {}).get("verdict")
+
+        differ = [s for s in real if picture(s) == "different"]
+        needs_you += [s for s in differ if s not in needs_you]
         broken = [s for s in real if s["state"] == "broken"]
         working = [s for s in real if s["state"] == "ok"]
         # A channel just acted on stays on the list whatever the view says. Parking the
@@ -3734,7 +4204,7 @@ def issues(redis_client, show="problems", keep=()):
         kept = channel_id in keep
         if show == "broken" and not broken and not kept:
             continue
-        if show == "problems" and not bad and not suspects and not kept:
+        if show == "problems" and not bad and not suspects and not differ and not kept:
             continue
         if show == "all" and all(s["state"] == "unchecked" for s in real) and not kept:
             continue
@@ -3755,6 +4225,9 @@ def issues(redis_client, show="problems", keep=()):
             "needs_you": len(needs_you),
             "unlisted": len([s for s in real if (s.get("result") or {}).get("unlisted")]),
             "suspects": len(suspects),
+            "pictures_differ": len(differ),
+            "pictures_pending": len([s for s in real if picture(s) == "pending"]),
+            "pictures_compared": any(picture(s) for s in real),
             # Nothing left that plays: a viewer gets the fallback or nothing
             "dead": bool(real) and not working and len(broken) == len(real),
         })

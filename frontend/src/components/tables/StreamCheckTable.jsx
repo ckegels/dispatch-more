@@ -121,6 +121,44 @@ const KIND = {
   unlisted: { label: 'Gone from the playlist', color: 'red', needsYou: true },
 };
 
+// What comparing the pictures found (picture_compare.py): the only proof that a stream is the
+// channel its name says. Clicked, the pictures side by side.
+const PICTURE = {
+  same: { label: 'Same picture', color: 'green', variant: 'outline' },
+  different: { label: 'Different picture', color: 'grape', variant: 'filled' },
+  pending: {
+    label: 'Picture: watching longer',
+    color: 'cyan',
+    variant: 'outline',
+  },
+  unsure: { label: "Picture: can't tell", color: 'gray', variant: 'outline' },
+};
+
+export const PictureBadge = ({ picture, onOpen }) => {
+  const shown = picture && PICTURE[picture.verdict];
+  if (!shown) return null;
+  const against = picture.against_name
+    ? ` (compared with ${picture.against_name})`
+    : '';
+  return (
+    <Tooltip
+      multiline
+      w={320}
+      label={`${picture.why || ''}${against}. Click to see the pictures.`}
+    >
+      <Badge
+        size="xs"
+        variant={shown.variant}
+        color={shown.color}
+        style={{ cursor: 'pointer' }}
+        onClick={onOpen}
+      >
+        {shown.label}
+      </Badge>
+    </Tooltip>
+  );
+};
+
 const KindBadge = ({ result }) => {
   const kind = result && !result.ok && !result.skipped && KIND[result.kind];
   if (!kind) return null;
@@ -197,6 +235,10 @@ const StreamLine = ({ stream, channel, onAct }) => (
           {stream.account}
         </Badge>
         <KindBadge result={stream.result} />
+        <PictureBadge
+          picture={stream.result?.picture}
+          onOpen={() => onAct('pictures', [stream], channel)}
+        />
         <History history={stream.result?.history} />
       </Group>
       <Finding result={stream.result} />
@@ -315,7 +357,9 @@ const Expanded = ({ row, onAct }) => {
                 variant="subtle"
                 onClick={() => onAct('pictures', real, row.channel)}
               >
-                Compare pictures
+                {row.pictures_compared
+                  ? 'See the pictures'
+                  : 'Compare pictures'}
               </Button>
               <Button
                 size="compact-xs"
@@ -507,7 +551,9 @@ const StreamCheckTable = () => {
         // Parked streams come with every answer; the channels shown depend on the filter
         setData(
           await API.getStreamCheck(
-            ['parked', 'needs_you', 'ignored', 'unlisted'].includes(show)
+            ['parked', 'needs_you', 'ignored', 'unlisted', 'pictures'].includes(
+              show
+            )
               ? 'problems'
               : show,
             [...keepShowing]
@@ -709,6 +755,12 @@ const StreamCheckTable = () => {
     [data]
   );
 
+  // How many channels have a stream showing another channel's picture
+  const picturesCount = useMemo(
+    () => (data?.rows || []).filter((row) => row.pictures_differ > 0).length,
+    [data]
+  );
+
   // Which kind of stream brings its channel to the top. Not a filter: everything stays on
   // the list, in the order it was in, and the channels with one of these come first.
   const [top, setTop] = useState('');
@@ -727,7 +779,9 @@ const StreamCheckTable = () => {
           ? (data?.rows || []).filter((row) => row.needs_you > 0)
           : show === 'unlisted'
             ? (data?.rows || []).filter((row) => row.unlisted > 0)
-            : data?.rows || [];
+            : show === 'pictures'
+              ? (data?.rows || []).filter((row) => row.pictures_differ > 0)
+              : data?.rows || [];
     const wanted = search.trim().toLowerCase();
     let found = wanted
       ? all.filter((row) =>
@@ -801,6 +855,13 @@ const StreamCheckTable = () => {
               {r.needs_you > 0 && (
                 <Badge size="xs" variant="outline" color="orange">
                   {r.needs_you} need{r.needs_you === 1 ? 's' : ''} you
+                </Badge>
+              )}
+              {/* Plays, but not the channel's picture: only comparing them can tell */}
+              {r.pictures_differ > 0 && (
+                <Badge size="xs" variant="filled" color="grape">
+                  {r.pictures_differ} different picture
+                  {r.pictures_differ === 1 ? '' : 's'}
                 </Badge>
               )}
               {/* Not something a run found: the provider's playlist says so, and it says
@@ -1085,6 +1146,10 @@ const StreamCheckTable = () => {
                     { value: 'broken', label: 'Broken only' },
                     { value: 'needs_you', label: 'Needs you' },
                     {
+                      value: 'pictures',
+                      label: `Different picture (${picturesCount})`,
+                    },
+                    {
                       value: 'unlisted',
                       label: `Gone from the playlist (${unlistedCount})`,
                     },
@@ -1319,6 +1384,9 @@ const StreamCheckTable = () => {
                       {account.reason ? ` (${account.reason})` : ''}
                       {account.until
                         ? ` · until ${new Date(account.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                        : ''}
+                      {account.status === 'unavailable' && account.since
+                        ? ` · since ${when(account.since)}`
                         : ''}
                       {account.status === 'checking' && account.now
                         ? ` · ${account.now}`

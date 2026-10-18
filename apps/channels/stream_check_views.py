@@ -216,6 +216,15 @@ def stream_check_pictures(request):
         return JsonResponse({"error": "A channel is given by id"}, status=400)
     if request.method == "GET":
         return JsonResponse({"result": picture_compare.load(redis_client, channel_id)})
+    if stream_check.current_round(redis_client) is not None:
+        # A round going holds the connections batch after batch, so this would never get
+        # its turn: Stream Check compares it itself, first, as soon as the logins are free
+        redis_client.zadd(stream_check.LONGER_KEY, {str(channel_id): 0})
+        picture_compare._save(redis_client, channel_id, {
+            "channel": {"id": channel_id}, "state": "queued", "with_check": True, "results": [],
+            "session": 0, "sessions": 0, "error": "",
+        })
+        return JsonResponse({"started": True, "with_check": True})
     if redis_client.exists(stream_check.RUN_KEY):
         return JsonResponse(
             {"error": "Stream Check is reading streams now and holds the connections. Try again once it pauses."},

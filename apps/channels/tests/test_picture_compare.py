@@ -150,6 +150,69 @@ class CompareTests(SimpleTestCase):
         self.assertTrue(found["error"])
 
 
+@skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+class QuickLookTests(SimpleTestCase):
+    """
+    Stream Check reads about ten seconds of a stream anyway; those bytes, fingerprinted, are
+    the quick look. Read at the same moment from two providers a few seconds apart.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.folder = tempfile.mkdtemp(prefix="picture-quick-")
+        f = cls.folder
+
+        def read(name, **kwargs):
+            with open(_programme(f, name, seconds=pc.QUICK_SECONDS + 1, **kwargs), "rb") as video:
+                return pc.fingerprint(video.read())
+
+        cls.prints = {
+            "ref": read("ref", seed=1),
+            # The same programme from another provider, three seconds ahead, with its logo
+            "ahead": read("ahead", seed=1, start=3, big=True, logo=True),
+            "far": read("far", seed=1, start=40),
+            "other": read("other", seed=2),
+        }
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.folder, ignore_errors=True)
+        super().tearDownClass()
+
+    def test_what_a_check_read_is_fingerprinted_without_a_connection_of_its_own(self):
+        ref = self.prints["ref"]
+        self.assertEqual(ref["error"], "")
+        self.assertEqual(ref["fps"], pc.QUICK_FPS)
+        self.assertAlmostEqual(len(ref["frames"]), (pc.QUICK_SECONDS + 1) * pc.QUICK_FPS, delta=4)
+        # A few pictures to show a person, every couple of seconds
+        self.assertGreaterEqual(len(ref["thumbs"]), 4)
+
+    def test_providers_a_few_seconds_apart_are_settled_in_ten_seconds(self):
+        found = pc.quick_compare(self.prints["ref"], self.prints["ahead"])
+        self.assertEqual(found["verdict"], pc.SAME, found)
+        self.assertAlmostEqual(found["offset"], -3, delta=0.5)
+
+    def test_anything_else_is_watched_longer_never_called_different_on_ten_seconds(self):
+        # Another programme -- and the same one further apart than ten seconds can see,
+        # which looks just like it
+        for name in ("other", "far"):
+            found = pc.quick_compare(self.prints["ref"], self.prints[name])
+            self.assertEqual(found["verdict"], pc.PENDING, (name, found))
+            self.assertIn("watched longer", found["why"])
+
+    def test_the_rows_carry_a_picture_of_each_at_the_delay_found(self):
+        rows = pc.quick_rows(
+            self.prints["ref"],
+            [({"id": 2, "name": "MTV FHD", "account_id": 7}, self.prints["ahead"])],
+            lambda account_id: {7: "Digitalizard.com"}[account_id],
+        )
+        self.assertEqual(rows[0]["verdict"], pc.SAME)
+        self.assertEqual(rows[0]["account"], "Digitalizard.com")
+        self.assertTrue(rows[0]["thumb_ref"])
+        self.assertTrue(rows[0]["thumb"])
+
+
 class PlanTests(SimpleTestCase):
     """What is opened together: the reference, and one stream on every other login."""
 
@@ -307,6 +370,35 @@ class ChannelTests(TestCase):
         state = self.run_it()
         self.assertIn("in use", state["error"])
         self.assertEqual(state["results"], [])
+
+    def test_run_by_stream_check_it_only_takes_the_logins_it_is_allowed(self):
+        """Stream Check's rules for a connection: nobody on the provider, under its limit."""
+        from unittest import mock
+
+        allowed = lambda login: login.m3u_account.name != "Digitalizard.com"
+        taken = []
+
+        def take(logins, redis_client):
+            return logins[0]
+
+        def record(url, user_agent="", seconds=0, should_stop=None):
+            return self.shows[int(url.split(":")[1])]
+
+        with mock.patch("apps.channels.stream_check._take_connection", side_effect=take), \
+                mock.patch("apps.channels.stream_check._url_for", side_effect=lambda s, p: f"stream:{s.id}"), \
+                mock.patch("apps.m3u.connection_pool.release_profile_slot",
+                           side_effect=lambda pid, r: self.released.append(pid)), \
+                mock.patch.object(pc, "record", side_effect=record):
+            state = pc.compare_channel(self.channel.id, self.redis, may_open=allowed, opened=taken.append)
+        found = {row["name"]: row for row in state["results"]}
+        self.assertIn("in use", found["FR| MTV HD"]["why"])
+        self.assertEqual(found["┃FR┃ MTV FHD"]["verdict"], pc.SAME)
+        self.assertEqual(len(taken), 2)
+        self.assertTrue(state["long"])
+        # ...and what it found, for Stream Check's records
+        verdicts = pc.verdicts(state)
+        self.assertEqual(verdicts[found["┃FR┃ MTV FHD"]["id"]]["verdict"], pc.SAME)
+        self.assertEqual(verdicts[found["┃FR┃ MTV FHD"]["id"]]["against_name"], "┃FR┃ MTV HD")
 
     def test_a_viewer_needing_a_connection_stops_it_and_it_is_given_back(self):
         from apps.channels import stream_check

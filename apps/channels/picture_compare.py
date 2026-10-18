@@ -28,6 +28,15 @@ on each other login (a login holds one connection) -- the HD and FHD of one prov
 its two logins, and another provider's through its own -- until every one was compared.
 A connection is taken the way a viewer takes one, and a viewer needing it stops the session.
 
+**While Stream Check checks** (`fingerprint`, `quick_compare`): Stream Check reads about ten
+seconds of each stream anyway to judge its picture, so with "Compare pictures" on it opens a
+channel's streams on every free login at once and fingerprints what each check read -- no
+extra connection, no extra time. Ten seconds settles it when the providers are within a few
+seconds of each other: a clear match is the same channel. Anything else is never called
+different on ten seconds -- providers can be half a minute apart, beyond what ten seconds
+can see -- but looked at again the long way (`compare_channel`, a minute and a half) as soon
+as the logins are free, and only that can say "different".
+
 It only says so (Stream Check's page shows it); nothing is changed.
 """
 
@@ -71,6 +80,23 @@ DIFFERENT_SHARE = 0.5
 # The sound at the same delay: below this, it says the two are not the same
 SOUND_DISAGREES = 0.2
 SAME, DIFFERENT, UNSURE = "same", "different", "unsure"
+# Not matched on ten seconds, and to be looked at the long way
+PENDING = "pending"
+
+# The quick look Stream Check's own read gives (see the module's text): more pictures a
+# second, since there are fewer seconds, and offsets only as far as ten seconds can show
+QUICK_SECONDS = 10
+QUICK_FPS = 4
+QUICK_THUMB_EVERY = 2
+QUICK_MAX_OFFSET = 7
+QUICK_OVERLAP = 5
+QUICK_LEAST_MOVING = 6
+# Same, on ten seconds, takes more than on ninety: ten moments matching at least, most of
+# them, and clearly at one delay. A made-up programme matched another 7 of 11 times at a delay
+# where only five seconds overlap -- chance, which is never to be called the same channel.
+QUICK_LEAST_MATCHED = 10
+QUICK_SAME_SHARE = 0.8
+QUICK_CLEAR_BY = 0.4
 
 RESULT_KEY = "picture-compare:{channel_id}"
 RESULT_TTL = 14 * 86400
@@ -95,13 +121,18 @@ def _bits(a, b):
     return bin(a ^ b).count("1")
 
 
-def record(source, user_agent="", seconds=RECORD_SECONDS, should_stop=lambda: False):
+def record(source, user_agent="", seconds=RECORD_SECONDS, should_stop=lambda: False,
+           fps=FRAMES_PER_SECOND, thumb_every=THUMB_EVERY, sound=True):
     """
-    {"frames": [hash, two a second], "loud": [ten a second] or [], "thumbs": [base64 JPEG],
-    "error": ""} for seconds of source (a URL or a file).
+    {"frames": [hash, fps a second], "loud": [ten a second] or [], "thumbs": [base64 JPEG],
+    "fps", "thumb_every", "error": ""} for seconds of source (a URL or a file).
+
+    A source without sound is read again without asking for it: ffmpeg will not write an
+    output that has nothing in it, and gave up on the whole reading -- pictures too -- for
+    a stream that is silent (found by a test: every silent channel came out "can't tell").
     """
     with tempfile.TemporaryDirectory(prefix="picture-") as folder:
-        sound = os.path.join(folder, "sound.raw")
+        sound_file = os.path.join(folder, "sound.raw")
         thumbs = os.path.join(folder, "thumb%02d.jpg")
         command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
         if user_agent:
@@ -110,15 +141,16 @@ def record(source, user_agent="", seconds=RECORD_SECONDS, should_stop=lambda: Fa
             command += ["-rw_timeout", "15000000"]
         command += [
             "-t", str(seconds), "-i", str(source),
-            "-map", "0:v:0", "-vf", f"fps={FRAMES_PER_SECOND},scale=9:8:flags=area,format=gray",
+            "-map", "0:v:0", "-vf", f"fps={fps},scale=9:8:flags=area,format=gray",
             "-f", "rawvideo", "pipe:1",
-            "-map", "0:a:0?", "-ac", "1", "-ar", str(AUDIO_RATE), "-f", "s16le", sound,
-            "-map", "0:v:0", "-vf", f"fps=1/{THUMB_EVERY},scale=192:-2", "-q:v", "7", thumbs,
+            *(["-map", "0:a:0?", "-ac", "1", "-ar", str(AUDIO_RATE), "-f", "s16le", sound_file] if sound else []),
+            "-map", "0:v:0", "-vf", f"fps=1/{thumb_every},scale=192:-2", "-q:v", "7", thumbs,
         ]
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except (FileNotFoundError, OSError) as e:
-            return {"frames": [], "loud": [], "thumbs": [], "error": f"ffmpeg could not start: {e}"}
+            return {"frames": [], "loud": [], "thumbs": [], "fps": fps, "thumb_every": thumb_every,
+                    "error": f"ffmpeg could not start: {e}"}
         out = bytearray()
         reader = threading.Thread(target=lambda: out.extend(process.stdout.read()), daemon=True)
         reader.start()
@@ -134,18 +166,32 @@ def record(source, user_agent="", seconds=RECORD_SECONDS, should_stop=lambda: Fa
         reader.join(timeout=5)
         error = (process.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
         frames = [dhash(out[at:at + 72]) for at in range(0, len(out) - 71, 72)]
-        loud = _loudness(sound)
+        loud = _loudness(sound_file) if sound else []
         pictures = []
         for path in sorted(glob.glob(os.path.join(folder, "thumb*.jpg"))):
             with open(path, "rb") as f:
                 pictures.append(base64.b64encode(f.read()).decode())
+    if sound and not frames and not stopped and any("output file" in line.lower() for line in error):
+        return record(source, user_agent, seconds, should_stop, fps, thumb_every, sound=False)
     if stopped and should_stop():
         why = "stopped"
     elif not frames:
         why = error[-1] if error else "Nothing came"
     else:
         why = ""
-    return {"frames": frames, "loud": loud, "thumbs": pictures, "error": why}
+    return {"frames": frames, "loud": loud, "thumbs": pictures, "fps": fps, "thumb_every": thumb_every,
+            "error": why}
+
+
+def fingerprint(data, seconds=QUICK_SECONDS):
+    """
+    The fingerprint of video already read (bytes of MPEG-TS, as a Stream Check read them),
+    for quick_compare: no connection of its own.
+    """
+    with tempfile.NamedTemporaryFile(prefix="picture-", suffix=".ts") as f:
+        f.write(data)
+        f.flush()
+        return record(f.name, seconds=seconds + 5, fps=QUICK_FPS, thumb_every=QUICK_THUMB_EVERY)
 
 
 def _loudness(path):
@@ -179,26 +225,27 @@ def _correlation(a, b):
     return top / bottom if bottom else None
 
 
-def _sound_at(ref, other, offset_frames):
+def _sound_at(ref, other, offset_frames, fps=FRAMES_PER_SECOND):
     """How alike the loudness of the two is with other offset_frames behind ref."""
     if not ref or not other:
         return None
-    shift = round(offset_frames * LOUD_PER_SECOND / FRAMES_PER_SECOND)
+    shift = round(offset_frames * LOUD_PER_SECOND / fps)
     if shift >= 0:
         return _correlation(ref, other[shift:])
     return _correlation(ref[-shift:], other)
 
 
-def compare(ref, other, max_offset=MAX_OFFSET):
+def compare(ref, other, max_offset=MAX_OFFSET, least_overlap=LEAST_OVERLAP, least_moving=LEAST_MOVING):
     """
     {"verdict", "offset" (seconds other is behind ref), "moving", "matched", "share", "clear",
     "sound", "why"}: what the two fingerprints say about being one channel.
     """
     a, b = ref["frames"], other["frames"]
-    gap = FRAMES_PER_SECOND
+    fps = int(ref.get("fps") or FRAMES_PER_SECOND)
+    gap = fps
     moving = [i for i in range(gap, len(a)) if _bits(a[i], a[i - gap]) >= MOVING_BITS]
-    span = max_offset * FRAMES_PER_SECOND
-    least = LEAST_OVERLAP * FRAMES_PER_SECOND
+    span = int(max_offset * fps)
+    least = int(least_overlap * fps)
     shares = {}
     for offset in range(-span, span + 1):
         looked = matched = 0
@@ -209,11 +256,11 @@ def compare(ref, other, max_offset=MAX_OFFSET):
                 matched += _bits(a[i], b[j]) <= SAME_BITS
         overlap = min(len(a), len(b) - offset) - max(0, -offset)
         # Too few moments at an offset and chance alone makes a peak there
-        if overlap >= least and looked >= LEAST_MOVING:
+        if overlap >= least and looked >= least_moving:
             shares[offset] = (matched / looked, looked, matched)
     found = {"verdict": UNSURE, "offset": None, "moving": len(moving), "matched": 0, "share": 0.0,
              "clear": 0.0, "sound": None, "why": ""}
-    if len(moving) < LEAST_MOVING:
+    if len(moving) < least_moving:
         found["why"] = "The picture hardly changes, so it proves nothing"
         return found
     if not shares:
@@ -223,12 +270,12 @@ def compare(ref, other, max_offset=MAX_OFFSET):
     share, looked, matched = shares[best]
     # The best elsewhere, away from this delay and its neighbours (a slow scene matches a
     # second either side too)
-    away = [s for o, (s, _, _) in shares.items() if abs(o - best) > 2 * FRAMES_PER_SECOND]
+    away = [s for o, (s, _, _) in shares.items() if abs(o - best) > 2 * fps]
     clear = share - (max(away) if away else 0.0)
-    sound = _sound_at(ref.get("loud"), other.get("loud"), best)
-    found.update(offset=best / FRAMES_PER_SECOND, matched=matched, share=round(share, 2),
+    sound = _sound_at(ref.get("loud"), other.get("loud"), best, fps)
+    found.update(offset=best / fps, matched=matched, share=round(share, 2),
                  clear=round(clear, 2), sound=None if sound is None else round(sound, 2))
-    behind = abs(best / FRAMES_PER_SECOND)
+    behind = abs(best / fps)
     when = f"{behind:g} s {'behind' if best > 0 else 'ahead'}" if best else "in step"
     if share >= SAME_SHARE and clear >= CLEAR_BY:
         if sound is not None and sound < SOUND_DISAGREES:
@@ -244,10 +291,30 @@ def compare(ref, other, max_offset=MAX_OFFSET):
     return found
 
 
-def _thumb_near(thumbs, second):
+def quick_compare(ref, other):
+    """
+    What ten seconds of each, read at the same moment, say (see the module's text): SAME on
+    a clear match, otherwise PENDING -- never different on this little, since providers can
+    be further apart than ten seconds can show. With "verdict", "why" and compare's numbers.
+    """
+    found = compare(ref, other, max_offset=QUICK_MAX_OFFSET, least_overlap=QUICK_OVERLAP,
+                    least_moving=QUICK_LEAST_MOVING)
+    if (
+        found["verdict"] == SAME
+        and found["matched"] >= QUICK_LEAST_MATCHED
+        and found["share"] >= QUICK_SAME_SHARE
+        and found["clear"] >= QUICK_CLEAR_BY
+    ):
+        return found
+    found["verdict"] = PENDING
+    found["why"] = f"Not matched in {QUICK_SECONDS} s ({found['why'][:1].lower()}{found['why'][1:]}); to be watched longer"
+    return found
+
+
+def _thumb_near(thumbs, second, every=THUMB_EVERY):
     if not thumbs:
         return ""
-    at = max(0, min(len(thumbs) - 1, round(second / THUMB_EVERY)))
+    at = max(0, min(len(thumbs) - 1, round(second / every)))
     return thumbs[at]
 
 
@@ -321,8 +388,12 @@ def load(redis_client, channel_id):
     return json.loads(raw) if raw else None
 
 
-def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS):
-    """Compare every stream of the channel with its first (see the module's text); kept in Redis."""
+def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS, may_open=None, opened=None, should_stop=None):
+    """
+    Compare every stream of the channel with its first (see the module's text); kept in Redis.
+    Stream Check runs it with its own rules for a connection: may_open(login) before one is
+    taken, opened(login) once it is, and should_stop to stop for a viewer or a Stop.
+    """
     from apps.m3u.connection_pool import release_profile_slot
 
     from .models import Channel
@@ -347,7 +418,7 @@ def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS):
     state = {
         "channel": {"id": channel.id, "name": channel.name},
         "state": "running", "started": time.time(), "session": 0, "sessions": len(sessions),
-        "reference": None, "results": [], "error": "",
+        "reference": None, "results": [], "error": "", "long": True,
     }
     if not sessions:
         state.update(state="done", error="Nothing to compare: one stream, or one login for all of them")
@@ -358,7 +429,7 @@ def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS):
     _save(redis_client, channel_id, state)
 
     def a_viewer_needs_it():
-        return bool(redis_client.exists(YIELD_KEY))
+        return bool(redis_client.exists(YIELD_KEY)) or bool(should_stop and should_stop())
 
     for number, (_, taken) in enumerate(sessions, 1):
         state["session"] = number
@@ -367,9 +438,13 @@ def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS):
         held = {}
         try:
             for login, stream in wanted.items():
+                if may_open is not None and not may_open(profile_by_id[login]):
+                    continue
                 got = _take_connection([profile_by_id[login]], redis_client)
                 if got is not None:
                     held[login] = (got, stream)
+                    if opened is not None:
+                        opened(got)
             if logins_of[ref.m3u_account_id][0] not in held:
                 state.update(state="done", error="The reference's login is in use: try again when nobody is watching")
                 _save(redis_client, channel_id, state)
@@ -408,8 +483,8 @@ def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS):
             else:
                 row.update(compare(ref_print, mine))
                 middle = seconds / 2
-                row["thumb_ref"] = _thumb_near(ref_print["thumbs"], middle)
-                row["thumb"] = _thumb_near(mine["thumbs"], middle + (row.get("offset") or 0))
+                row["thumb_ref"] = _thumb_near(ref_print["thumbs"], middle, ref_print.get("thumb_every") or THUMB_EVERY)
+                row["thumb"] = _thumb_near(mine["thumbs"], middle + (row.get("offset") or 0), mine.get("thumb_every") or THUMB_EVERY)
             state["results"].append(row)
         _save(redis_client, channel_id, state)
     for stream in left_out:
@@ -418,5 +493,57 @@ def compare_channel(channel_id, redis_client, seconds=RECORD_SECONDS):
             "verdict": UNSURE, "why": "Only on the reference's own login, which cannot open two at once",
         })
     state["state"] = "done"
+    state["at"] = time.time()
     _save(redis_client, channel_id, state)
     return state
+
+
+def quick_rows(ref_print, others, names_of):
+    """
+    The quick look's rows for the page, compare's numbers and a picture of each at the delay
+    found: others is [(stream, print)] with stream {"id", "name", "account_id"} like ref,
+    names_of an account id -> name. Streams of the reference's provider and name are the
+    same stream through another login, and are left out.
+    """
+    rows = []
+    every = ref_print.get("thumb_every") or QUICK_THUMB_EVERY
+    middle = QUICK_SECONDS / 2
+    for stream, other in others:
+        row = {"id": stream["id"], "name": stream["name"], "account": names_of(stream["account_id"]),
+               "same_provider": stream.get("same_provider", False)}
+        row.update(quick_compare(ref_print, other))
+        row["thumb_ref"] = _thumb_near(ref_print.get("thumbs"), middle, every)
+        row["thumb"] = _thumb_near(other.get("thumbs"), middle + (row.get("offset") or 0), other.get("thumb_every") or every)
+        rows.append(row)
+    return rows
+
+
+def save_quick(redis_client, channel, reference, rows):
+    """A quick look kept where the page reads a comparison, unless a long one is going."""
+    current = load(redis_client, channel["id"]) or {}
+    if current.get("state") in ("queued", "running"):
+        return current
+    state = {
+        "channel": channel, "state": "done", "quick": True, "started": time.time(), "at": time.time(),
+        "session": 1, "sessions": 1, "reference": reference, "results": rows, "error": "",
+    }
+    _save(redis_client, channel["id"], state)
+    return state
+
+
+def verdicts(state):
+    """{stream id: {"verdict", "why", "offset", "against", "at", "long"}} of a comparison, for
+    Stream Check's records -- the pictures stay with the comparison."""
+    found = {}
+    reference = (state or {}).get("reference") or {}
+    for row in (state or {}).get("results") or []:
+        found[int(row["id"])] = {
+            "verdict": row.get("verdict") or UNSURE,
+            "why": row.get("why") or "",
+            "offset": row.get("offset"),
+            "against": reference.get("id"),
+            "against_name": reference.get("name", ""),
+            "at": (state or {}).get("at") or time.time(),
+            "long": bool((state or {}).get("long")),
+        }
+    return found

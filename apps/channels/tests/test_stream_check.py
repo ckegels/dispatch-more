@@ -108,6 +108,15 @@ class FakeRedis:
         for score, member in self._scores(key, low, high):
             self.data[key].pop(member, None)
 
+    def zrange(self, key, start, end):
+        found = [member for _, member in self._scores(key, float("-inf"), "+inf")]
+        return found[start:] if end == -1 else found[start:end + 1]
+
+    def zrem(self, key, *members):
+        with self.lock:
+            for member in members:
+                (self.data.get(key) or {}).pop(member, None)
+
     def scan_iter(self, match="*", count=None):
         return iter([key for key in list(self.data) if fnmatch.fnmatch(key, match)])
 
@@ -238,6 +247,22 @@ class ProbeTests(TestCase):
         found = stream_check.probe(f"{self.base}/live.ts", timeout=5)
         self.assertTrue(found["ok"], found)
         self.assertEqual(found["resolution"], "320x240")
+
+    def test_what_a_check_reads_is_fingerprinted_for_comparing_from_the_same_bytes(self):
+        """Compare pictures: no connection of its own, the check's own read."""
+        given_back = []
+        found = stream_check.probe(
+            f"{self.base}/moving.ts", timeout=12, picture_seconds=6, fingerprint_seconds=6,
+            done_reading=lambda: given_back.append(1),
+        )
+        self.assertTrue(found["ok"], found)
+        self.assertEqual(found["print"]["error"], "")
+        self.assertGreater(len(found["print"]["frames"]), 10)
+        self.assertTrue(found["print"]["thumbs"])
+        # The connection went back before any of the judging and fingerprinting
+        self.assertEqual(given_back, [1])
+        # ...and without asking for it, nothing extra
+        self.assertNotIn("print", stream_check.probe(f"{self.base}/moving.ts", timeout=12, picture_seconds=6))
 
     def test_a_pause_part_way_keeps_what_came(self):
         """What made WELT FHD 'could not connect': a pause while reading threw the video away."""
@@ -844,12 +869,21 @@ class ParkTests(_Setup):
         self.assertNotIn("┃AT┃ ORF 1 HD", [s["name"] for s in row["streams"]])
 
 
-def _answers(by_name):
-    """A probe that answers from a table, by the stream's URL."""
+def _answers(by_name, prints=None, calls=None):
+    """A probe that answers from a table, by the stream's URL. prints: the fingerprint each
+    stream's read gives when one is asked for; calls: [(name, fingerprint_seconds)] made."""
 
     def fake(url, user_agent="", timeout=12, should_stop=lambda: False, picture_seconds=0,
-             frozen_confirm_seconds=0, done_reading=None):
-        outcome = by_name.get(url.rsplit("/", 1)[-1], True)
+             frozen_confirm_seconds=0, done_reading=None, fingerprint_seconds=0):
+        name = url.rsplit("/", 1)[-1]
+        if calls is not None:
+            calls.append((name, fingerprint_seconds))
+        if fingerprint_seconds and prints and name in prints:
+            if done_reading:
+                done_reading()
+            return {"ok": True, "reason": "", "resolution": "1920x1080", "codec": "h264", "bytes": 1,
+                    "seconds": 0.1, "print": prints[name]}
+        outcome = by_name.get(name, True)
         # The real one gives the connection back the moment the reading is over, before
         # it judges what came; a stand-in that never does would hide a run that holds on
         if done_reading:
@@ -862,6 +896,141 @@ def _answers(by_name):
                 "resolution": "1920x1080" if outcome else "", "codec": "h264", "bytes": 1, "seconds": 0.1}
 
     return fake
+
+
+def _quick_print(seed, start=0.0, seconds=12):
+    """A made-up quick look: a programme whose picture changes a few times a second."""
+    import random
+
+    from apps.channels import picture_compare
+
+    rnd = random.Random(seed)
+    scenes = [rnd.getrandbits(64) for _ in range(400)]
+    fps = picture_compare.QUICK_FPS
+    first = int(start * fps)
+    return {"frames": [scenes[(first + i) // 3] for i in range(seconds * fps)], "loud": [],
+            "thumbs": ["AAAA"] * 6, "fps": fps, "thumb_every": picture_compare.QUICK_THUMB_EVERY, "error": ""}
+
+
+class PicturesWhileCheckingTests(_Setup):
+    """
+    Compare pictures, while Stream Check checks: a channel's streams opened together on
+    every free login, each read as its check reads it, and compared from the same bytes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        stream_check.save_settings({"gap_seconds": 0, "only_when_idle": False, "compare_pictures": True})
+
+    def _batch(self, prints, answers=None):
+        calls = []
+        with mock.patch.object(stream_check, "probe", side_effect=_answers(answers or {"*": True}, prints, calls)):
+            if stream_check.current_round(self.redis) is None:
+                stream_check.start_round(self.redis, force=True)
+            stream_check.run(self.redis)
+        return calls
+
+    def _record(self, stream):
+        return stream_check.current_results(self.redis)["streams"].get(str(stream.id)) or {}
+
+    def test_off_unless_turned_on(self):
+        stream_check.save_settings({"compare_pictures": False})
+        self.assertFalse(stream_check.DEFAULTS["compare_pictures"])
+        calls = self._batch({"ORF1A": _quick_print(1), "ORF1B": _quick_print(1, start=2)})
+        self.assertTrue(calls)
+        self.assertTrue(all(not seconds for _, seconds in calls))
+
+    def test_the_channels_streams_are_read_together_and_found_the_same(self):
+        calls = self._batch({"ORF1A": _quick_print(1), "ORF1B": _quick_print(1, start=2)})
+        # The first on its login and the other provider's on its own, at once, fingerprinted
+        together = [name for name, seconds in calls if seconds]
+        self.assertEqual(sorted(together), ["ORF1A", "ORF1B"])
+        # ...and each counts as checked: not read again in its provider's turn
+        self.assertEqual([name for name, _ in calls].count("ORF1B"), 1)
+        self.assertTrue(self._record(self.second)["ok"])
+        picture = self._record(self.second)["picture"]
+        self.assertEqual(picture["verdict"], "same")
+        self.assertEqual(picture["against"], self.first.id)
+        # Kept where the page shows a comparison, with the pictures
+        from apps.channels import picture_compare
+
+        shown = picture_compare.load(self.redis, self.orf1.id)
+        self.assertTrue(shown["quick"])
+        self.assertEqual(shown["results"][0]["name"], "ORF 1 B")
+        self.assertTrue(shown["results"][0]["thumb"])
+        self.assertEqual(self.redis.zrange(stream_check.LONGER_KEY, 0, -1), [])
+
+    def test_not_matched_in_ten_seconds_is_watched_longer_and_only_that_says_different(self):
+        from apps.channels import picture_compare
+
+        self._batch({"ORF1A": _quick_print(1), "ORF1B": _quick_print(2)})
+        self.assertEqual(self._record(self.second)["picture"]["verdict"], "pending")
+        self.assertEqual(self.redis.zrange(stream_check.LONGER_KEY, 0, -1), [str(self.orf1.id)])
+        # Nothing to look at yet: watching longer is not a finding
+        rows = stream_check.issues(self.redis, "all")["rows"]
+        self.assertEqual(rows[0]["pictures_differ"], 0)
+        self.assertEqual(rows[0]["pictures_pending"], 1)
+
+        # The next batch watches it the long way, with Stream Check's rules for a connection
+        long_state = {
+            "channel": {"id": self.orf1.id, "name": self.orf1.name}, "state": "done", "long": True, "at": time.time(),
+            "reference": {"id": self.first.id, "name": "ORF 1 A", "account": "Provider A"}, "error": "",
+            "results": [{"id": self.second.id, "name": "ORF 1 B", "account": "Provider B", "verdict": "different",
+                         "why": "At best 3 of 120 changing moments match"}],
+        }
+        asked = {}
+
+        def long_way(channel_id, redis_client, may_open=None, opened=None, should_stop=None, **kwargs):
+            asked.update(channel=channel_id, may_open=may_open, should_stop=should_stop)
+            return long_state
+
+        with mock.patch.object(picture_compare, "compare_channel", side_effect=long_way):
+            self._batch({})
+        self.assertEqual(asked["channel"], self.orf1.id)
+        self.assertTrue(callable(asked["may_open"]))
+        self.assertEqual(self.redis.zrange(stream_check.LONGER_KEY, 0, -1), [])
+        self.assertEqual(self._record(self.second)["picture"]["verdict"], "different")
+        self.assertTrue(self._record(self.second)["picture"]["long"])
+
+        # ...which the page shows as something for a person to look at
+        row = stream_check.issues(self.redis, "problems")["rows"][0]
+        self.assertEqual(row["pictures_differ"], 1)
+        self.assertGreaterEqual(row["needs_you"], 1)
+
+        # A later check of the stream keeps what comparing found
+        stream_check.start_round(self.redis, force=True) if stream_check.current_round(self.redis) is None else None
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"*": True})):
+            stream_check.run(self.redis, only=[self.second.id])
+        self.assertEqual(self._record(self.second)["picture"]["verdict"], "different")
+
+    def test_a_login_someone_is_on_is_left_out(self):
+        key_b = ("server", "b")
+        real_in_use = stream_check._Providers.in_use
+
+        def in_use(providers, provider, holding=None):
+            return provider == key_b or real_in_use(providers, provider, holding)
+
+        with mock.patch.object(stream_check._Providers, "in_use", in_use):
+            calls = self._batch({"ORF1A": _quick_print(1), "ORF1B": _quick_print(1, start=2)})
+        self.assertNotIn("ORF1B", [name for name, _ in calls])
+        self.assertNotIn("picture", self._record(self.first))
+
+    def test_a_comparison_asked_for_while_a_round_goes_is_done_by_the_check_first(self):
+        from apps.channels import picture_compare
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIClient
+
+        stream_check.start_round(self.redis, force=True)
+        admin = get_user_model().objects.create_user(username="pictures-admin", password="x", user_level=10)
+        client = APIClient()
+        client.force_authenticate(admin)
+        with mock.patch("apps.channels.stream_check_views.RedisClient.get_client", return_value=self.redis):
+            answer = client.post("/api/channels/stream-check/pictures/", {"channel_id": self.orf1.id}, format="json")
+        self.assertEqual(answer.status_code, 200, answer.content)
+        self.assertTrue(answer.json()["with_check"])
+        self.assertEqual(self.redis.zrange(stream_check.LONGER_KEY, 0, -1), [str(self.orf1.id)])
+        self.assertEqual(picture_compare.load(self.redis, self.orf1.id)["state"], "queued")
 
 
 @mock.patch.object(stream_check, "REFUSAL_PAUSE", 0.01)
@@ -929,11 +1098,17 @@ class RunTests(_Setup):
         # Most of these are about checking alongside viewers, which is not the default
         stream_check.save_settings({"gap_seconds": 0, "broken_after": 2, "only_when_idle": False})
 
-    def _run(self, answers, only=None, batch_seconds=None):
-        """A whole round, batch after batch, as the tasks chain them; (last ending, probe)."""
+    def _run(self, answers, only=None, batch_seconds=None, limits=None):
+        """
+        A whole round, batch after batch, as the tasks chain them; (last ending, probe).
+        limits: what providers allow and how they are blocked, as the round finds them --
+        set once it has begun, since a round starts with no provider resting on an old block.
+        """
         with mock.patch.object(stream_check, "probe", side_effect=_answers(answers)) as probe:
             if only is None:
                 stream_check.start_round(self.redis, force=True)
+            if limits:
+                stream_check._change_limits(lambda known: known.update(limits))
             for _ in range(20):
                 ended = stream_check.run(self.redis, only=only, batch_seconds=batch_seconds)
                 if ended not in ("more", "waiting"):
@@ -1357,6 +1532,39 @@ class RunTests(_Setup):
         self.assertTrue(stream_check.is_running(self.redis))
         self.assertGreaterEqual(stream_check.progress(self.redis)["resume_in"], stream_check.RETRY_WAITING)
 
+    def test_refused_while_the_provider_says_its_login_is_in_use_is_no_limit(self):
+        """
+        Digitalizard has one connection. Refused twice the moment something else had it --
+        a viewer starting, another app on the login -- and that was learned as "8 streams
+        every 57 min" for a provider a viewer could zap through freely.
+        """
+        self._as_xc(self.a)
+        opened = []
+
+        def two_then_refused(should_stop):
+            opened.append(1)
+            return self._plays() if len(opened) <= 1 else self._refusal()
+
+        # Free when its login is looked at; busy when it is asked again at the refusal
+        asked = iter([0] + [1] * 50)
+
+        def provider(account, profile, agent):
+            return {"auth": 1, "status": "Active", "active_cons": next(asked)}
+
+        with mock.patch.object(stream_check, "_xc_user_info", side_effect=provider):
+            with mock.patch.object(stream_check._ProviderCount, "free", return_value=True):
+                with mock.patch.object(stream_check, "probe", side_effect=_answers({"ORF1A": two_then_refused, "ORF1A2": two_then_refused})):
+                    stream_check.start_round(self.redis, force=True)
+                    stream_check.run(self.redis)
+        limit = self._limit()
+        self.assertNotIn("blocked_since", limit)
+        self.assertNotIn("candidate", limit)
+        status = self._status("Provider A")
+        self.assertEqual(status["status"], "in use")
+        self.assertIn("in use", status["reason"])
+        # ...and nothing was counted against the refused streams
+        self.assertNotIn(str(self.third.id), stream_check.load_results()["streams"])
+
     def test_once_it_answers_again_the_limit_is_kept_with_room_to_spare(self):
         blocked_since = time.time() - 600
         state = {
@@ -1365,9 +1573,10 @@ class RunTests(_Setup):
             "last_no": blocked_since + 300,
             "next_try": time.time() - 1, "good_stream": self.first.id,
             "v": stream_check.LIMITS_VERSION,
+            # ...and refused alike once before, so this is the second time
+            "candidate": {"count": 12, "window": 600, "at": time.time() - 3600},
         }
-        stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
-        final, probe = self._run({})
+        final, probe = self._run({}, limits={"server:a": {**state, "name": "Provider A"}})
         limit = self._limit()
         self.assertNotIn("blocked_since", limit)
         self.assertEqual(limit["limit"], 8)
@@ -1384,8 +1593,7 @@ class RunTests(_Setup):
             "at_cap": stream_check.GIVE_UP_AT_CAP - 1, "next_try": time.time() - 1,
             "good_stream": self.first.id, "v": stream_check.LIMITS_VERSION,
         }
-        stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
-        final, probe = self._run({"ORF1A": self._refusal})
+        final, probe = self._run({"ORF1A": self._refusal}, limits={"server:a": {**state, "name": "Provider A"}})
         # Asked once, and left: its other streams are not tried in this round
         self.assertEqual(
             [c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list if "ProviderA" in c.args[0]],
@@ -1401,9 +1609,8 @@ class RunTests(_Setup):
         self._as_xc(self.a)
         state = {"blocked_since": time.time(), "count": 34, "span": 120, "step": 0, "next_try": time.time() + 300,
                  "v": stream_check.LIMITS_VERSION}
-        stream_check._change_limits(lambda limits: limits.update({"server:a": {**state, "name": "Provider A"}}))
         with mock.patch.object(stream_check, "_xc_user_info") as asked:
-            final, probe = self._run({})
+            final, probe = self._run({}, limits={"server:a": {**state, "name": "Provider A"}})
         asked.assert_not_called()
         self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
         self.assertEqual(self._status("Provider A")["status"], "resting")
@@ -1462,7 +1669,10 @@ class RunTests(_Setup):
         self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
         results = stream_check.load_results()
         self.assertNotIn(str(self.first.id), results["streams"])
-        self.assertEqual(results["last_run"]["unavailable"], [{"name": "Provider A", "reason": "the provider refused the login"}])
+        self.assertEqual(
+            [(one["name"], one["reason"]) for one in results["last_run"]["unavailable"]],
+            [("Provider A", "the provider refused the login")],
+        )
 
     def test_a_login_the_provider_says_is_active_is_used(self):
         self._as_xc(self.a)
@@ -1470,13 +1680,50 @@ class RunTests(_Setup):
             final, probe = self._run({})
         self.assertEqual(probe.call_count, 3)
 
-    def test_a_provider_that_does_not_answer_is_left(self):
+    def test_a_provider_that_does_not_answer_is_asked_again_not_left(self):
+        """
+        One ConnectionError left both TiviBridge logins out of a round for five days on a
+        real installation, while a viewer could zap through them all along. Not answering
+        about a login is a moment: the provider rests a few minutes and is asked again.
+        """
         import requests
 
         self._as_xc(self.a)
         with mock.patch.object(stream_check, "_xc_user_info", side_effect=requests.exceptions.ConnectionError()):
-            final, probe = self._run({})
-        self.assertIn("did not answer", stream_check.load_results()["last_run"]["unavailable"][0]["reason"])
+            final, probe = self._run({"*": {"ok": True}})
+        # Nothing of it was looked at, nothing counted against it, and it is not left out
+        self.assertEqual({c.args[0].rsplit("/", 1)[-1] for c in probe.call_args_list}, {"ORF1B"})
+        self.assertEqual(final["ended"], "waiting")
+        self.assertNotIn("unavailable", stream_check.current_round(self.redis) or {})
+        status = self._status("Provider A")
+        self.assertEqual(status["status"], "resting")
+        self.assertIn("did not answer", status["reason"])
+        self.assertIn("asked again", status["reason"])
+
+        # ...and once it answers, its streams are looked at in the same round
+        with mock.patch.object(stream_check, "_xc_user_info", return_value={"auth": 1, "status": "Active", "active_cons": 0}):
+            with mock.patch.object(stream_check, "probe", side_effect=_answers({"*": {"ok": True}})) as later:
+                for _ in range(5):
+                    if stream_check.run(self.redis) not in ("more", "waiting"):
+                        break
+        self.assertIn("ORF1A", {c.args[0].rsplit("/", 1)[-1] for c in later.call_args_list})
+
+    def test_a_provider_left_for_the_round_says_so_and_since_when(self):
+        """TiviBridge read "checking, 3576 left" for five days while nothing of it was looked at."""
+        self._as_xc(self.a)
+        stream_check.start_round(self.redis, force=True)
+        progress = stream_check.progress(self.redis)
+        progress["accounts"] = {"server:a": {"name": "Provider A", "done": 3, "left": 9, "status": "checking"}}
+        stream_check._progress(self.redis, accounts=progress["accounts"])
+        round_ = stream_check.current_round(self.redis)
+        round_["unavailable"] = {str(self.a.id): {"name": "Provider A", "reason": "its login expired", "at": "2026-10-13T22:05:49+00:00"}}
+        self.redis.set(stream_check.ROUND_KEY, json.dumps(round_))
+        with mock.patch.object(stream_check, "probe", side_effect=_answers({"*": {"ok": True}})):
+            stream_check.run(self.redis)
+        status = self._status("Provider A")
+        self.assertEqual(status["status"], "unavailable")
+        self.assertIn("its login expired", status["reason"])
+        self.assertEqual(status["since"], "2026-10-13T22:05:49+00:00")
 
     def test_an_expired_login_is_left(self):
         from datetime import datetime, timedelta, timezone
@@ -2420,24 +2667,56 @@ class WhatAProviderAllowsTests(TestCase):
 
         self.assertIsNone(budget.state.get("limit"))
 
-    def test_but_a_real_one_is_learned_as_before(self):
-        budget = self._budget()
-        self._opened(budget, 30, 600)
+    def _refused(self, budget, how_many, over_seconds, blocked_for):
+        """Refused after that many streams, blocked for blocked_for seconds, and answering again."""
+        self.redis.delete(stream_check.OPENS_KEY.format(provider=budget.key))
+        budget.state.pop("clear_since", None)
+        self._opened(budget, how_many, over_seconds)
         budget.hit()
-        budget.state["last_no"] = budget.state["blocked_since"] + 300
+        budget.state["last_no"] = budget.state["blocked_since"] + blocked_for
         budget.recovered()
 
+    def test_but_a_real_one_is_learned_once_it_is_seen_twice(self):
+        budget = self._budget()
+        self._refused(budget, 30, 600, 300)
+        # Once is a moment -- a viewer, another app on the login -- and nothing is held back
+        self.assertIsNone(budget.state.get("limit"))
+        self.assertEqual(budget.state["candidate"]["count"], 30)
+        self.assertEqual(budget.wait(), 0.0)
+
+        self._refused(budget, 30, 600, 300)
         # With room to spare, over what it took plus what it was known to be blocked for
         self.assertEqual(budget.state["limit"], 24)
         self.assertEqual(budget.state["window"], 900)
         self.assertEqual(budget.state["how"], "learned")
+        self.assertNotIn("candidate", budget.state)
+
+    def test_two_refusals_far_apart_in_size_are_not_one_limit(self):
+        budget = self._budget()
+        self._refused(budget, 10, 600, 300)
+        self._refused(budget, 40, 600, 300)
+        self.assertIsNone(budget.state.get("limit"))
+        # The later one is what the next is compared with
+        self.assertEqual(budget.state["candidate"]["count"], 40)
+
+    def test_a_refusal_that_lifts_within_minutes_is_no_limit_over_hours(self):
+        """
+        Digitalizard answered a minute after refusing, and that was written down as "20
+        streams every 196 min" -- the 196 minutes being the time since its last block.
+        """
+        budget = self._budget()
+        for _ in range(2):
+            self._refused(budget, 26, 196 * 60, 30)
+        self.assertIsNone(budget.state.get("limit"))
+        self.assertNotIn("candidate", budget.state)
+        self.assertIsNone(budget.resting())
 
     def test_the_window_is_measured_to_the_last_refusal_not_to_whenever_we_looked(self):
         """
         Otherwise the waiting is its own answer: wait an hour to ask, learn an hour-long
         window, wait an hour next time. It ratchets, and nothing ever shortens it.
         """
-        budget = self._budget()
+        budget = self._budget(candidate={"count": 30, "window": 660, "at": time.time()})
         self._opened(budget, 30, 600)
         budget.hit()
         budget.state["last_no"] = budget.state["blocked_since"] + 60
@@ -2475,7 +2754,8 @@ class ProviderLimitTests(WhatAProviderAllowsTests):
     """
 
     def test_a_refusal_after_far_more_than_the_short_limit_is_learned_as_a_second_one(self):
-        budget = self._budget(limit=8, window=120, how="learned", v=stream_check.LIMITS_VERSION)
+        budget = self._budget(limit=8, window=120, how="learned", v=stream_check.LIMITS_VERSION,
+                              long_candidate={"count": 140, "window": 3600, "at": time.time()})
         self._opened(budget, 140, 35 * 60)
         budget.hit()
         budget.state["last_no"] = budget.state["blocked_since"] + 25 * 60

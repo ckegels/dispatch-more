@@ -1,4 +1,27 @@
-# Picture check: is this stream really that channel? (step 1 built in v265)
+# Picture check: is this stream really that channel? (step 1 built in v265, step 2 in v270)
+
+**v270 (2026-10-18): compared while Stream Check checks.** The user: "implement the stream
+compare option directly into it so it does both at the same time when possible, it will open
+all 3 when possible record them and compare those 10 seconds to see for matching frames and it
+will suggest error and have the images ready to show". Setting "Compare pictures while
+checking" (`compare_pictures`, off by default; `compare_every_days` 7). At the start of each
+batch (`run` -> `pictures_first`), for the channels of the batch's streams: the channel's first
+stream on its login and one stream on every other free login (a copy not yet in the session
+first, then one due anyway) are opened at once and read by `probe` as any check reads them,
+with `fingerprint_seconds=10`: the same bytes are fingerprinted (`picture_compare.fingerprint`,
+4 pictures a second, a picture every 2 s), no extra connection. Each counts as checked; a
+refused one is left to its provider's turn. `quick_compare` (offsets to +-7 s, 5 s overlap):
+SAME needs 10+ matching moments, 80 % of them, clear by 40 points; anything else is PENDING,
+never DIFFERENT on ten seconds (providers can be 30 s apart). A PENDING channel goes into
+`stream-check:pictures-longer` and the next batch with 2 min to spare watches it the long way
+(`compare_channel`, 90 s, with Stream Check's `may_open` / `opened` / `should_stop`); only that
+can say DIFFERENT. The verdict sits on each stream's record (`picture`, kept by later checks),
+the pictures with the comparison (`picture-compare:<channel>`). The page: "Different picture"
+on the stream (click: the pictures side by side), "N different pictures" on the channel, the
+view "Different picture (N)", counted in "Needs you". "Compare pictures" pressed while a round
+goes is queued first for the check instead of refused. Measured on made-up programmes: 10 of
+10 different programmes PENDING, the same one 0-6 s apart SAME every time. Silent streams:
+ffmpeg refused an empty sound output and the whole reading failed; read again without sound.
 
 Status (2026-10-17): **the user decided -- build it, flagging only, in Stream Check**. Step 1
 ("Compare pictures" on a channel, `apps/channels/picture_compare.py`) is built in v265; steps 2

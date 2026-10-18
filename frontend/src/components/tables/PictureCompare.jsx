@@ -24,11 +24,16 @@ const VERDICT = {
   same: { color: 'green', label: 'Same' },
   different: { color: 'red', label: 'Different' },
   unsure: { color: 'gray', label: "Can't tell" },
+  // Not matched in the ten seconds a check reads: watched for a minute and a half next
+  pending: { color: 'cyan', label: 'Watching longer' },
 };
 
 export const sessionText = (result) => {
   if (!result) return '';
-  if (result.state === 'queued') return 'Starting…';
+  if (result.state === 'queued')
+    return result.with_check
+      ? 'Stream Check is running: it compares this first, as soon as the logins are free.'
+      : 'Starting…';
   if (result.state !== 'running') return '';
   const minutes = Math.max(1, Math.ceil(((result.sessions || 1) * 95) / 60));
   return `Watching them side by side: session ${result.session || 1} of ${result.sessions || 1} (about ${minutes} min in all)`;
@@ -178,6 +183,14 @@ const PictureCompare = ({ channel, onClose }) => {
                 {result.reference.account})
                 {result.started &&
                   ` · ${new Date(result.started * 1000).toLocaleString()}`}
+              </Text>
+            )}
+            {result?.quick && (
+              <Text size="xs" c="dimmed">
+                Compared while Stream Check checked them: ten seconds of each,
+                read at the same moment. A stream that did not match in those
+                ten seconds is watched for a minute and a half next, and only
+                that can call it different.
               </Text>
             )}
             {(result?.results || []).map((row) => (

@@ -44,7 +44,10 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             label="Providers at a time"
             description="Automatic: one while people may be watching, two when only checking while nothing plays -- so someone who starts watching mid-check always finds a provider nobody is checking. Each provider is checked through before the next; one that refuses or is in use hands its turn on. While a check runs, a viewer's next channel stays on the provider they are watching through."
             data={[
-              { value: 'auto', label: 'Automatic (1, or 2 when nothing plays)' },
+              {
+                value: 'auto',
+                label: 'Automatic (1, or 2 when nothing plays)',
+              },
               { value: '1', label: 'One' },
               { value: '2', label: 'Two' },
               { value: '3', label: 'Three' },
@@ -70,7 +73,7 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
             size="xs"
             color="green"
             label="Leave the fallback slate"
-            description="A channel that ended on its last, custom stream (the &quot;Could Not Dispatch&quot; screen) keeps trying its real streams, one at a time, and is stopped after a while on the slate. Off: the slate plays for as long as anybody stays connected."
+            description='A channel that ended on its last, custom stream (the "Could Not Dispatch" screen) keeps trying its real streams, one at a time, and is stopped after a while on the slate. Off: the slate plays for as long as anybody stays connected.'
             checked={draft.slate_retry !== false}
             onChange={(e) => set({ slate_retry: e.currentTarget.checked })}
           />
@@ -223,6 +226,27 @@ const StreamCheckSettings = ({ value, groups, onSave, saving, onClear }) => {
               onChange={(e) =>
                 set({ relook_pictures: e.currentTarget.checked })
               }
+            />
+          )}
+          {/* While checking, a channel's streams are read together and their pictures
+              compared (picture_compare.py): the only proof that a stream is the channel
+              its name says */}
+          <Switch
+            size="xs"
+            label="Compare pictures while checking"
+            description="A channel's streams are opened together, one on every free login, and the ten seconds each check reads anyway are compared with the channel's first stream. A stream that does not match in ten seconds is watched for a minute and a half once the logins are free, and one showing another channel is marked 'Different picture', with the pictures side by side. It only tells you: nothing on the channel changes."
+            checked={!!draft.compare_pictures}
+            onChange={(e) => set({ compare_pictures: e.currentTarget.checked })}
+          />
+          {draft.compare_pictures && (
+            <NumberInput
+              size="xs"
+              label="Compare a channel again after (days)"
+              description="Until then its streams are checked the usual way, one at a time."
+              min={1}
+              max={60}
+              value={draft.compare_every_days ?? 7}
+              onChange={number('compare_every_days')}
             />
           )}
           <Switch

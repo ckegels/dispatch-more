@@ -24,6 +24,8 @@ vi.mock('../../../api', () => ({
     streamCheckChannels: vi.fn(),
     clearStreamCheck: vi.fn(),
     setStreamCheckLimit: vi.fn(),
+    getPictureCompare: vi.fn(),
+    startPictureCompare: vi.fn(),
   },
 }));
 
@@ -660,5 +662,84 @@ describe('StreamCheckTable', () => {
     expect(
       await screen.findByText(/3 streams of 1 channel parked, backups too/)
     ).toBeInTheDocument();
+  });
+
+  it('marks a stream showing another channel, and shows the pictures side by side', async () => {
+    const compared = {
+      ...channelRow,
+      pictures_differ: 1,
+      pictures_compared: true,
+      needs_you: 1,
+      streams: channelRow.streams.map((stream) =>
+        stream.id === 12
+          ? {
+              ...stream,
+              state: 'ok',
+              result: result(true, {
+                picture: {
+                  verdict: 'different', long: true, against: 11, against_name: 'ORF 1 A',
+                  why: 'At best 3 of 120 changing moments match',
+                },
+              }),
+            }
+          : stream
+      ),
+      broken: 0,
+      working: 2,
+    };
+    API.getStreamCheck.mockResolvedValue(overview({ rows: [compared] }));
+    API.getPictureCompare.mockResolvedValue({
+      result: {
+        state: 'done', long: true, reference: { id: 11, name: 'ORF 1 A', account: 'Provider A' },
+        results: [{ id: 12, name: 'ORF 1 B', account: 'Provider B', verdict: 'different', why: 'At best 3 of 120 changing moments match', thumb_ref: 'AAAA', thumb: 'BBBB' }],
+        error: '',
+      },
+    });
+    draw();
+    expect(await screen.findByText('1 different picture')).toBeInTheDocument();
+    await open();
+    expect(screen.getByRole('button', { name: 'See the pictures' })).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Different picture'));
+    await waitFor(() => expect(API.getPictureCompare).toHaveBeenCalledWith(1));
+    expect(await screen.findByText(/Do the streams of "┃AT┃ ORF 1" show the same thing/)).toBeInTheDocument();
+  });
+
+  it('says when a provider was left for the round, and since when', async () => {
+    API.getStreamCheck.mockResolvedValue(
+      overview({
+        running: true,
+        progress: {
+          done: 4, total: 9, accounts: {
+            1: {
+              name: 'TiviBridge', done: 563, left: 3576, status: 'unavailable',
+              reason: 'its login expired; tried again next round', since: '2026-10-13T22:05:49+00:00',
+            },
+          },
+        },
+      })
+    );
+    draw();
+    const since = new Date('2026-10-13T22:05:49+00:00').toLocaleString();
+    expect(
+      await screen.findByText(new RegExp(`TiviBridge: .* unavailable \\(its login expired; tried again next round\\) · since ${since.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+    ).toBeInTheDocument();
+  });
+
+  it('compares pictures while checking only when that is turned on', async () => {
+    draw();
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open Failing streams' })
+    );
+    const compare = screen.getByRole('switch', { name: /Compare pictures while checking/ });
+    expect(compare).not.toBeChecked();
+    fireEvent.click(compare);
+    fireEvent.change(await screen.findByLabelText(/Compare a channel again after/), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    await waitFor(() =>
+      expect(API.saveStreamCheckSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ compare_pictures: true, compare_every_days: 5 })
+      )
+    );
   });
 });
