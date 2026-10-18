@@ -9,7 +9,7 @@ that work on every install, and a lot more. It installs over the Dispatcharr you
 and takes itself off again with one button.
 
 > [!TIP]
-> **Use it together with [arrTV](https://github.com/ckegels/AerioTV-Android)**, the Android TV
+> **Use it together with [arrTV](https://github.com/ckegels/ArrTV)**, the Android TV
 > app built for Dispatch More. Many features only work, or work much better, when both are used
 > together: see [Better together with arrTV](#better-together-with-arrtv).
 
@@ -42,7 +42,7 @@ itself one day.
 
 ## Better together with arrTV
 
-[arrTV](https://github.com/ckegels/AerioTV-Android) is an app for Google TV / Android TV (and
+[arrTV](https://github.com/ckegels/ArrTV) is an app for Google TV / Android TV (and
 phones) that works with any Dispatcharr, but talks to Dispatch More directly. Using both is
 **highly recommended**:
 
@@ -211,13 +211,13 @@ Streaming. Switch on what you want to use; the rest stays off.
 On a Google TV / Android TV:
 
 1. Install **Downloader** (by AFTVnews) from the Play Store.
-2. Enter `https://github.com/ckegels/AerioTV-Android/releases/latest/download/ArrTV.apk` and
+2. Enter `https://github.com/ckegels/ArrTV/releases/latest/download/ArrTV.apk` and
    install the app (allow Downloader to install apps when asked).
 3. Open arrTV. It finds Dispatcharr on your network by itself; pick it and log in.
 4. In Dispatch More, switch on what you want under **Settings → Streaming → arrTV**.
 
 Phones, tablets and other ways to install are in the
-[arrTV instructions](https://github.com/ckegels/AerioTV-Android#install).
+[arrTV instructions](https://github.com/ckegels/ArrTV#install).
 
 ## Update
 
