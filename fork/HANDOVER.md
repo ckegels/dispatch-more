@@ -9,8 +9,12 @@ Written 2026-09-19, kept current to **release v269** (2026-10-18; v253-v257 and 
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
-> **Work in progress on 2026-10-02 -- read [`fork/handover-2026-10-02.md`](handover-2026-10-02.md)
-> first.** It holds where things stand right now (v248 published and installed, v249 built and
+> **Read [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) first** (2026-10-18): v269 published
+> and installed, v270 committed locally and not published, arrTV arr.115 built and not published, and
+> the upstream AerioTV ports on arrTV's `feature/upstream-picks` -- exactly what is on the branch and
+> what is still open. The 2026-10-02 handover below is history.
+>
+> **Earlier: work in progress on 2026-10-02 -- [`fork/handover-2026-10-02.md`](handover-2026-10-02.md).** It holds where things stand right now (v248 published and installed, v249 built and
 > not published, an uncommitted look-back priority fix, arrTV arr.89 committed but not built,
 > the open look-back grey screen), everything built in v244-v249 and arr.73-arr.89 in detail,
 > the commands that work, and the test plan.
