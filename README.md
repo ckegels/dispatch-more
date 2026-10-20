@@ -154,12 +154,14 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
 > [!IMPORTANT]
 > **Make a backup first:** Dispatcharr → Settings → Backup & Restore.
 
-Dispatch More needs a working Dispatcharr. The installer checks your version and **changes
-nothing** if no release was built for it.
+Dispatch More goes over a working Dispatcharr. The installer checks your version and **changes
+nothing** if no release was built for it. On a Linux machine or LXC **without** Dispatcharr, the
+same command installs the Dispatcharr version the release is made for first, with Dispatcharr's
+own installer (it asks you to type "I understand" under its warning), then Dispatch More.
 
 ### Linux or LXC (Debian install, Proxmox script)
 
-Run on the Dispatcharr machine:
+Run on the Dispatcharr machine (or a new Debian/Ubuntu machine or LXC, as root):
 
 ```bash
 curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash

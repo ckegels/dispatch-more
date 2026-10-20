@@ -62,7 +62,8 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
   [ -f "$STATE/captions.sh" ] && bash "$STATE/captions.sh" remove "$STATE" "$SLUG" "$APP" all || true
   # The memory recorder's service; its history in /data/memory-history stays (memory-recorder.sh)
   [ -f "$STATE/memory-recorder.sh" ] && bash "$STATE/memory-recorder.sh" remove "$STATE" "$SLUG" || true
-  systemctl disable "$SLUG-uninstall.path" --no-block >/dev/null 2>&1 || true
+  # Stopped as well as disabled: only disabled, it stayed "active" (its file gone) until a reboot
+  systemctl disable --now "$SLUG-uninstall.path" --no-block >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$SLUG-uninstall.path" "/etc/systemd/system/$SLUG-uninstall.service"
   systemctl daemon-reload || true
   if [ "$RESTART" = 1 ]; then

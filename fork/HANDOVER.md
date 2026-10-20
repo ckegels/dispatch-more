@@ -180,6 +180,21 @@ it ran green on GitHub). Never push to `upstream`.
 Moving the user's own server from the patch-based install to the patcher: run
 `fork/scripts/uninstall-probation.sh` (back to stock), then the release's `install.sh`.
 
+**A machine without Dispatcharr** (v274, `quick-install.sh`): the one command runs Dispatcharr's
+own `debian_install.sh` first, fetched from the tag the release is made for and pinned to it
+(its own default `DISPATCH_BRANCH="main"` is the newest Dispatcharr, which the release refuses),
+after saying so and waiting 10 s; its "type I understand" question is read from the terminal
+(`</dev/tty`: piped from curl, stdin is the script itself), or given on purpose with
+`DISPATCH_MORE_DISPATCHARR_ANSWER="I understand"`; without either it stops and says why. Root on
+Debian/Ubuntu with systemd only; in Docker it says Dispatcharr comes from its image. **Tested for
+real** (2026-10-20) in a clean Debian 12 container with systemd as PID 1: Dispatcharr 0.31.0 +
+Dispatch More from the one command, every service up, the memory recorder writing; then the page's
+Uninstall (`core.modified_build.request_uninstall` -> the path unit -> uninstall.sh) put stock back
+in ~21 s: `git status` against 0.31.0 showed only Dispatcharr's own installer's files (`.env`,
+`uwsgi-debian.ini`, one line of `package-lock.json`), no unit files of ours left, capabilities
+and app-sync gone (the SPA's page, as for any unknown address), the memory history kept.
+Found there and fixed: the uninstall watcher was disabled but not stopped (`--now` now).
+
 ### 4.5 Tests
 
 A local environment was set up in a session scratch directory (not in the repo): a Python
