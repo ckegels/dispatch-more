@@ -673,6 +673,10 @@ def capabilities(user=None):
         # v266: other people in the house too, asked first, the one joined leading
         "link_people": bool(settings["devices"] and settings["link_devices"] and settings["link_users"]),
         "link_url": "/api/core/app-link/",
+        # Start-up check (app_sync): what changed since the app last looked, and the guide
+        # records of this login's channels only. Read-only, so always offered.
+        "sync_url": "/api/core/app-sync/",
+        "guide_links_url": "/api/core/app-guide-links/",
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

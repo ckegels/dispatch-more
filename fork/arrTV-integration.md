@@ -46,6 +46,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
 | Watch together: join another device of the login, follow its channel (`/api/core/app-link/`, socket `linked_channel`) | v260 | built (`feature/one-device`): Join on the other-device notice and at start, follow, Stop watching together | §5b |
 | One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254; look back and movies v255) | built (arr.98; stops at once on the socket message, Watch here on TV, a channel picked takes over, look back and movies: arr.99) | §5a |
+| Start-up check: what changed since the app last looked (`/api/core/app-sync/`), its channels' guide records only (`/api/core/app-guide-links/`) | v272 | built on `feature/upstream-picks` (`71528a90`, not published): no downloads at launch, only what changed | §1a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
@@ -114,6 +115,53 @@ send none of the headers below. On Dispatch More:
 Simplest correct behaviour: **if the capabilities call answers 200 with `app_integration >= 1`,
 always send the device headers on that server**, whatever `devices` says. The server decides
 whether to use them.
+
+## 1a. Start-up check (server v272)
+
+**Why** (measured 2026-10-20 on the user's Chromecast with Google TV HD, 1.4 GB, arr.115): at
+every launch arrTV downloaded the channel list, every guide record of the whole server
+(`/api/epg/epgdata/`, 43+ sources) and the server's 24 h guide, twice each, while the first
+channel started. The app's 256 MB heap was full for one to two minutes: the picture froze for up
+to 2.4 s with 13 s buffered, "Reconnecting" showed, one launch ran out of memory. The plan for
+both sides is `fork/guide-loading-plan.md`.
+
+Capabilities say `"sync_url": "/api/core/app-sync/"` and `"guide_links_url":
+"/api/core/app-guide-links/"`. Both are read-only, for any logged-in user, always on (no switch:
+they only tell a login what it can already read through Dispatcharr's own endpoints).
+
+```
+GET /api/core/app-sync/
+```
+```json
+{"sync": 1, "channels": 1541, "lineup": "9c1f0e2a7b3d4e5f6a7b", "guide_links": "0d4c...",
+ "guides": "77ab...", "programmes": 41210,
+ "sources": [{"id": 3, "type": "xmltv", "active": true, "refreshed": "2026-10-20T15:02:11+00:00"}],
+ "guide_links_url": "/api/core/app-guide-links/"}
+```
+
+- `lineup` changes when anything the app shows from `/api/channels/channels/` changes for this
+  login (number, name, group and its name, logo, tvg-id, guide, catch-up, hidden, level, and
+  an override of any of them; the login's own channel profiles too) -- by the channel list's own
+  rules for who sees what. It does **not** change when only a channel's streams change (Stream
+  Check reorders those all day).
+- `guide_links` changes when one of these channels is put on another guide or that guide's
+  tvg-id changes.
+- `guides` changes when any source finishes a refresh (`refreshed`, which the app may show) or
+  the programmes of these channels' guides change (count or newest row).
+- The hashes mean nothing by themselves: **save them per playlist after a successful download,
+  compare at the next start**. Equal: download nothing. Different: download only that part.
+- One answer per login is kept 10 s, so asking twice at start costs one computation.
+
+```
+GET /api/core/app-guide-links/
+```
+`[{"id": 88213, "tvg_id": "DasErste.de", "epg_source": 3, "source_type": "xmltv"}, ...]` -- the
+guide records this login's channels use (by their own guide or an override), in the shape of
+`/api/epg/epgdata/` rows, so the same decoder reads it. Use it instead of `/api/epg/epgdata/`
+whenever capabilities name it: ~1.5k rows instead of every guide record on the server.
+
+On a server without `sync_url` (stock Dispatcharr, Dispatch More before v272) keep the
+time-based checks.
 
 ## 2. The device ID (`X-Dispatch-Device`)
 

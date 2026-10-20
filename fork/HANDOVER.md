@@ -2171,7 +2171,7 @@ path and missed in its sibling:
 - **The guide search scored every match on every keystroke.** At most `SEARCH_SCORED` (2000),
   shortest names first; the total is counted in the database.
 
-### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `app_one_device.py`, `app_links.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
+### 5.11 arrTV — `app_devices.py`, `app_reports.py`, `app_stalls.py`, `app_own_streams.py`, `app_one_device.py`, `app_links.py`, `app_sync.py`, `ArrTvSettings.jsx`, `AppReports.jsx`
 
 arrTV is the user's own Android / Google TV player, a fork of AerioTV
 (https://github.com/jonzey231/AerioTV-Android) built to work with this server. Everything
@@ -2182,6 +2182,19 @@ Settings → Streaming → **arrTV** (`/api/core/arrtv/`, `CoreSettings` "app-in
 every switch off: no other app sends any of it, and off is stock. **What arrTV has built of
 it** is the table at the top of that file ("Where arrTV stands"): as of 2026-09-28 (arr.63)
 the app has built every part of it, each behind a switch of its own in the app.
+
+**Start-up check** (v272; `app_sync.py`, contract `fork/arrTV-integration.md` §1a, plan
+`fork/guide-loading-plan.md`). Measured 2026-10-20 on the user's Chromecast HD: every arrTV
+launch downloaded the lineup, all of `/api/epg/epgdata/` (every guide record of every source)
+and the 24 h guide, twice each, and the app's heap sat at its 256 MB limit for one to two minutes
+(picture freezes, false "Reconnecting", one out-of-memory). `GET /api/core/app-sync/` gives
+stamps of the login's lineup, its channels' guide links and the guides' programmes, so the app
+downloads only what changed; `GET /api/core/app-guide-links/` gives just the guide records those
+channels use. Read-only and always on (capabilities `sync_url`, `guide_links_url`): it tells a
+login nothing it cannot read already, and an app that never asks changes nothing. Stamps hash
+the values, not `updated_at` (bulk `update()` skips `auto_now`); the lineup comes from
+`ChannelViewSet.get_queryset()` itself so it cannot drift from what the app downloads; one
+answer per login is kept 10 s. Tests: `test_app_sync.py`.
 
 **One arrTV device at a time** (v253, the socket message v254; `app_one_device.py`, contract
 `fork/arrTV-integration.md` §5a). The user asked (2026-10-16) for logins of their choosing to

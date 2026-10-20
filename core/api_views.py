@@ -571,6 +571,35 @@ def capabilities(request):
     return JsonResponse(app_devices.capabilities(request.user))
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def app_sync(request):
+    """
+    arrTV's start-up check (apps.proxy.live_proxy.app_sync): stamps of this login's lineup,
+    its channels' guide links and the guides' programmes, so the app downloads only what
+    changed since it last looked instead of everything at every launch. Any logged-in user.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_sync as sync
+
+    return JsonResponse(sync.answer(request.user))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def app_guide_links(request):
+    """
+    The guide records this login's channels use, in /api/epg/epgdata/'s row shape: what arrTV
+    needs from that endpoint, without every guide record of every source on the server.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_sync as sync
+
+    return JsonResponse(sync.links_for(request.user), safe=False)
+
+
 @api_view(["GET", "PUT"])
 @permission_classes([IsAdmin])
 def arrtv_settings(request):
