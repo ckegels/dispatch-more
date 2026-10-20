@@ -46,7 +46,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
 | Watch together: join another device of the login, follow its channel (`/api/core/app-link/`, socket `linked_channel`) | v260 | built (`feature/one-device`): Join on the other-device notice and at start, follow, Stop watching together | §5b |
 | One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254; look back and movies v255) | built (arr.98; stops at once on the socket message, Watch here on TV, a channel picked takes over, look back and movies: arr.99) | §5a |
-| Start-up check: what changed since the app last looked (`/api/core/app-sync/`), its channels' guide records only (`/api/core/app-guide-links/`); per-guide marks and the grid for those guides only (`/api/core/app-guide-marks/`, `/api/epg/grid/?epg_ids=`, v275) | v272, v275 | built on `feature/upstream-picks` (`71528a90`, not published): no downloads at launch, only what changed | §1a |
+| Start-up check: what changed since the app last looked (`/api/core/app-sync/`), its channels' guide records only (`/api/core/app-guide-links/`); per-guide marks and the grid for those guides only (`/api/core/app-guide-marks/`, `/api/epg/grid/?epg_ids=`, v275) | v272, v275 | built on `feature/upstream-picks` (`71528a90`; marks `84e03a5b`; not published): no downloads at launch, only what changed, only the guides that changed | §1a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
