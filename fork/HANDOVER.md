@@ -5,14 +5,15 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v273** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v274** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
 > **Read [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) first** (2026-10-18): v269 published
 > and installed, v270 published, v271 published (2026-10-18, the TiviBridge fix; install pending), v272 published (2026-10-20, the arrTV
 > start-up check: `fork/guide-loading-plan.md`), v273 published (2026-10-20: epgdata streamed, the
-> memory recorder -- §5.4c), arrTV arr.115 built and not published, and
+> memory recorder -- §5.4c), v274 published (2026-10-20: the one command on a machine without
+> Dispatcharr, uninstall stops its watcher -- §4.4), arrTV arr.115 built and not published, and
 > the upstream AerioTV ports on arrTV's `feature/upstream-picks` -- exactly what is on the branch and
 > what is still open. The 2026-10-02 handover below is history.
 >
@@ -2895,6 +2896,10 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   `/api/core/app-guide-links/` (§5.11, contract §1a). arrTV uses them from the commits on its
   `feature/upstream-picks` (not in a published arrTV yet). Next: the paced, on-screen-first guide
   loader, `fork/guide-loading-plan.md` step 3.
+- **v274 (2026-10-20)**: the one command installs the matching Dispatcharr first on a machine
+  without it (its "I understand" asked on the terminal); the recorder's unit has
+  ConditionPathExists; uninstall stops its watcher too. Tested for real in a clean Debian 12
+  container with systemd: fresh install, install over stock, the page's Uninstall back to stock.
 - **v273 (2026-10-20)**: `/api/epg/epgdata/` streamed, and the memory recorder (§5.4c). After
   installing, the recorder is switched on (`touch /data/memory-history/on`, or the tab) and the
   minute log `/etc/cron.d/dispatcharr-mem` on the box can go.
