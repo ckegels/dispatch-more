@@ -5,12 +5,13 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v271** (2026-10-18; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v272** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
 > **Read [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) first** (2026-10-18): v269 published
-> and installed, v270 published, v271 published (2026-10-18, the TiviBridge fix; install pending), arrTV arr.115 built and not published, and
+> and installed, v270 published, v271 published (2026-10-18, the TiviBridge fix; install pending), v272 published (2026-10-20, the arrTV
+> start-up check: `fork/guide-loading-plan.md`), arrTV arr.115 built and not published, and
 > the upstream AerioTV ports on arrTV's `feature/upstream-picks` -- exactly what is on the branch and
 > what is still open. The 2026-10-02 handover below is history.
 >
@@ -2822,6 +2823,10 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   provider count the connection was its own, so the provider's lingering count of it was taken
   for a viewer and TiviBridge sat out every batch. Fixed (`check_ended` after `compare_channel`);
   `fork/picture-check.md` ("Fix after v270").
+- **arrTV start-up check, v272 (2026-10-20)**: `/api/core/app-sync/` and
+  `/api/core/app-guide-links/` (§5.11, contract §1a). arrTV uses them from the commits on its
+  `feature/upstream-picks` (not in a published arrTV yet). Next: the paced, on-screen-first guide
+  loader, `fork/guide-loading-plan.md` step 3.
 - **Picture check** (designed 2026-09-28, the user is deciding): confirm or refute that two
   providers' streams are one channel by sampling both at night (a frame hash a second and the
   loudness, slid along each other for the providers' delay). Confirmed pairs go into the
