@@ -74,7 +74,19 @@ if [ ! -f "$APP/version.py" ]; then
     exit 3
   }
   sed -i "s|^\( *\)DISPATCH_BRANCH=\"main\"|\1DISPATCH_BRANCH=\"v$WANT\"|" "$WORK/debian_install.sh"
-  bash "$WORK/debian_install.sh"
+  # Its first step asks you to type "I understand" under its own warning. That answer is yours:
+  # asked on the terminal (stdin here is this script itself when piped from curl, which its
+  # `read` would swallow), or given on purpose for an unattended install.
+  if [ -n "${DISPATCH_MORE_DISPATCHARR_ANSWER:-}" ]; then
+    printf '%s\n' "$DISPATCH_MORE_DISPATCHARR_ANSWER" | bash "$WORK/debian_install.sh"
+  elif ( : </dev/tty ) 2>/dev/null; then
+    echo "Dispatcharr's installer asks you to confirm its warning: type what it asks for."
+    bash "$WORK/debian_install.sh" </dev/tty
+  else
+    echo "Dispatcharr's installer asks you to type \"I understand\" under its warning, and there is no"
+    echo "terminal here to ask in. Run this in a terminal, or set DISPATCH_MORE_DISPATCHARR_ANSWER=\"I understand\"."
+    exit 3
+  fi
   [ -f "$APP/version.py" ] || { echo "Dispatcharr's installer did not put Dispatcharr at $APP; Dispatch More was not installed."; exit 1; }
   find_python
 fi
