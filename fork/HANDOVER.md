@@ -351,6 +351,30 @@ worker only when no worker answers a 1 s ping); `meaning_index._index` keeps onl
 `channel_top` in memory; the comparison judges only the page shown for "All". Open: moving
 the Lineup's encoding out of the web workers -- wait for the tab's numbers first.
 
+**8 GB and a frozen container, 2026-10-20 (v273: `/api/epg/epgdata/` streamed).** The user's
+LXC (145, 8 GB) froze at 100 %: one uWSGI worker at 6 GB after 45 h, Redis answering in seconds
+from 17:50 (slowlog: a SET of 2.3 s), every request 499/504 from 18:28, workers in `D` state.
+Killing that worker freed 4 GB and two others filled it within minutes; killing all four web
+workers at once ended it. **Measured on the live box** with a script running each heavy
+address 3x and watching the workers' RSS: `/api/epg/epgdata/` kept **+117/+141 MB per request**
+(a 15.3 MB answer: stock's EPGDataViewSet has no pages and serializes the whole table);
+the channel list +2..+52 MB; `/api/epg/grid/`, `/output/epg` (164 MB XMLTV, already a
+generator) and recordings nothing. 20 in a row level off at ~1.3 GB for the four workers; 8 at
+once lift every worker to ~400 MB and 8 more at once no higher: **not a leak but a high-water
+mark per concurrent request, never given back** -- requests that pile up in one worker (gevent
+takes 400 at once, and a request keeps building after its client gave up) multiply it, which
+is how the slow period snowballed. Threads (7 per worker) and allocator arenas (1) did not
+build up, so the stream threads are not it. **v273:** `EPGDataViewSet.list` streams the table
+in batches of 2,000 through the same serializer and renderer (the bytes are DRF's; the
+browsable API, an indented or paginated answer keep DRF's path): peak 8.3 MB flat from 80,000
+to 160,000 rows, where DRF's grows ~1 MB per 1,000 rows (`apps/epg/tests/test_epgdata_stream.py`).
+arrTV stops asking for it at launch (v272 + `guide_links`). systemd memory fences were set on
+the box for an hour and taken off again at the user's word ("fix the cause, not limits"); left
+on it: the LXC raised to 12 GB and a minute log `/etc/cron.d/dispatcharr-mem` ->
+`/var/log/dispatcharr-mem.log` until the memory recorder (below) is installed. The Proxmox
+host's swap was full (8 of 8 GB). Open: the channel list (+50 MB high-water) the same way if it
+shows up again.
+
 **The language model out of the web workers** (v241, `meaning.py`). Measured with the Memory
 tab on the user's server (2026-09-30): all 4 uWSGI workers had PyTorch mapped, 550-650 MB
 each against 160-290 MB without, ~1.6 GB of the 3.7 GB total -- the "nearly 4 GB". The Lineup

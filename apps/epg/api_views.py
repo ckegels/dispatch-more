@@ -452,6 +452,61 @@ class EPGDataViewSet(viewsets.ReadOnlyModelViewSet):
         except KeyError:
             return [Authenticated()]
 
+    # Rows per serialized batch of the streamed list (see list()).
+    STREAM_BATCH = 2000
+
+    def list(self, request, *args, **kwargs):
+        """
+        The whole table, written out batch by batch instead of built whole first.
+
+        This list has no pages, so every call used to serialize every guide record of every
+        source in one go: about 130 MB of Python objects for a 15 MB answer on the user's
+        server (2026-10-20, measured per request on the live box), memory a uWSGI worker never
+        gives back. Requests piling up in one worker (it takes up to 400 at once, and keeps
+        building after the client gave up) took a worker to 6 GB and the container down with
+        it. Each batch goes through the same serializer and the same renderer, so the bytes
+        are the ones DRF would have sent; anything else (the browsable API, an indented or
+        paginated answer) keeps DRF's own path.
+        """
+        from django.http import StreamingHttpResponse
+        from rest_framework.renderers import JSONRenderer
+
+        renderer = getattr(request, "accepted_renderer", None)
+        context = self.get_renderer_context()
+        if (
+            type(renderer) is not JSONRenderer
+            or self.paginator is not None
+            or renderer.get_indent(request.accepted_media_type, context) is not None
+        ):
+            return super().list(request, *args, **kwargs)
+        queryset = self.filter_queryset(self.get_queryset())
+        media_type = request.accepted_media_type
+
+        # What the renderer puts between list items (compact unless COMPACT_JSON is off)
+        between = b"," if renderer.compact else b", "
+
+        def batches():
+            yield b"["
+            first = True
+            batch = []
+
+            def rendered(rows):
+                # "[a,b]" from the renderer, without its brackets: joined with the separator
+                # the compact renderer itself puts between list items
+                return renderer.render(self.get_serializer(rows, many=True).data, media_type, context)[1:-1]
+
+            for row in queryset.iterator(chunk_size=self.STREAM_BATCH):
+                batch.append(row)
+                if len(batch) >= self.STREAM_BATCH:
+                    yield (b"" if first else between) + rendered(batch)
+                    first = False
+                    batch = []
+            if batch:
+                yield (b"" if first else between) + rendered(batch)
+            yield b"]"
+
+        return StreamingHttpResponse(batches(), content_type=renderer.media_type)
+
 
 # ─────────────────────────────
 # 5) Current Programs API
