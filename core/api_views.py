@@ -600,6 +600,20 @@ def app_guide_links(request):
     return JsonResponse(sync.links_for(request.user), safe=False)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def app_guide_marks(request):
+    """
+    A fingerprint per guide of this login's channels (apps.proxy.live_proxy.app_sync.guide_marks):
+    arrTV compares them with its own and fetches only the guides that changed.
+    """
+    from django.http import JsonResponse
+
+    from apps.proxy.live_proxy import app_sync as sync
+
+    return JsonResponse(sync.marks_for(request.user))
+
+
 @api_view(["GET", "PUT"])
 @permission_classes([IsAdmin])
 def arrtv_settings(request):

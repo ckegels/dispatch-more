@@ -8,6 +8,10 @@ check + guide links + quiet background job, `116532be` one rebuild at a time (A3
 A3 on-screen/group-first beyond the first view and grid slices (measure first: after the pieces
 above a group switch already shows now..+2 h at once), S3, S4. Next: measure on the Google TV with
 v273 on the server.
+Later (2026-10-20 night): exploring on the Shield found the `guides` stamp too coarse (any
+source's refresh moved it, so the whole grid came again several times an hour). Server v275 (not
+yet published): the stamp counts only the login's guides, `app-guide-marks` gives a mark per
+guide and the grid takes `epg_ids`, so the app fetches only the guides that changed.
 
 ## 1. What was measured (Google TV / Chromecast HD, 1.4 GB, real ArrTV arr.115, your account)
 

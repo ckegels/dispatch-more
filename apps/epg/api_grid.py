@@ -209,6 +209,14 @@ def _parse_channel_profile_id(params):
     return profile_id
 
 
+def _parse_epg_ids(params):
+    """Dispatch More: the optional ``epg_ids`` list (comma-separated EPGData ids), or None."""
+    raw = params.get('epg_ids')
+    if raw is None:
+        return None
+    return {int(part) for part in str(raw).split(',') if part.strip().isdigit()}
+
+
 def _visible_channels_queryset(user, profile_id=None):
     """Return non-hidden channels the caller may see for grid programmes.
 
@@ -577,6 +585,17 @@ class EPGGridAPIView(APIView):
         epg_ids, dummy_custom, no_epg = _partition_visible_channels(
             _visible_channels_queryset(request.user, profile_id)
         )
+        # Dispatch More (arrTV, apps/proxy/live_proxy/app_sync.py guide_marks): ?epg_ids=1,2,3
+        # gives only those guides' programmes, of the channels this login sees, so an app fetches
+        # the guides that changed instead of the whole grid. Not sent: the grid as before.
+        wanted = _parse_epg_ids(request.query_params)
+        if wanted is not None:
+            epg_ids = epg_ids & wanted
+            dummy_custom = [
+                c for c in dummy_custom
+                if getattr(c.effective_epg_data_obj, "id", None) in wanted
+            ]
+            no_epg = []
 
         logger.debug(
             "EPGGridAPIView: Querying programs between %s and %s "

@@ -19,6 +19,7 @@ from apps.proxy.live_proxy import app_sync
 
 SYNC = "/api/core/app-sync/"
 LINKS = "/api/core/app-guide-links/"
+MARKS = "/api/core/app-guide-marks/"
 
 
 class AppSyncTests(TestCase):
@@ -57,6 +58,14 @@ class AppSyncTests(TestCase):
         client = APIClient()
         client.force_authenticate(user=user or self.alice)
         response = client.get(SYNC)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def marks(self, user=None):
+        app_sync._CACHE.clear()
+        client = APIClient()
+        client.force_authenticate(user=user or self.alice)
+        response = client.get(MARKS)
         self.assertEqual(response.status_code, 200)
         return response.json()
 
@@ -207,14 +216,57 @@ class AppSyncTests(TestCase):
 
     # -- guides -----------------------------------------------------------------------------
 
-    def test_a_source_refresh_moves_the_guides_stamp(self):
+    def test_a_refresh_of_a_source_none_of_the_channels_use_moves_nothing(self):
+        # The user's server refreshes 43 sources in turn; only the login's guides count
         before = self.sync()
         EPGSource.objects.filter(id=self.other_source.id).update(updated_at=timezone.now())
         after = self.sync()
+        self.assertEqual(before["guides"], after["guides"])
+        self.assertEqual([s["id"] for s in after["sources"]], [self.source.id])
+
+    def test_a_refresh_that_reimports_a_used_guide_moves_its_mark_only(self):
+        before = self.marks()
+        ProgramData.objects.filter(epg=self.ard).delete()
+        now = timezone.now()
+        ProgramData.objects.create(epg=self.ard, title="Tagesschau", start_time=now, end_time=now + timedelta(minutes=15))
+        after = self.marks()
         self.assertNotEqual(before["guides"], after["guides"])
-        self.assertEqual(before["lineup"], after["lineup"])
-        refreshed = {s["id"]: s["refreshed"] for s in after["sources"]}
-        self.assertIsNotNone(refreshed[self.other_source.id])
+        self.assertNotEqual(before["marks"][str(self.ard.id)], after["marks"][str(self.ard.id)])
+        self.assertEqual(before["marks"][str(self.zdf.id)], after["marks"][str(self.zdf.id)])
+
+    def test_marks_cover_every_guide_of_the_channels_and_only_those(self):
+        marks = self.marks()["marks"]
+        self.assertEqual(set(marks), {str(self.ard.id), str(self.zdf.id)})
+        self.assertEqual(marks[str(self.zdf.id)], "0")  # no programmes yet
+        self.assertNotEqual(marks[str(self.ard.id)], "0")
+
+    def test_the_marks_stamp_is_the_sync_stamp(self):
+        self.assertEqual(self.marks()["guides"], self.sync()["guides"])
+
+    def test_capabilities_name_the_marks_and_the_grid_filter(self):
+        client = APIClient()
+        client.force_authenticate(user=self.alice)
+        capabilities = client.get("/api/core/capabilities/").json()
+        self.assertEqual(capabilities["guide_marks_url"], MARKS)
+        self.assertTrue(capabilities["grid_epg_ids"])
+
+    def test_the_grid_gives_only_the_guides_asked_for(self):
+        now = timezone.now()
+        ProgramData.objects.create(epg=self.zdf, title="heute", start_time=now, end_time=now + timedelta(minutes=20))
+        client = APIClient()
+        client.force_authenticate(user=self.alice)
+
+        def titles(query=""):
+            response = client.get("/api/epg/grid/" + query)
+            self.assertEqual(response.status_code, 200)
+            body = b"".join(response.streaming_content) if response.streaming else response.content
+            return sorted(p.get("title") for p in __import__("json").loads(body)["data"] if p.get("title") in ("Tagesschau", "heute"))
+
+        self.assertEqual(titles(), ["Tagesschau", "heute"])
+        self.assertEqual(titles(f"?epg_ids={self.zdf.id}"), ["heute"])
+        self.assertEqual(titles(f"?epg_ids={self.ard.id},{self.zdf.id}"), ["Tagesschau", "heute"])
+        self.assertEqual(titles(f"?epg_ids={self.unused.id}"), [])
+        self.assertEqual(titles("?epg_ids="), [])
 
     def test_new_programmes_for_the_channels_move_the_guides_stamp(self):
         before = self.sync()["guides"]

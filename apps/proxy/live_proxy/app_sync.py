@@ -24,6 +24,7 @@ import time
 
 SYNC_URL = "/api/core/app-sync/"
 GUIDE_LINKS_URL = "/api/core/app-guide-links/"
+GUIDE_MARKS_URL = "/api/core/app-guide-marks/"
 
 # One answer per login for this long: the app asks at start, and its background check, the
 # live socket and a second device of the same login may ask within seconds of each other.
@@ -130,26 +131,43 @@ def guide_links(epg_ids):
     return [{"id": i, "tvg_id": t, "epg_source": s, "source_type": st} for i, t, s, st in rows]
 
 
-def _guides(epg_ids):
+def guide_marks(epg_ids):
     """
-    Whether the programmes changed: every source's last successful refresh (the app reads all
-    sources for look back), and the count and newest row of the programmes of these channels'
-    guides, which also moves when something other than a source refresh writes programmes.
+    A short fingerprint of each guide's programmes ({epg id: mark}): the count and the newest
+    row, which change when a refresh re-imports the guide or anything else writes to it. The app
+    compares them with its own and fetches the programmes of the guides that changed only
+    (`/api/epg/grid/?epg_ids=`), instead of the whole 24 h grid -- 41,000 programmes, 16 MB --
+    at every source refresh and Show Groups change (measured 2026-10-20). A guide without
+    programmes is "0".
     """
     from django.db.models import Count, Max
 
-    from apps.epg.models import EPGSource, ProgramData
+    from apps.epg.models import ProgramData
 
-    sources = list(
-        EPGSource.objects.order_by("id").values_list("id", "source_type", "is_active", "updated_at", "url")
+    marks = {str(i): "0" for i in epg_ids}
+    total = 0
+    rows = (
+        ProgramData.objects.filter(epg_id__in=epg_ids)
+        .values("epg_id")
+        .annotate(n=Count("id"), last=Max("id"))
+        .order_by()
     )
-    programmes = ProgramData.objects.filter(epg_id__in=epg_ids).aggregate(n=Count("id"), last=Max("id"))
-    stamp = _digest([[s[0], s[1], s[2], s[3], s[4]] for s in sources] + [[programmes["n"], programmes["last"]]])
-    shown = [
+    for row in rows:
+        total += row["n"]
+        marks[str(row["epg_id"])] = hashlib.sha1(f"{row['n']}:{row['last']}".encode()).hexdigest()[:8]
+    return marks, total
+
+
+def _sources(links):
+    """The sources the login's guides come from, with their last successful refresh."""
+    from apps.epg.models import EPGSource
+
+    used = {g["epg_source"] for g in links if g["epg_source"] is not None}
+    return [
         {"id": s[0], "type": s[1], "active": s[2], "refreshed": s[3].isoformat() if s[3] else None}
-        for s in sources
+        for s in EPGSource.objects.filter(id__in=used).order_by("id")
+        .values_list("id", "source_type", "is_active", "updated_at")
     ]
-    return stamp, programmes["n"] or 0, shown
 
 
 def answer(user):
@@ -163,20 +181,32 @@ def answer(user):
     rows = _lineup(user)
     epg_ids = _epg_ids(rows)
     links = guide_links(epg_ids)
-    guides_stamp, programmes, sources = _guides(epg_ids)
+    marks, programmes = guide_marks(epg_ids)
     result = {
         "sync": 1,
         "channels": len(rows),
         "lineup": _digest(rows + [["groups"]] + _groups(rows) + [["profiles"]] + [_profiles(user)]),
         "guide_links": _digest([[g["id"], g["tvg_id"], g["epg_source"], g["source_type"]] for g in links]),
-        "guides": guides_stamp,
+        # Only this login's guides count: a refresh of a source none of its channels use (the
+        # user's server refreshes 43 in turn, several an hour) is no reason to download anything
+        "guides": _digest(sorted(marks.items())),
         "programmes": programmes,
-        "sources": sources,
+        "sources": _sources(links),
         "guide_links_url": GUIDE_LINKS_URL,
+        "guide_marks_url": GUIDE_MARKS_URL,
     }
     with _CACHE_LOCK:
-        _CACHE[key] = (now, result)
+        _CACHE[key] = (now, result, marks)
     return result
+
+
+def marks_for(user):
+    """What GET /api/core/app-guide-marks/ answers this login: {"guides": stamp, "marks": {...}}."""
+    result = answer(user)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(getattr(user, "id", None))
+    marks = hit[2] if hit and hit[1] is result else guide_marks(_epg_ids(_lineup(user)))[0]
+    return {"guides": result["guides"], "marks": marks}
 
 
 def links_for(user):

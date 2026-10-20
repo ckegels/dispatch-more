@@ -46,7 +46,7 @@ General → **arrTV optimizations**, all on by default); switched off, that part
 | A guide changed: `channels_changed` with `"guide": true` on the socket | v219 | built (arr.64): the lineup is read again and the guide window fetched | §7a |
 | Watch together: join another device of the login, follow its channel (`/api/core/app-link/`, socket `linked_channel`) | v260 | built (`feature/one-device`): Join on the other-device notice and at start, follow, Stop watching together | §5b |
 | One arrTV device at a time for chosen logins (409 `device_replaced`, `X-Dispatch-Take-Over`, socket `device_replaced`) | v253 (socket message v254; look back and movies v255) | built (arr.98; stops at once on the socket message, Watch here on TV, a channel picked takes over, look back and movies: arr.99) | §5a |
-| Start-up check: what changed since the app last looked (`/api/core/app-sync/`), its channels' guide records only (`/api/core/app-guide-links/`) | v272 | built on `feature/upstream-picks` (`71528a90`, not published): no downloads at launch, only what changed | §1a |
+| Start-up check: what changed since the app last looked (`/api/core/app-sync/`), its channels' guide records only (`/api/core/app-guide-links/`); per-guide marks and the grid for those guides only (`/api/core/app-guide-marks/`, `/api/epg/grid/?epg_ids=`, v275) | v272, v275 | built on `feature/upstream-picks` (`71528a90`, not published): no downloads at launch, only what changed | §1a |
 
 The TV report below was taken when the user's server was still on v205; it is on v217 now.
 Install the latest release before testing any of §8.
@@ -125,8 +125,9 @@ channel started. The app's 256 MB heap was full for one to two minutes: the pict
 to 2.4 s with 13 s buffered, "Reconnecting" showed, one launch ran out of memory. The plan for
 both sides is `fork/guide-loading-plan.md`.
 
-Capabilities say `"sync_url": "/api/core/app-sync/"` and `"guide_links_url":
-"/api/core/app-guide-links/"`. Both are read-only, for any logged-in user, always on (no switch:
+Capabilities say `"sync_url": "/api/core/app-sync/"`, `"guide_links_url":
+"/api/core/app-guide-links/"`, and from v275 `"guide_marks_url": "/api/core/app-guide-marks/"`
+and `"grid_epg_ids": true`. All are read-only, for any logged-in user, always on (no switch:
 they only tell a login what it can already read through Dispatcharr's own endpoints).
 
 ```
@@ -136,7 +137,8 @@ GET /api/core/app-sync/
 {"sync": 1, "channels": 1541, "lineup": "9c1f0e2a7b3d4e5f6a7b", "guide_links": "0d4c...",
  "guides": "77ab...", "programmes": 41210,
  "sources": [{"id": 3, "type": "xmltv", "active": true, "refreshed": "2026-10-20T15:02:11+00:00"}],
- "guide_links_url": "/api/core/app-guide-links/"}
+ "guide_links_url": "/api/core/app-guide-links/",
+ "guide_marks_url": "/api/core/app-guide-marks/"}
 ```
 
 - `lineup` changes when anything the app shows from `/api/channels/channels/` changes for this
@@ -146,8 +148,11 @@ GET /api/core/app-sync/
   Check reorders those all day).
 - `guide_links` changes when one of these channels is put on another guide or that guide's
   tvg-id changes.
-- `guides` changes when any source finishes a refresh (`refreshed`, which the app may show) or
-  the programmes of these channels' guides change (count or newest row).
+- `guides` changes when the programmes of these channels' guides change (count or newest row of
+  any of them). From v275 only those guides count: a refresh of a source none of the login's
+  channels use moves nothing (the user's server refreshes 43 sources in turn, several an hour).
+  Before v275 any source's refresh moved it. `sources` lists only the sources these guides come
+  from, with `refreshed` (the app may show it).
 - The hashes mean nothing by themselves: **save them per playlist after a successful download,
   compare at the next start**. Equal: download nothing. Different: download only that part.
 - One answer per login is kept 10 s, so asking twice at start costs one computation.
@@ -160,8 +165,28 @@ guide records this login's channels use (by their own guide or an override), in 
 `/api/epg/epgdata/` rows, so the same decoder reads it. Use it instead of `/api/epg/epgdata/`
 whenever capabilities name it: ~1.5k rows instead of every guide record on the server.
 
+```
+GET /api/core/app-guide-marks/        (v275)
+```
+`{"guides": "77ab...", "marks": {"88213": "3fa09c1d", "88214": "0", ...}}` -- one short mark per
+guide of this login's channels (key: the guide record id as a string; `"0"`: no programmes).
+`guides` is the same stamp `app-sync` gives. **Save the marks with the stamp; when `guides`
+differs, ask for the marks and fetch only the guides whose mark changed** (or that are new):
+
+```
+GET /api/epg/grid/?epg_ids=88213,88219      (v275, capabilities "grid_epg_ids")
+```
+The usual grid (same window, same rows, same streaming), limited to those guide records:
+programmes of other guides, dummy-guide channels with another guide and channels without a guide
+are left out. An empty `epg_ids=` gives no programmes. Without the parameter the grid is
+unchanged. The answer has every programme of those guides in the window, so replace those
+channels' programmes with it. When most guides changed (a full re-import) one plain grid call is
+cheaper. Measured 2026-10-20: the whole grid is 41,000 programmes, 16 MB; one guide is a few
+dozen rows.
+
 On a server without `sync_url` (stock Dispatcharr, Dispatch More before v272) keep the
-time-based checks.
+time-based checks; without `guide_marks_url` (before v275) a changed `guides` means the whole
+grid.
 
 ## 2. The device ID (`X-Dispatch-Device`)
 

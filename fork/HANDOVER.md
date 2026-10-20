@@ -2265,6 +2265,13 @@ login nothing it cannot read already, and an app that never asks changes nothing
 the values, not `updated_at` (bulk `update()` skips `auto_now`); the lineup comes from
 `ChannelViewSet.get_queryset()` itself so it cannot drift from what the app downloads; one
 answer per login is kept 10 s. Tests: `test_app_sync.py`.
+**Per-guide marks** (v275): the `guides` stamp counts only the login's own guides (a refresh of
+an unused source moved it before, and the app downloaded the whole 24 h grid, 41k programmes,
+16 MB, several times an hour -- found exploring on the Shield 2026-10-20). `GET
+/api/core/app-guide-marks/` gives one mark per guide (`sha1(count:newest id)[:8]`, one grouped
+query, kept with the sync answer) and `/api/epg/grid/?epg_ids=` (`api_grid._parse_epg_ids`,
+applied after `_partition_visible_channels`, so a login still sees only its own channels) gives
+the programmes of the guides whose mark changed. Capabilities `guide_marks_url`, `grid_epg_ids`.
 
 **One arrTV device at a time** (v253, the socket message v254; `app_one_device.py`, contract
 `fork/arrTV-integration.md` §5a). The user asked (2026-10-16) for logins of their choosing to
@@ -2896,6 +2903,8 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   `/api/core/app-guide-links/` (§5.11, contract §1a). arrTV uses them from the commits on its
   `feature/upstream-picks` (not in a published arrTV yet). Next: the paced, on-screen-first guide
   loader, `fork/guide-loading-plan.md` step 3.
+- **v275 (2026-10-20)**: per-guide marks and the grid for some guides only (§5.11, contract
+  §1a): a source refresh or a Show Groups change no longer means the whole 24 h grid for arrTV.
 - **v274 (2026-10-20)**: the one command installs the matching Dispatcharr first on a machine
   without it (its "I understand" asked on the terminal); the recorder's unit has
   ConditionPathExists; uninstall stops its watcher too. Tested for real in a clean Debian 12

@@ -677,6 +677,9 @@ def capabilities(user=None):
         # records of this login's channels only. Read-only, so always offered.
         "sync_url": "/api/core/app-sync/",
         "guide_links_url": "/api/core/app-guide-links/",
+        # v275: a fingerprint per guide, and the grid's epg_ids= filter to fetch only those
+        "guide_marks_url": "/api/core/app-guide-marks/",
+        "grid_epg_ids": True,
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }
