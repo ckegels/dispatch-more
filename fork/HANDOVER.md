@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v274** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-21; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -13,7 +13,8 @@ The design of the first feature is in `docs/channel-switch-overlap.md`.
 > and installed, v270 published, v271 published (2026-10-18, the TiviBridge fix; install pending), v272 published (2026-10-20, the arrTV
 > start-up check: `fork/guide-loading-plan.md`), v273 published (2026-10-20: epgdata streamed, the
 > memory recorder -- §5.4c), v274 published (2026-10-20: the one command on a machine without
-> Dispatcharr, uninstall stops its watcher -- §4.4), arrTV arr.115 built and not published, and
+> Dispatcharr, uninstall stops its watcher -- §4.4), v275 published (2026-10-21: per-guide marks, the
+> grid for some guides only and with categories -- §5.11), arrTV arr.116 published with it, and
 > the upstream AerioTV ports on arrTV's `feature/upstream-picks` -- exactly what is on the branch and
 > what is still open. The 2026-10-02 handover below is history.
 >
@@ -2272,6 +2273,9 @@ an unused source moved it before, and the app downloaded the whole 24 h grid, 41
 query, kept with the sync answer) and `/api/epg/grid/?epg_ids=` (`api_grid._parse_epg_ids`,
 applied after `_partition_visible_channels`, so a login still sees only its own channels) gives
 the programmes of the guides whose mark changed. Capabilities `guide_marks_url`, `grid_epg_ids`.
+`?categories=1` (`api_grid._parse_categories`, v275) adds `categories` from
+`custom_properties` to each stored programme (capabilities `grid_categories`); without it the grid
+is byte for byte stock.
 
 **One arrTV device at a time** (v253, the socket message v254; `app_one_device.py`, contract
 `fork/arrTV-integration.md` §5a). The user asked (2026-10-16) for logins of their choosing to
@@ -2903,8 +2907,11 @@ Planned 2026-10-02 (the user's three asks, designs written, nothing built):
   `/api/core/app-guide-links/` (§5.11, contract §1a). arrTV uses them from the commits on its
   `feature/upstream-picks` (not in a published arrTV yet). Next: the paced, on-screen-first guide
   loader, `fork/guide-loading-plan.md` step 3.
-- **v275 (2026-10-20)**: per-guide marks and the grid for some guides only (§5.11, contract
+- **v275 (2026-10-21)**: per-guide marks and the grid for some guides only (§5.11, contract
   §1a): a source refresh or a Show Groups change no longer means the whole 24 h grid for arrTV.
+  The grid's `categories=1` gives each programme's categories (capabilities `grid_categories`):
+  arrTV no longer asks `/api/epg/programs/<id>/` once per airing programme. Published with
+  arrTV arr.116.
 - **v274 (2026-10-20)**: the one command installs the matching Dispatcharr first on a machine
   without it (its "I understand" asked on the terminal); the recorder's unit has
   ConditionPathExists; uninstall stops its watcher too. Tested for real in a clean Debian 12

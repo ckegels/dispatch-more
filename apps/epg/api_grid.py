@@ -292,10 +292,19 @@ def _premiere_text_value(raw):
     return str(raw)
 
 
-def _program_value_to_dict(p):
+def _parse_categories(params):
+    """
+    Dispatch More (arrTV): ?categories=1 adds each programme's categories. The bulk grid
+    leaves them out, so arrTV asked /api/epg/programs/<id>/ once per airing programme just to
+    tint the guide -- hundreds of requests at every launch. Not sent: the grid as before.
+    """
+    return str(params.get('categories') or '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _program_value_to_dict(p, categories=False):
     """Convert one annotated grid ``.values()`` row into a response dict."""
     premiere_text = _premiere_text_value(p.get('premiere_text'))
-    return {
+    row = {
         'id': p['id'],
         'start_time': p['start_time'],
         'end_time': p['end_time'],
@@ -310,9 +319,13 @@ def _program_value_to_dict(p):
         'is_premiere': bool(p.get('flag_premiere')),
         'is_finale': bool(premiere_text and 'finale' in premiere_text.lower()),
     }
+    if categories:
+        cats = p.get('categories')
+        row['categories'] = [str(c) for c in cats] if isinstance(cats, list) else []
+    return row
 
 
-def _iter_real_program_dicts(lookback, cutoff, epg_ids):
+def _iter_real_program_dicts(lookback, cutoff, epg_ids, categories=False):
     """Yield stored programs for the caller's visible, non-dummy EPG rows."""
     if not epg_ids:
         return
@@ -330,17 +343,19 @@ def _iter_real_program_dicts(lookback, cutoff, epg_ids):
             flag_live=KeyTransform('live', 'custom_properties'),
             flag_premiere=KeyTransform('premiere', 'custom_properties'),
             premiere_text=KeyTransform('premiere_text', 'custom_properties'),
+            **({'categories': KeyTransform('categories', 'custom_properties')} if categories else {}),
         )
         .values(
             'id', 'start_time', 'end_time', 'title', 'sub_title',
             'description', 'tvg_id',
             'season', 'episode',
             'flag_new', 'flag_live', 'flag_premiere', 'premiere_text',
+            *(('categories',) if categories else ()),
         )
         .iterator(chunk_size=_GRID_DB_ITERATOR_CHUNK_SIZE)
     )
     for row in programs_qs:
-        yield _program_value_to_dict(row)
+        yield _program_value_to_dict(row, categories)
 
 
 def _iter_dummy_for_channels(
@@ -422,6 +437,7 @@ def _iter_grid_json_chunks(
     epg_ids,
     dummy_custom_channels,
     no_epg_channels,
+    categories=False,
 ):
     """Yield UTF-8 chunks of ``{"data":[...]}`` without buffering every program."""
     yield b'{"data":['
@@ -433,7 +449,7 @@ def _iter_grid_json_chunks(
     dummy_start, dummy_days = _dummy_generation_span(now, lookback, cutoff)
 
     try:
-        for program in _iter_real_program_dicts(lookback, cutoff, epg_ids):
+        for program in _iter_real_program_dicts(lookback, cutoff, epg_ids, categories):
             batch.append(program)
             real_count += 1
             if len(batch) >= _GRID_JSON_YIELD_BATCH_SIZE:
@@ -616,6 +632,7 @@ class EPGGridAPIView(APIView):
                 epg_ids=epg_ids,
                 dummy_custom_channels=dummy_custom,
                 no_epg_channels=no_epg,
+                categories=_parse_categories(request.query_params),
             ),
             content_type='application/json',
             status=status.HTTP_200_OK,

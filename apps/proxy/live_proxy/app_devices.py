@@ -680,6 +680,8 @@ def capabilities(user=None):
         # v275: a fingerprint per guide, and the grid's epg_ids= filter to fetch only those
         "guide_marks_url": "/api/core/app-guide-marks/",
         "grid_epg_ids": True,
+        # v275: the grid's categories=1 (no request per programme for the guide's tints)
+        "grid_categories": True,
         "headers": {what: header[5:].replace("_", "-").title() for what, (header, _p) in HEADERS.items()},
         "query_parameters": {what: param for what, (_h, param) in HEADERS.items()},
     }

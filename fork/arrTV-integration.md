@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); other people in the house from v266, server rewind for every login from v269; v271: TiviBridge no longer starved by the picture compare; v272: the start-up check, §1a; v273: /api/epg/epgdata/ streamed (the same bytes, a few MB instead of ~130 MB per request); latest release v274) knows which
+that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); other people in the house from v266, server rewind for every login from v269; v271: TiviBridge no longer starved by the picture compare; v272: the start-up check, §1a; v273: /api/epg/epgdata/ streamed (the same bytes, a few MB instead of ~130 MB per request); v275: per-guide marks, the grid for some guides and with categories, §1a; latest release v275) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -183,6 +183,13 @@ unchanged. The answer has every programme of those guides in the window, so repl
 channels' programmes with it. When most guides changed (a full re-import) one plain grid call is
 cheaper. Measured 2026-10-20: the whole grid is 41,000 programmes, 16 MB; one guide is a few
 dozen rows.
+
+```
+GET /api/epg/grid/?categories=1      (v275, capabilities "grid_categories")
+```
+Each stored programme also carries `"categories": ["News", ...]` (`[]` when the guide has
+none), so no `/api/epg/programs/<id>/` per programme is needed for the guide's tints. Combines
+with `start`, `end` and `epg_ids`. Without it the grid is unchanged.
 
 On a server without `sync_url` (stock Dispatcharr, Dispatch More before v272) keep the
 time-based checks; without `guide_marks_url` (before v275) a changed `guides` means the whole

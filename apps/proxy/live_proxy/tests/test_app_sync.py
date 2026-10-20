@@ -249,6 +249,26 @@ class AppSyncTests(TestCase):
         capabilities = client.get("/api/core/capabilities/").json()
         self.assertEqual(capabilities["guide_marks_url"], MARKS)
         self.assertTrue(capabilities["grid_epg_ids"])
+        self.assertTrue(capabilities["grid_categories"])
+
+    def test_the_grid_gives_categories_only_when_asked(self):
+        now = timezone.now()
+        ProgramData.objects.create(
+            epg=self.zdf, title="heute", start_time=now, end_time=now + timedelta(minutes=20),
+            custom_properties={"categories": ["News", "Magazine"]},
+        )
+        client = APIClient()
+        client.force_authenticate(user=self.alice)
+
+        def rows(query):
+            response = client.get("/api/epg/grid/" + query)
+            body = b"".join(response.streaming_content) if response.streaming else response.content
+            return {p.get("title"): p for p in __import__("json").loads(body)["data"]}
+
+        self.assertNotIn("categories", rows(f"?epg_ids={self.zdf.id}")["heute"])
+        with_categories = rows(f"?epg_ids={self.zdf.id},{self.ard.id}&categories=1")
+        self.assertEqual(with_categories["heute"]["categories"], ["News", "Magazine"])
+        self.assertEqual(with_categories["Tagesschau"]["categories"], [])
 
     def test_the_grid_gives_only_the_guides_asked_for(self):
         now = timezone.now()
