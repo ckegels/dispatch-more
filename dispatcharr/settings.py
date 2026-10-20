@@ -146,6 +146,8 @@ ATOMIC_REQUESTS = False
 REQUESTS_TIMEOUT = 30  # Seconds for external API requests
 
 MIDDLEWARE = [
+    # Dispatch More: requests in flight per worker for the memory recorder; nothing while it is off
+    "apps.proxy.live_proxy.inflight.InflightMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

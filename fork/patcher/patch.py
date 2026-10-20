@@ -159,7 +159,7 @@ def install(app, state, package, layout, force=False):
 
     # What uninstalling needs, kept where the page's request and the watcher can find it
     for script in ("install.sh", "uninstall.sh", "docker-entrypoint.sh", "patch.py", "manifest.json",
-                   "dvr-worker.sh", "captions.sh"):
+                   "dvr-worker.sh", "captions.sh", "memory-recorder.sh"):
         source, kept = os.path.join(package, script), os.path.join(state, script)
         # In Docker the release is unpacked in the state folder itself: nothing to copy then
         if os.path.exists(source) and os.path.abspath(source) != os.path.abspath(kept):

@@ -136,7 +136,9 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
 - **Channel health** — what each running channel plays, from where, to whom, and how stopped
   ones ended.
 - **Logs** — every log Dispatcharr writes, filtered and downloadable.
-- **Memory** — how much memory each part of Dispatcharr uses.
+- **Memory** — how much memory each part of Dispatcharr uses, and (switched on) a **history**
+  kept on disk for 14 days, through reboots and crashes: a chart with what happened marked on
+  it, and for any moment every process and what each web worker was doing.
 
 ### And more
 

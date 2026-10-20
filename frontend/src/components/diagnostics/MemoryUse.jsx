@@ -5,12 +5,14 @@ import {
   Button,
   Group,
   Loader,
+  SegmentedControl,
   Stack,
   Table,
   Text,
 } from '@mantine/core';
 import { Copy, RefreshCw } from 'lucide-react';
 import API from '../../api';
+import MemoryHistory from './MemoryHistory';
 
 // Every Dispatcharr process and the memory it really holds (shared pages divided among the
 // processes sharing them), and which ones have the language model's libraries loaded. Read
@@ -34,7 +36,7 @@ export const memoryAsText = (found) =>
     ),
   ].join('\n');
 
-const MemoryUse = ({ onCopy, copied }) => {
+const MemoryNow = ({ onCopy, copied }) => {
   const [found, setFound] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -148,6 +150,26 @@ const MemoryUse = ({ onCopy, copied }) => {
           ))}
         </Table.Tbody>
       </Table>
+    </Stack>
+  );
+};
+
+// Now: the processes as they are. History: what the memory recorder kept, through reboots.
+const MemoryUse = ({ onCopy, copied }) => {
+  const [view, setView] = useState('now');
+  return (
+    <Stack gap="sm">
+      <SegmentedControl
+        size="xs"
+        value={view}
+        onChange={setView}
+        data={[
+          { value: 'now', label: 'Now' },
+          { value: 'history', label: 'History' },
+        ]}
+        style={{ alignSelf: 'flex-start' }}
+      />
+      {view === 'now' ? <MemoryNow onCopy={onCopy} copied={copied} /> : <MemoryHistory />}
     </Stack>
   );
 };

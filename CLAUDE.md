@@ -75,7 +75,8 @@ the mistakes not to repeat.
   command). Only the `fork-*` workflow is enabled there; upstream's are disabled on purpose.
 - `docs/channel-switch-overlap.md` — design of the first feature.
 - Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health,
-  diagnostics, and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
+  diagnostics with the memory recorder -- memory_recorder.py runs apart as a service of its own
+  (`fork/patcher/memory-recorder.sh`), inflight.py, memory_history.py -- and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
   app_alternatives, app_guides, app_one_device, app_links, app_sync) and `apps/channels/` (logo_library, channel_manager,
   pairings, guide_manager, guide_layout, epg_grabber, stream_check, show_groups/,
   subtitles, captions/ -- the caption worker runs apart, in its own venv or container).

@@ -12,3 +12,9 @@ class LiveProxyConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'apps.proxy.live_proxy'
     verbose_name = "Live Stream Proxy"
+
+    def ready(self):
+        # Dispatch More: Celery tasks in flight for the memory recorder (inflight.py)
+        from . import inflight
+
+        inflight.connect_celery()

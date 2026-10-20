@@ -351,6 +351,34 @@ worker only when no worker answers a 1 s ping); `meaning_index._index` keeps onl
 `channel_top` in memory; the comparison judges only the page shown for "All". Open: moving
 the Lineup's encoding out of the web workers -- wait for the tab's numbers first.
 
+**The memory recorder** (v273; `memory_recorder.py`, `memory_history.py`, `inflight.py`,
+`fork/patcher/memory-recorder.sh`, `MemoryHistory.jsx`). Asked for after that freeze: "a memory
+recorder that logs all things so we can catch it the next time ... survives reboots ... see
+previous info after reboots and crashes" on the Memory tab. A process of its own -- systemd
+`<slug>-memory.service` (Restart=always, enabled for boot, as Dispatcharr's user) on Linux/LXC,
+a restart loop started by `docker-entrypoint.sh` on Docker -- never a thread in a web worker,
+which is what freezes; plain Python on /proc and /sys only (no Django, database or Redis
+client: Redis is asked over a raw socket with a 2 s cap and a slow answer is recorded). Every
+30 s, every 5 s for 2 minutes after something alarming (container +300 MB, Redis >= 500 ms or
+no answer, PSI full >= 5 %, a process >= 500 MB in `D`): machine and container memory, swap,
+cgroup events (oom, max), PSI, load, every Dispatcharr process (kind, RSS, PSS -- not read from
+a `D` process, whose memory map can block the reader --, swap, state, threads, CPU, start), the 5
+largest other processes, Redis, and what each process was doing: `InflightMiddleware` (first in
+MIDDLEWARE) and Celery's task signals keep requests/tasks in flight per process (a stream until
+its last chunk) and a greenlet writes them every 5 s to `/dev/shm/dispatch-more-inflight/<pid>.json`;
+a worker that is stuck stops writing, so the file's age is the sign and its contents what it
+was doing. One JSON line per sample, flushed and fsync'd, in `/data/memory-history/YYYY-MM-DD.jsonl`
+(UTC), finished days gzipped, 14 days / 500 MB kept; a torn last line is skipped. Off unless
+the flag file `on` exists (the tab's switch; off is stock: the service only checks the flag, the
+middleware does one attribute read). The tab: Now | History; History has the switch, 1 h-14
+days, a chart (in use, Dispatcharr's processes, the largest process, the limit) with events
+(reboot = boot id changed, gap = no record for > 3 intervals: the server or the recorder stopped,
+a web worker that ended and what it held, a jump of 1 GB in 5 min, a slow Redis, a stuck
+process), a click opens that moment in full, and Download gives the raw files.
+`/proxy/diagnostics/memory/history/` (GET ?hours, POST {on}), `.../moment/?t=`, `.../download/`.
+Uninstall removes the service and keeps the history. Tests: `test_memory_recorder.py`,
+`MemoryHistory.test.jsx`, test-patcher.sh "The memory recorder".
+
 **8 GB and a frozen container, 2026-10-20 (v273: `/api/epg/epgdata/` streamed).** The user's
 LXC (145, 8 GB) froze at 100 %: one uWSGI worker at 6 GB after 45 h, Redis answering in seconds
 from 17:50 (slowlog: a SET of 2.3 s), every request 499/504 from 18:28, workers in `D` state.

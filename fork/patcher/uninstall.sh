@@ -60,6 +60,8 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
   rm -f "$STATE/dvr-worker-off"
   # The caption worker, its models and the watcher for the Subtitles tab's requests (captions.sh)
   [ -f "$STATE/captions.sh" ] && bash "$STATE/captions.sh" remove "$STATE" "$SLUG" "$APP" all || true
+  # The memory recorder's service; its history in /data/memory-history stays (memory-recorder.sh)
+  [ -f "$STATE/memory-recorder.sh" ] && bash "$STATE/memory-recorder.sh" remove "$STATE" "$SLUG" || true
   systemctl disable "$SLUG-uninstall.path" --no-block >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$SLUG-uninstall.path" "/etc/systemd/system/$SLUG-uninstall.service"
   systemctl daemon-reload || true

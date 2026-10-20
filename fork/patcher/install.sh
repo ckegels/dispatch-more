@@ -97,6 +97,10 @@ UNIT
   # Nothing is installed until someone asks.
   bash "$HERE/captions.sh" watch "$STATE" "$SLUG" "$APP" || echo "Note: the captions watcher could not be set up."
 
+  # The memory recorder, a service of its own so it keeps writing when the web workers are
+  # stuck (memory-recorder.sh); it records only once switched on, on Diagnostics -> Memory.
+  bash "$HERE/memory-recorder.sh" add "$STATE" "$SLUG" "$APP" || echo "Note: the memory recorder could not be added."
+
   # Diagnostics -> Logs reads the systemd journal; the user Dispatcharr runs as needs to be in
   # the systemd-journal group for that (root needs nothing). Noted, so uninstalling undoes it.
   RUNS_AS="$(systemctl show dispatcharr -p User --value 2>/dev/null || true)"

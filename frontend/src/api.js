@@ -2708,6 +2708,40 @@ export default class API {
     return await request(`${host}/proxy/diagnostics/memory/`);
   }
 
+  // The memory recorder's history (Diagnostics → Memory → History): chart points and events
+  static async getMemoryHistory(hours) {
+    return await request(`${host}/proxy/diagnostics/memory/history/?hours=${hours}`);
+  }
+
+  static async setMemoryRecorder(on) {
+    return await request(`${host}/proxy/diagnostics/memory/history/`, {
+      method: 'POST',
+      body: { on },
+    });
+  }
+
+  // One recorded moment in full: every process and what each worker was doing
+  static async getMemoryMoment(t) {
+    return await request(`${host}/proxy/diagnostics/memory/history/moment/?t=${t}`);
+  }
+
+  // The recorder's raw files as a zip, saved by the browser
+  static async downloadMemoryHistory(hours, filename) {
+    const query = hours ? `?hours=${hours}` : '';
+    const response = await request(
+      `${host}/proxy/diagnostics/memory/history/download/${query}`,
+      { raw: true }
+    );
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   static async getDiagnostics() {
     // Channel starts and Channel Switch Overlap activity for the Diagnostics page
     try {

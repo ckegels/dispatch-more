@@ -286,3 +286,55 @@ def diagnostics_memory(request):
     from . import memory
 
     return JsonResponse(memory.snapshot())
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
+def diagnostics_memory_history(request):
+    """
+    The memory recorder's history (memory_history.py): GET ?hours=N the chart's points and the
+    events of the last N hours (1 to 14 days); POST {"on": true|false} switches the recorder.
+    """
+    from . import memory_history
+
+    if request.method == "POST":
+        memory_history.switch(bool((request.data or {}).get("on")))
+    try:
+        hours = min(max(float(request.GET.get("hours", 24)), 0.25), 24 * memory_history.KEEP_DAYS)
+    except ValueError:
+        hours = 24
+    return JsonResponse(memory_history.overview(hours))
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def diagnostics_memory_moment(request):
+    """One recorded sample in full (?t=epoch seconds): every process, what each worker did."""
+    from . import memory_history
+
+    try:
+        t = float(request.GET.get("t", ""))
+    except ValueError:
+        return JsonResponse({"error": "t must be a time in seconds"}, status=400)
+    record = memory_history.at(t)
+    if record is None:
+        return JsonResponse({"error": "Nothing was recorded around that time"}, status=404)
+    return JsonResponse(record)
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def diagnostics_memory_download(request):
+    """The recorder's raw files as a zip (?hours=N for the days touching the last N hours)."""
+    from django.http import HttpResponse
+
+    from . import memory_history
+
+    try:
+        hours = float(request.GET["hours"]) if request.GET.get("hours") else None
+    except ValueError:
+        hours = None
+    response = HttpResponse(memory_history.archive(hours), content_type="application/zip")
+    stamp = time.strftime("%Y%m%d-%H%M", time.gmtime())
+    response["Content-Disposition"] = f'attachment; filename="dispatch-more-memory-{stamp}.zip"'
+    return response

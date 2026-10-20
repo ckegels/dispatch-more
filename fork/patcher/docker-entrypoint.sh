@@ -20,5 +20,8 @@ if [ -f "$STATE/uninstalled" ]; then
   echo "Dispatch More: uninstalled, starting stock Dispatcharr."
 elif ! STATE="$STATE" DISPATCH_MORE_VIA=entrypoint bash "$STATE/install.sh" --docker --app "$APP"; then
   echo "Dispatch More: not applied (see above), starting stock Dispatcharr."
+elif [ -f "$STATE/memory-recorder.sh" ]; then
+  # The memory recorder, outside Dispatcharr's own processes (Diagnostics -> Memory -> History)
+  bash "$STATE/memory-recorder.sh" docker "$STATE" "$APP" || true
 fi
 exec "$ORIGINAL" "$@"

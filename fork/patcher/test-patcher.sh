@@ -175,6 +175,30 @@ out="$(dvr remove)"
 check "removed, nothing of it is left" \
   "[ ! -e '$UNITS/dispatcharr-celery-dvr.service' ] && [ ! -e '$UNITS/dispatcharr-celery.service.d' ] && [ ! -e '$T/dvr-state/dvr-worker' ]"
 
+echo "The memory recorder (memory-recorder.sh, against a pretend systemd):"
+MEM="$T/mem-state"; MEMFAKE="$T/memfake"; MEMAPP="$T/memapp"; mkdir -p "$MEM" "$MEMFAKE" "$MEMAPP/.venv/bin"
+printf '#!/bin/bash\nexit 0\n' > "$MEMAPP/.venv/bin/python"; chmod +x "$MEMAPP/.venv/bin/python"
+cat > "$MEMFAKE/systemctl" <<FAKE
+#!/bin/bash
+echo "\$*" >> "$T/memctl.log"
+[ "\$1" = show ] && [ "\$3" = "-p" ] && [ "\$4" = User ] && echo "$(id -un)"
+exit 0
+FAKE
+chmod +x "$MEMFAKE/systemctl"
+mem() { PATH="$MEMFAKE:$PATH" SYSTEMD_DIR="$UNITS" MEMORY_HISTORY_DIR="$T/history" bash "$REPO/fork/patcher/memory-recorder.sh" "$@" 2>&1; }
+out="$(mem add "$MEM" "$SLUG" "$MEMAPP")"
+check "a service of its own, running the recorder from the install's Python as Dispatcharr's user" \
+  "grep -q '^ExecStart=$MEMAPP/.venv/bin/python $MEMAPP/apps/proxy/live_proxy/memory_recorder.py --dir $T/history$' '$UNITS/$SLUG-memory.service' && grep -q '^User=$(id -un)$' '$UNITS/$SLUG-memory.service' && grep -q '^Restart=always$' '$UNITS/$SLUG-memory.service'"
+check "...enabled for every boot and started" \
+  "grep -q 'enable $SLUG-memory.service' '$T/memctl.log' && grep -q 'restart $SLUG-memory.service' '$T/memctl.log' && grep -q '^WantedBy=multi-user.target$' '$UNITS/$SLUG-memory.service'"
+check "...its history folder there and the web app's to switch" "[ -d '$T/history' ] && [ \"\$(stat -c %U '$T/history')\" = '$(id -un)' ]"
+echo '{"t": 1}' > "$T/history/2026-10-20.jsonl"
+out="$(mem remove "$MEM" "$SLUG")"
+check "removed, the service goes and the history stays" \
+  "[ ! -e '$UNITS/$SLUG-memory.service' ] && grep -q 'disable --now $SLUG-memory.service' '$T/memctl.log' && [ -f '$T/history/2026-10-20.jsonl' ] && [ ! -e '$MEM/memory-recorder' ]"
+out="$(mem remove "$MEM" "$SLUG")"
+check "...and removing it twice is no error" "echo \"\$out\" | grep -qv 'rror'"
+
 echo "The caption worker (captions.sh, against a pretend systemd, pip and card):"
 CAP="$T/cap-state"; mkdir -p "$CAP/requests" "$T/models" "$T/capapp/apps/channels/captions"
 touch "$T/capapp/apps/channels/captions/worker.py"
