@@ -1,10 +1,13 @@
 # Plan: a calm cold start (guide loading, memory, start-up check) -- 2026-10-20
 
-Status: **steps 1 and 2 built, not released** (server `app_sync`, v272 to be; arrTV
-`3db81656`, `f380951f`, `71528a90` on `feature/upstream-picks`). Step 3 (the paced loader) next. Agreed with the user: no download at start (for every
-install, including existing ones, and whatever the background refresh option says); instead
-one small check at start that compares the app's cache with Dispatch More, and only what
-changed is fetched, slowly, one thing at a time.
+Status (2026-10-20 evening): server S1+S2 published (v272), epgdata streamed (v273, the root
+cause of the 8 GB freeze). arrTV on `feature/upstream-picks`, not pushed or released:
+`3db81656` enrich writes only changed rows, `f380951f` streamed JSON decode, `71528a90` start-up
+check + guide links + quiet background job, `116532be` one rebuild at a time (A3 "no duplicates"),
+`a5396191` GuideWorkGate (A3 pacing: tune + heap), `cdc680b8` first view now-1 h..+2 h. Not yet:
+A3 on-screen/group-first beyond the first view and grid slices (measure first: after the pieces
+above a group switch already shows now..+2 h at once), S3, S4. Next: measure on the Google TV with
+v273 on the server.
 
 ## 1. What was measured (Google TV / Chromecast HD, 1.4 GB, real ArrTV arr.115, your account)
 
