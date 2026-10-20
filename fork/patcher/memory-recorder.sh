@@ -42,6 +42,8 @@ add() {
 [Unit]
 Description=$slug memory recorder (Diagnostics > Memory > History)
 After=network.target
+# Not started at all once the file is gone (an uninstall stopped halfway): never a restart loop
+ConditionPathExists=$app/apps/proxy/live_proxy/memory_recorder.py
 
 [Service]
 Type=simple
