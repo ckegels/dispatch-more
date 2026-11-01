@@ -84,8 +84,7 @@ const RecordingCard = ({
   const showVideo = useVideoStore((s) => s.showVideo);
   const fetchRecordings = useChannelsStore((s) => s.fetchRecordings);
   const { toUserTime, userNow } = useTimeHelpers();
-  const { timeFormat: timeformat, dateFormat: dateformat } =
-    useDateTimeFormat();
+  const { timeFormat: timeformat, dateYearFormat } = useDateTimeFormat();
 
   const channel = channelProp;
 
@@ -512,7 +511,7 @@ const RecordingCard = ({
               {isSeriesGroup ? 'Next recording' : 'Time'}
             </Text>
             <Text size="sm">
-              {format(start, `${dateformat}, YYYY ${timeformat}`)} –{' '}
+              {format(start, `${dateYearFormat} ${timeformat}`)} –{' '}
               {format(end, timeformat)}
             </Text>
           </Group>

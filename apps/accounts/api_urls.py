@@ -5,6 +5,8 @@ from .api_views import (
     UserViewSet,
     GroupViewSet,
     APIKeyViewSet,
+    UserAppDataCollectionView,
+    UserAppDataKeyView,
     TokenObtainPairView,
     TokenRefreshView,
     list_permissions,
@@ -23,12 +25,17 @@ router.register(r"api-keys", APIKeyViewSet, basename="api-key")
 # 🔹 Custom Authentication Endpoints
 auth_view = AuthViewSet.as_view({"post": "login"})
 
+proxy_login_view = AuthViewSet.as_view({"post": "proxy_login"})
+
 logout_view = AuthViewSet.as_view({"post": "logout"})
 
-# 🔹 Define API URL patterns
+# App-data routes sit ahead of the users router so /me/app-data/ is not
+# treated as a user pk. Collection and key use separate views so OpenAPI
+# only advertises the methods each path actually supports.
 urlpatterns = [
     # Authentication
     path("auth/login/", auth_view, name="user-login"),
+    path("auth/proxy-login/", proxy_login_view, name="user-proxy-login"),
     path("auth/logout/", logout_view, name="user-logout"),
     # Superuser API
     path("initialize-superuser/", initialize_superuser, name="initialize_superuser"),
@@ -36,6 +43,27 @@ urlpatterns = [
     path("permissions/", list_permissions, name="list-permissions"),
     path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    # Per-app user storage (owner or admin)
+    path(
+        "users/me/app-data/",
+        UserAppDataCollectionView.as_view(),
+        name="user-app-data-me",
+    ),
+    path(
+        "users/me/app-data/<str:key>/",
+        UserAppDataKeyView.as_view(),
+        name="user-app-data-me-key",
+    ),
+    path(
+        "users/<int:user_id>/app-data/",
+        UserAppDataCollectionView.as_view(),
+        name="user-app-data",
+    ),
+    path(
+        "users/<int:user_id>/app-data/<str:key>/",
+        UserAppDataKeyView.as_view(),
+        name="user-app-data-key",
+    ),
 ]
 
 # 🔹 Include ViewSet routes

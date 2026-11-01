@@ -3,8 +3,12 @@
 from django.test import TestCase
 from unittest.mock import patch
 
+from redis.exceptions import WatchError
+
 from apps.m3u.connection_pool import (
-    extract_credentials_from_stream_url,
+    RELEASE_MAX_ATTEMPTS,
+    extract_short_form_xc_credentials,
+    extract_typed_xc_credentials,
     get_credential_connection_count,
     get_enforced_server_group_for_profile,
     get_profile_connection_count,
@@ -26,6 +30,7 @@ class FakeRedis:
 
     def __init__(self):
         self._data = {}
+        self._hashes = {}
 
     def get(self, key):
         val = self._data.get(key)
@@ -41,6 +46,11 @@ class FakeRedis:
         except (ValueError, TypeError):
             self._data[key] = value
 
+    def getdel(self, key):
+        value = self.get(key)
+        self._data.pop(key, None)
+        return value
+
     def incr(self, key):
         self._data[key] = self._data.get(key, 0) + 1
         return self._data[key]
@@ -51,6 +61,27 @@ class FakeRedis:
 
     def delete(self, key):
         self._data.pop(key, None)
+        self._hashes.pop(key, None)
+
+    def hget(self, key, field):
+        return self._hashes.get(key, {}).get(field)
+
+    def hset(self, key, mapping=None, **kwargs):
+        bucket = self._hashes.setdefault(key, {})
+        if mapping:
+            bucket.update(mapping)
+        bucket.update(kwargs)
+
+    def hdel(self, key, *fields):
+        bucket = self._hashes.get(key)
+        if not bucket:
+            return 0
+        removed = 0
+        for field in fields:
+            if field in bucket:
+                del bucket[field]
+                removed += 1
+        return removed
 
     def pipeline(self):
         return FakeRedisPipeline(self)
@@ -60,6 +91,28 @@ class FakeRedisPipeline:
     def __init__(self, redis):
         self.redis = redis
         self._ops = []
+        self._watched = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._ops = []
+        self._watched = {}
+
+    def watch(self, *keys):
+        for key in keys:
+            self._watched[key] = self.redis.get(key)
+
+    def get(self, key):
+        return self.redis.get(key)
+
+    def multi(self):
+        pass
+
+    def delete(self, key):
+        self._ops.append(("delete", key))
+        return self
 
     def decr(self, key):
         self._ops.append(("decr", key))
@@ -74,6 +127,8 @@ class FakeRedisPipeline:
         return self
 
     def execute(self):
+        if any(self.redis.get(key) != value for key, value in self._watched.items()):
+            raise WatchError()
         for op in self._ops:
             if op[0] == "decr":
                 self.redis.decr(op[1])
@@ -81,15 +136,243 @@ class FakeRedisPipeline:
                 self.redis.incr(op[1])
             elif op[0] == "set":
                 self.redis.set(op[1], op[2])
+            elif op[0] == "delete":
+                self.redis.delete(op[1])
         self._ops = []
 
 
 class ExtractCredentialsTests(TestCase):
-    def test_extract_credentials_from_xc_style_url(self):
+    def test_extract_typed_xc_credentials(self):
         url = "http://example.com/live/alice/secret123/99999.ts"
-        user, password = extract_credentials_from_stream_url(url)
+        user, password = extract_typed_xc_credentials(url)
         self.assertEqual(user, "alice")
         self.assertEqual(password, "secret123")
+
+    def test_extract_short_form_xc_credentials(self):
+        """Short-form stream URLs embed creds as /user/pass/streamId."""
+        cases = [
+            "https://provider.example/alice/secret123/99999",
+            "https://provider.example/alice/secret123/99999.ts",
+            "http://host:8080/alice/secret123/42.m3u8",
+            "https://provider.example/alice/secret123/99999?token=abc",
+            # M3U providers may use non-numeric ids and uncommon extensions.
+            "https://provider.example/alice/secret123/channel-abc",
+            "https://provider.example/alice/secret123/espn1",
+            "https://provider.example/alice/secret123/99999.flv",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                user, password = extract_short_form_xc_credentials(url)
+                self.assertEqual(user, "alice")
+                self.assertEqual(password, "secret123")
+
+    def test_extract_short_form_rejects_ambiguous_paths(self):
+        """Reject non-short-form paths and XC/panel roots used as the first segment."""
+        rejected = [
+            "https://cdn.example.com/a/b/c/12345.ts",
+            "https://provider.example/live/alice/99999",
+            "https://provider.example/movie/alice/99999.mkv",
+            # Empty path segments (trailing slash or "//") are not collapsed.
+            "https://provider.example/alice/secret123/99999/",
+            "https://provider.example/alice/secret123/99999.ts/",
+            "https://provider.example/alice/secret123/",
+            "https://provider.example//alice/secret123/99999",
+            "https://provider.example/alice//secret123/99999",
+            "",
+            None,
+        ]
+        for url in rejected:
+            with self.subTest(url=url):
+                user, password = extract_short_form_xc_credentials(url)
+                self.assertEqual((user, password), (None, None))
+
+
+class ShortFormServerGroupPoolTests(TestCase):
+    """
+    STD M3U accounts whose provider uses short-form Xtream URLs
+    (/user/pass/id, no /live/ segment) must still participate in ServerGroup
+    credential pooling when a stream limit is set.
+    """
+
+    def setUp(self):
+        from apps.channels.models import Stream
+
+        self.Stream = Stream
+        self.redis = FakeRedis()
+        self.group = ServerGroup.objects.create(name="short-form-pool")
+
+    def _std_account_with_short_form_stream(
+        self, name, url, *, max_streams=2, username="", password=""
+    ):
+        account = M3UAccount.objects.create(
+            name=name,
+            account_type="STD",
+            username=username,
+            password=password,
+            server_group=self.group,
+            max_streams=5,
+        )
+        profile = M3UAccountProfile.objects.get(m3u_account=account, is_default=True)
+        profile.max_streams = max_streams
+        profile.save()
+        self.Stream.objects.create(
+            name=f"{name}-stream",
+            url=url,
+            m3u_account=account,
+        )
+        return account, profile
+
+    def test_std_short_form_url_with_limit_reserves_in_server_group(self):
+        """
+        Reproduction for the short-form ServerGroup regression: an STD account
+        with no account-level username/password, short-form stream URLs, a
+        ServerGroup assignment, and max_streams > 0 must be able to reserve.
+        """
+        _account, profile = self._std_account_with_short_form_stream(
+            "Short Form STD",
+            "https://provider.example/alice/secret123/99999",
+            max_streams=2,
+        )
+
+        fingerprint = get_profile_credential_fingerprint(profile)
+        self.assertIsNotNone(fingerprint)
+        self.assertTrue(group_has_capacity_for_profile(profile, self.redis))
+
+        reserved, count, reason = reserve_profile_slot(profile, self.redis)
+        self.assertTrue(reserved, f"expected reserve to succeed, got reason={reason}")
+        self.assertIsNone(reason)
+        self.assertEqual(count, 1)
+        self.assertEqual(get_credential_connection_count(profile, self.redis), 1)
+
+        # Limit is 2, so a second stream on the same login still fits.
+        reserved_again, count_again, reason_again = reserve_profile_slot(
+            profile, self.redis
+        )
+        self.assertTrue(reserved_again)
+        self.assertIsNone(reason_again)
+        self.assertEqual(count_again, 2)
+        self.assertEqual(get_credential_connection_count(profile, self.redis), 2)
+
+        self.assertTrue(release_profile_slot(profile.id, self.redis))
+        self.assertEqual(get_credential_connection_count(profile, self.redis), 1)
+        self.assertEqual(get_profile_connection_count(profile, self.redis), 1)
+
+    def test_std_short_form_accounts_share_credential_pool(self):
+        """Two STD accounts with the same short-form login share one group limit."""
+        _a1, profile1 = self._std_account_with_short_form_stream(
+            "STD A",
+            "https://provider.example/alice/secret123/111",
+            max_streams=1,
+        )
+        _a2, profile2 = self._std_account_with_short_form_stream(
+            "STD B",
+            "https://provider.example/alice/secret123/222.ts",
+            max_streams=1,
+        )
+
+        self.assertEqual(
+            get_profile_credential_fingerprint(profile1),
+            get_profile_credential_fingerprint(profile2),
+        )
+
+        self.assertTrue(reserve_profile_slot(profile1, self.redis)[0])
+        reserved2, _, reason2 = reserve_profile_slot(profile2, self.redis)
+        self.assertFalse(reserved2)
+        self.assertEqual(reason2, "credential_full")
+        self.assertFalse(group_has_capacity_for_profile(profile2, self.redis))
+
+    def test_different_short_form_logins_do_not_share_a_pool(self):
+        """Same group, different /user/pass/id logins, keep independent limits."""
+        _a1, profile1 = self._std_account_with_short_form_stream(
+            "STD Alice",
+            "https://provider.example/alice/secret123/111",
+            max_streams=1,
+        )
+        _a2, profile2 = self._std_account_with_short_form_stream(
+            "STD Bob",
+            "https://provider.example/bob/otherpass/111",
+            max_streams=1,
+        )
+
+        self.assertNotEqual(
+            get_profile_credential_fingerprint(profile1),
+            get_profile_credential_fingerprint(profile2),
+        )
+        self.assertTrue(reserve_profile_slot(profile1, self.redis)[0])
+        reserved2, _, reason2 = reserve_profile_slot(profile2, self.redis)
+        self.assertTrue(reserved2)
+        self.assertIsNone(reason2)
+
+    def test_account_credentials_preferred_over_short_form_url(self):
+        """
+        Explicit STD username/password beat a short-form URL that carries a
+        different login. An XC account with the same stored login must share
+        that pool, which is what keeps XC+STD ServerGroup pairing intact.
+        """
+        from apps.m3u.connection_pool import compute_credential_fingerprint
+
+        _account, profile = self._std_account_with_short_form_stream(
+            "STD With Stored Login",
+            "https://provider.example/urluser/urlpass/99999",
+            max_streams=1,
+            username="realuser",
+            password="realpass",
+        )
+        xc = M3UAccount.objects.create(
+            name="Matching XC",
+            account_type="XC",
+            username="realuser",
+            password="realpass",
+            server_url="http://xc.example.com",
+            server_group=self.group,
+            max_streams=5,
+        )
+        xc_profile = M3UAccountProfile.objects.get(m3u_account=xc, is_default=True)
+        xc_profile.max_streams = 1
+        xc_profile.save()
+
+        fingerprint = get_profile_credential_fingerprint(profile)
+        self.assertEqual(fingerprint, compute_credential_fingerprint("realuser", "realpass"))
+        self.assertNotEqual(
+            fingerprint, compute_credential_fingerprint("urluser", "urlpass")
+        )
+        self.assertEqual(fingerprint, get_profile_credential_fingerprint(xc_profile))
+
+        self.assertTrue(reserve_profile_slot(profile, self.redis)[0])
+        reserved_xc, _, reason = reserve_profile_slot(xc_profile, self.redis)
+        self.assertFalse(reserved_xc)
+        self.assertEqual(reason, "credential_full")
+
+    def test_profile_rewrite_is_fingerprinted_and_failed_rewrite_fails_closed(self):
+        """
+        STD playback uses the rewritten stream URL, so the pool fingerprint
+        follows that rewrite. A pattern that does not match must not fall
+        back to the raw URL.
+        """
+        from apps.m3u.connection_pool import compute_credential_fingerprint
+
+        _account, profile = self._std_account_with_short_form_stream(
+            "Rewritten STD",
+            "https://provider.example/alice/secret123/99999",
+            max_streams=1,
+        )
+        profile.search_pattern = "alice/secret123"
+        profile.replace_pattern = "bob/otherpass"
+        profile.save()
+
+        self.assertEqual(
+            get_profile_credential_fingerprint(profile),
+            compute_credential_fingerprint("bob", "otherpass"),
+        )
+        self.assertTrue(reserve_profile_slot(profile, self.redis)[0])
+
+        profile.search_pattern = "no/match/here"
+        profile.replace_pattern = "bob/otherpass"
+        profile.save()
+        self.assertIsNone(get_profile_credential_fingerprint(profile))
+        reserved, _, reason = reserve_profile_slot(profile, FakeRedis())
+        self.assertFalse(reserved)
+        self.assertEqual(reason, "credential_full")
 
 
 class ManualServerGroupTests(TestCase):
@@ -214,6 +497,102 @@ class PoolEnforcementTests(TestCase):
         release_profile_slot(self.profile.id, self.redis)
         self.assertEqual(self.redis._data[cred_key], 0)
         self.assertEqual(self.redis._data[profile_key], 0)
+
+    def test_releasing_concurrent_streams_returns_both_counters_to_zero(self):
+        self.profile.max_streams = 4
+        cred_key = server_group_connections_key(
+            self.group.id, get_profile_credential_fingerprint(self.profile)
+        )
+        profile_key = profile_connections_key(self.profile.id)
+        release_key = profile_credential_release_key(self.profile.id)
+
+        for _ in range(3):
+            for count in range(1, 5):
+                self.assertEqual(
+                    reserve_profile_slot(self.profile, self.redis),
+                    (True, count, None),
+                )
+            self.assertFalse(reserve_profile_slot(self.profile, self.redis)[0])
+
+            for remaining in range(3, -1, -1):
+                release_profile_slot(self.profile.id, self.redis)
+                self.assertEqual(int(self.redis.get(profile_key)), remaining)
+                self.assertEqual(int(self.redis.get(cred_key)), remaining)
+                self.assertEqual(self.redis.get(release_key) is not None, remaining > 0)
+
+            release_profile_slot(self.profile.id, self.redis)
+            self.assertEqual(int(self.redis.get(profile_key)), 0)
+            self.assertEqual(int(self.redis.get(cred_key)), 0)
+            self.assertTrue(pool_has_capacity_for_profile(self.profile, self.redis))
+
+    def test_release_retries_when_another_stream_stops_before_commit(self):
+        self.profile.max_streams = 4
+        for _ in range(2):
+            self.assertTrue(reserve_profile_slot(self.profile, self.redis)[0])
+        original_pipeline = self.redis.pipeline
+        interrupted = False
+
+        def pipeline_with_teardown():
+            pipe = original_pipeline()
+            original_execute = pipe.execute
+
+            def execute():
+                nonlocal interrupted
+                if not interrupted:
+                    interrupted = True
+                    release_profile_slot(self.profile.id, self.redis)
+                return original_execute()
+
+            pipe.execute = execute
+            return pipe
+
+        with patch.object(self.redis, "pipeline", side_effect=pipeline_with_teardown):
+            release_profile_slot(self.profile.id, self.redis)
+
+        self.assertEqual(get_profile_connection_count(self.profile, self.redis), 0)
+        self.assertEqual(get_credential_connection_count(self.profile, self.redis), 0)
+        self.assertIsNone(self.redis.get(profile_credential_release_key(self.profile.id)))
+
+    def test_release_keeps_marker_when_another_stream_starts_before_commit(self):
+        self.profile.max_streams = 4
+        self.assertTrue(reserve_profile_slot(self.profile, self.redis)[0])
+        original_pipeline = self.redis.pipeline
+        interrupted = False
+
+        def pipeline_with_reservation():
+            pipe = original_pipeline()
+            original_execute = pipe.execute
+
+            def execute():
+                nonlocal interrupted
+                if not interrupted:
+                    interrupted = True
+                    self.assertTrue(reserve_profile_slot(self.profile, self.redis)[0])
+                return original_execute()
+
+            pipe.execute = execute
+            return pipe
+
+        with patch.object(self.redis, "pipeline", side_effect=pipeline_with_reservation):
+            release_profile_slot(self.profile.id, self.redis)
+
+        self.assertEqual(get_profile_connection_count(self.profile, self.redis), 1)
+        self.assertEqual(get_credential_connection_count(self.profile, self.redis), 1)
+        self.assertIsNotNone(self.redis.get(profile_credential_release_key(self.profile.id)))
+        release_profile_slot(self.profile.id, self.redis)
+        self.assertEqual(get_credential_connection_count(self.profile, self.redis), 0)
+
+    def test_release_gives_up_after_repeated_watch_conflicts(self):
+        self.assertTrue(reserve_profile_slot(self.profile, self.redis)[0])
+
+        with patch.object(
+            FakeRedisPipeline, "execute", side_effect=WatchError
+        ) as execute, self.assertLogs("apps.m3u.connection_pool", level="WARNING"):
+            release_profile_slot(self.profile.id, self.redis)
+
+        self.assertEqual(execute.call_count, RELEASE_MAX_ATTEMPTS)
+        self.assertEqual(get_profile_connection_count(self.profile, self.redis), 1)
+        self.assertEqual(get_credential_connection_count(self.profile, self.redis), 1)
 
     def test_same_credential_capped_at_profile_max(self):
         """Shared credential counter is capped by each profile's max_streams."""
@@ -490,7 +869,7 @@ class UpdateStreamProfileTests(TestCase):
             max_streams=5,
         )
         profile_a = M3UAccountProfile.objects.get(m3u_account=account, is_default=True)
-        profile_a.max_streams = 1
+        profile_a.max_streams = 2
         profile_a.save()
         profile_b = M3UAccountProfile.objects.create(
             m3u_account=account,
@@ -516,16 +895,133 @@ class UpdateStreamProfileTests(TestCase):
             side_effect=lambda profile: fp_a if profile.id == profile_a.id else fp_b,
         ):
             reserve_profile_slot(profile_a, redis)
+            reserve_profile_slot(profile_a, redis)
             redis.set(f"channel_stream:{channel.id}", stream.id)
             redis.set(f"stream_profile:{stream.id}", profile_a.id)
-            self.assertEqual(redis._data[key_a], 1)
+            self.assertEqual(redis._data[key_a], 2)
             self.assertNotIn(key_b, redis._data)
 
             with patch("core.utils.RedisClient.get_client", return_value=redis):
                 self.assertTrue(channel.update_stream_profile(profile_b.id))
 
-            self.assertEqual(redis._data[key_a], 0)
+            self.assertEqual(redis._data[key_a], 1)
             self.assertEqual(redis._data[key_b], 1)
+
+            release_profile_slot(profile_a.id, redis)
+            self.assertEqual(redis._data[key_a], 0)
+            release_profile_slot(profile_b.id, redis)
+            self.assertEqual(redis._data[key_b], 0)
+
+    def _shared_login_switch_fixture(self, *, channel_number, max_a, max_b):
+        """Two profiles on one XC login (same fingerprint) with a stream on profile A."""
+        from apps.channels.models import Channel, Stream
+
+        redis = FakeRedis()
+        group = ServerGroup.objects.create(name=f"shared-login-{channel_number}")
+        account = M3UAccount.objects.create(
+            name=f"Shared Login Account {channel_number}",
+            account_type="XC",
+            username="user",
+            password="pass",
+            server_url="http://xc.example.com",
+            server_group=group,
+            max_streams=5,
+        )
+        profile_a = M3UAccountProfile.objects.get(m3u_account=account, is_default=True)
+        profile_a.max_streams = max_a
+        profile_a.save()
+        profile_b = M3UAccountProfile.objects.create(
+            m3u_account=account,
+            name="alt",
+            is_default=False,
+            is_active=True,
+            max_streams=max_b,
+            search_pattern="",
+            replace_pattern="",
+        )
+        stream = Stream.objects.create(name="Shared Login Stream", m3u_account=account)
+        channel = Channel.objects.create(
+            channel_number=channel_number, name="Shared Login Channel"
+        )
+        channel.streams.add(stream)
+        cred_key = server_group_connections_key(
+            group.id, get_profile_credential_fingerprint(profile_a)
+        )
+        return redis, channel, stream, profile_a, profile_b, cred_key
+
+    def _start_stream_on(self, redis, channel, stream, profile):
+        redis.set(f"channel_stream:{channel.id}", stream.id)
+        redis.set(f"stream_profile:{stream.id}", profile.id)
+
+    def test_switch_between_profiles_sharing_a_login_hands_release_to_new_profile(self):
+        redis, channel, stream, profile_a, profile_b, cred_key = (
+            self._shared_login_switch_fixture(channel_number=504, max_a=2, max_b=2)
+        )
+        reserve_profile_slot(profile_a, redis)
+        reserve_profile_slot(profile_a, redis)
+        self._start_stream_on(redis, channel, stream, profile_a)
+
+        with patch("core.utils.RedisClient.get_client", return_value=redis):
+            self.assertTrue(channel.update_stream_profile(profile_b.id))
+
+        self.assertEqual(redis._data[cred_key], 2)
+        self.assertEqual(
+            redis.get(profile_credential_release_key(profile_b.id)), cred_key.encode()
+        )
+
+        release_profile_slot(profile_b.id, redis)
+        self.assertEqual(redis._data[cred_key], 1)
+        release_profile_slot(profile_a.id, redis)
+        self.assertEqual(redis._data[cred_key], 0)
+        self.assertEqual(redis._data[profile_connections_key(profile_a.id)], 0)
+        self.assertEqual(redis._data[profile_connections_key(profile_b.id)], 0)
+
+    def test_switch_to_unlimited_profile_with_same_login_frees_credential_slot(self):
+        redis, channel, stream, profile_a, profile_b, cred_key = (
+            self._shared_login_switch_fixture(channel_number=505, max_a=1, max_b=0)
+        )
+        reserve_profile_slot(profile_a, redis)
+        self._start_stream_on(redis, channel, stream, profile_a)
+        self.assertEqual(redis._data[cred_key], 1)
+
+        with patch("core.utils.RedisClient.get_client", return_value=redis):
+            self.assertTrue(channel.update_stream_profile(profile_b.id))
+
+        self.assertEqual(redis._data[cred_key], 0)
+        self.assertNotIn(profile_credential_release_key(profile_a.id), redis._data)
+
+        release_profile_slot(profile_b.id, redis)
+        self.assertEqual(redis._data[cred_key], 0)
+
+    def test_switch_from_unlimited_profile_with_same_login_reserves_credential_slot(self):
+        redis, channel, stream, profile_a, profile_b, cred_key = (
+            self._shared_login_switch_fixture(channel_number=506, max_a=0, max_b=1)
+        )
+        reserve_profile_slot(profile_a, redis)
+        self._start_stream_on(redis, channel, stream, profile_a)
+        self.assertEqual(redis._data.get(cred_key, 0), 0)
+
+        with patch("core.utils.RedisClient.get_client", return_value=redis):
+            self.assertTrue(channel.update_stream_profile(profile_b.id))
+
+        self.assertEqual(redis._data[cred_key], 1)
+        release_profile_slot(profile_b.id, redis)
+        self.assertEqual(redis._data[cred_key], 0)
+
+    def test_switch_from_unlimited_profile_rejected_when_login_pool_full(self):
+        redis, channel, stream, profile_a, profile_b, cred_key = (
+            self._shared_login_switch_fixture(channel_number=507, max_a=0, max_b=1)
+        )
+        reserve_profile_slot(profile_a, redis)
+        self._start_stream_on(redis, channel, stream, profile_a)
+        redis.set(cred_key, 1)
+
+        with patch("core.utils.RedisClient.get_client", return_value=redis):
+            self.assertFalse(channel.update_stream_profile(profile_b.id))
+
+        self.assertEqual(redis._data[cred_key], 1)
+        self.assertEqual(int(redis.get(f"stream_profile:{stream.id}")), profile_a.id)
+        self.assertNotIn(profile_credential_release_key(profile_b.id), redis._data)
 
 
 class VodProfileSelectionTests(TestCase):

@@ -89,7 +89,7 @@ export const NAV_ITEMS = {
       { label: 'Logo Manager', icon: FileImage, path: '/logos' },
       { label: 'Channel Manager', icon: GitMerge, path: '/channel-manager' },
       { label: 'Connect', icon: Webhook, path: '/connect' },
-      { label: 'Logs', icon: ScrollText, path: '/logs', requires: 'logCollectorRunning' },
+      { label: 'Logs', icon: ScrollText, path: '/logs', requires: 'logPersist' },
       { ...SETTINGS_NAV_BASE },
     ],
   },

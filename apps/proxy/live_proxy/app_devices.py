@@ -55,8 +55,6 @@ SETTINGS_KEY = "app-integration"
 # for it right now (app_alternatives, X-Dispatch-Alternatives), so it waits less where there
 # are several; fast_grace / fast_grace_many: faster failover's wait in seconds with one usable
 # alternative, and with two or more (a channel with none keeps the stock grace)
-# keep_past_days: a guide refresh keeps the finished programmes of this many days (0-7),
-# which it otherwise deletes with the rest (see apps.channels.guide_past); 0 is stock
 # guide_choice: whoever watches a channel in arrTV may put it on another guide, from the
 # guides that have something on now (see app_guides); guide_choice_sources: the EPG source
 # ids to offer from, comma separated ("" is every active one that is not a dummy)
@@ -75,7 +73,6 @@ DEFAULTS = {
     # Watch together with other people (app_links, v266): the user ids who may join each other's
     # devices in the same house, comma separated ("" is none)
     "link_users": "",
-    "keep_past_days": 0,
     # Server rewind (live_proxy/rewind.py, fork/pause-resume.md §4.3): watched channels kept on
     # the server so a TV can pause and rewind without its own disk. Minutes always kept, the
     # longest pause kept, and the disk budget in GB
@@ -138,14 +135,6 @@ def _as_kind(key, value):
     """A setting as the kind its default is: the switches on or off, the rest as text."""
     if isinstance(DEFAULTS[key], bool):
         return bool(value)
-    if key == "keep_past_days":
-        # Days of finished programmes a guide refresh keeps (apps.channels.guide_past)
-        from apps.channels.guide_past import MOST_DAYS
-
-        try:
-            return max(0, min(MOST_DAYS, int(float(value or 0))))
-        except (TypeError, ValueError):
-            return 0
     if isinstance(DEFAULTS[key], int):
         low, high = BOUNDS.get(key, GRACE_BOUNDS)
         try:

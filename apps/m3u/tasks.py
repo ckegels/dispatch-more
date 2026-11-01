@@ -11,8 +11,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from celery import shared_task
 from django.conf import settings
 from django.db import models, transaction
-from .models import M3UAccount
-from apps.channels.models import Stream, ChannelGroup, ChannelGroupM3UAccount
+from .models import CUSTOM_M3U_ACCOUNT_NAME, M3UAccount
+from apps.channels.models import (
+    Stream,
+    ChannelGroup,
+    ChannelGroupM3UAccount,
+)
 from django.utils import timezone
 import time
 import json
@@ -179,10 +183,10 @@ _EXTINF_ATTR_RE = re.compile(r'([^\s=]+)\s*=\s*(["\'])(.*?)\2')
 def _open_m3u_text_source(source_path):
     """Open an on-disk M3U (or .m3u.gz / .m3u.xz) file for line-by-line parsing."""
     if source_path.endswith(".gz"):
-        return gzip.open(source_path, "rt", encoding="utf-8")
+        return gzip.open(source_path, "rt", encoding="utf-8", errors="ignore")
     if source_path.endswith(".xz"):
-        return lzma.open(source_path, "rt", encoding="utf-8")
-    return open(source_path, "r", encoding="utf-8")
+        return lzma.open(source_path, "rt", encoding="utf-8", errors="ignore")
+    return open(source_path, "r", encoding="utf-8", errors="ignore")
 
 
 def fetch_m3u_lines(account, use_cache=False):
@@ -546,7 +550,7 @@ def fetch_m3u_lines(account, use_cache=False):
                         if name.endswith(".m3u"):
                             with zip_file.open(name) as f:
                                 return [
-                                    line.decode("utf-8") for line in f.readlines()
+                                    line.decode("utf-8", errors="ignore") for line in f.readlines()
                                 ], True
 
                     error_msg = (
@@ -776,11 +780,16 @@ def process_groups(account, groups, scan_start_time=None):
             groups_to_create.append(ChannelGroup(name=group_name))
 
     # Create new groups and fetch them back with IDs
-    newly_created_group_objs = []
     if groups_to_create:
         logger.info(f"Creating {len(groups_to_create)} new groups for account {account.id}")
-        newly_created_group_objs = list(ChannelGroup.bulk_create_and_fetch(groups_to_create))
+        newly_created_group_objs = list(
+            ChannelGroup.objects.bulk_create_provider_groups(
+                group.name for group in groups_to_create
+            )
+        )
         logger.debug(f"Successfully created {len(newly_created_group_objs)} new groups")
+    else:
+        newly_created_group_objs = []
 
     # Combine all groups
     all_group_objs = existing_group_objs + newly_created_group_objs
@@ -872,6 +881,9 @@ def cleanup_stale_group_relationships(account, scan_start_time):
     Remove group relationships that haven't been seen since the stale retention period.
     This follows the same logic as stream cleanup for consistency.
     """
+    if account.locked and account.name == CUSTOM_M3U_ACCOUNT_NAME:
+        return 0
+
     # Calculate cutoff date for stale group relationships
     stale_cutoff = scan_start_time - timezone.timedelta(days=account.stale_stream_days)
     logger.info(
@@ -909,16 +921,22 @@ def cleanup_stale_group_relationships(account, scan_start_time):
             # Check if this group has any direct channels (not through M3U accounts)
             has_direct_channels = group.related_channels().exists()
 
-            # If no relationships and no direct channels, it's safe to delete
             if not remaining_m3u_relationships and not has_direct_channels:
                 orphaned_group_ids.append(group.id)
                 logger.debug(f"Group '{group.name}' has no remaining associations and will be deleted")
 
         # Delete truly orphaned groups
         if orphaned_group_ids:
-            deleted_groups = list(ChannelGroup.objects.filter(id__in=orphaned_group_ids).values_list('name', flat=True))
-            ChannelGroup.objects.filter(id__in=orphaned_group_ids).delete()
-            logger.info(f"Deleted {len(orphaned_group_ids)} orphaned groups that had no remaining associations: {deleted_groups}")
+            orphaned_groups = ChannelGroup.objects.filter(
+                id__in=orphaned_group_ids,
+                m3u_accounts__isnull=True,
+                channels__isnull=True,
+            )
+            deleted_groups = list(orphaned_groups.values_list('name', flat=True))
+            orphaned_groups.delete()
+            logger.info(
+                f"Deleted {len(deleted_groups)} orphaned groups that had no remaining associations: {deleted_groups}"
+            )
     else:
         logger.debug(f"No stale group relationships found for account {account.id}")
 
@@ -1060,7 +1078,7 @@ _STREAM_TOUCH_FIELDS = ("last_seen", "is_stale")
 _STREAM_CHANGED_FIELDS = (
     "name", "url", "logo_url", "tvg_id", "custom_properties", "is_adult",
     "last_seen", "updated_at", "is_stale", "stream_id", "stream_chno",
-    "channel_group_id", "is_catchup", "catchup_days",
+    "channel_group_id", "is_catchup", "catchup_days", "is_radio",
 )
 
 
@@ -1403,6 +1421,10 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
                 _catchup_days_m3u = int(_attrs.get("tv_archive_duration", 0) or 0)
             except (TypeError, ValueError):
                 _catchup_days_m3u = 0
+            _is_radio_m3u = (
+                str(get_case_insensitive_attr(_attrs, "radio", "")).lower() in ("1", "true")
+                or str(_attrs.get("stream_type", "")).lower() == "radio_streams"
+            )
 
             stream_props = {
                 "name": name,
@@ -1419,6 +1441,7 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
                 "stream_chno": channel_num,
                 "is_catchup": _is_catchup_m3u,
                 "catchup_days": _catchup_days_m3u,
+                "is_radio": _is_radio_m3u,
             }
 
             if stream_hash not in stream_hashes:
@@ -1430,7 +1453,7 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
     existing_streams = {
         s.stream_hash: s
         for s in Stream.objects.filter(stream_hash__in=stream_hashes.keys()).select_related('m3u_account').only(
-            'id', 'stream_hash', 'name', 'url', 'logo_url', 'tvg_id', 'custom_properties', 'last_seen', 'updated_at', 'm3u_account', 'stream_id', 'stream_chno', 'channel_group_id', 'is_catchup', 'catchup_days'
+            'id', 'stream_hash', 'name', 'url', 'logo_url', 'tvg_id', 'custom_properties', 'last_seen', 'updated_at', 'm3u_account', 'stream_id', 'stream_chno', 'channel_group_id', 'is_catchup', 'catchup_days', 'is_radio'
         )
     }
 
@@ -1449,7 +1472,8 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
                 obj.stream_chno != stream_props["stream_chno"] or
                 obj.channel_group_id != stream_props["channel_group_id"] or
                 obj.is_catchup != stream_props["is_catchup"] or
-                obj.catchup_days != stream_props["catchup_days"]
+                obj.catchup_days != stream_props["catchup_days"] or
+                obj.is_radio != stream_props["is_radio"]
             )
 
             obj.last_seen = timezone.now()
@@ -1467,6 +1491,7 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
                 obj.channel_group_id = stream_props["channel_group_id"]
                 obj.is_catchup = stream_props["is_catchup"]
                 obj.catchup_days = stream_props["catchup_days"]
+                obj.is_radio = stream_props["is_radio"]
                 obj.updated_at = timezone.now()
                 streams_to_update.append(obj)
             else:
@@ -1487,7 +1512,11 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
                 streams_to_update, streams_to_touch, batch_size=200,
             )
     except Exception as e:
+        # The batch rolled back, so none of its streams got a fresh last_seen;
+        # the refresh must not treat it as processed.
         logger.error(f"Bulk operation failed: {str(e)}")
+        connections.close_all()
+        raise
 
     retval = (
         f"M3U account: {account_id}, Batch processed: "
@@ -1506,6 +1535,124 @@ def process_m3u_batch_direct(account_id, batch, groups, hash_keys, compiled_filt
     gc.collect()
 
     return retval
+
+
+def _retry_failed_batches(account_id, failed_batches, groups, hash_keys, compiled_filters):
+    """Retry batches that failed in the thread pool once, sequentially.
+
+    Returns (created, updated, unchanged, failed) counts.
+    """
+    created = updated = unchanged = failed = 0
+    for batch_idx, batch in failed_batches:
+        try:
+            result = process_m3u_batch_direct(
+                account_id, batch, groups, hash_keys, compiled_filters
+            )
+        except Exception as e:
+            logger.error(f"Batch {batch_idx} failed again on retry: {str(e)}")
+            failed += 1
+            continue
+        created_count, updated_count, unchanged_count = _parse_batch_stream_counts(result)
+        created += created_count
+        updated += updated_count
+        unchanged += unchanged_count
+        logger.info(f"Batch {batch_idx} succeeded on retry")
+    return created, updated, unchanged, failed
+
+
+def _process_stream_batches_with_retry(
+    account_id,
+    batches,
+    groups,
+    hash_keys,
+    compiled_filters,
+    *,
+    max_workers,
+    start_time,
+    error_label="thread batch",
+    progress_label="Thread batch",
+):
+    """Run stream batches in a thread pool, then retry write failures once.
+
+    Batches that raise before returning a result are queued for one sequential
+    retry after the pool finishes. A failure after a successful write (for
+    example a progress notification) does not requeue that committed batch.
+
+    Returns (created, updated, unchanged, failed_batch_count).
+    """
+    streams_created = streams_updated = streams_unchanged = 0
+    failed_batches = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_batch = {
+            executor.submit(
+                process_m3u_batch_direct,
+                account_id,
+                batch,
+                groups,
+                hash_keys,
+                compiled_filters,
+            ): i
+            for i, batch in enumerate(batches)
+        }
+
+        completed_batches = 0
+        total_batches = len(batches)
+
+        for future in as_completed(future_to_batch):
+            batch_idx = future_to_batch[future]
+            result = None
+            try:
+                result = future.result()
+                completed_batches += 1
+
+                created_count, updated_count, unchanged_count = (
+                    _parse_batch_stream_counts(result)
+                )
+                if created_count or updated_count or unchanged_count:
+                    streams_created += created_count
+                    streams_updated += updated_count
+                    streams_unchanged += unchanged_count
+
+                progress = int((completed_batches / total_batches) * 100)
+                current_elapsed = time.time() - start_time
+
+                if progress > 0:
+                    estimated_total = (current_elapsed / progress) * 100
+                    time_remaining = max(0, estimated_total - current_elapsed)
+                else:
+                    time_remaining = 0
+
+                send_m3u_update(
+                    account_id,
+                    "parsing",
+                    progress,
+                    elapsed_time=current_elapsed,
+                    time_remaining=time_remaining,
+                    streams_processed=streams_created + streams_updated + streams_unchanged,
+                )
+
+                logger.debug(
+                    f"{progress_label} {completed_batches}/{total_batches} completed"
+                )
+
+            except Exception as e:
+                logger.error(f"Error in {error_label} {batch_idx}: {str(e)}")
+                if result is None:
+                    completed_batches += 1  # Still count it to avoid hanging
+                    failed_batches.append((batch_idx, batches[batch_idx]))
+            finally:
+                batches[batch_idx] = None
+
+    created_count, updated_count, unchanged_count, failed_batch_count = (
+        _retry_failed_batches(
+            account_id, failed_batches, groups, hash_keys, compiled_filters,
+        )
+    )
+    streams_created += created_count
+    streams_updated += updated_count
+    streams_unchanged += unchanged_count
+    return streams_created, streams_updated, streams_unchanged, failed_batch_count
 
 
 def cleanup_streams(account_id, scan_start_time=timezone.now):
@@ -2762,6 +2909,10 @@ def sync_auto_channels(account_id, scan_start_time=None):
                             existing_channel.stream_profile = stream_profile_to_assign
                             dirty_fields.append("stream_profile")
 
+                        if existing_channel.is_radio != stream.is_radio:
+                            existing_channel.is_radio = stream.is_radio
+                            dirty_fields.append("is_radio")
+
                         if dirty_fields:
                             # Multi-stream channels appear once per stream;
                             # dedupe by id so bulk_update does not double-fire
@@ -2830,6 +2981,7 @@ def sync_auto_channels(account_id, scan_start_time=None):
                                     logo=new_logo,
                                     epg_data=new_epg_data,
                                     stream_profile=stream_profile_to_assign,
+                                    is_radio=stream.is_radio,
                                 ),
                                 stream,
                             )
@@ -3588,7 +3740,9 @@ def _refresh_single_m3u_account_impl(account_id):
             )
         return "Failed to update m3u account, no data available"
 
-    hash_keys = CoreSettings.get_m3u_hash_key().split(",")
+    # Use this account's own hash key override when set, otherwise fall
+    # back to the global M3U Hash Key setting.
+    hash_keys = account.get_effective_hash_keys()
 
     existing_groups = {
         group.name: group.id
@@ -3611,6 +3765,7 @@ def _refresh_single_m3u_account_impl(account_id):
         streams_created = 0
         streams_updated = 0
         streams_unchanged = 0
+        failed_batch_count = 0
 
         if account.account_type == M3UAccount.Types.STADNARD:
             logger.debug(
@@ -3628,65 +3783,17 @@ def _refresh_single_m3u_account_impl(account_id):
             max_workers = min(2, len(batches))
             logger.debug(f"Using {max_workers} threads for processing")
 
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit batch processing tasks using direct functions (now thread-safe)
-                future_to_batch = {
-                    executor.submit(
-                        process_m3u_batch_direct,
-                        account_id,
-                        batch,
-                        existing_groups,
-                        hash_keys,
-                        compiled_stream_filters,
-                    ): i
-                    for i, batch in enumerate(batches)
-                }
-
-                completed_batches = 0
-                total_batches = len(batches)
-
-                # Process completed batches as they finish
-                for future in as_completed(future_to_batch):
-                    batch_idx = future_to_batch[future]
-                    try:
-                        result = future.result()
-                        completed_batches += 1
-
-                        # Extract stream counts from result
-                        created_count, updated_count, unchanged_count = (
-                            _parse_batch_stream_counts(result)
-                        )
-                        if created_count or updated_count or unchanged_count:
-                            streams_created += created_count
-                            streams_updated += updated_count
-                            streams_unchanged += unchanged_count
-
-                        # Send progress update
-                        progress = int((completed_batches / total_batches) * 100)
-                        current_elapsed = time.time() - start_time
-
-                        if progress > 0:
-                            estimated_total = (current_elapsed / progress) * 100
-                            time_remaining = max(0, estimated_total - current_elapsed)
-                        else:
-                            time_remaining = 0
-
-                        send_m3u_update(
-                            account_id,
-                            "parsing",
-                            progress,
-                            elapsed_time=current_elapsed,
-                            time_remaining=time_remaining,
-                            streams_processed=streams_created + streams_updated + streams_unchanged,
-                        )
-
-                        logger.debug(f"Thread batch {completed_batches}/{total_batches} completed")
-
-                    except Exception as e:
-                        logger.error(f"Error in thread batch {batch_idx}: {str(e)}")
-                        completed_batches += 1  # Still count it to avoid hanging
-                    finally:
-                        batches[batch_idx] = None
+            streams_created, streams_updated, streams_unchanged, failed_batch_count = (
+                _process_stream_batches_with_retry(
+                    account_id,
+                    batches,
+                    existing_groups,
+                    hash_keys,
+                    compiled_stream_filters,
+                    max_workers=max_workers,
+                    start_time=start_time,
+                )
+            )
 
             logger.info(f"Thread-based processing completed for account {account_id}")
 
@@ -3767,70 +3874,53 @@ def _refresh_single_m3u_account_impl(account_id):
                 max_workers = min(4, len(batches))
                 logger.debug(f"Using {max_workers} threads for XC stream processing")
 
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit stream batch processing tasks (reuse standard M3U processing)
-                    future_to_batch = {
-                        executor.submit(
-                            process_m3u_batch_direct,
-                            account_id,
-                            batch,
-                            existing_groups,
-                            hash_keys,
-                            compiled_stream_filters,
-                        ): i
-                        for i, batch in enumerate(batches)
-                    }
-
-                    completed_batches = 0
-                    total_batches = len(batches)
-
-                    # Process completed batches as they finish
-                    for future in as_completed(future_to_batch):
-                        batch_idx = future_to_batch[future]
-                        try:
-                            result = future.result()
-                            completed_batches += 1
-
-                            # Extract stream counts from result
-                            created_count, updated_count, unchanged_count = (
-                                _parse_batch_stream_counts(result)
-                            )
-                            if created_count or updated_count or unchanged_count:
-                                streams_created += created_count
-                                streams_updated += updated_count
-                                streams_unchanged += unchanged_count
-
-                            # Send progress update
-                            progress = int((completed_batches / total_batches) * 100)
-                            current_elapsed = time.time() - start_time
-
-                            if progress > 0:
-                                estimated_total = (current_elapsed / progress) * 100
-                                time_remaining = max(0, estimated_total - current_elapsed)
-                            else:
-                                time_remaining = 0
-
-                            send_m3u_update(
-                                account_id,
-                                "parsing",
-                                progress,
-                                elapsed_time=current_elapsed,
-                                time_remaining=time_remaining,
-                                streams_processed=streams_created + streams_updated + streams_unchanged,
-                            )
-
-                            logger.debug(f"XC thread batch {completed_batches}/{total_batches} completed")
-
-                        except Exception as e:
-                            logger.error(f"Error in XC thread batch {batch_idx}: {str(e)}")
-                            completed_batches += 1  # Still count it to avoid hanging
-                        finally:
-                            batches[batch_idx] = None
+                streams_created, streams_updated, streams_unchanged, failed_batch_count = (
+                    _process_stream_batches_with_retry(
+                        account_id,
+                        batches,
+                        existing_groups,
+                        hash_keys,
+                        compiled_stream_filters,
+                        max_workers=max_workers,
+                        start_time=start_time,
+                        error_label="XC thread batch",
+                        progress_label="XC thread batch",
+                    )
+                )
 
                 logger.info(f"XC thread-based processing completed for account {account_id}")
 
                 del batches
                 gc.collect()
+
+        if failed_batch_count:
+            # Stale marking and auto-sync compare last_seen against this
+            # refresh, so they would treat the failed batches' streams as gone.
+            logger.error(
+                f"{failed_batch_count} batch(es) failed for account {account_id}; "
+                f"skipping stale marking and cleanup for this incomplete refresh."
+            )
+            error_msg = (
+                f"Refresh incomplete: {failed_batch_count} batch(es) failed to process."
+            )
+            _set_m3u_account_status(
+                account_id,
+                M3UAccount.Status.ERROR,
+                error_msg,
+                account_name=account.name,
+                notify_error=True,
+                ws_error=error_msg,
+            )
+            # Committed batches already changed Stream rows.
+            try:
+                rollup_channel_catchup_fields(account_id)
+            except Exception as e:
+                logger.error(f"Error rolling up catch-up fields for account {account_id}: {str(e)}")
+            from apps.output.streaming_chunk_cache import (
+                invalidate_output_caches_after_m3u_refresh,
+            )
+            invalidate_output_caches_after_m3u_refresh()
+            return "Failed to update m3u account, one or more batches failed to process"
 
         # Ensure all database transactions are committed before cleanup
         logger.info(

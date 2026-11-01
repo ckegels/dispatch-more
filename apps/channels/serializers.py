@@ -20,11 +20,27 @@ from apps.epg.serializers import EPGDataSerializer
 from core.models import StreamProfile
 from apps.epg.models import EPGData
 from django.db import connection, transaction
+from django.db.models.functions import Coalesce
 from django.urls import reverse
 from rest_framework import serializers
 from django.utils import timezone
 from core.utils import validate_flexible_url, build_absolute_uri_with_port, truncate_with_warning
+from apps.channels.access import user_can_access_channel
 from apps.channels.utils import coerce_channel_profile_ids
+
+
+def _require_accessible_channel(context, channel):
+    """Reject a channel the requesting user may not access.
+
+    The error matches an unknown id so a restricted user cannot tell a
+    channel they may not use from one that does not exist. Serializers used
+    without a request (internal callers) are not restricted.
+    """
+    user = getattr(context.get("request"), "user", None)
+    if user is not None and not user_can_access_channel(user, channel):
+        raise serializers.ValidationError(
+            f'Invalid pk "{channel.pk}" - object does not exist.'
+        )
 
 
 class LogoSerializer(serializers.ModelSerializer):
@@ -161,6 +177,7 @@ class StreamSerializer(serializers.ModelSerializer):
             "stream_chno",
             "is_catchup",
             "catchup_days",
+            "is_radio",
         ]
 
     def get_fields(self):
@@ -180,6 +197,16 @@ class StreamSerializer(serializers.ModelSerializer):
             fields["channel_group"].read_only = True
 
         return fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Provider stream URLs often embed M3U/XC logins. Match M3UAccountSerializer:
+        # only admins receive them. Fail closed when there is no request user.
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if user is None or getattr(user, "user_level", 0) < 10:
+            data.pop("url", None)
+        return data
 
 
 class ChannelGroupM3UAccountSerializer(serializers.ModelSerializer):
@@ -265,25 +292,50 @@ class ChannelGroupM3UAccountSerializer(serializers.ModelSerializer):
 #
 class ChannelGroupSerializer(serializers.ModelSerializer):
     channel_count = serializers.SerializerMethodField()
+    is_custom = serializers.SerializerMethodField()
     m3u_account_count = serializers.SerializerMethodField()
     m3u_accounts = ChannelGroupM3UAccountSerializer(
         many=True,
-        read_only=True
+        read_only=True,
+        source="provider_m3u_account_relations",
     )
 
     class Meta:
         model = ChannelGroup
-        fields = ["id", "name", "channel_count", "m3u_account_count", "m3u_accounts"]
+        fields = [
+            "id",
+            "name",
+            "channel_count",
+            "is_custom",
+            "m3u_account_count",
+            "m3u_accounts",
+        ]
+
+    def create(self, validated_data):
+        return ChannelGroup.objects.create_manual(**validated_data)
 
     def get_channel_count(self, obj):
         # Use the queryset annotation when available (list path); fall back
-        # to a live query for retrieve/create/update where it isn't set.
+        # to an override-aware live query for retrieve/create/update.
         v = getattr(obj, 'channel_count', None)
-        return v if v is not None else obj.channels.count()
+        if v is not None:
+            return v
+        return Channel.objects.annotate(
+            effective_group_id=Coalesce(
+                'override__channel_group_id',
+                'channel_group_id',
+            )
+        ).filter(effective_group_id=obj.id).count()
+
+    def get_is_custom(self, obj):
+        v = getattr(obj, "is_custom", None)
+        return v if v is not None else obj.m3u_accounts.filter(
+            m3u_account__locked=True
+        ).exists()
 
     def get_m3u_account_count(self, obj):
         v = getattr(obj, 'm3u_account_count', None)
-        return v if v is not None else obj.m3u_accounts.count()
+        return v if v is not None else obj.provider_m3u_accounts().count()
 
 
 class ChannelProfileSerializer(serializers.ModelSerializer):
@@ -384,11 +436,13 @@ class ChannelOverrideSerializer(serializers.ModelSerializer):
             "tvc_guide_stationid",
             "epg_data_id",
             "stream_profile_id",
+            "is_radio",
         ]
         extra_kwargs = {
             "name": {"allow_null": True, "required": False},
             "tvg_id": {"allow_null": True, "required": False},
             "tvc_guide_stationid": {"allow_null": True, "required": False},
+            "is_radio": {"allow_null": True, "required": False},
         }
 
 
@@ -458,6 +512,7 @@ class ChannelSerializer(serializers.ModelSerializer):
     effective_tvc_guide_stationid = serializers.SerializerMethodField()
     effective_epg_data_id = serializers.SerializerMethodField()
     effective_stream_profile_id = serializers.SerializerMethodField()
+    effective_is_radio = serializers.SerializerMethodField()
 
     class Meta:
         model = Channel
@@ -477,6 +532,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "is_adult",
             "is_catchup",
             "catchup_days",
+            "is_radio",
             "hidden_from_output",
             "auto_created",
             "auto_created_by",
@@ -491,6 +547,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "effective_tvc_guide_stationid",
             "effective_epg_data_id",
             "effective_stream_profile_id",
+            "effective_is_radio",
         ]
 
     def _effective_value(self, obj, field_name):
@@ -531,6 +588,9 @@ class ChannelSerializer(serializers.ModelSerializer):
     def get_effective_stream_profile_id(self, obj):
         return self._effective_value(obj, "stream_profile_id")
 
+    def get_effective_is_radio(self, obj):
+        return self._effective_value(obj, "is_radio")
+
     def get_source_stream(self, obj):
         """
         Return the originating provider stream for an auto-created channel.
@@ -560,21 +620,31 @@ class ChannelSerializer(serializers.ModelSerializer):
         }
 
     def to_representation(self, instance):
+        # `streams` stays a writable M2M field for create/update. Output must
+        # not evaluate that relation: the declared field would query it once
+        # per channel. Swap in a method field once; doing it per row rebinds
+        # and throws away the cached readable-field list.
         include_streams = self.context.get("include_streams", False)
+        attr = (
+            "_streams_output_field_full"
+            if include_streams
+            else "_streams_output_field_ids"
+        )
+        field = getattr(self, attr, None)
+        if field is None:
+            if include_streams:
+                field = serializers.SerializerMethodField()
+            else:
+                field = serializers.SerializerMethodField(
+                    method_name="get_stream_ids"
+                )
+            setattr(self, attr, field)
+            self.fields["streams"] = field
+            self.__dict__.pop("_readable_fields", None)
+        return super().to_representation(instance)
 
-        if include_streams:
-            self.fields["streams"] = serializers.SerializerMethodField()
-            return super().to_representation(instance)
-        else:
-            # Read from the prefetched channelstream_set (ordered by the
-            # viewset's Prefetch); chaining .order_by() rebuilds the
-            # queryset and fires one SELECT per row in list responses.
-            representation = super().to_representation(instance)
-            if "streams" in representation:
-                representation["streams"] = [
-                    cs.stream_id for cs in instance.channelstream_set.all()
-                ]
-            return representation
+    def get_stream_ids(self, obj):
+        return [cs.stream_id for cs in obj.channelstream_set.all()]
 
     def get_logo(self, obj):
         return LogoSerializer(obj.logo).data
@@ -586,7 +656,9 @@ class ChannelSerializer(serializers.ModelSerializer):
             for cs in obj.channelstream_set.all()
             if cs.stream_id is not None
         ]
-        return StreamSerializer(ordered_streams, many=True).data
+        return StreamSerializer(
+            ordered_streams, many=True, context=self.context
+        ).data
 
     def create(self, validated_data):
         streams = validated_data.pop("streams", [])
@@ -599,7 +671,9 @@ class ChannelSerializer(serializers.ModelSerializer):
         # Auto-assign Default Group if no channel_group is specified
         if "channel_group" not in validated_data or validated_data.get("channel_group") is None:
             from apps.channels.models import ChannelGroup
-            default_group, _ = ChannelGroup.objects.get_or_create(name="Default Group")
+            default_group, _ = ChannelGroup.objects.get_or_create_manual(
+                name="Default Group"
+            )
             validated_data["channel_group"] = default_group
 
         # Atomic wrapper keeps the channel insert and its override row
@@ -789,6 +863,10 @@ class RecordingSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ["task_id"]
 
+    def validate_channel(self, channel):
+        _require_accessible_channel(self.context, channel)
+        return channel
+
     def validate_custom_properties(self, value):
         if value is None:
             return value
@@ -874,6 +952,10 @@ class RecurringRecordingRuleSerializer(serializers.ModelSerializer):
         model = RecurringRecordingRule
         fields = "__all__"
         read_only_fields = ["created_at", "updated_at"]
+
+    def validate_channel(self, channel):
+        _require_accessible_channel(self.context, channel)
+        return channel
 
     def validate_days_of_week(self, value):
         if not value:

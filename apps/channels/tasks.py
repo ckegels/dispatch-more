@@ -1629,6 +1629,7 @@ def _dvr_build_ffmpeg_cmd(
         "-f", "hls",
         "-hls_time", "4",
         "-hls_list_size", "0",
+        "-hls_playlist_type", "event",
         "-hls_flags", "append_list+omit_endlist+independent_segments",
         "-start_number", str(hls_start_number),
         "-hls_segment_filename", hls_seg_pattern,
@@ -1638,6 +1639,127 @@ def _dvr_build_ffmpeg_cmd(
 
 # Shared ceiling for HLS finalize
 _DVR_HLS_REMUX_TIMEOUT_SECONDS = 30 * 60
+
+
+def _dvr_recording_end_payload(
+    cp, final_path, remux_success, start_time=None, end_time=None,
+    cancelled_by=None, cancelled_by_id=None, cancelled=False,
+):
+    """Build the ``recording_end`` event payload. Never raises.
+
+    ``start_time``/``end_time`` should be the Recording's scheduled times, as
+    ISO strings or datetimes. ``cancelled=True`` (a user deleted an in-progress
+    recording) reports ``outcome``/``status`` ``"cancelled"`` with no file, so
+    a subscriber's failure alert does not fire on a deliberate cancel.
+    """
+    props = cp if isinstance(cp, dict) else {}
+
+    def _iso(value):
+        if isinstance(value, str):
+            return value or None
+        try:
+            return value.isoformat() if value is not None else None
+        except Exception:
+            return None
+
+    if cancelled:
+        return {
+            "outcome": "cancelled",
+            "has_file": False,
+            "failure_reason": None,
+            "status": "cancelled",
+            "interrupted_reason": None,
+            "file_path": None,
+            "file_name": None,
+            "file_url": None,
+            "file_size": None,
+            "remux_success": False,
+            "bytes_written": None,
+            "start_time": _iso(start_time),
+            "end_time": _iso(end_time),
+            "cancelled_by": cancelled_by if isinstance(cancelled_by, str) and cancelled_by else None,
+            "cancelled_by_id": cancelled_by_id if isinstance(cancelled_by_id, int) and not isinstance(cancelled_by_id, bool) else None,
+        }
+
+    status = props.get("status")
+    if not isinstance(status, str) or not status:
+        status = "unknown"
+
+    bytes_written = props.get("bytes_written")
+    if isinstance(bytes_written, bool) or not isinstance(bytes_written, int):
+        bytes_written = None
+
+    reason = props.get("interrupted_reason")
+    if not isinstance(reason, str) or not reason:
+        reason = None
+
+    remux_success = bool(remux_success)
+    path = final_path if isinstance(final_path, str) and final_path else None
+    file_size = None
+    if path:
+        try:
+            file_size = os.path.getsize(path)
+        except OSError:
+            file_size = None
+
+    file_name = props.get("file_name")
+    if not isinstance(file_name, str) or not file_name:
+        file_name = os.path.basename(path) if path else None
+
+    if not remux_success:
+        failure_reason = "remux_failed"
+    elif not path or file_size is None:
+        failure_reason = "missing_file"
+    elif file_size == 0:
+        failure_reason = "empty_file"
+    else:
+        failure_reason = None
+
+    has_file = failure_reason is None
+
+    return {
+        "outcome": "success" if has_file else "failed",
+        "has_file": has_file,
+        "failure_reason": failure_reason,
+        "status": status,
+        "interrupted_reason": reason,
+        "file_path": path,
+        "file_name": file_name,
+        "file_url": props.get("file_url") if isinstance(props.get("file_url"), str) else None,
+        "file_size": file_size,
+        "remux_success": remux_success,
+        "bytes_written": bytes_written,
+        "start_time": _iso(start_time),
+        "end_time": _iso(end_time),
+    }
+
+
+def _dvr_emit_recording_end(
+    recording, channel, cp, final_path, remux_success,
+    fallback_start=None, fallback_end=None, recording_id=None,
+):
+    """Emit ``recording_end`` for a finished recording. Never raises.
+
+    The window reported is the Recording's own scheduled ``start_time`` and
+    ``end_time``. The fallbacks (the task arguments) are used only when no
+    Recording object is at hand: a recording resumed after a restart is
+    dispatched with ``now`` as its start, which is not when it started.
+    """
+    try:
+        from core.utils import log_system_event
+        start = getattr(recording, "start_time", None) or fallback_start
+        end = getattr(recording, "end_time", None) or fallback_end
+        log_system_event(
+            'recording_end',
+            channel_id=getattr(channel, "uuid", None),
+            channel_name=getattr(channel, "name", None),
+            recording_id=recording_id if recording_id is not None else getattr(recording, "id", None),
+            **_dvr_recording_end_payload(
+                cp, final_path, remux_success, start_time=start, end_time=end,
+            ),
+        )
+    except Exception as e:
+        logger.error(f"Could not log recording end event: {e}")
 
 
 def _dvr_build_hls_playlist_remux_cmd(m3u8_path, output_path, extra_args=None):
@@ -1887,6 +2009,17 @@ def _dvr_ensure_ffmpeg_exited(ffmpeg_proc, timeout=5):
             ffmpeg_proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             pass
+
+
+def _dvr_stop_ffmpeg(ffmpeg_proc, timeout=10):
+    """Ask FFmpeg to exit with SIGINT, then kill if it does not leave."""
+    if ffmpeg_proc is None or ffmpeg_proc.poll() is not None:
+        return
+    ffmpeg_proc.send_signal(signal.SIGINT)
+    try:
+        ffmpeg_proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        ffmpeg_proc.kill()
 
 
 def get_dvr_stream_base_url():
@@ -2371,11 +2504,7 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
                         logger.info(
                             f"DVR recording {recording_id}: worker shutting down — stopping FFmpeg"
                         )
-                        ffmpeg_proc.send_signal(signal.SIGINT)
-                        try:
-                            ffmpeg_proc.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            ffmpeg_proc.kill()
+                        _dvr_stop_ffmpeg(ffmpeg_proc)
                         _break_reason = "server_shutdown"
                         break
 
@@ -2389,10 +2518,34 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
                             pass
                         _last_active_lock_refresh = now
 
-                    segs_now = [
-                        f for f in os.listdir(hls_dir)
-                        if f.startswith("seg_") and f.endswith(".ts")
-                    ]
+                    try:
+                        segs_now = [
+                            f for f in os.listdir(hls_dir)
+                            if f.startswith("seg_") and f.endswith(".ts")
+                        ]
+                    except FileNotFoundError:
+                        # destroy() deletes the row, then removes this directory,
+                        # usually before the stop poll below. Stop FFmpeg or it
+                        # reconnects as an untracked client. "deleted" only when
+                        # the row is already gone. A missing directory with the
+                        # row still present is its own terminal reason.
+                        logger.info(
+                            f"DVR recording {recording_id}: HLS directory removed, stopping FFmpeg"
+                        )
+                        _dvr_stop_ffmpeg(ffmpeg_proc)
+                        interrupted = True
+                        try:
+                            _row_gone = not Recording.objects.filter(
+                                id=recording_id
+                            ).exists()
+                        except Exception:
+                            _row_gone = False
+                        if _row_gone:
+                            _break_reason = "deleted"
+                        else:
+                            interrupted_reason = "hls_directory_removed"
+                            _break_reason = "hls_directory_removed"
+                        break
 
                     if not _attempt_stream_confirmed:
                         if len(segs_now) > _last_seg_count:
@@ -2461,11 +2614,7 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
                                 f"DVR recording {recording_id}: no new HLS segments for "
                                 f"{_stall_timeout:.0f}s — source stream stalled, stopping FFmpeg"
                             )
-                            ffmpeg_proc.send_signal(signal.SIGINT)
-                            try:
-                                ffmpeg_proc.wait(timeout=10)
-                            except subprocess.TimeoutExpired:
-                                ffmpeg_proc.kill()
+                            _dvr_stop_ffmpeg(ffmpeg_proc)
                             _break_reason = "stall"
                             break
 
@@ -2474,11 +2623,7 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
                             f"DVR recording {recording_id}: scheduled end time reached, "
                             f"stopping FFmpeg"
                         )
-                        ffmpeg_proc.send_signal(signal.SIGINT)
-                        try:
-                            ffmpeg_proc.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            ffmpeg_proc.kill()
+                        _dvr_stop_ffmpeg(ffmpeg_proc)
                         _break_reason = "end_time"
                         break
 
@@ -2492,23 +2637,14 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
                                 logger.info(
                                     f"DVR recording {recording_id}: deleted — stopping FFmpeg"
                                 )
-                                ffmpeg_proc.send_signal(signal.SIGINT)
-                                try:
-                                    ffmpeg_proc.wait(timeout=10)
-                                except subprocess.TimeoutExpired:
-                                    ffmpeg_proc.kill()
-                                interrupted = False
+                                _dvr_stop_ffmpeg(ffmpeg_proc)
                                 _break_reason = "deleted"
                                 break
                             if (_sc.custom_properties or {}).get("status") == "stopped":
                                 logger.info(
                                     f"DVR recording {recording_id}: stop requested — stopping FFmpeg"
                                 )
-                                ffmpeg_proc.send_signal(signal.SIGINT)
-                                try:
-                                    ffmpeg_proc.wait(timeout=10)
-                                except subprocess.TimeoutExpired:
-                                    ffmpeg_proc.kill()
+                                _dvr_stop_ffmpeg(ffmpeg_proc)
                                 _break_reason = "stopped"
                                 break
                             try:
@@ -2558,7 +2694,9 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
 
             _dvr_ensure_ffmpeg_exited(ffmpeg_proc)
 
-            if _break_reason in ("end_time", "stopped", "deleted"):
+            if _break_reason in (
+                "end_time", "stopped", "deleted", "hls_directory_removed",
+            ):
                 break
 
             if _DVR_SHUTTING_DOWN or time.time() >= end_timestamp:
@@ -2588,7 +2726,9 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
     if (
         _stream_confirmed
         and not interrupted
-        and _break_reason not in ("end_time", "stopped", "deleted", "server_shutdown")
+        and _break_reason not in (
+            "end_time", "stopped", "deleted", "hls_directory_removed", "server_shutdown",
+        )
         and time.time() < end_timestamp
         and not _DVR_SHUTTING_DOWN
     ):
@@ -2637,6 +2777,30 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
         interrupted = True
         interrupted_reason = f"no_stream_data: {last_error or 'ffmpeg_failed'}"
 
+    # Skip post-processing when the row is already gone. Do this before the
+    # HLS size scan and the zero-byte path, which would otherwise treat a
+    # removed directory as a finished recording.
+    recording_cancelled = not Recording.objects.filter(id=recording_id).exists()
+    if recording_cancelled:
+        logger.info(f"Recording {recording_id} was cancelled — skipping remux and metadata.")
+        # Clean up artifacts for the cancelled recording, including any
+        # pre-restart .ts segments from server recovery. hls_dir and final_path
+        # were resolved before the row was deleted.
+        if hls_dir and os.path.isdir(hls_dir):
+            try:
+                shutil.rmtree(hls_dir)
+                logger.info(f"Cleaned up cancelled recording HLS directory: {hls_dir}")
+            except Exception as _e:
+                logger.warning(f"Failed to remove HLS directory {hls_dir}: {_e}")
+        if final_path:
+            try:
+                if os.path.exists(final_path):
+                    os.remove(final_path)
+                    logger.info(f"Cleaned up cancelled recording MKV placeholder: {final_path}")
+            except Exception:
+                pass
+        return
+
     # Measure bytes from HLS segment files
     try:
         bytes_written = sum(
@@ -2646,6 +2810,7 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
         ) if hls_dir and os.path.isdir(hls_dir) else 0
     except Exception:
         bytes_written = 0
+
     if bytes_written == 0 and not interrupted:
         _deliberately_stopped = False
         try:
@@ -2685,42 +2850,6 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
             )
             # After the loop, the file and response are closed automatically.
             logger.info(f"Finished recording for channel {channel.name}")
-
-    # Log system event for recording end
-    try:
-        from core.utils import log_system_event
-        log_system_event(
-            'recording_end',
-            channel_id=channel.uuid,
-            channel_name=channel.name,
-            recording_id=recording_id,
-            interrupted=interrupted,
-            bytes_written=bytes_written
-        )
-    except Exception as e:
-        logger.error(f"Could not log recording end event: {e}")
-
-    # If the Recording was deleted (cancelled by user), skip post-processing
-    recording_cancelled = not Recording.objects.filter(id=recording_id).exists()
-    if recording_cancelled:
-        logger.info(f"Recording {recording_id} was cancelled — skipping remux and metadata.")
-        # Clean up all artifacts for the cancelled recording,
-        # including any pre-restart .ts segments from server recovery.
-        # Use the in-memory recording_obj since the DB row is already deleted.
-        if hls_dir and os.path.isdir(hls_dir):
-            try:
-                shutil.rmtree(hls_dir)
-                logger.info(f"Cleaned up cancelled recording HLS directory: {hls_dir}")
-            except Exception as _e:
-                logger.warning(f"Failed to remove HLS directory {hls_dir}: {_e}")
-        if final_path:
-            try:
-                if os.path.exists(final_path):
-                    os.remove(final_path)
-                    logger.info(f"Cleaned up cancelled recording MKV placeholder: {final_path}")
-            except Exception:
-                pass
-        return
 
     # --- Post-processing: remux HLS playlist → final MKV ---
     remux_success = False
@@ -2904,8 +3033,8 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
         # Removed: local thumbnail generation. We rely on EPG/VOD/TMDB/OMDb/keyless providers only.
 
         # Final cancellation guard: destroy() may have deleted the record while
-        # remuxing.  If it's gone now, skip saving "interrupted" status and
-        # skip the notification — destroy() already sent recording_cancelled.
+        # remuxing. If it's gone now, skip saving status and skip recording_end;
+        # destroy() already emitted recording_end with outcome "cancelled".
         if not Recording.objects.filter(id=recording_id).exists():
             logger.info(
                 f"Recording {recording_id} was deleted during post-processing — skipping final save."
@@ -2916,11 +3045,33 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
             recording_obj.custom_properties = cp
             recording_obj.save(update_fields=["custom_properties"])
 
-        _db_retry(
-            _save_final_metadata,
-            max_retries=_dvr_db_max_retries,
-            base_interval=_dvr_db_retry_interval,
-            label=f"DVR recording {recording_id}: metadata save",
+        try:
+            _db_retry(
+                _save_final_metadata,
+                max_retries=_dvr_db_max_retries,
+                base_interval=_dvr_db_retry_interval,
+                label=f"DVR recording {recording_id}: metadata save",
+            )
+        except Exception as save_e:
+            logger.error(
+                f"DVR recording {recording_id}: final metadata save failed ({save_e}); "
+                f"emitting recording_end from in-memory state"
+            )
+
+        # Re-check after the save: destroy() can delete between the guard above
+        # and here, and has already emitted cancelled. Do not emit a second
+        # success/failed recording_end for the same recording.
+        if not Recording.objects.filter(id=recording_id).exists():
+            logger.info(
+                f"Recording {recording_id} was deleted before recording_end emit; "
+                f"destroy() already closed the event."
+            )
+            return
+
+        _dvr_emit_recording_end(
+            recording_obj, channel, cp, final_path, remux_success,
+            fallback_start=start_time, fallback_end=end_time,
+            recording_id=recording_id,
         )
 
         # Notify frontends so the UI refreshes immediately (e.g. "Stopped" → "Completed")
@@ -3147,9 +3298,19 @@ def recover_recordings_on_startup():
                     cp["remux_success"] = False
 
                 rec.custom_properties = cp
-                _db_retry(
-                    lambda r=rec: r.save(update_fields=["custom_properties"]),
-                    label=f"DVR recovery: recording {rec.id} expired status update",
+                try:
+                    _db_retry(
+                        lambda r=rec: r.save(update_fields=["custom_properties"]),
+                        label=f"DVR recovery: recording {rec.id} expired status update",
+                    )
+                except Exception as _save_e:
+                    logger.error(
+                        f"DVR recovery: recording {rec.id} status save failed ({_save_e}); "
+                        f"emitting recording_end from in-memory state"
+                    )
+
+                _dvr_emit_recording_end(
+                    rec, rec.channel, cp, mkv_path, cp.get("remux_success"),
                 )
             except Exception as e:
                 logger.warning(f"Failed to finalize expired recording {rec.id}: {e}")
@@ -3869,8 +4030,11 @@ def bulk_create_channels_from_streams(self, stream_ids, channel_profile_ids=None
             'message': f'Starting bulk creation of {total_streams} channels...'
         })
 
-        # Gather current used numbers once
-        used_numbers = set(Channel.objects.all().values_list("channel_number", flat=True))
+        # Reserve both raw and override pins so auto-assign never hands out
+        # a number that is already visible via ChannelOverride.
+        from apps.channels.compact_numbering import build_reserved_set
+
+        used_numbers = build_reserved_set()
 
         # Initialize next_number based on starting_channel_number mode
         if starting_channel_number is None:
@@ -3880,8 +4044,9 @@ def bulk_create_channels_from_streams(self, stream_ids, channel_profile_ids=None
             # Mode 2: Start from lowest available number
             next_number = 1
         elif starting_channel_number == -1:
-            # Mode 4: Start after the current highest channel number
-            highest = Channel.objects.order_by('-channel_number').values_list('channel_number', flat=True).first()
+            # Mode 4: Start after the current highest reserved number.
+            # used_numbers already includes raw values and override pins.
+            highest = max(used_numbers) if used_numbers else None
             next_number = (int(highest) + 1) if highest is not None else 1
         else:
             # Mode 3: Start from specified number
@@ -3943,10 +4108,7 @@ def bulk_create_channels_from_streams(self, stream_ids, channel_profile_ids=None
                         tvc_guide_stationid = stream_custom_props["tvc-guide-stationid"]
 
                     # Check if the determined/provider number is available
-                    if channel_number is not None and (
-                        channel_number in used_numbers
-                        or Channel.objects.filter(channel_number=channel_number).exists()
-                    ):
+                    if channel_number is not None and channel_number in used_numbers:
                         # Provider number is taken, use auto-assignment
                         channel_number = get_auto_number()
                     elif channel_number is not None:
@@ -3962,6 +4124,7 @@ def bulk_create_channels_from_streams(self, stream_ids, channel_profile_ids=None
                         "tvc_guide_stationid": tvc_guide_stationid,
                         "tvg_id": stream.tvg_id,
                         "is_adult": stream.is_adult,
+                        "is_radio": stream.is_radio,
                     }
 
                     # Only add channel_group_id if the stream has a channel group
@@ -4112,6 +4275,10 @@ def bulk_create_channels_from_streams(self, stream_ids, channel_profile_ids=None
                 if channel_stream_associations:
                     from apps.channels.models import ChannelStream
                     ChannelStream.objects.bulk_create(channel_stream_associations, ignore_conflicts=True)
+
+                # bulk_create skips ChannelStream post_save; one batched rollup.
+                from apps.channels.utils import rollup_catchup_for_channels
+                rollup_catchup_for_channels([c.id for c in created_channels])
 
                 # Bulk create profile memberships
                 if channel_profile_memberships:

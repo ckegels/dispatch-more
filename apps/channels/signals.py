@@ -6,7 +6,7 @@ from django.dispatch import receiver
 from django.utils.timezone import now, is_aware, make_aware
 from celery.result import AsyncResult
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
-from .models import Channel, Stream, ChannelStream, ChannelProfile, ChannelProfileMembership, ChannelOverride, Recording
+from .models import Channel, ChannelGroup, Stream, ChannelStream, ChannelProfile, ChannelProfileMembership, ChannelOverride, Recording
 from apps.m3u.models import M3UAccount
 from apps.epg.tasks import parse_programs_for_tvg_id
 import json
@@ -195,6 +195,19 @@ def refresh_epg_programs(sender, instance, created, **kwargs):
         logger.info(f"New channel {instance.id} ({instance.name}) created with EPG data, refreshing program data")
         _invalidate_epg_output_cache()
         _queue_epg_program_refresh(instance.epg_data)
+
+
+@receiver(post_save, sender=Channel)
+def mark_manual_channel_group_as_custom(sender, instance, **kwargs):
+    if instance.auto_created or not instance.channel_group_id:
+        return
+
+    try:
+        ChannelGroup.objects.mark_custom(instance.channel_group)
+    except M3UAccount.DoesNotExist:
+        # The locked account is created by a data migration and can be absent
+        # from isolated test fixtures.
+        return
 
 
 @receiver(pre_save, sender=ChannelOverride)
@@ -405,12 +418,10 @@ def schedule_task_on_save(sender, instance, created, **kwargs):
         if rec_status not in ("recording", "completed", "stopped", "interrupted"):
             try:
                 prefetch_recording_artwork.apply_async(args=[instance.id], countdown=1)
-            except Exception as e:
-                print("Error scheduling artwork prefetch:", e)
-    except Exception as e:
-        import traceback
-        print("Error in post_save signal:", e)
-        traceback.print_exc()
+            except Exception:
+                logger.exception("Error scheduling artwork prefetch")
+    except Exception:
+        logger.exception("Error scheduling recording on save")
 
 @receiver(post_delete, sender=Recording)
 def revoke_task_on_delete(sender, instance, **kwargs):
@@ -420,15 +431,6 @@ def revoke_task_on_delete(sender, instance, **kwargs):
 @receiver([post_save, post_delete], sender=ChannelStream)
 def update_channel_catchup_fields(sender, instance, **kwargs):
     """Roll up catch-up flags from active streams (UI path; import uses SQL rollup)."""
-    from django.db.models import Max
+    from apps.channels.utils import rollup_catchup_for_channels
 
-    channel = instance.channel
-    catchup_qs = channel.streams.filter(
-        is_catchup=True,
-        m3u_account__is_active=True,
-    )
-    max_days = catchup_qs.aggregate(max_days=Max("catchup_days"))["max_days"]
-    Channel.objects.filter(pk=channel.pk).update(
-        is_catchup=catchup_qs.exists(),
-        catchup_days=max_days or 0,
-    )
+    rollup_catchup_for_channels([instance.channel_id])

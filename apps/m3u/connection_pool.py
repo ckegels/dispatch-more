@@ -14,6 +14,9 @@ import hashlib
 import logging
 import re
 from typing import Literal, Optional, Tuple
+from urllib.parse import unquote, urlparse
+
+from redis.exceptions import WatchError
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +26,25 @@ PROFILE_CONNECTIONS_KEY = "profile_connections:{profile_id}"
 PROFILE_CREDENTIAL_RELEASE_KEY = "profile_credential_release:{profile_id}"
 SERVER_GROUP_CONNECTIONS_KEY = "server_group_connections:{group_id}:{fingerprint}"
 
+RELEASE_MAX_ATTEMPTS = 10
+
+# Typed Xtream paths: /live|movie|series/<user>/<pass>/...
 _XC_URL_CREDENTIALS_RE = re.compile(
     r"/(?:live|movie|series)/([^/]+)/([^/]+)/",
     re.IGNORECASE,
+)
+
+# First path segment values that are XC API/path roots, not usernames.
+_XC_SHORT_FORM_RESERVED_FIRST_SEGMENTS = frozenset(
+    {
+        "live",
+        "movie",
+        "series",
+        "timeshift",
+        "player_api.php",
+        "panel_api.php",
+        "xmltv.php",
+    }
 )
 
 
@@ -54,8 +73,8 @@ def compute_credential_fingerprint(username: str, password: str) -> Optional[str
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def extract_credentials_from_stream_url(url: str) -> Tuple[Optional[str], Optional[str]]:
-    """Parse username/password embedded in an Xtream-style stream URL."""
+def extract_typed_xc_credentials(url: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse credentials from /live|movie|series/<user>/<pass>/ paths."""
     if not url:
         return None, None
     match = _XC_URL_CREDENTIALS_RE.search(url)
@@ -64,8 +83,34 @@ def extract_credentials_from_stream_url(url: str) -> Tuple[Optional[str], Option
     return match.group(1), match.group(2)
 
 
-def _fingerprint_from_profile_stream_url(profile) -> Optional[str]:
-    """STD/M3U: fingerprint from a sample stream URL after profile rewrite."""
+def extract_short_form_xc_credentials(url: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse credentials from short-form stream URLs: /<user>/<pass>/<id>.
+
+    Requires exactly three non-empty path segments. The stream id may be numeric
+    or not, and may include a media extension. Empty segments (trailing slash or
+    "//") are rejected rather than collapsed. Reserved first segments are also
+    rejected so incomplete typed paths are not treated as logins.
+    """
+    if not url:
+        return None, None
+
+    path = urlparse(url).path or ""
+    if not path.startswith("/"):
+        return None, None
+
+    segments = path[1:].split("/")
+    if len(segments) != 3 or not all(segments):
+        return None, None
+
+    username, password, _stream_part = (unquote(part) for part in segments)
+    if username.lower() in _XC_SHORT_FORM_RESERVED_FIRST_SEGMENTS:
+        return None, None
+    return username, password
+
+
+def _transformed_sample_stream_url(profile) -> Optional[str]:
+    """Return one profile-rewritten stream URL for credential fingerprinting."""
     from apps.channels.models import Stream
 
     sample_url = (
@@ -80,18 +125,14 @@ def _fingerprint_from_profile_stream_url(profile) -> Optional[str]:
     try:
         from apps.proxy.live_proxy.url_utils import transform_url
 
-        transformed = transform_url(
+        return transform_url(
             sample_url,
             profile.search_pattern or "",
             profile.replace_pattern or "",
         )
-        if not transformed:
-            return None
-        url_user, url_pass = extract_credentials_from_stream_url(transformed)
-        return compute_credential_fingerprint(url_user or "", url_pass or "")
     except Exception as exc:
         logger.debug(
-            "Could not derive profile %s fingerprint from stream URL: %s",
+            "Could not transform sample stream URL for profile %s: %s",
             profile.pk,
             exc,
         )
@@ -99,7 +140,18 @@ def _fingerprint_from_profile_stream_url(profile) -> Optional[str]:
 
 
 def get_profile_credential_fingerprint(profile) -> Optional[str]:
-    """Fingerprint for credentials this profile uses at playback time."""
+    """Fingerprint for credentials this profile uses at playback time.
+
+    Resolution order (after XC account credential transforms):
+    1. Typed Xtream path credentials in a sample stream URL
+    2. Account username/password
+    3. Short-form Xtream path credentials in a sample stream URL
+
+    Account credentials are preferred over short-form URL parsing so CDN-style
+    three-segment paths cannot override an explicit login and break ServerGroup
+    pairing with XC accounts. Short-form remains available for STD M3U accounts
+    whose only login is embedded in /user/pass/id URLs.
+    """
     m3u_account = profile.m3u_account
 
     if m3u_account.account_type == "XC":
@@ -123,14 +175,25 @@ def get_profile_credential_fingerprint(profile) -> Optional[str]:
             if profile.search_pattern and profile.replace_pattern:
                 return None
 
-    fingerprint = _fingerprint_from_profile_stream_url(profile)
-    if fingerprint:
-        return fingerprint
+    transformed = _transformed_sample_stream_url(profile)
+    if transformed:
+        url_user, url_pass = extract_typed_xc_credentials(transformed)
+        fingerprint = compute_credential_fingerprint(url_user or "", url_pass or "")
+        if fingerprint:
+            return fingerprint
 
-    return compute_credential_fingerprint(
+    fingerprint = compute_credential_fingerprint(
         m3u_account.username or "",
         m3u_account.password or "",
     )
+    if fingerprint:
+        return fingerprint
+
+    if transformed:
+        url_user, url_pass = extract_short_form_xc_credentials(transformed)
+        return compute_credential_fingerprint(url_user or "", url_pass or "")
+
+    return None
 
 
 def get_enforced_server_group_for_profile(profile):
@@ -221,14 +284,19 @@ def move_credential_slot_on_profile_switch(
     old_profile, new_profile, redis_client
 ) -> bool:
     """
-    Move the shared credential counter when switching to a different provider login.
+    Move the shared credential counter when a stream switches profiles.
 
     Profile counters are managed separately by Channel.update_stream_profile().
-    Returns False when the new profile's credential pool is full.
+    When both profiles hold a slot on the same credential counter, the slot stays
+    where it is and only the new profile's release key is armed, so ending the
+    stream on the new profile still frees it. Returns False when the new profile's
+    credential pool is full.
     """
-    old_fp = get_profile_credential_fingerprint(old_profile)
-    new_fp = get_profile_credential_fingerprint(new_profile)
-    if old_fp == new_fp:
+    old_slot_key = _held_credential_slot_key(old_profile)
+    new_slot_key = _held_credential_slot_key(new_profile)
+    if old_slot_key == new_slot_key:
+        if new_slot_key:
+            _remember_credential_release_key(new_profile.id, new_slot_key, redis_client)
         return True
 
     _release_credential_slot_by_profile_id(old_profile.id, redis_client)
@@ -252,13 +320,12 @@ def move_credential_slot_on_profile_switch(
     return True
 
 
-def _safe_decr(redis_client, key: str) -> None:
-    current = int(redis_client.get(key) or 0)
-    if current <= 0:
-        return
-    new_count = redis_client.decr(key)
-    if new_count < 0:
-        redis_client.set(key, 0)
+def _held_credential_slot_key(profile) -> Optional[str]:
+    """Credential counter key a reservation on this profile holds, or None if it holds none."""
+    group = get_enforced_server_group_for_profile(profile)
+    if not group or profile.max_streams == 0:
+        return None
+    return _credential_counter_key(profile, group)
 
 
 def _remember_credential_release_key(
@@ -267,18 +334,55 @@ def _remember_credential_release_key(
     redis_client.set(profile_credential_release_key(profile_id), cred_key)
 
 
-def _release_credential_slot_by_profile_id(profile_id: int, redis_client) -> bool:
-    """Release a reserved credential counter using the key stored at reserve time."""
-    release_key = profile_credential_release_key(profile_id)
-    cred_key = redis_client.get(release_key)
-    if not cred_key:
-        return False
+def _release_credential_slot_by_profile_id(
+    profile_id: int, redis_client, *, release_profile: bool = False
+) -> bool:
+    """
+    Release one credential slot for the profile, and its profile slot if requested.
 
-    if isinstance(cred_key, bytes):
-        cred_key = cred_key.decode()
-    _safe_decr(redis_client, cred_key)
-    redis_client.delete(release_key)
-    return True
+    The stored credential key is kept until the profile's last reservation ends so
+    every stream sharing the profile can still find it. Concurrent counter changes
+    are retried; after RELEASE_MAX_ATTEMPTS conflicts the release is abandoned with
+    a warning instead of blocking stream teardown.
+
+    Returns True when the pipeline committed (including a no-op when counters
+    were already zero). Returns False when every attempt hit WatchError.
+    """
+    release_key = profile_credential_release_key(profile_id)
+    profile_key = profile_connections_key(profile_id)
+    for _ in range(RELEASE_MAX_ATTEMPTS):
+        with redis_client.pipeline() as pipe:
+            try:
+                pipe.watch(release_key, profile_key)
+                profile_count = int(pipe.get(profile_key) or 0)
+                cred_key = pipe.get(release_key)
+                if isinstance(cred_key, bytes):
+                    cred_key = cred_key.decode()
+                if cred_key:
+                    pipe.watch(cred_key)
+                    cred_count = int(pipe.get(cred_key) or 0)
+
+                # Watch the reads and commit both decrements together so concurrent
+                # teardowns cannot consume the same final reservation.
+                pipe.multi()
+                if cred_key and profile_count > 0 and cred_count > 0:
+                    pipe.decr(cred_key)
+                if profile_count <= 1:
+                    pipe.delete(release_key)
+                if release_profile and profile_count > 0:
+                    pipe.decr(profile_key)
+                pipe.execute()
+                return True
+            except WatchError:
+                continue
+
+    logger.warning(
+        "Gave up releasing connection slots for profile %s after %d conflicting "
+        "updates; its counters may be stale",
+        profile_id,
+        RELEASE_MAX_ATTEMPTS,
+    )
+    return False
 
 
 def _reserve_server_group_slot_for_profile(
@@ -345,11 +449,12 @@ def reserve_profile_slot(
     return True, profile_count, None
 
 
-def release_profile_slot(profile_id: int, redis_client) -> None:
-    """Release profile and shared credential slots after a stream end."""
-    _release_credential_slot_by_profile_id(profile_id, redis_client)
+def release_profile_slot(profile_id: int, redis_client) -> bool:
+    """Release profile and shared credential slots after a stream end.
 
-    profile_key = profile_connections_key(profile_id)
-    current = int(redis_client.get(profile_key) or 0)
-    if current > 0:
-        redis_client.decr(profile_key)
+    Returns True when the Redis update committed, False when concurrent
+    updates exhausted the retry budget and the release was abandoned.
+    """
+    return _release_credential_slot_by_profile_id(
+        profile_id, redis_client, release_profile=True
+    )

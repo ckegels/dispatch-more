@@ -11,6 +11,7 @@ export const OVERRIDABLE_FIELDS = [
   'tvc_guide_stationid',
   'epg_data_id',
   'stream_profile_id',
+  'is_radio',
 ];
 
 // Display labels for the override fields above.
@@ -23,6 +24,7 @@ export const OVERRIDE_FIELD_LABELS = {
   tvc_guide_stationid: 'Gracenote Station ID',
   epg_data_id: 'EPG',
   stream_profile_id: 'Stream Profile',
+  is_radio: 'Radio',
 };
 
 export const matchChannelEpg = (channel) => {
@@ -205,6 +207,7 @@ export const getChannelFormDefaultValues = (channel, channelGroups) => {
     logo_id: logoId ? `${logoId}` : '',
     user_level: `${channel?.user_level ?? '0'}`,
     is_adult: channel?.is_adult ?? false,
+    is_radio: effective(channel, 'is_radio') ?? false,
     hidden_from_output: channel?.hidden_from_output ?? false,
   };
 };
@@ -238,14 +241,16 @@ export const handleEpgUpdate = async (
 ) => {
   // Auto-synced channels route identity edits into the override row. Sync
   // keeps writing provider values to Channel.* unmodified, so the override
-  // is what actually persists user changes across refreshes. `hidden_from_output`
-  // stays as a direct Channel field even for auto-created channels because
-  // it is a status flag, not a value replacement.
+  // is what actually persists user changes across refreshes. Status and
+  // permission flags stay on the channel row: hidden_from_output, user_level,
+  // and is_adult.
   if (channel.auto_created) {
     const overridePayload = buildOverridePayload(channel, formattedValues);
     const payload = {
       id: channel.id,
       hidden_from_output: formattedValues.hidden_from_output,
+      user_level: formattedValues.user_level,
+      is_adult: formattedValues.is_adult,
     };
     if (overridePayload !== undefined) {
       payload.override = overridePayload;

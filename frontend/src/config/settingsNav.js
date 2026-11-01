@@ -2,9 +2,11 @@ import { lazy } from 'react';
 import {
   Activity,
   ArrowLeftRight,
+  CalendarDays,
   DatabaseBackup,
   KeyRound,
   FileOutput,
+  KeyRound,
   Menu,
   Monitor,
   Network,
@@ -28,10 +30,12 @@ const Diagnostics = lazy(() => import('../components/diagnostics/Diagnostics.jsx
 const MediaServers = lazy(() => import('../components/mediaservers/MediaServers.jsx'));
 const ArrTvSettings = lazy(() => import('../components/arrtv/ArrTvSettings.jsx'));
 const DvrSettingsForm = lazy(() => import('../components/forms/settings/DvrSettingsForm.jsx'));
+const EpgSettingsForm = lazy(() => import('../components/forms/settings/EpgSettingsForm.jsx'));
 const UserAgentsTable = lazy(() => import('../components/tables/UserAgentsTable.jsx'));
 const NetworkAccessForm = lazy(() => import('../components/forms/settings/NetworkAccessForm.jsx'));
 const SystemSettingsForm = lazy(() => import('../components/forms/settings/SystemSettingsForm.jsx'));
 const UserLimitsForm = lazy(() => import('../components/forms/settings/UserLimitsForm.jsx'));
+const ReverseProxyAuthForm = lazy(() => import('../components/forms/settings/ReverseProxyAuthForm.jsx'));
 const BackupManager = lazy(() => import('../components/backups/BackupManager.jsx'));
 const ServiceKeysForm = lazy(() => import('../components/forms/settings/ServiceKeysForm.jsx'));
 const ModifiedBuild = lazy(() => import('../components/ModifiedBuild.jsx'));
@@ -73,6 +77,14 @@ export const SETTINGS_GROUPS = [
     ],
   },
   {
+    id: 'epg',
+    label: 'EPG',
+    adminOnly: true,
+    sections: [
+      { id: 'epg-settings', label: 'EPG Settings', icon: CalendarDays, Component: EpgSettingsForm },
+    ],
+  },
+  {
     id: 'network',
     label: 'Network',
     adminOnly: true,
@@ -87,6 +99,7 @@ export const SETTINGS_GROUPS = [
     adminOnly: true,
     sections: [
       { id: 'system-settings', label: 'System Settings', icon: Settings2, Component: SystemSettingsForm },
+      { id: 'reverse-proxy-auth', label: 'Reverse Proxy Auth', icon: KeyRound, Component: ReverseProxyAuthForm },
       { id: 'user-limits', label: 'User Limits', icon: Users, Component: UserLimitsForm },
       // Not official Dispatcharr: keys for TMDB, TheTVDB, Trakt, OMDb, shared by every feature
       { id: 'service-keys', label: 'Service keys', icon: KeyRound, Component: ServiceKeysForm },

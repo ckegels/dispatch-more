@@ -677,16 +677,11 @@ const ArrTvSettings = () => {
             </Box>
           )}
         </Box>
-        <Seconds
-          label="Keep the guide's past"
-          w={420}
-          min={0}
-          max={7}
-          suffix=" days"
-          description="Each guide refresh throws away what has already been on, and most guide files start at today, so the TV cannot scroll back even to this morning. Set 3 to keep three days of finished programmes (0 keeps none, as Dispatcharr does). arrTV shows them once its login has “EPG previous days” set to the same number (Users → edit the user). The past fills in from the next refresh on."
-          value={settings.keep_past_days ?? 0}
-          onSave={(days) => change({ keep_past_days: days })}
-        />
+        <Text size="xs" c="dimmed" maw={520}>
+          The guide's past is kept by Dispatcharr itself now: Settings → EPG → EPG Settings
+          sets how many days of finished programmes stay (at least one, more for channels with
+          catch-up), and Default days back what a TV is sent.
+        </Text>
         <Setting
           label="Server rewind"
           description="While a TV watches a channel, the server keeps a recording of it, so arrTV can pause for as long as it likes and rewind without using the TV's own storage. On for every user, whatever the TV's own Live Rewind setting says. Read from the channel the TV already plays: no extra provider connection while someone watches; a paused TV alone keeps its channel open. Off: nothing is recorded and arrTV uses its own buffer."

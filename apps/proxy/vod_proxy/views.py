@@ -18,15 +18,15 @@ from apps.m3u.models import M3UAccountProfile
 from apps.proxy.vod_proxy.multi_worker_connection_manager import MultiWorkerVODConnectionManager, infer_content_type_from_url, get_vod_client_stop_key
 from .utils import get_client_info
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from apps.accounts.models import User
 from apps.accounts.permissions import IsAdmin
+from apps.accounts.xc_auth import authorize_xc_client
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.accounts.authentication import ApiKeyAuthentication, QueryParamJWTAuthentication
 from apps.proxy.utils import check_user_stream_limits
 from dispatcharr.utils import network_access_allowed
-from core.utils import dispatcharr_user_agent
+from core.utils import dispatcharr_user_agent, RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,28 @@ def _find_idle_vod_session(
         return None
 
 
+# How long a client may keep the session-mint 301. Long enough for a long
+# playback; short enough that a stale session_id does not stick forever in a
+# browser redirect cache.
+VOD_SESSION_REDIRECT_CACHE_SECONDS = 6 * 3600
+
+
+def _session_redirect_cache_control(request):
+    """Cache-Control for the redirect that puts a session id in the URL.
+
+    This 301 is how later Range requests stay on one session, so it must be
+    cacheable by the client (``private, max-age=...``). ``no-store`` /
+    ``no-cache`` would force every reopen back to the bare URL and a new mint.
+
+    Exception: a request that carried ``?token=`` (browser player auth). The
+    Location drops the token, so a stored copy would replay anonymously and is
+    never stored.
+    """
+    if "token" in request.GET:
+        return "no-store"
+    return f"private, max-age={VOD_SESSION_REDIRECT_CACHE_SECONDS}"
+
+
 def _vod_session_path_redirect(request, session_id, profile_id=None, user=None):
     """
     301 to the same VOD URL with session_id in the path (or XC query string).
@@ -141,7 +163,13 @@ def _vod_session_path_redirect(request, session_id, profile_id=None, user=None):
         except Exception:
             pass
 
-    return HttpResponse(status=301, headers={"Location": redirect_url})
+    return HttpResponse(
+        status=301,
+        headers={
+            "Location": redirect_url,
+            "Cache-Control": _session_redirect_cache_control(request),
+        },
+    )
 
 
 def _select_vod_stream(
@@ -650,7 +678,16 @@ def _vod_playback_allowed(content_type, user):
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication, ApiKeyAuthentication, QueryParamJWTAuthentication])
 @permission_classes([AllowAny])
-def stream_vod(request, content_type, content_id, session_id=None, profile_id=None, user=None):
+def stream_vod(
+    request,
+    content_type,
+    content_id,
+    session_id=None,
+    profile_id=None,
+    user=None,
+    *,
+    check_network=True,
+):
     """
     Stream VOD content (movies or series episodes) with session-based connection reuse
 
@@ -659,8 +696,11 @@ def stream_vod(request, content_type, content_id, session_id=None, profile_id=No
         content_id: ID of the content
         session_id: Optional session ID from URL path (for persistent connections)
         profile_id: Optional M3U profile ID for authentication
+        check_network: When False, skip the STREAMS allowlist. XC movie/episode
+            entry points call authorize_xc_client (XC_API) first, then pass
+            False so STREAMS is not required as well.
     """
-    if not network_access_allowed(request, "STREAMS"):
+    if check_network and not network_access_allowed(request, "STREAMS"):
         return JsonResponse({"error": "Forbidden"}, status=403)
     user = _user_from_vod_request(request, user)
     if not _vod_playback_allowed(content_type, user):
@@ -1046,23 +1086,7 @@ def head_vod(request, content_type, content_id, session_id=None, profile_id=None
 
         # Store the total content length in Redis for the persistent connection to use
         try:
-            import redis
-            from django.conf import settings
-            redis_host = getattr(settings, 'REDIS_HOST', 'localhost')
-            redis_port = int(getattr(settings, 'REDIS_PORT', 6379))
-            redis_db = int(getattr(settings, 'REDIS_DB', 0))
-            redis_password = getattr(settings, 'REDIS_PASSWORD', '')
-            redis_user = getattr(settings, 'REDIS_USER', '')
-            ssl_params = getattr(settings, 'REDIS_SSL_PARAMS', {})
-            r = redis.StrictRedis(
-                host=redis_host,
-                port=redis_port,
-                db=redis_db,
-                password=redis_password if redis_password else None,
-                username=redis_user if redis_user else None,
-                decode_responses=True,
-                **ssl_params
-            )
+            r = RedisClient().get_client()
             content_length_key = f"vod_content_length:{session_id}"
             r.set(content_length_key, total_size, ex=1800)  # Store for 30 minutes
             logger.info(f"[VOD-HEAD] Stored total content length {total_size} for session {session_id}")
@@ -1446,26 +1470,14 @@ def stop_vod_client(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def stream_xc_movie(request, username, password, stream_id, extension):
-    if not network_access_allowed(request, "STREAMS"):
-        return JsonResponse({"error": "Forbidden"}, status=403)
-
     from apps.vod.models import M3UMovieRelation
 
     session_id = request.GET.get('session_id')
     profile_id = request.GET.get('profile_id')
 
-    user = get_object_or_404(User, username=username)
-
-    if not network_access_allowed(request, 'STREAMS', user):
-        return Response({"error": "Forbidden"}, status=403)
-
-    custom_properties = user.custom_properties or {}
-
-    if "xc_password" not in custom_properties:
-        return Response({"error": "Invalid credentials"}, status=401)
-
-    if custom_properties["xc_password"] != password:
-        return Response({"error": "Invalid credentials"}, status=401)
+    user, error = authorize_xc_client(request, username, password, "XC_API")
+    if error is not None:
+        return error
 
     if not is_vod_movies_enabled(user=user):
         return JsonResponse({"error": "Forbidden"}, status=403)
@@ -1481,31 +1493,27 @@ def stream_xc_movie(request, username, password, stream_id, extension):
     except (M3UMovieRelation.DoesNotExist, M3UMovieRelation.MultipleObjectsReturned):
         return JsonResponse({"error": "Movie not found"}, status=404)
 
-    return stream_vod(request._request, 'movie', movie_relation.movie.uuid, session_id, profile_id, user)
+    return stream_vod(
+        request._request,
+        'movie',
+        movie_relation.movie.uuid,
+        session_id,
+        profile_id,
+        user,
+        check_network=False,
+    )
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def stream_xc_episode(request, username, password, stream_id, extension):
-    if not network_access_allowed(request, "STREAMS"):
-        return JsonResponse({"error": "Forbidden"}, status=403)
-
     from apps.vod.models import M3UEpisodeRelation
 
     session_id = request.GET.get('session_id')
     profile_id = request.GET.get('profile_id')
 
-    user = get_object_or_404(User, username=username)
-
-    if not network_access_allowed(request, 'STREAMS', user):
-        return Response({"error": "Forbidden"}, status=403)
-
-    custom_properties = user.custom_properties or {}
-
-    if "xc_password" not in custom_properties:
-        return Response({"error": "Invalid credentials"}, status=401)
-
-    if custom_properties["xc_password"] != password:
-        return Response({"error": "Invalid credentials"}, status=401)
+    user, error = authorize_xc_client(request, username, password, "XC_API")
+    if error is not None:
+        return error
 
     if not is_vod_series_enabled(user=user):
         return JsonResponse({"error": "Forbidden"}, status=403)
@@ -1517,4 +1525,12 @@ def stream_xc_episode(request, username, password, stream_id, extension):
     if not episode_relation:
         return JsonResponse({"error": "Episode not found"}, status=404)
 
-    return stream_vod(request._request, 'episode', episode_relation.episode.uuid, session_id, profile_id, user)
+    return stream_vod(
+        request._request,
+        'episode',
+        episode_relation.episode.uuid,
+        session_id,
+        profile_id,
+        user,
+        check_network=False,
+    )

@@ -6,7 +6,6 @@ This module handles generating and delivering video streams to clients.
 import time
 import gevent
 from apps.proxy.config import TSConfig as Config
-from apps.channels.models import Channel, Stream
 from django.db import close_old_connections
 from core.utils import log_system_event
 from ...server import ProxyServer
@@ -557,7 +556,7 @@ class StreamGenerator:
         else:
             # Non-owner worker: stream_manager only exists in the owner process.
             # Approximate health from the Redis last_data timestamp; if stale
-            # beyond CONNECTION_TIMEOUT, send keepalives to prevent DVR timeout.
+            # beyond connection_timeout, send keepalives to prevent DVR timeout.
             # Throttled: only re-query Redis every _health_check_interval seconds
             # to avoid a Redis GET on every loop iteration during sustained waits.
             now = time.time()
@@ -569,7 +568,7 @@ class StreamGenerator:
                     raw = proxy_server.redis_client.get(RedisKeys.last_data(self.channel_id))
                     if raw:
                         age = now - float(raw)
-                        timeout_threshold = getattr(Config, 'CONNECTION_TIMEOUT', 10)
+                        timeout_threshold = ConfigHelper.connection_timeout()
                         result = age >= timeout_threshold
                     else:
                         # No timestamp in Redis → key missing or expired → unhealthy
@@ -627,11 +626,9 @@ class StreamGenerator:
                         # During shutdown_delay, keep the slot until coordinated stop runs.
                         if client_count <= 1 and ConfigHelper.channel_shutdown_delay() <= 0:
                             try:
-                                try:
-                                    obj = Channel.objects.get(uuid=self.channel_id)
-                                except (Channel.DoesNotExist, Exception):
-                                    obj = Stream.objects.get(stream_hash=self.channel_id)
-                                stream_released = obj.release_stream()
+                                from ...url_utils import release_worker_stream
+
+                                stream_released = release_worker_stream(self.channel_id)
                                 if stream_released:
                                     logger.debug(f"[{self.client_id}] Released stream for channel {self.channel_id}")
                                 else:
