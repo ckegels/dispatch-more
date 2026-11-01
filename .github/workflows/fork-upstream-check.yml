@@ -31,7 +31,11 @@ jobs:
           git fetch --quiet --tags official
           BASE_COMMIT="$(cat fork/patcher/BASE)"
           BASE_VERSION="$(git show "$BASE_COMMIT:version.py" | sed -n "s/^__version__ = '\(.*\)'.*/\1/p")"
-          NEWEST="$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -v -e '-' | head -1)"
+          # Dispatcharr's own release tags, asked of Dispatcharr itself: the fork's checkout has
+          # its own release tags too (v99 ... v275), which sort above v0.33.0 and were taken for
+          # Dispatcharr releases ("Dispatcharr 275 is out") while the real ones went unseen
+          NEWEST="$(git ls-remote --tags --refs official 'v*' | sed 's#.*refs/tags/##' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
           echo "base=$BASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "newest=${NEWEST#v}" >> "$GITHUB_OUTPUT"
           if [ "v$BASE_VERSION" = "$NEWEST" ]; then
