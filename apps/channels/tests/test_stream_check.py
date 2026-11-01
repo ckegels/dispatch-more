@@ -120,6 +120,59 @@ class FakeRedis:
     def scan_iter(self, match="*", count=None):
         return iter([key for key in list(self.data) if fnmatch.fnmatch(key, match)])
 
+    def pipeline(self, transaction=True):
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    """
+    WATCH/MULTI/EXEC as Dispatcharr's slot release uses it (apps.m3u.connection_pool, from
+    0.32): reads go straight through until multi(), then commands are queued and run together
+    -- unless a watched key moved meanwhile, when it raises WatchError as Redis does.
+    """
+
+    def __init__(self, redis):
+        self.redis = redis
+        self.watched = {}
+        self.queued = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.reset()
+
+    def reset(self):
+        self.watched, self.queued = {}, None
+
+    def watch(self, *keys):
+        for key in keys:
+            self.watched[key] = self.redis.get(key)
+
+    def multi(self):
+        self.queued = []
+
+    def __getattr__(self, name):
+        method = getattr(self.redis, name)
+        if self.queued is None:
+            return method
+
+        def queue(*args, **kwargs):
+            self.queued.append((method, args, kwargs))
+            return self
+
+        return queue
+
+    def execute(self):
+        from redis.exceptions import WatchError
+
+        if any(self.redis.get(key) != value for key, value in self.watched.items()):
+            self.reset()
+            raise WatchError("a watched key changed")
+        results = [method(*args, **kwargs) for method, args, kwargs in self.queued or ()]
+        self.reset()
+        return results
+
 
 def _video(seconds=2, source="testsrc=size=320x240:rate=25"):
     """A few seconds of real MPEG-TS, made by ffmpeg: moving by default."""

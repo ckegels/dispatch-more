@@ -178,21 +178,17 @@ def _user_names(ids):
 
 
 def may_watch(user_id, channel_uuid):
-    """Whether this login may watch this channel, by Dispatcharr's own rule (its level, its channel profiles)."""
+    """
+    Whether this login may watch this channel, by Dispatcharr's own rule: since 0.33 that is
+    apps.channels.access (its level, hiding adult content, its channel profiles), the same
+    rule every other way to a channel uses.
+    """
     try:
         from apps.accounts.models import User
-        from apps.channels.models import Channel
+        from apps.channels.access import get_channel_for_user
 
         user = User.objects.get(id=int(user_id))
-        if user.user_level >= 10:
-            return Channel.objects.filter(uuid=channel_uuid).exists()
-        channels = Channel.objects.filter(uuid=channel_uuid, user_level__lte=user.user_level)
-        if user.channel_profiles.count():
-            channels = channels.filter(
-                channelprofilemembership__enabled=True,
-                channelprofilemembership__channel_profile__in=user.channel_profiles.all(),
-            )
-        return channels.exists()
+        return get_channel_for_user(user, uuid=channel_uuid) is not None
     except Exception:
         return False
 

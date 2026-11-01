@@ -119,19 +119,18 @@ class OwnStreamTests(TestCase):
         self.assertEqual(self.own(), "┃DE┃ RTL ZWEI FHD")
 
     def test_never_a_stream_another_channel_is_playing(self):
-        # Stock would not count the second connection to it, and the provider would be one
-        # over its limit: somebody's stream ends
+        # A second connection to a stream already playing buys nothing
         self.redis.set(f"stream_profile:{self.streams['DE| RTL ZWEI FHD'].id}", 1)
         # The other provider's HD then: another provider first, as the user put it
         self.assertEqual(self.own(), "DE| RTL ZWEI HD")
 
-    def test_never_a_stream_whose_id_a_channel_has(self):
+    def test_a_stream_whose_id_a_channel_has_is_a_choice_like_any(self):
         from apps.channels.models import Channel
 
-        # Its slot would be kept under the same key as that channel's
+        # Dispatcharr 0.33 keeps a stream run on its own apart from channels' keys
         clash = self.streams["DE| RTL ZWEI FHD"].id
         Channel.objects.create(id=clash, name="Somebody else's channel", channel_number=900)
-        self.assertEqual(self.own(), "DE| RTL ZWEI HD")
+        self.assertEqual(self.own(), "DE| RTL ZWEI FHD")
 
     def test_only_where_a_connection_is_free(self):
         self.free[self.two.id] = False

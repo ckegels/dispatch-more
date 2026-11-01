@@ -142,6 +142,17 @@ class Live(Base):
         self.assertFalse(copy.hidden_from_output)
         self.assertEqual(list(copy.streams.values_list("id", flat=True)), [self.stream.id])
 
+    def test_its_channel_group_is_one_of_your_own(self):
+        # Dispatcharr 0.33 tells the user's groups from a provider's by the custom account
+        from apps.channels.models import ChannelGroupM3UAccount
+
+        self.airs(self.pbs_guide, "Rick Steves' Europe", 10, 30, ["Travel"])
+        self.switch_on("travel")
+        self.run_at(0)
+        group = Channel.objects.get(channel_group__name="Travel").channel_group
+        self.assertTrue(ChannelGroupM3UAccount.objects.filter(
+            channel_group=group, m3u_account__locked=True).exists())
+
     def test_a_copy_leaves_when_its_show_is_over_but_not_under_a_viewer(self):
         self.airs(self.pbs_guide, "Rick Steves' Europe", 10, 30, ["Travel"])
         self.switch_on("travel")

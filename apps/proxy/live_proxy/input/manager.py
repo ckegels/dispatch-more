@@ -1774,13 +1774,15 @@ class StreamManager:
         Whether an arrTV device marked the channel is read from Redis once per start;
         a channel nobody marked never reads the settings.
         """
-        if not (self.connected and getattr(self.buffer, 'index', 0) == 0):
+        # A stream manager without a buffer (upstream's tests make bare ones) is none of this
+        buffer = getattr(self, 'buffer', None)
+        if buffer is None or not (self.connected and getattr(buffer, 'index', 0) == 0):
             return None
         from apps.proxy.live_proxy import app_devices
 
         if not hasattr(self, "_fast_alternatives"):
             self._fast_alternatives = app_devices.fast_start_alternatives(
-                getattr(self.buffer, "redis_client", None), self.channel_id
+                getattr(buffer, "redis_client", None), self.channel_id
             )
         if not self._fast_alternatives:
             return None

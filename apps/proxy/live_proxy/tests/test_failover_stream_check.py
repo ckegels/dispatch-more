@@ -13,7 +13,7 @@ class FailoverWaitsForACheckTests(TestCase):
     def test_a_check_letting_go_gives_failover_its_stream(self):
         sm = _make_manager()
         tries = iter([False, True])
-        with patch.object(sm, "_try_next_stream", side_effect=lambda: next(tries)), \
+        with patch.object(sm, "_try_next_stream", side_effect=lambda **kw: next(tries)), \
              patch.object(sm, "_wait_for_stream_check", return_value=True):
             self.assertTrue(sm._try_next_stream_with_cooldown())
 
@@ -25,10 +25,24 @@ class FailoverWaitsForACheckTests(TestCase):
             return False
 
         tries = iter([arms_then_fails, lambda: True])
-        with patch.object(sm, "_try_next_stream", side_effect=lambda: next(tries)()), \
+        with patch.object(sm, "_try_next_stream", side_effect=lambda **kw: next(tries)()), \
              patch.object(sm, "_wait_for_stream_check", return_value=True):
             self.assertTrue(sm._try_next_stream_with_cooldown())
         self.assertEqual((sm._failover_rotation_passes, sm._rotation_cooldown_until), (0, None))
+
+    def test_the_try_after_a_check_let_go_keeps_the_reason(self):
+        # Dispatcharr 0.32+ records why a channel switched; the second try is the same switch
+        sm = _make_manager()
+        reasons, tries = [], iter([False, True])
+
+        def try_next(**kwargs):
+            reasons.append(kwargs.get("reason"))
+            return next(tries)
+
+        with patch.object(sm, "_try_next_stream", side_effect=try_next), \
+             patch.object(sm, "_wait_for_stream_check", return_value=True):
+            self.assertTrue(sm._try_next_stream_with_cooldown(reason="health_monitor"))
+        self.assertEqual(reasons, ["health_monitor", "health_monitor"])
 
     def test_no_check_running_changes_nothing(self):
         sm = _make_manager()

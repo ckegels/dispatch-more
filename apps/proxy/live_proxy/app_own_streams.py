@@ -148,20 +148,17 @@ def own_stream_for(redis_client, viewer, channel):
 
 
 def _pick(redis_client, viewer, channel, current, limit):
-    from apps.channels.models import Channel
     from apps.m3u.connection_pool import pool_has_capacity_for_profile
 
+    # A stream run on its own keeps its slot under stream_profile:<id>:preview since Dispatcharr
+    # 0.33 (#1773), never under a channel's keys: a stream whose id is also some channel's is as
+    # good a choice as any (0.31 kept it under channel_stream:<id>, so this left those out)
     streams = list(channel.streams.select_related("m3u_account").order_by("channelstream__order"))
-    # Stock keeps a stream run on its own under channel_stream:<stream id>, the same keys a
-    # channel's slot is kept under by *its* id: a channel whose id is this stream's would be
-    # handed this stream when it starts. Stock's previews take that chance; this is automatic,
-    # so a stream whose id is a channel's is never chosen.
-    clashing = set(Channel.objects.filter(id__in=[s.id for s in streams]).values_list("id", flat=True))
     choices = []
     for position, stream in enumerate(streams):
         if stream.id == current.id or stream.is_custom or not stream.m3u_account or not stream.stream_hash:
             continue
-        if stream.m3u_account.is_active is False or stream.id in clashing:
+        if stream.m3u_account.is_active is False:
             continue
         fits, says = _fits(stream, limit)
         if not fits:
@@ -170,9 +167,9 @@ def _pick(redis_client, viewer, channel, current, limit):
             # Already run on its own for another device: joining it opens nothing
             cost = 0
         elif redis_client.get(f"stream_profile:{stream.id}"):
-            # Playing on some other channel. Stock would not count a second connection to
-            # it (Stream.get_stream takes the stream as already reserved) while it opens
-            # one: past the provider's limit, which ends somebody's stream. Never that.
+            # Playing on some other channel: running it apart would open a second connection
+            # to the same stream (0.31 did not even count it, past the provider's limit),
+            # where another stream costs a connection that buys something
             continue
         elif any(
             profile.is_active and pool_has_capacity_for_profile(profile, redis_client, viewer)

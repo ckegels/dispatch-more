@@ -1787,12 +1787,13 @@ def _open_at_its_minute(redis_client, session_id, pool_session_id, media_id, tim
     provider's archive has, since its URLs carry the minute only. The pool forgets its archive
     URL, so this request opens the provider's archive at exactly that minute, on the same
     provider connection, rather than estimating a byte offset into the archive it has open
-    (_resolve_session_archive_scrub, from the archive's reported length: on the user's provider
-    it landed on the minute it started from again, 2026-10-17).
+    (on the user's provider that landed on the minute it started from again, 2026-10-17).
 
-    A start with seconds (resuming where the viewer left off) keeps that estimate: a fresh
-    archive could only start at the minute before it. So does a session at the pool's own
-    position, and one without an API session (an Xtream player, served as stock serves it).
+    Since Dispatcharr 0.33 (#1540) stock asks the provider again itself for any start a second
+    or more from the open archive's (_archive_anchor_differs), and no longer estimates offsets
+    at all; this still clears the pool's archive for a whole-minute start the pool has no anchor
+    for. A start with seconds, a session at the pool's own position, and one without an API
+    session (an Xtream player) are left to stock.
     """
     if redis_client is None or not catchup_session_exists(session_id, redis_client=redis_client):
         return False

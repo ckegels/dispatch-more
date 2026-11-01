@@ -99,11 +99,13 @@ def channel_for(user, given):
     """
     The channel `given` names (its UUID or its number id), if this login may see it; else None.
 
-    The same rule the stream endpoints use: an admin sees every channel, anyone else the ones
-    at or under their level and, when they have channel profiles, only those enabled in one
-    of them. A channel somebody cannot watch is not one whose guide they may change, and
-    telling them it exists is already more than they are owed.
+    The same rule the stream endpoints use (apps.channels.access): an admin sees every
+    channel, anyone else the ones at or under their level, not adult ones when they hide
+    those, and, when they have channel profiles, only those enabled in one of them. A channel
+    somebody cannot watch is not one whose guide they may change, and telling them it exists
+    is already more than they are owed.
     """
+    from apps.channels.access import channels_queryset_for_user
     from apps.channels.models import Channel
 
     given = str(given or "").strip()
@@ -111,15 +113,8 @@ def channel_for(user, given):
         return None
     rows = Channel.objects.all()
     rows = rows.filter(id=int(given)) if given.isdigit() else rows.filter(uuid=given)
-    level = getattr(user, "user_level", 0) or 0
-    if level < 10:
-        rows = rows.filter(user_level__lte=level)
-        profiles = user.channel_profiles.all()
-        if profiles.exists():
-            rows = rows.filter(
-                channelprofilemembership__enabled=True,
-                channelprofilemembership__channel_profile__in=profiles,
-            ).distinct()
+    # Dispatcharr's own rule for who sees a channel (apps.channels.access, 0.33)
+    rows = channels_queryset_for_user(rows, user)
     try:
         return rows.select_related("epg_data", "epg_data__epg_source").first()
     except Exception:

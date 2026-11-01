@@ -157,23 +157,6 @@ class SeekSessionTests(SimpleTestCase):
         self.redis.delete(views._pool_key(self.old))
         self.assertIsNone(views._held_pool(self.redis, self.new, 3))
 
-    def test_a_seek_is_served_to_the_second_in_the_archive_the_pool_has_open(self):
-        """
-        Not by opening a new archive: provider URLs carry the minute only, so a +30 s press
-        from the start of a minute asked for that same minute again (the Shield, 2026-10-16).
-        """
-        sessions.adopt(self.new, self.old, redis_client=self.redis)
-        self.redis.hset(views._pool_key(self.old), mapping={
-            "content_length": "600000000", "archive_duration_secs": "3600",
-            "archive_anchor_ts": "2026-10-16T20:00:00Z",
-        })
-        entry = views._get_pool_entry(self.redis, views._held_pool(self.redis, self.new, 3))
-        scrub = views._resolve_session_archive_scrub(entry, "2026-10-16T20:00:31Z")
-        self.assertEqual(scrub["kind"], "scrub")
-        self.assertEqual(entry.get("final_url"), "http://cdn/archive-opened-at-20-00.ts")
-        # 31 s of an hour's 600 MB, on a TS packet boundary
-        self.assertEqual(scrub["byte_offset"], (int(31 / 3600 * 600000000) // 188) * 188)
-
     def test_a_whole_minute_opens_the_providers_archive_at_that_minute(self):
         """arrTV moves a minute a press: the provider serves that minute exactly."""
         self.assertTrue(views._open_at_its_minute(

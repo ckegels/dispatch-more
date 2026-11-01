@@ -190,18 +190,49 @@ class FakeRedis:
 
 
 class _FakePipeline:
+    """
+    Commands are queued and run at execute(). As in redis-py, watch() puts the pipeline in
+    immediate mode until multi() -- how Dispatcharr's slot release (0.32+) reads the counters
+    it then changes together; a watched key that moved meanwhile raises WatchError.
+    """
+
     def __init__(self, redis):
         self.redis = redis
         self.calls = []
+        self.watched = {}
+        self.immediate = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.calls, self.watched, self.immediate = [], {}, False
+
+    def watch(self, *keys):
+        self.immediate = True
+        for key in keys:
+            self.watched[key] = self.redis.get(key)
+
+    def multi(self):
+        self.immediate = False
 
     def __getattr__(self, name):
+        if self.immediate:
+            return getattr(self.redis, name)
+
         def queue(*args, **kwargs):
             self.calls.append((name, args, kwargs))
             return self
         return queue
 
     def execute(self):
-        return [getattr(self.redis, name)(*args, **kwargs) for name, args, kwargs in self.calls]
+        from redis.exceptions import WatchError
+
+        if any(self.redis.get(key) != value for key, value in self.watched.items()):
+            self.calls, self.watched = [], {}
+            raise WatchError("a watched key changed")
+        calls, self.calls, self.watched = self.calls, [], {}
+        return [getattr(self.redis, name)(*args, **kwargs) for name, args, kwargs in calls]
 
 
 def _reset_in_use_cache(test):
@@ -2596,7 +2627,7 @@ class StreamManagerRefusalRetryTests(TestCase):
                 sm.last_data_time += 1
             sm.connected = False
 
-        def fake_try_next():
+        def fake_try_next(**kwargs):
             sm.running = False
             return False
 

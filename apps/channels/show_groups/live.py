@@ -238,7 +238,9 @@ def ensure_group(entry, name, ours):
         if ChannelGroup.objects.filter(name=name).exists():
             raise Refused(f'You already have a channel group called "{name}"; give this show '
                           'group another name (say "' + name + ' now").')
-        group = ChannelGroup.objects.create(name=name)
+        # A group of the user's own, as Dispatcharr 0.33 marks the ones made by hand (custom,
+        # never a provider's to clean up; Group Manager shows it so)
+        group = ChannelGroup.objects.create_manual(name=name)
         entry["group_id"] = group.id
     strangers = Channel.objects.filter(channel_group=group).exclude(id__in=ours)
     if strangers.exists():

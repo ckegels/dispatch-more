@@ -331,6 +331,14 @@ class GuideChoiceTests(TestCase):
         ChannelProfileMembership.objects.filter(channel_profile=profile).update(enabled=True)
         self.assertEqual(self.ask().status_code, 200)
 
+    def test_an_adult_channel_is_not_there_for_a_login_that_hides_them(self):
+        self.channel.is_adult = True
+        self.channel.save()
+        self.assertEqual(self.ask().status_code, 200)
+        self.alice.custom_properties = {"hide_adult_content": True}
+        self.alice.save()
+        self.assertEqual(self.ask().status_code, 404)
+
     # -- choosing -------------------------------------------------------------------------
 
     def test_choosing_puts_the_channel_on_the_guide_and_says_what_is_on(self):

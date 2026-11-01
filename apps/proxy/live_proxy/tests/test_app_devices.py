@@ -386,11 +386,12 @@ class FastFailoverTests(TestCase):
         fake = types.SimpleNamespace(
             connected=True, channel_id=channel_id,
             buffer=types.SimpleNamespace(index=index, redis_client=self.redis),
-            tried_stream_ids=set(range(tried)),
+            tried_stream_ids=set(range(tried)), url_switching=False,
         )
-        fake._fast_start_grace = types.MethodType(StreamManager._fast_start_grace, fake)
-        fake._health_inactivity_threshold = types.MethodType(StreamManager._health_inactivity_threshold, fake)
-        fake._note_stall = types.MethodType(StreamManager._note_stall, fake)
+        for name in ("_fast_start_grace", "_stream_startup_timeout", "_health_inactivity_threshold",
+                     "_note_stall", "_connection_is_awaiting_data", "_startup_switch_enabled",
+                     "_request_startup_stream_switch", "_health_poll_interval"):
+            setattr(fake, name, types.MethodType(getattr(StreamManager, name), fake))
         return fake
 
     def test_off_marks_nothing_and_the_stock_grace_applies(self):
@@ -427,20 +428,34 @@ class FastFailoverTests(TestCase):
         reading.assert_not_called()
 
     def test_the_stream_manager_waits_the_short_grace_only_before_any_data(self):
+        """
+        Dispatcharr 0.33's Stream Startup Timeout (8 s by default) is how long a connection may
+        stay silent; faster failover only makes it shorter, for a channel an arrTV device
+        started and only before any data came. ConfigHelper reads the database and then closes
+        its connection, so it is stood in for here.
+        """
         from apps.proxy.live_proxy.config_helper import ConfigHelper
 
         self.switch(fast_failover=True)
         app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=1)
-        fake = self.manager()
-        self.assertEqual(fake._health_inactivity_threshold(), app_devices.FAST_START_GRACE)
-        # Once data came, the stock rule for a running stream
-        fake.buffer.index = 10
-        self.assertNotEqual(fake._health_inactivity_threshold(), app_devices.FAST_START_GRACE)
-        # A channel nobody marked: the stock start grace (read through ConfigHelper, which
-        # closes the database connection after reading, so stood in for here)
-        other = self.manager("ch2")
-        with mock.patch.object(ConfigHelper, "channel_init_grace_period", return_value=60):
-            self.assertEqual(other._health_inactivity_threshold(), 60)
+        with mock.patch.object(ConfigHelper, "stream_startup_timeout", return_value=8), \
+                mock.patch.object(ConfigHelper, "connection_timeout", return_value=10):
+            fake = self.manager()
+            self.assertEqual(fake._stream_startup_timeout(), app_devices.FAST_START_GRACE)
+            self.assertEqual(fake._health_inactivity_threshold(), app_devices.FAST_START_GRACE)
+            # Once data came, the stock rule for a running stream
+            fake.buffer.index = 10
+            self.assertEqual(fake._stream_startup_timeout(), 8)
+            # A channel nobody marked: stock's startup timeout
+            self.assertEqual(self.manager("ch2")._health_inactivity_threshold(), 8)
+
+    def test_it_never_waits_longer_than_stock(self):
+        from apps.proxy.live_proxy.config_helper import ConfigHelper
+
+        self.switch(fast_failover=True, fast_grace=20)
+        app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=1)
+        with mock.patch.object(ConfigHelper, "stream_startup_timeout", return_value=8):
+            self.assertEqual(self.manager()._stream_startup_timeout(), 8)
 
     def test_the_walk_is_quick_while_there_are_streams_to_burn_through_and_slower_near_the_end(self):
         """
@@ -453,42 +468,46 @@ class FastFailoverTests(TestCase):
         waits = [self.manager(tried=tried)._fast_start_grace() for tried in (1, 2, 3, 4)]
         self.assertEqual(waits, [3, 3, 5, None])
 
-    def test_the_second_dead_stream_is_left_after_its_own_wait_not_the_30_s_between_actions(self):
-        """Run the real health check once, as the stream manager does after one switch."""
+    def test_a_silent_stream_is_left_after_its_own_wait_through_the_startup_clock(self):
+        """
+        Run the real health check once. Dispatcharr's startup clock starts again at each new
+        connection (last_data_time) and asks for one switch when it runs out; for a channel an
+        arrTV device started it runs out after faster failover's wait instead of stock's.
+        """
         import time
-        import types
 
+        from apps.proxy.live_proxy.config_helper import ConfigHelper
         from apps.proxy.live_proxy.input.manager import StreamManager
 
         self.switch(fast_failover=True, fast_grace=5, fast_grace_many=3)
         app_devices.mark_fast_start(self.redis, self.arrtv, "ch1", alternatives=2)
 
-        def check(connected_ago, marked=True):
+        def check(silent_for, marked=True):
             fake = self.manager("ch1" if marked else "unmarked", tried=2)
             now = time.time()
             fake.__dict__.update(
                 running=True, healthy=True, needs_reconnect=False, needs_stream_switch=False,
-                health_check_interval=5, last_data_time=now - 30,
-                connection_start_time=now - connected_ago, last_health_action_time=now - connected_ago,
+                health_check_interval=5, last_data_time=now - silent_for,
+                connection_start_time=now - silent_for, last_health_action_time=now - silent_for,
+                _connection_awaiting_data=True,
             )
 
             def stop(_seconds):
                 fake.running = False
 
-            # Stock's start grace is read through the proxy's ConfigHelper, which closes the
-            # database connection after reading (right for the proxy's threads, and the end
-            # of this test's connection)
             with mock.patch("apps.proxy.live_proxy.input.manager.gevent.sleep", side_effect=stop), \
-                    mock.patch("apps.proxy.live_proxy.input.manager.ConfigHelper.channel_init_grace_period",
-                               return_value=60):
+                    mock.patch.object(ConfigHelper, "stream_startup_timeout", return_value=8), \
+                    mock.patch.object(ConfigHelper, "connection_timeout", return_value=10), \
+                    mock.patch.object(ConfigHelper, "channel_init_grace_period", return_value=60):
                 StreamManager._monitor_health(fake)
             return fake.needs_stream_switch
 
         # One stream left to go to: the normal wait (5 s), counted from this stream's connection
-        self.assertFalse(check(connected_ago=4))
-        self.assertTrue(check(connected_ago=6))
-        # Stock, for a channel no arrTV device marked: three checks and 30 s between actions
-        self.assertFalse(check(connected_ago=6, marked=False))
+        self.assertFalse(check(silent_for=4))
+        self.assertTrue(check(silent_for=6))
+        # Stock, for a channel no arrTV device marked: Dispatcharr's 8 s
+        self.assertFalse(check(silent_for=6, marked=False))
+        self.assertTrue(check(silent_for=9, marked=False))
 
 
 class FastGraceTests(TestCase):

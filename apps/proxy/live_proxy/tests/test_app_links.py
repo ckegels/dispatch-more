@@ -302,6 +302,21 @@ class WatchTogetherWithPeopleTests(TestCase):
         app_devices.save_settings({"link_users": str(self.x.id)})
         self.assertEqual(app_links.offers(self.redis, self.y.id, self.pixel, "192.168.65.3"), [])
 
+    def test_a_login_hiding_adult_content_may_not_join_an_adult_channel(self):
+        # Dispatcharr 0.33's one rule for who sees a channel (apps.channels.access)
+        from apps.channels.models import Channel
+
+        channel = Channel.objects.get(uuid=self.tf1)
+        self.assertTrue(app_links.may_watch(self.y.id, self.tf1))
+        channel.is_adult = True
+        channel.save()
+        self.assertTrue(app_links.may_watch(self.y.id, self.tf1))
+        self.y.custom_properties = {"hide_adult_content": True}
+        self.y.save()
+        self.assertFalse(app_links.may_watch(self.y.id, self.tf1))
+        # An admin sees every channel, as before
+        self.assertTrue(app_links.may_watch(self.x.id, self.tf1))
+
     def test_joining_asks_the_other_first_and_allowed_links_the_two(self):
         self._watching(self.tf1, "c1", self.shield, self.x)
         asked = app_links.join(self.redis, self.y.id, self.pixel, SHIELD, "192.168.65.3")
