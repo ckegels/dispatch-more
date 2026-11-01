@@ -12,4 +12,7 @@ set +a
 while IFS= read -r line; do
   [ -n "$line" ] && export "$line"
 done < <(systemctl show dispatcharr -p Environment --value | tr ' ' '\n')
-exec .venv/bin/python manage.py "$@"
+# The Proxmox community script makes .venv, Dispatcharr's own debian_install.sh makes env
+PY=.venv/bin/python
+[ -x "$PY" ] || PY=env/bin/python
+exec "$PY" manage.py "$@"
