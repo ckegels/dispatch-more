@@ -95,6 +95,10 @@ check "Dispatcharr $OLD_V and $OLD_R are on, every service up" "up && answers $O
 
 echo "2. Dispatcharr updated to $NEW_V by its own installer:"
 inside "curl -fsSL https://raw.githubusercontent.com/Dispatcharr/Dispatcharr/v$NEW_V/debian_install.sh -o /root/debian_install.sh && sed -i 's|^\( *\)DISPATCH_BRANCH=\"main\"|\1DISPATCH_BRANCH=\"v$NEW_V\"|' /root/debian_install.sh && printf 'I understand\n' | bash /root/debian_install.sh" >>"$LOG" 2>&1
+# The installer ends with "systemctl enable --now", which starts what is stopped and leaves what
+# runs alone: the old version's processes keep answering until something restarts them (the
+# first clean run waited five minutes on the old code). A user's reboot or restart does that.
+inside "systemctl restart dispatcharr dispatcharr-celery dispatcharr-celerybeat dispatcharr-daphne" >>"$LOG" 2>&1
 check "Dispatcharr $NEW_V runs, stock (the update put its files back)" "up && answers $NEW_V ''"
 check "...with $OLD_R's added files and record left behind, as the update leaves them" "left_behind"
 

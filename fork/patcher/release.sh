@@ -34,11 +34,15 @@ if [ "${2:-}" = "--publish" ]; then
   # The one-command installer rides along as a download of its own, so
   # releases/latest/download/quick-install.sh always gives the newest
   cp fork/patcher/quick-install.sh fork/patcher/out/quick-install.sh
+  # What only this release has to say (a new Dispatcharr version, a step to take) goes in
+  # fork/patcher/notes/<release>.md and is put under the usual words
+  EXTRA=""
+  [ -f "fork/patcher/notes/$RELEASE.md" ] && EXTRA="$(printf '\n\n%s' "$(cat "fork/patcher/notes/$RELEASE.md")")"
   gh release create "$RELEASE" "$ARCHIVE" fork/patcher/out/quick-install.sh --repo "$SLUG_REPO" \
     --target "$(git rev-parse HEAD)" \
     --title "Dispatch More $RELEASE (for Dispatcharr $DISPATCHARR)" \
     --notes "An unofficial, modified build of Dispatcharr $DISPATCHARR — see the README for installing, uninstalling, and where to report problems (not the official Dispatcharr GitHub or Discord).
 
-Changes since the last release: see the commits on feature/probation-slots."
+Changes since the last release: see the commits on feature/probation-slots.$EXTRA"
   echo "Published $RELEASE."
 fi

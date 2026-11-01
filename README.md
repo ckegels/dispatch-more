@@ -238,7 +238,9 @@ like:
   the old release off (only what is still the old release's -- never the old Dispatcharr's files
   over the new ones) and puts on the release for your new Dispatcharr. If there is none yet, it
   says so and changes nothing; Dispatcharr keeps working as stock, and the uninstall command
-  below tidies away what the old release left.
+  below tidies away what the old release left. Dispatcharr's own `debian_install.sh` does not
+  restart services that are already running, so until you restart Dispatcharr (or reboot) the
+  old version keeps answering; the install command restarts it when it puts a release on.
 - **Docker:** a new image starts as stock Dispatcharr until you run the install command in it
   again.
 
