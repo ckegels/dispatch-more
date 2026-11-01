@@ -38,7 +38,8 @@ itself one day.
   changes, until you switch it on or press Apply**. With its features off, Dispatcharr behaves as
   stock.
 - **For Linux, LXC (including the Proxmox script) and Docker.** Each release is built for one
-  Dispatcharr version; the installer picks the right one for you.
+  Dispatcharr version; the installer picks the right one for you. From v276 that is Dispatcharr
+  **0.33.0** (v275 is the last for 0.31.0, and still installs on it).
 
 ## Better together with arrTV
 

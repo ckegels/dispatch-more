@@ -1,7 +1,7 @@
 # arrTV ↔ Dispatch More: what arrTV tells the server, and what the server does with it
 
 For the developer of **arrTV** (the AerioTV-Android fork). This describes what arrTV sends so
-that a **Dispatch More** server (a fork of Dispatcharr 0.31: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); other people in the house from v266, server rewind for every login from v269; v271: TiviBridge no longer starved by the picture compare; v272: the start-up check, §1a; v273: /api/epg/epgdata/ streamed (the same bytes, a few MB instead of ~130 MB per request); v275: per-guide marks, the grid for some guides and with categories, §1a; latest release v275) knows which
+that a **Dispatch More** server (a fork of Dispatcharr, 0.31 until v275 and 0.33 from v276: device and channel-change headers from v197, error reports from v198, quality away from home from v206 (FHD as a choice from v209), stutter from v207, what it can decode and a stream of its own from v208, faster failover from v212, the number of other streams from v213, choosing a channel's guide from v216 (a longer list and Load more from v217), a socket message when a guide changes from v219, commercial breaks in recordings from v238, subtitles found by Stream Check from v243 and the caption worker from v244, catch-up sessions kept alive from v246, generated captions from v247, one arrTV device at a time for chosen logins and look-back seeks to the minute from v258, the same channel free and watch together from v260, in step from v261 (v262: the device joined hears it); other people in the house from v266, server rewind for every login from v269; v271: TiviBridge no longer starved by the picture compare; v272: the start-up check, §1a; v273: /api/epg/epgdata/ streamed (the same bytes, a few MB instead of ~130 MB per request); v275: per-guide marks, the grid for some guides and with categories, §1a; latest release v275) knows which
 device a request comes from, and which channel it is leaving. Everything here is extra: a stock
 Dispatcharr server ignores it, and arrTV must work exactly as today when the server does not
 announce support.
@@ -675,7 +675,10 @@ arrTV ("Guide changes", with Put back and Keep) and on the Guides tab. From v220
 guide a channel is already on ("this one is right") is recorded as a confirmation and keeps
 the change it confirms, so it can still be put back.
 
-**The guide's past** (server v220, nothing for the app to send). With "Keep the guide's past"
+**The guide's past: Dispatcharr's own since 0.33** (Dispatch More v276): Dispatcharr 0.33 keeps
+guide history itself (Settings → EPG, minimum and maximum days of ended programmes, more for
+channels with catch-up), and the setting below is gone; nothing changes for the app, which asks
+for the past as before. What it was: **The guide's past** (server v220, nothing for the app to send). With "Keep the guide's past"
 set on Settings → arrTV (`keep_past_days`, 0–7), a guide refresh no longer deletes what has
 already been on: the finished programmes of those days stay. The app gets them the way any
 player asks for the past from Dispatcharr: the login's "EPG previous days" (set on the user
@@ -850,6 +853,9 @@ walk, each stream's wait counted from its own connection: with two or more other
 channel with nowhere to go is never hurried -- no other stream the device can play, none on a
 provider with a connection free, or a stream of its own (§8.3), which has no failover. Once
 data has come, stock rules apply.
+On Dispatcharr 0.33 (Dispatch More v276) stock itself leaves a silent stream after its Stream
+Startup Timeout (8 s by default, one switch request); faster failover makes that wait 3 s or 5 s
+as above for a channel arrTV started, never longer than stock's. Nothing changes for the app.
 Switching it off takes effect at once. IPTV answers within a second or two (the TVs learned
 0.1–3 s); a source that needs longer to lock would be left too soon, which is why it is only
 for arrTV and off by default.

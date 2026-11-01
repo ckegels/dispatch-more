@@ -5,11 +5,14 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01, branch `base/dispatcharr-0.33`, v276 not yet built). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
-> **Read [`fork/handover-2026-10-20.md`](handover-2026-10-20.md) first** (2026-10-20 night: v275 and arrTV arr.116 published, the calm cold start, what is open), then [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) (2026-10-18): v269 published
+> **Read [`fork/handover-2026-11-01.md`](handover-2026-11-01.md) first** (2026-11-01: the fork on
+> Dispatcharr 0.33.0, what upstream changed that the fork had and how each was settled, installing
+> and uninstalling across Dispatcharr updates, what is open). Before it,
+> [`fork/handover-2026-10-20.md`](handover-2026-10-20.md) (2026-10-20 night: v275 and arrTV arr.116 published, the calm cold start, what is open), then [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) (2026-10-18): v269 published
 > and installed, v270 published, v271 published (2026-10-18, the TiviBridge fix; install pending), v272 published (2026-10-20, the arrTV
 > start-up check: `fork/guide-loading-plan.md`), v273 published (2026-10-20: epgdata streamed, the
 > memory recorder -- §5.4c), v274 published (2026-10-20: the one command on a machine without
@@ -32,8 +35,9 @@ A fork of [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr), an IPTV pro
 one user for their own installation.
 
 - **Branch:** `feature/probation-slots`
-- **Based on:** upstream **v0.31.0**, commit `bcbb68c4`. Every patch is the full diff from
-  there.
+- **Based on:** upstream **v0.33.0**, commit `2fa13a67` (`fork/patcher/BASE`), since 2026-11-01
+  (the merge `a1749363`, handover-2026-11-01); v99-v275 were on **v0.31.0**, `bcbb68c4`. Every
+  patch and overlay is the full diff from the base.
 - **Delivered as:** releases of the patcher, **Dispatch More vNN** (§4.4), public at
   https://github.com/ckegels/dispatch-more. One command installs one:
   `curl -fsSL .../releases/latest/download/quick-install.sh | sudo bash` (Linux/LXC), or the
@@ -108,8 +112,8 @@ The user's setup (matters for almost every decision):
 ### 4.1 Building a patch (the older way, still used on the user's server until it moves to the patcher)
 
 ```bash
-git diff bcbb68c4..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' ':(exclude)README.md' ':(exclude).github' > ~/probation-slots-vNN.patch
-git checkout -q bcbb68c4 && git apply --check ~/probation-slots-vNN.patch && echo APPLIES_CLEANLY
+git diff $(cat fork/patcher/BASE)..HEAD -- . ':(exclude)CLAUDE.md' ':(exclude)fork' ':(exclude)README.md' ':(exclude).github' > ~/probation-slots-vNN.patch
+git checkout -q $(cat fork/patcher/BASE) && git apply --check ~/probation-slots-vNN.patch && echo APPLIES_CLEANLY
 git checkout -q feature/probation-slots
 ```
 
@@ -189,6 +193,15 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   scripts into the state folder (never its manifest) and uninstalls with them: the safe way off
   for anyone on a release before v276 whose Dispatcharr was updated. And when there is no release
   for the Dispatcharr found, quick-install says the old one is still recorded and how to take it off.
+- `test-real.sh <older release> <this release>` (2026-11-01) -- the same on a real machine: a clean
+  Debian 12 container with systemd, made to look like an LXC (no `/.dockerenv`, its own cgroup
+  namespace; otherwise the installers take it for Docker). The one command without Dispatcharr
+  (the older release's Dispatcharr by `debian_install.sh`, then that release), Dispatcharr updated by
+  its own installer, the one command with this release, the page's Uninstall (an admin's POST,
+  carried out by the watcher), then the one command and its `--uninstall`. Judged by git in
+  `/opt/dispatcharr` (only `.env`, `uwsgi-debian.ini`, `frontend/package-lock.json` may differ),
+  the services, `/api/core/version/`, Celery beat, the units and the journal. ~40 min. Not run by
+  release.sh (needs Docker): run it before publishing a release for a new Dispatcharr version.
 - `.github/workflows/fork-upstream-check.yml` — daily: if Dispatcharr has a newer release than
   `fork/patcher/BASE`, tries the fork's changes on it and opens an issue saying whether they
   apply or which files conflict. (On 2026-09-19 they applied cleanly to upstream `dev`.) In the
@@ -233,10 +246,18 @@ cd frontend && npx vitest run      # ~6500 tests
 npx eslint <files>                 # api.js has 14 errors that are stock's own
 ```
 
-- **Baseline:** the full backend run always ends `FAILED (errors=26)` — all 26 are
-  `PermissionError: '/data'` from stock tests that expect Docker paths. Compare the list of
+- **Baseline:** on 0.33 the full backend run ends `FAILED (errors=28)` (5004 tests) — 26
+  `PermissionError: '/data'` from stock tests that expect Docker paths and 2 `posix_spawn: setsid
+  unavailable` from 0.33's process-group tests; stock 0.33.0 gives the same 28 by name. (On 0.31:
+  `errors=26`, the `/data` ones.) Redis must be running (handover-2026-11-01 §4). Compare the list of
   errors against a saved baseline, not the count alone. Use `grep -a` on the log.
-- Tests use in-test fake Redis classes (no Redis needed); Stream Check's `FakeRedis`
+- **`--keepdb` runs are not to be trusted on their own**: Stream Check's threads write outside
+  the test transaction, so their rows stay in a kept database, and CombineTests then fail or pass
+  from run to run (seen 2026-11-01, also without any change). A fresh database is steady; the
+  full run (no `--keepdb`) is the one that counts.
+- Tests use in-test fake Redis classes (no Redis needed for those; the suite as a whole needs
+  one running for Celery, handover-2026-11-01 §4); from 0.32 they need WATCH/MULTI/EXEC
+  pipelines (`_FakePipeline` in test_stream_check and test_probation); Stream Check's `FakeRedis`
   supports strings, counters, hashes, sorted sets and `scan_iter`.
 - Probe tests use a real local HTTP server and real ffmpeg-made video (skipped without
   ffmpeg/ffprobe).
@@ -2164,8 +2185,8 @@ stream twice for stutter; it stays").
 ### 5.8 Misc
 
 - **Modified-build label:** `version.py` `__build__` ("Dispatch More dev", stamped "Dispatch
-  More vNN" per release); `/api/core/version/` returns it. `__version__` stays `0.31.0` (it is
-  in the default User-Agent sent to providers and compared by the update check).
+  More vNN" per release); `/api/core/version/` returns it. `__version__` stays Dispatcharr's own
+  (it is in the default User-Agent sent to providers and compared by the update check).
 - **Not-official warnings:** About, a notice on every Settings page, Settings → System →
   Modified build (what it is, where it comes from, the Uninstall button; `core/modified_build.py`),
   and the README. All say: try stock first, do not report on the official GitHub/Discord.
@@ -2524,6 +2545,11 @@ A declared arrTV device's stream request marks the channel in Redis for two minu
 The setting is read on every ask, so off ends it at once; once data has come, stock rules. The
 app's own waits were shortened alongside (arr.40, each with a switch in the app). Tests:
 `FastFailoverTests` in `test_app_devices.py`.
+**On Dispatcharr 0.33** (handover-2026-11-01 §2) stock does most of this itself: its Stream
+Startup Timeout (8 s) asks for one switch when a new connection stays silent, and waits out the
+init grace when nowhere is left. Faster failover now only shortens that timeout for a marked
+channel (`StreamManager._stream_startup_timeout`, never longer than stock's); the one-check,
+short-cooldown path through the health monitor is gone.
 
 **How many other streams a channel has** (v213, `app_alternatives.py`, `alternatives` in
 `app_devices`, off by default). The user's point: how quickly to give up on a slow stream
@@ -2610,7 +2636,9 @@ the handover's v211 update, with the suspected faults run as tests first:
   page asks again every 5 s while one runs. Guides a viewer's list had read are kept
   `ASKED_KEPT_DAYS` (14) after they were last asked for (`asked_at`; a re-read after a
   refresh does not count), then left to the next full preload.
-- **The guide's past** (`apps/channels/guide_past.py`, `keep_past_days` on Settings → arrTV,
+- **The guide's past** -- **retired with the move to 0.33** (handover-2026-11-01 §2): Dispatcharr
+  0.33 keeps guide history itself (#1707, Settings → EPG minimum/maximum days), so the module, its
+  test and the setting went; a stored value is ignored. What it was: (`apps/channels/guide_past.py`, `keep_past_days` on Settings → arrTV,
   0 = stock, at most 7). Every guide refresh deleted a guide's programmes and put in the
   file's, and most files start at today, so arrTV could not scroll back even to this morning.
   With days set, the three places stock deletes (`parse_programs_for_tvg_id`,
@@ -2862,6 +2890,10 @@ once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatc
 (or any name of its own).
 
 ## 8. Open / possible next
+
+- **Dispatcharr 0.33.0** (2026-11-01): the fork is on it on `base/dispatcharr-0.33`; merging it
+  into `feature/probation-slots`, v276, the user's server, and what to look at afterwards are in
+  `fork/handover-2026-11-01.md` §6.
 
 Planned 2026-10-02 (the user's three asks, designs written, nothing built):
 - **Look back gets a provider** -- **`fork/lookback-priority.md`**: when the only provider with a

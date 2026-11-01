@@ -477,7 +477,7 @@ are shown.
      models. Tests: `apps/channels/tests/test_caption_translation.py`.
 5. More models (NeMo, Vosk, cloud), captions for recordings (§4.5), teletext pages (§2).
 
-Tests, as always: the full backend suite (baseline `FAILED (errors=26)`, all `/data`) on a test
+Tests, as always: the full backend suite (baseline on 0.33 `FAILED (errors=28)`: 26 `/data`, 2 `posix_spawn`) on a test
 database of our own (`POSTGRES_DB=dispatcharr_claude`), vitest green, and the patcher release.
 
 **Which model is in use, on the card (v265).** The card never said: the model setting was
