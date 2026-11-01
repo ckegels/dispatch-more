@@ -973,6 +973,20 @@ class NewNumberTests(_Setup):
         self.assertEqual(homes.number_in(self.austria.id), 3.0)
 
 
+    def test_a_number_pinned_by_an_override_is_where_the_channel_is(self):
+        """
+        An auto-synced channel shows its override's number and group (Dispatcharr 0.32+,
+        #1630): that is where its group ends, and neither of its numbers is free.
+        """
+        from apps.channels.models import ChannelOverride
+
+        moved = self._channel("┃AT┃ ORF III", 40, self.germany)
+        ChannelOverride.objects.create(channel=moved, channel_number=2, channel_group=self.austria)
+        homes = channel_manager._NewHomes()
+        self.assertEqual(homes.number_in(self.austria.id), 3.0)
+        self.assertIn(40.0, homes.taken)
+
+
 class LeaveAloneTests(_Setup):
     """
     Groups the Lineup is told not to touch. For the ones something else looks after -- a

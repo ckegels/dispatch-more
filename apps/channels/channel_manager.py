@@ -2861,7 +2861,16 @@ class _NewHomes:
         self.lowest_in = {}
         self.taken = set()
         self.highest = 0
-        for number, group_id, name in Channel.objects.values_list("channel_number", "channel_group_id", "name"):
+        from .managers import with_effective_values
+
+        # What the channel list shows (Dispatcharr 0.32+, #1630: an auto-synced channel's
+        # number, group and name pinned by its override): the groups end where the user sees
+        # them end, and a number is taken whether it is a channel's own or its pinned one
+        for number, group_id, name, own_number in with_effective_values(Channel.objects.all()).values_list(
+            "effective_channel_number", "effective_channel_group_id", "effective_name", "channel_number"
+        ):
+            if own_number is not None:
+                self.taken.add(float(own_number))
             if number is not None:
                 self.taken.add(float(number))
                 self.highest = max(self.highest, float(number))
