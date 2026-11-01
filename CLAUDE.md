@@ -15,7 +15,7 @@ the mistakes not to repeat.
   cost nothing when off.
 - **Install and uninstall must leave Dispatcharr's own files exactly as they were**, also when
   Dispatcharr was updated under a release in between (handover-2026-11-01 §3): test-patcher.sh's
-  U and P scenarios and `fork/patcher/test-real.sh` check it.
+  U and P scenarios, `fork/patcher/test-real.sh` and `fork/patcher/test-docker.sh` check it.
 - **No migrations.** State lives in `CoreSettings` JSON rows, M3U account `custom_properties`
   and Redis.
 - **No fake provider** for testing; the user tests with real providers.

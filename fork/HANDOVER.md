@@ -208,6 +208,11 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   installer does not restart services that run (`systemctl enable --now`), so the test restarts
   them after its update, as a user's restart or reboot would. ~40 min. Not run by
   release.sh (needs Docker): run it before publishing a release for a new Dispatcharr version.
+- `test-docker.sh <older release> <this release>` (2026-11-01) -- the same with Dispatcharr's
+  official images: the older release on its image, the image updated (the entrypoint starts it
+  stock and says why), this release by the one command and across a recreate, `--uninstall`.
+  Judged by `/api/core/version/`, the container's log and the sha256 of every file in `/app`
+  against the image's, `static/` included. ~10 min, not run by release.sh either.
 - `.github/workflows/fork-upstream-check.yml` — daily: if Dispatcharr has a newer release than
   `fork/patcher/BASE`, tries the fork's changes on it and opens an issue saying whether they
   apply or which files conflict. (On 2026-09-19 they applied cleanly to upstream `dev`.) In the
