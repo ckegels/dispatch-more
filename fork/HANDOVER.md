@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01, branch `base/dispatcharr-0.33`, v276 not yet built). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01: merged into `feature/probation-slots` locally, not pushed; v276 built and tested, not published). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -185,8 +185,12 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   uninstall` undoes only what is still the release's: a replaced file is restored only while it is
   the release's (`sha256`), an added file removed only while it is, the frontend put back only
   while it is the release's (`frontend_sha256` in the manifest, the built `index.html`; releases
-  before v276 have none: then only when the Dispatcharr version is unchanged). Anything else is
-  left and listed. Scenarios in test-patcher.sh: **U** -- this release on X, Dispatcharr updated to
+  before v276 have none: then only when the Dispatcharr version is unchanged), and with it
+  collectstatic's copies of it in `static/` (`unstatic_frontend`: a copy that is still the
+  release's byte for byte becomes stock's file of that name, or goes; Docker's nginx serves
+  `/assets/` from there, and collectstatic skips a file whose copy is newer, so the release's
+  `static/index.html` and assets stayed after a restart -- found 2026-11-01 with the official
+  images). Anything else is left and listed. Scenarios in test-patcher.sh: **U** -- this release on X, Dispatcharr updated to
   Y, `quick-install.sh --uninstall` -> stock Y byte for byte; **P** -- an older release on an older
   X, updated to Y, this release installed, then uninstalled -> stock Y byte for byte.
   `quick-install.sh --uninstall` (`| sudo bash -s -- --uninstall`) fetches the newest release's
@@ -200,7 +204,9 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   its own installer, the one command with this release, the page's Uninstall (an admin's POST,
   carried out by the watcher), then the one command and its `--uninstall`. Judged by git in
   `/opt/dispatcharr` (only `.env`, `uwsgi-debian.ini`, `frontend/package-lock.json` may differ),
-  the services, `/api/core/version/`, Celery beat, the units and the journal. ~40 min. Not run by
+  the services, `/api/core/version/`, Celery beat, the units and the journal. Dispatcharr's own
+  installer does not restart services that run (`systemctl enable --now`), so the test restarts
+  them after its update, as a user's restart or reboot would. ~40 min. Not run by
   release.sh (needs Docker): run it before publishing a release for a new Dispatcharr version.
 - `.github/workflows/fork-upstream-check.yml` — daily: if Dispatcharr has a newer release than
   `fork/patcher/BASE`, tries the fork's changes on it and opens an issue saying whether they
@@ -2891,9 +2897,10 @@ once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatc
 
 ## 8. Open / possible next
 
-- **Dispatcharr 0.33.0** (2026-11-01): the fork is on it on `base/dispatcharr-0.33`; merging it
-  into `feature/probation-slots`, v276, the user's server, and what to look at afterwards are in
-  `fork/handover-2026-11-01.md` §6.
+- **Dispatcharr 0.33.0** (2026-11-01): the fork is on it, fast-forwarded into
+  `feature/probation-slots` locally (not pushed); v276 built and every test passed. Pushing,
+  publishing v276, the user's server, and what to look at afterwards are in
+  `fork/handover-2026-11-01.md` §9.
 
 Planned 2026-10-02 (the user's three asks, designs written, nothing built):
 - **Look back gets a provider** -- **`fork/lookback-priority.md`**: when the only provider with a

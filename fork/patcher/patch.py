@@ -80,6 +80,37 @@ def copy_file(source, target, owner):
     give_to(target, owner)
 
 
+def unstatic_frontend(app, dist, stock_dist, owner):
+    """
+    Collectstatic's copies of the release's frontend go with it. Dispatcharr copies
+    frontend/dist into static/ at every start (Docker, where nginx serves /assets/ from there)
+    and skips a file whose copy is newer than its source: stock's originals come back with
+    their old times, so without this a container restarted after uninstalling kept the
+    release's static/index.html and every asset of its build. A copy that is still the release's
+    byte for byte becomes stock's file of that name, or goes when stock has none; anything else
+    in static/ is not the release's and is left alone.
+    """
+    static = os.path.join(app, "static")
+    if not os.path.isdir(static) or not os.path.isdir(dist):
+        return
+    for root, _dirs, files in os.walk(dist):
+        for name in files:
+            ours = os.path.join(root, name)
+            relative = os.path.relpath(ours, dist)
+            copy = os.path.join(static, relative)
+            if os.path.islink(ours) or not os.path.isfile(copy) or sha256(copy) != sha256(ours):
+                continue
+            stock = os.path.join(stock_dist, relative) if stock_dist else None
+            if stock and os.path.isfile(stock):
+                copy_file(stock, copy, owner)
+            else:
+                os.remove(copy)
+                folder = os.path.dirname(copy)
+                while folder.startswith(static + os.sep) and not os.listdir(folder):
+                    os.rmdir(folder)
+                    folder = os.path.dirname(folder)
+
+
 def load_record(app, state):
     for path in (os.path.join(state, "record.json"), os.path.join(app, RECORD)):
         try:
@@ -261,10 +292,12 @@ def uninstall(app, state, quiet=False):
     if not frontend_ours and os.path.isdir(dist):
         left.append("frontend/dist")
     elif os.path.isdir(os.path.join(backup, "frontend-dist")):
+        unstatic_frontend(app, dist, os.path.join(backup, "frontend-dist"), owner)
         shutil.rmtree(dist, ignore_errors=True)
         shutil.copytree(os.path.join(backup, "frontend-dist"), dist, symlinks=True)
         give_to(dist, owner)
     elif os.path.exists(os.path.join(backup, "no-frontend-dist")):
+        unstatic_frontend(app, dist, None, owner)
         shutil.rmtree(dist, ignore_errors=True)
 
     if left and not quiet:

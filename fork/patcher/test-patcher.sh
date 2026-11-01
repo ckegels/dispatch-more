@@ -102,6 +102,21 @@ bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
 bash "$STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
 check "uninstalling takes the release's frontend away again" "[ ! -e '$T/app/frontend/dist' ]"
 
+echo "Collectstatic's copies of the frontend (static/, which Docker's nginx serves /assets/ from):"
+fresh; rm -rf "$STATE"; mkdir -p "$T/app/static/admin"
+cp -a "$T/app/frontend/dist/." "$T/app/static/"; echo "django admin" > "$T/app/static/admin/base.css"
+bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+# A start collects the release's frontend; then the uninstall puts stock's back with its old times
+cp -a "$T/app/frontend/dist/." "$T/app/static/"
+OURS="$(cd "$T/app/frontend/dist" && find . -type f ! -name index.html | head -1)"
+echo "not the release's" > "$T/app/static/assets/someone-elses.js"
+bash "$STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+check "uninstalling puts stock's page back in static/ too" "cmp -s '$T/stock/frontend/dist/index.html' '$T/app/static/index.html'"
+check "...takes the release's assets out of it" "[ -n '$OURS' ] && [ ! -e '$T/app/static/$OURS' ]"
+check "...and leaves what is not the release's" "[ -f '$T/app/static/admin/base.css' ] && [ -f '$T/app/static/assets/someone-elses.js' ]"
+rm -rf "$T/app/static"
+check "...everything else is stock" "same_as_stock"
+
 echo "Docker (the start script):"
 fresh; unset STATE
 DATA="$T/data/$SLUG"; unpack "$DATA"

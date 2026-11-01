@@ -1,8 +1,8 @@
 # Dispatcharr fork: probation-slots
 
 A personal fork of Dispatcharr on branch `feature/probation-slots`, based on **v0.33.0**
-(`2fa13a67`, `fork/patcher/BASE`; on branch `base/dispatcharr-0.33` until the user agrees to merge
-it -- before 2026-11-01 v0.31.0, `bcbb68c4`), delivered as releases of the patcher. **Read `fork/HANDOVER.md` before changing
+(`2fa13a67`, `fork/patcher/BASE`; merged into `feature/probation-slots` on 2026-11-01, not pushed yet --
+before 2026-11-01 v0.31.0, `bcbb68c4`), delivered as releases of the patcher. **Read `fork/HANDOVER.md` before changing
 anything**: it holds the features, the reasoning, what was measured on the real server, and
 the mistakes not to repeat.
 
