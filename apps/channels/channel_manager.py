@@ -816,7 +816,8 @@ def search_streams(search, accounts=(), leave_out=(), name="", limit=STREAMS_FOU
 
     words = [w for w in str(search or "").lower().split() if w]
     if not words and not unassigned:
-        return []
+        # Nothing asked for is nothing found -- in the shape asked for (the view unpacks two)
+        return ([], False) if with_more else []
     streams = Stream.objects.filter(is_custom=False)
     if unassigned:
         streams = streams.filter(channels__isnull=True)

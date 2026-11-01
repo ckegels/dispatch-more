@@ -716,6 +716,15 @@ class StreamSearchTests(_Setup):
         self.assertEqual([s["name"] for s in answer["streams"]], ["AT: ORF 1 HD"])
 
 
+    def test_nothing_typed_through_the_page_is_nothing_found_not_an_error(self):
+        # A 500 on the real machine (2026-11-01): the empty answer had the wrong shape
+        client = APIClient()
+        client.force_authenticate(user=User.objects.create_user(username="admin2", password="x", user_level=10))
+        answer = client.get("/api/channels/channel-manager/streams/")
+        self.assertEqual(answer.status_code, 200)
+        self.assertEqual(answer.json(), {"streams": [], "more": False})
+
+
 class CombineTests(_Setup):
     """Two channels that are the same channel made one, and the other deleted."""
 
