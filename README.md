@@ -229,19 +229,35 @@ Run the same install command again: it replaces the installed release with the n
 arrTV updates itself (Settings › App Updates).
 
 **A new Dispatcharr version:** a Dispatch More release only fits the Dispatcharr version it was
-built for. When Dispatcharr updates, a new Dispatch More release follows. Until then, keep your
-Dispatcharr version, or uninstall Dispatch More first and update to stock.
+built for, and the install command picks the newest release made for *your* Dispatcharr. When
+Dispatcharr updates, a new Dispatch More release follows. You can update Dispatcharr whenever you
+like:
+
+- **Linux:** update Dispatcharr as you always do, then run the install command again. It takes
+  the old release off (only what is still the old release's -- never the old Dispatcharr's files
+  over the new ones) and puts on the release for your new Dispatcharr. If there is none yet, it
+  says so and changes nothing; Dispatcharr keeps working as stock, and the uninstall command
+  below tidies away what the old release left.
+- **Docker:** a new image starts as stock Dispatcharr until you run the install command in it
+  again.
 
 ## Uninstall
 
 - **From the page:** Settings → System → Modified build → *Uninstall and go back to stock
   Dispatcharr*. On Linux it happens right away; in Docker at the next restart of the container.
-- **By hand (Linux):** `sudo bash /var/lib/dispatch-more/uninstall.sh`
+- **One command (Linux, or inside Docker):**
+  `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash -s -- --uninstall`.
+  It uses the newest release's uninstaller, so it is also the safe way after Dispatcharr was
+  updated under Dispatch More (releases before v276 left an uninstaller that put the old
+  Dispatcharr's files back).
+- **By hand (Linux):** `sudo bash /var/lib/dispatch-more/uninstall.sh` (while the Dispatcharr
+  version has not changed since installing)
 - **Docker:** recreate the container (`docker compose up -d --force-recreate`), without the
   `entrypoint` line if you added it.
 
-Every file is put back as it was. Your channels, streams and settings stay; stock Dispatcharr
-ignores the settings only Dispatch More uses.
+Every file is put back as it was. A file something else has changed since (a Dispatcharr update,
+or you) is left as it is, and the uninstaller lists it. Your channels, streams and settings stay;
+Dispatch More adds no database tables, and stock Dispatcharr ignores the settings only it uses.
 
 ## Good to know
 

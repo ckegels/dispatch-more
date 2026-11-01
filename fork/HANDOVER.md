@@ -165,9 +165,30 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   takes the build's Celery beat entry (`stream-check-tick`) out of the database; the page's
   button does that last part itself (`core/modified_build.py`), since stock would otherwise log
   "unregistered task" every five minutes.
-- `test-patcher.sh <release.tar.gz>` — 25 checks on real stock copies: install, again,
-  refusals, `--force`, upgrade, uninstall byte-for-byte, no frontend before, and the Docker
-  start script. `release.sh vNN [--publish]` builds, tests, and publishes.
+- `test-patcher.sh <release.tar.gz>` — checks on real stock copies: install, again,
+  refusals, `--force`, upgrade, uninstall byte-for-byte, a file changed after installing, no
+  frontend before, the Docker start script, and **Dispatcharr updated under a release** (below).
+  `release.sh vNN [--publish]` builds, tests, and publishes; it sets `UPDATED_TO` (the newest
+  Dispatcharr tag above the base) and `PREVIOUS_ARCHIVE` (the newest `out/` archive for an older
+  Dispatcharr) by itself, so both cross-version scenarios run whenever there is something to run
+  them with.
+- **Dispatcharr updated under a release** (v276, 2026-11-01; found while moving to Dispatcharr
+  0.33). `debian_install.sh` updates with `git reset --hard` + `git pull`: every file the release
+  changed becomes the *new* version's stock file, while its added files and `.fork-install.json`
+  (untracked) stay. The next install then "took the old release off first" -- copying the **old
+  version's originals over the new Dispatcharr** -- and so did the uninstaller the old release
+  left behind. Checked: v275's own patch.py fails test-patcher's U scenario. Now `patch.py
+  uninstall` undoes only what is still the release's: a replaced file is restored only while it is
+  the release's (`sha256`), an added file removed only while it is, the frontend put back only
+  while it is the release's (`frontend_sha256` in the manifest, the built `index.html`; releases
+  before v276 have none: then only when the Dispatcharr version is unchanged). Anything else is
+  left and listed. Scenarios in test-patcher.sh: **U** -- this release on X, Dispatcharr updated to
+  Y, `quick-install.sh --uninstall` -> stock Y byte for byte; **P** -- an older release on an older
+  X, updated to Y, this release installed, then uninstalled -> stock Y byte for byte.
+  `quick-install.sh --uninstall` (`| sudo bash -s -- --uninstall`) fetches the newest release's
+  scripts into the state folder (never its manifest) and uninstalls with them: the safe way off
+  for anyone on a release before v276 whose Dispatcharr was updated. And when there is no release
+  for the Dispatcharr found, quick-install says the old one is still recorded and how to take it off.
 - `.github/workflows/fork-upstream-check.yml` — daily: if Dispatcharr has a newer release than
   `fork/patcher/BASE`, tries the fork's changes on it and opens an issue saying whether they
   apply or which files conflict. (On 2026-09-19 they applied cleanly to upstream `dev`.) In the

@@ -10,6 +10,14 @@
 # DISPATCH_MORE_ARCHIVE=<file or URL> installs that release instead of looking one up;
 # DISPATCH_MORE_INSTALL_ARGS is passed on to install.sh (e.g. --force).
 #
+# Taking it off again, also after Dispatcharr was updated under it:
+#
+#   curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash -s -- --uninstall
+#
+# This uses the newest release's uninstaller, not the one the installed release left behind:
+# releases before v276 put their own Dispatcharr version's files back even over a newer
+# Dispatcharr.
+#
 # No Dispatcharr yet (a new Linux machine or LXC): Dispatcharr's own installer
 # (debian_install.sh) is run first, pinned to the Dispatcharr version the release is made for --
 # its own default is the newest Dispatcharr, which a release for another version refuses -- then
@@ -43,6 +51,51 @@ fetch() {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 ARCHIVE="${DISPATCH_MORE_ARCHIVE:-}"
+ACTION=install
+for arg in "$@"; do
+  case "$arg" in
+    --uninstall) ACTION=uninstall ;;
+    *) echo "Unknown option: $arg"; exit 2 ;;
+  esac
+done
+
+if [ "$ACTION" = uninstall ]; then
+  [ -f "$STATE/manifest.json" ] || { echo "Dispatch More is not installed here (nothing in $STATE)."; exit 0; }
+  [ -n "$PY" ] || { echo "No Python found."; exit 1; }
+  if [ -z "$ARCHIVE" ]; then
+    # Any release will do: only its scripts are used, whatever Dispatcharr version it is for
+    fetch "https://api.github.com/repos/$REPOSITORY/releases?per_page=30" "$WORK/releases.json"
+    ARCHIVE="$("$PY" - "$WORK/releases.json" <<'PY'
+import json, sys
+for release in json.load(open(sys.argv[1])):
+    for asset in release.get("assets", []):
+        if asset["name"].startswith("dispatch-more-v") and asset["name"].endswith(".tar.gz"):
+            print(asset["browser_download_url"]); sys.exit(0)
+PY
+)"
+    [ -n "$ARCHIVE" ] || { echo "Could not find a Dispatch More release to uninstall with. Nothing was changed."; exit 3; }
+  fi
+  echo "Getting the uninstaller from $ARCHIVE"
+  case "$ARCHIVE" in
+    http*) fetch "$ARCHIVE" "$WORK/release.tar.gz" ;;
+    *) cp "$ARCHIVE" "$WORK/release.tar.gz" ;;
+  esac
+  mkdir -p "$WORK/new"
+  tar -xzf "$WORK/release.tar.gz" -C "$WORK/new" --strip-components=1
+  # The scripts, never the manifest: that one says what the installed release put where
+  for script in patch.py uninstall.sh install.sh docker-entrypoint.sh dvr-worker.sh captions.sh memory-recorder.sh; do
+    if [ -f "$WORK/new/$script" ]; then cp "$WORK/new/$script" "$STATE/$script"; fi
+  done
+  if [ "$LAYOUT" = docker ]; then
+    STATE="$STATE" bash "$STATE/uninstall.sh" --docker --app "$APP" ${DISPATCH_MORE_INSTALL_ARGS:-}
+    # The start script (if the compose file uses it) stays stock from now on
+    touch "$STATE/uninstalled"
+    echo "Uninstalled. Restart the container (docker restart <container name>) to run stock Dispatcharr."
+  else
+    STATE="$STATE" bash "$STATE/uninstall.sh" --app "$APP" ${DISPATCH_MORE_INSTALL_ARGS:-}
+  fi
+  exit 0
+fi
 
 if [ ! -f "$APP/version.py" ]; then
   if [ "$LAYOUT" = docker ]; then
@@ -105,7 +158,16 @@ for release in releases:
             print(asset["browser_download_url"]); sys.exit(0)
 PY
 )"
-  [ -n "$ARCHIVE" ] || { echo "There is no Dispatch More release for Dispatcharr $VERSION yet. Nothing was changed."; exit 3; }
+  if [ -z "$ARCHIVE" ]; then
+    echo "There is no Dispatch More release for Dispatcharr $VERSION yet. Nothing was changed."
+    # Dispatcharr updated under an installed release: what that release left (its added files,
+    # its services) is still there, and is taken off with --uninstall
+    if [ -f "$STATE/record.json" ]; then
+      echo "Dispatch More is still recorded as installed here ($STATE). To take what is left of it off:"
+      echo "  curl -fsSL https://github.com/$REPOSITORY/releases/latest/download/quick-install.sh | sudo bash -s -- --uninstall"
+    fi
+    exit 3
+  fi
 fi
 echo "Getting $ARCHIVE"
 case "$ARCHIVE" in

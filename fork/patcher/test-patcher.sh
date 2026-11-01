@@ -85,6 +85,17 @@ check "...and is the one on" "grep -q '\"release\": \"v-next\"' '$T/app/.fork-in
 bash "$STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
 check "uninstalling it gives stock, not the older release" "same_as_stock"
 
+echo "A file changed after installing:"
+fresh; rm -rf "$STATE"
+bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+ADDED="$(python3 -c "import json;print(next(f['path'] for f in json.load(open('$T/pkg/manifest.json'))['files'] if f['action']=='add'))")"
+echo "# mine" >> "$T/app/$ADDED"; echo "# mine" >> "$T/app/apps/proxy/live_proxy/views.py"
+out="$(bash "$STATE/uninstall.sh" --app "$T/app" --no-systemd 2>&1)"; code=$?
+check "uninstalling leaves both as they are, and says so" \
+  "[ $code = 0 ] && grep -q '# mine' '$T/app/$ADDED' && grep -q '# mine' '$T/app/apps/proxy/live_proxy/views.py' && echo \"\$out\" | grep -q 'something else has changed them'"
+check "...and everything else is stock" \
+  "[ \"\$(diff -r -q '$T/stock' '$T/app' | wc -l)\" = 2 ]"
+
 echo "No built frontend before:"
 fresh; rm -rf "$STATE" "$T/app/frontend/dist"
 bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
@@ -118,6 +129,76 @@ out="$(DISPATCH_MORE_ARCHIVE="$ARCHIVE" DISPATCHARR_APP="$T/app" STATE="$QUICK_S
 check "installs in one command" "[ $code = 0 ] && [ -f '$T/app/.fork-install.json' ]"
 STATE="$QUICK_STATE" bash "$QUICK_STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
 check "and uninstalls back to stock" "same_as_stock"
+
+# Dispatcharr updated under an installed release, as debian_install.sh updates it: `git reset
+# --hard` and a pull of the new version (every tracked file becomes the new version's, files the
+# old one had and the new one has not go, untracked files -- the release's added ones, its record
+# -- stay), then a new frontend build. $1: the app, $2: the old version's tree, $3: the new one's.
+dispatcharr_update() {
+  (cd "$2" && find . -type f -not -path './frontend/dist/*' -not -name .git) | while read -r f; do
+    [ -e "$3/$f" ] || rm -f "$1/$f"
+  done
+  (cd "$3" && tar -cf - --exclude=./frontend/dist --exclude=./.git .) | (cd "$1" && tar -xf -)
+  rm -rf "$1/frontend/dist"; cp -a "$3/frontend/dist" "$1/frontend/dist"
+}
+stock_tree() {  # $1: version, $2: where -- a stock copy as a server has it (built frontend)
+  git -C "$REPO" worktree add --detach "$2" "v$1" >/dev/null 2>&1
+  mkdir -p "$2/frontend/dist/assets" && echo "stock page $1" > "$2/frontend/dist/index.html"
+  rm -f "$2/.git"
+}
+VERSION_OF() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['for_dispatcharr'])" "$1"; }
+THIS="$(VERSION_OF "$T/pkg/manifest.json")"
+
+# U: this release on its Dispatcharr, Dispatcharr updated to UPDATED_TO under it, then taken off
+# with the one command. Needs the newer version's tag (git fetch upstream --tags).
+UPDATED_TO="${UPDATED_TO:-}"
+if [ -n "$UPDATED_TO" ] && git -C "$REPO" rev-parse -q --verify "v$UPDATED_TO^{commit}" >/dev/null; then
+  echo "Dispatcharr updated from $THIS to $UPDATED_TO under this release, then uninstalled:"
+  stock_tree "$UPDATED_TO" "$T/newer"
+  fresh; U_STATE="$T/u-state"; rm -rf "$U_STATE"
+  STATE="$U_STATE" bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+  dispatcharr_update "$T/app" "$T/stock" "$T/newer"
+  check "...the update leaves the release's added files and record behind (what debian_install.sh does)" \
+    "[ -f '$T/app/.fork-install.json' ] && ! diff -r -q '$T/newer' '$T/app' >/dev/null"
+  out="$(DISPATCH_MORE_ARCHIVE="$ARCHIVE" DISPATCHARR_APP="$T/app" STATE="$U_STATE" \
+    DISPATCH_MORE_INSTALL_ARGS="--no-systemd" bash "$REPO/fork/patcher/quick-install.sh" --uninstall 2>&1)"; code=$?
+  check "the one command uninstalls" "[ $code = 0 ] && echo \"\$out\" | grep -q 'updated from $THIS to $UPDATED_TO'"
+  check "...and leaves stock $UPDATED_TO byte for byte, not $THIS's files over it" "diff -r -q '$T/newer' '$T/app' >/dev/null"
+  rm -rf "$T/newer"; git -C "$REPO" worktree prune
+else
+  echo "(Dispatcharr updated under the release: skipped, set UPDATED_TO to a newer Dispatcharr version)"
+fi
+
+# P: an older release on an older Dispatcharr (PREVIOUS_ARCHIVE), Dispatcharr updated to this
+# release's version under it, then this release installed over it and uninstalled again.
+PREVIOUS_ARCHIVE="${PREVIOUS_ARCHIVE:-}"
+if [ -n "$PREVIOUS_ARCHIVE" ] && [ -f "$PREVIOUS_ARCHIVE" ]; then
+  rm -rf "$T/prev"; mkdir -p "$T/prev"; tar -xzf "$PREVIOUS_ARCHIVE" -C "$T/prev" --strip-components=1
+  OLD="$(VERSION_OF "$T/prev/manifest.json")"; OLDREL="$(python3 -c "import json;print(json.load(open('$T/prev/manifest.json'))['release'])")"
+  echo "$OLDREL on Dispatcharr $OLD, Dispatcharr updated to $THIS, then $RELEASE:"
+  stock_tree "$OLD" "$T/older"
+  rm -rf "$T/app"; cp -a "$T/older" "$T/app"; P_STATE="$T/p-state"; rm -rf "$P_STATE"
+  STATE="$P_STATE" bash "$T/prev/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+  check "$OLDREL installs on $OLD" "grep -q '\"release\": \"$OLDREL\"' '$T/app/.fork-install.json'"
+  dispatcharr_update "$T/app" "$T/older" "$T/stock"
+  out="$(STATE="$P_STATE" bash "$T/pkg/install.sh" --app "$T/app" --no-systemd 2>&1)"; code=$?
+  check "$RELEASE installs over what the update left" "[ $code = 0 ] && echo \"\$out\" | grep -q 'updated from $OLD to $THIS'"
+  check "...every file is $RELEASE's" "python3 - <<PY
+import hashlib, json, os
+m = json.load(open('$T/pkg/manifest.json'))
+for f in m['files']:
+    p = os.path.join('$T/app', f['path'])
+    if f['action'] == 'remove':
+        assert not os.path.exists(p), p
+    else:
+        assert hashlib.sha256(open(p, 'rb').read()).hexdigest() == f['sha256'], p
+PY"
+  out="$(STATE="$P_STATE" bash "$P_STATE/uninstall.sh" --app "$T/app" --no-systemd 2>&1)"; code=$?
+  check "uninstalled, stock $THIS is back byte for byte (nothing of $OLDREL left either)" "[ $code = 0 ] && same_as_stock"
+  rm -rf "$T/older"; git -C "$REPO" worktree prune
+else
+  echo "(an older release on an older Dispatcharr: skipped, set PREVIOUS_ARCHIVE to one)"
+fi
 
 echo "The recordings worker (dvr-worker.sh, against a pretend systemd):"
 UNITS="$T/units"; FAKE="$T/fakebin"; mkdir -p "$UNITS" "$FAKE" "$T/dvr-state"

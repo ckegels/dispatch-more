@@ -96,14 +96,18 @@ print(f"{len(files)} files: " + ", ".join(f"{sum(1 for f in files if f['action']
 PY
 
 python3 - "$PACKAGE" "$NAME" "$SLUG" "$RELEASE" "$DISPATCHARR" "$COMMIT" "$REPOSITORY" <<'PY'
-import json, os, sys, datetime
+import hashlib, json, os, sys, datetime
 package, name, slug, release, dispatcharr, commit, repository = sys.argv[1:8]
 files = json.load(open(os.path.join(package, "files.json")))["files"]
 os.remove(os.path.join(package, "files.json"))
+# The built page's fingerprint (its asset names are content hashes): uninstalling puts the stock
+# frontend back only while this one is still there, never over one a Dispatcharr update built
+index = open(os.path.join(package, "frontend-dist", "index.html"), "rb").read()
 json.dump({
     "name": name, "slug": slug, "release": release, "for_dispatcharr": dispatcharr,
     "built_from": commit, "repository": repository,
     "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "frontend_sha256": hashlib.sha256(index).hexdigest(),
     "files": files,
 }, open(os.path.join(package, "manifest.json"), "w"), indent=1)
 PY

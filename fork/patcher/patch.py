@@ -13,7 +13,12 @@ Installing:
   - leaves a record in the Dispatcharr folder for the page (core/modified_build.py): which
     release, how installed, and where a request to uninstall is to be left.
 
-Uninstalling puts back exactly what was there, removes what was added, and forgets the record.
+Uninstalling puts back exactly what was there, removes what was added, and forgets the record --
+but only where the release's own file is still there. Dispatcharr may have been updated under the
+release since (debian_install.sh does `git reset --hard` and pulls the new version: every changed
+file is the new stock one, the added files and the record are left behind), and putting the old
+version's originals back over the new version would break it. A file something else has written
+since is that something's, and is left as it is.
 
 Exit codes: 0 done, 10 nothing to do, 3 wrong Dispatcharr version, 4 files not stock.
 """
@@ -108,6 +113,9 @@ def install(app, state, package, layout, force=False):
         return NOTHING_TO_DO
     if here:
         print(f"{name} {here.get('release')} is installed: taking it off first.")
+        if here.get("for_dispatcharr") and here["for_dispatcharr"] != version:
+            print(f"Dispatcharr was updated from {here['for_dispatcharr']} to {version} under it: only "
+                  f"what is still {here.get('release')}'s is taken off, the rest is {version}'s already.")
         uninstall(app, state, quiet=True)
 
     # Before anything changes: is every file to be replaced or removed the stock one?
@@ -206,27 +214,72 @@ def uninstall(app, state, quiet=False):
     manifest = json.load(open(manifest_path))
     backup = os.path.join(state, "backup")
     owner = owner_of(app)
+    built_for = record.get("for_dispatcharr") or manifest.get("for_dispatcharr")
+    version_now = dispatcharr_version(app)
+    # Dispatcharr updated under the release: its files may be the new version's already
+    updated = bool(built_for and version_now and built_for != version_now)
 
+    left, old_originals = [], []
     for entry in manifest["files"]:
         target = os.path.join(app, entry["path"])
         original = os.path.join(backup, "files", entry["path"])
-        if entry["action"] in ("replace", "remove"):
+        here = os.path.exists(target)
+        if entry["action"] == "replace":
+            if here and sha256(target) != entry["sha256"]:
+                left.append(entry["path"])
+                continue
             if os.path.exists(original):
                 copy_file(original, target, owner)
-        elif os.path.exists(target):
+                if updated:
+                    old_originals.append(entry["path"])
+        elif entry["action"] == "remove":
+            if here:
+                # Something has put it back since: it is that something's now
+                left.append(entry["path"])
+            elif os.path.exists(original):
+                copy_file(original, target, owner)
+        elif here:
+            if sha256(target) != entry["sha256"]:
+                left.append(entry["path"])
+                continue
             os.remove(target)
             # Folders the release made, left empty now, go too
             folder = os.path.dirname(target)
             while folder.startswith(app + os.sep) and folder != app and not os.listdir(folder):
                 os.rmdir(folder)
                 folder = os.path.dirname(folder)
+
     dist = os.path.join(app, "frontend", "dist")
-    if os.path.isdir(os.path.join(backup, "frontend-dist")):
+    index = os.path.join(dist, "index.html")
+    ours = manifest.get("frontend_sha256")
+    if ours:
+        frontend_ours = os.path.exists(index) and sha256(index) == ours
+    else:
+        # Releases before v276 kept no fingerprint of their frontend: it is taken for the
+        # release's unless Dispatcharr was updated since, whose update builds its own
+        frontend_ours = os.path.isdir(dist) and not updated
+    if not frontend_ours and os.path.isdir(dist):
+        left.append("frontend/dist")
+    elif os.path.isdir(os.path.join(backup, "frontend-dist")):
         shutil.rmtree(dist, ignore_errors=True)
         shutil.copytree(os.path.join(backup, "frontend-dist"), dist, symlinks=True)
         give_to(dist, owner)
     elif os.path.exists(os.path.join(backup, "no-frontend-dist")):
         shutil.rmtree(dist, ignore_errors=True)
+
+    if left and not quiet:
+        why = (f"Dispatcharr was updated from {built_for} to {version_now} since" if updated
+               else "something else has changed them since")
+        print(f"{len(left)} file(s) were left as they are: {why}.")
+        for path in left[:10]:
+            print(f"  {path}")
+        if len(left) > 10:
+            print(f"  ... and {len(left) - 10} more")
+    if old_originals and not quiet:
+        print(f"{len(old_originals)} file(s) were still the release's and were put back as Dispatcharr "
+              f"{built_for} had them; if Dispatcharr {version_now} misbehaves, reinstall it to be sure:")
+        for path in old_originals[:10]:
+            print(f"  {path}")
 
     for path in (os.path.join(app, RECORD), os.path.join(state, "record.json"),
                  os.path.join(state, "requests", "uninstall"), os.path.join(state, "requests", "captions")):

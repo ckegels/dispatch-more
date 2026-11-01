@@ -21,7 +21,14 @@ REPOSITORY="${ORIGIN:+https://github.com/$SLUG_REPO}"
 BASE="$BASE" REPOSITORY="$REPOSITORY" bash fork/patcher/build-overlay.sh "$RELEASE"
 DISPATCHARR="$(git show "$BASE:version.py" | sed -n "s/^__version__ = '\(.*\)'.*/\1/p")"
 ARCHIVE="fork/patcher/out/dispatch-more-$RELEASE-dispatcharr-$DISPATCHARR.tar.gz"
-BASE="$BASE" bash fork/patcher/test-patcher.sh "$ARCHIVE"
+# Updating across Dispatcharr versions is tested too, whenever there is something to test it
+# with: a newer Dispatcharr than this release's (its tag, from `git fetch upstream --tags`), and
+# the newest release built here for an older one (fork/patcher/out)
+UPDATED_TO="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+  | { cat; echo "$DISPATCHARR"; } | sort -V | sed -n "/^$DISPATCHARR\$/,\$p" | grep -vx "$DISPATCHARR" | tail -1 || true)"
+PREVIOUS_ARCHIVE="$(ls fork/patcher/out/dispatch-more-v*-dispatcharr-*.tar.gz 2>/dev/null \
+  | grep -v -- "-dispatcharr-$DISPATCHARR.tar.gz" | sort -V | tail -1 || true)"
+BASE="$BASE" UPDATED_TO="$UPDATED_TO" PREVIOUS_ARCHIVE="$PREVIOUS_ARCHIVE" bash fork/patcher/test-patcher.sh "$ARCHIVE"
 
 if [ "${2:-}" = "--publish" ]; then
   # The one-command installer rides along as a download of its own, so
