@@ -2,7 +2,7 @@
 # Build one release of the patcher: the overlay for the Dispatcharr version the fork is based
 # on, and the scripts that put it on and take it off.
 #
-#   fork/patcher/build-overlay.sh v99            # -> fork/patcher/out/dispatch-more-v99-dispatcharr-0.31.0.tar.gz
+#   fork/patcher/build-overlay.sh v99            # -> fork/patcher/out/dispatch-more-v99-dispatcharr-<version>.tar.gz
 #
 # The overlay holds every backend file the fork changes, adds or removes (not tests, not the
 # fork's own notes), the frontend already built -- so the server needs neither git nor npm --
@@ -13,7 +13,7 @@ set -euo pipefail
 RELEASE="${1:?usage: build-overlay.sh <release, e.g. v99>}"
 NAME="${NAME:-Dispatch More}"
 SLUG="${SLUG:-dispatch-more}"
-BASE="${BASE:-bcbb68c4}"
+BASE="${BASE:-$(cat "$(dirname "$0")/BASE")}"
 REPOSITORY="${REPOSITORY:-}"
 REPO="$(git rev-parse --show-toplevel)"
 OUT="${OUT:-$REPO/fork/patcher/out}"

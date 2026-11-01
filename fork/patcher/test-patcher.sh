@@ -3,11 +3,11 @@
 # wrong version and changed files, upgrading, uninstalling back to byte-for-byte stock, and
 # the Docker start script. Needs a built release:
 #
-#   fork/patcher/test-patcher.sh fork/patcher/out/dispatch-more-v99-dispatcharr-0.31.0.tar.gz
+#   fork/patcher/test-patcher.sh fork/patcher/out/dispatch-more-v99-dispatcharr-<version>.tar.gz
 set -uo pipefail
 
 ARCHIVE="$(realpath "${1:?usage: test-patcher.sh <release .tar.gz>}")"
-BASE="${BASE:-bcbb68c4}"
+BASE="${BASE:-$(cat "$(dirname "$0")/BASE")}"
 REPO="$(git rev-parse --show-toplevel)"
 T="$(mktemp -d)"
 PASS=0 FAIL=0
