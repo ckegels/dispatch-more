@@ -156,6 +156,63 @@ class RenamingTests(_Setup):
         self.assertEqual(self.one.name, "ORF Eins")
 
 
+class ProviderChannelTests(_Setup):
+    """
+    An auto-created channel's name, number and group are its provider's; what the user chose
+    instead is its override, and the channel list shows that (Dispatcharr's effective values,
+    used for sorting and numbering since 0.32). Guide Layout reads and writes the same.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from apps.channels.models import ChannelOverride
+        from apps.m3u.models import M3UAccount
+
+        account = M3UAccount.objects.create(name="Provider", account_type="XC", server_url="http://p")
+        self.synced = Channel.objects.create(
+            name="AT| ORF III", channel_number=900, channel_group=self.austria,
+            auto_created=True, auto_created_by=account,
+        )
+        self.override = ChannelOverride.objects.create(
+            channel=self.synced, name="┃AT┃ ORF III", channel_number=51, channel_group=self.news,
+        )
+
+    def _override(self):
+        from apps.channels.models import ChannelOverride
+
+        return ChannelOverride.objects.filter(channel=self.synced).first()
+
+    def test_it_is_shown_where_the_channel_list_shows_it(self):
+        news = guide_layout.layout()["groups"][1]
+        self.assertEqual(news["name"], "┃AT┃ NEWS")
+        self.assertEqual([(c["name"], c["number"]) for c in news["channels"]],
+                         [("┃AT┃ NEWS 1", 50), ("┃AT┃ ORF III", 51)])
+        self.assertNotIn("AT| ORF III", [c["name"] for g in guide_layout.layout()["groups"] for c in g["channels"]])
+
+    def test_a_new_number_or_group_goes_on_its_override_and_the_provider_keeps_its_own(self):
+        guide_layout.apply({self.synced.id: 3}, {self.synced.id: self.austria.id})
+        self.synced.refresh_from_db()
+        self.assertEqual((self.synced.channel_number, self.synced.channel_group_id), (900, self.austria.id))
+        # The provider's own group again: that override goes; the number is pinned
+        self.assertEqual((self._override().channel_number, self._override().channel_group_id), (3, None))
+
+    def test_back_on_its_providers_number_and_group_the_override_is_cleared(self):
+        self.override.name = None
+        self.override.save()
+        guide_layout.apply({self.synced.id: 900}, {self.synced.id: self.austria.id})
+        self.assertIsNone(self._override())
+        self.synced.refresh_from_db()
+        self.assertEqual(self.synced.channel_number, 900)
+
+    def test_a_rename_goes_on_its_override(self):
+        self.assertEqual(guide_layout.rename_channels({self.synced.id: "ORF III HD"})["renamed"], 1)
+        self.synced.refresh_from_db()
+        self.assertEqual((self.synced.name, self._override().name), ("AT| ORF III", "ORF III HD"))
+
+    def test_a_number_it_already_shows_is_not_written_again(self):
+        self.assertEqual(guide_layout.apply({self.synced.id: 51})["changed"], 0)
+
+
 class ViewTests(_Setup):
     def setUp(self):
         super().setUp()

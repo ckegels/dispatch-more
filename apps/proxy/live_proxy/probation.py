@@ -2637,6 +2637,8 @@ def release_abandoned_slots(redis_client, now=None) -> list:
 
         from apps.m3u.connection_pool import release_profile_slot
 
+        from .slot_release import redis_getdel
+
         now = now if now is not None else time.time()
         first_seen = {
             _as_str(key): _parse_hold(value)[0]
@@ -2678,15 +2680,21 @@ def release_abandoned_slots(redis_client, now=None) -> list:
             if now - first_seen[key] < ABANDONED_SLOT_GRACE:
                 continue
 
-            redis_client.delete(key)
             not_running.discard(key)
-            profile_id = _as_str(redis_client.get(f"stream_profile:{stream_id}"))
-            if stream_id in streams_in_use or not profile_id:
-                # Another running channel shares the stream's profile record, or no slot was
-                # counted (stream previews keep an empty assignment after they end)
+            # Taken the way Dispatcharr's own teardown takes them (Channel.release_stream,
+            # since 0.33 #1831): whoever's GETDEL removes the key releases the slot, so a
+            # teardown that reaches the same assignment meanwhile never frees it a second time
+            if redis_getdel(redis_client, key) is None:
+                continue
+            if stream_id in streams_in_use:
+                # Another running channel shares the stream's profile record
                 logger.info(f"Probation: removed a leftover assignment {key} (stream {stream_id})")
                 continue
-            redis_client.delete(f"stream_profile:{stream_id}")
+            profile_id = _as_str(redis_getdel(redis_client, f"stream_profile:{stream_id}"))
+            if not profile_id:
+                # No slot was counted, or a teardown took the profile record first
+                logger.info(f"Probation: removed a leftover assignment {key} (stream {stream_id})")
+                continue
             release_profile_slot(int(profile_id), redis_client)
             logger.warning(
                 f"Probation: released the slot on profile {profile_id} that {key} (stream "

@@ -417,7 +417,8 @@ are shown.
        `POST /jobs/stop`. `POST /jobs/poll {key, url, model, language, since}` starts or keeps
        it and answers the lines since `since`; `/status` lists the jobs.
      - Dispatch More (`captions/live.py`): `GET /api/channels/captions/live/<uuid>/?since=`
-       (any signed-in user) answers "off" (setting `live` off, or no worker), "not playing"
+       (any signed-in user, for a channel that login may watch -- 0.33's channel access rule,
+       404 otherwise) answers "off" (setting `live` off, or no worker), "not playing"
        (the proxy is not playing it: a job only ever reads alongside), "busy" (as many jobs as
        `channels_at_once`), or the worker's answer; the model is the setting or the proposal
        (asked once a minute). `DELETE` stops the job.

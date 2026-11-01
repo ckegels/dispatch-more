@@ -212,8 +212,12 @@ class ViewTests(TestCase):
         rewind._recorders.clear()
         self.addCleanup(rewind._recorders.clear)
         self.client = APIClient()
-        self.client.force_authenticate(get_user_model().objects.create_user(username="tv", password="x", user_level=1))
-        self.uuid = "6f4c3991-f5e6-474e-8e00-a970a654c1d1"
+        self.user = get_user_model().objects.create_user(username="tv", password="x", user_level=1)
+        self.client.force_authenticate(self.user)
+        from apps.channels.models import Channel
+
+        self.channel = Channel.objects.create(name="┃NL┃ NPO 1", channel_number=1)
+        self.uuid = str(self.channel.uuid)
 
     def test_watch_window_playlist_and_segment(self):
         with mock.patch.object(rewind.Recorder, "start"):
@@ -234,6 +238,18 @@ class ViewTests(TestCase):
         self.assertEqual(self.client.delete(f"/api/channels/rewind/{self.uuid}/", {"viewer": "shield"}, format="json").json(),
                          {"left": True})
 
+    def test_a_channel_the_login_may_not_watch_is_not_recorded_for_it(self):
+        # Dispatcharr 0.33's one rule for who sees a channel (apps.channels.access)
+        self.channel.is_adult = True
+        self.channel.save()
+        self.user.custom_properties = {"hide_adult_content": True}
+        self.user.save()
+        with mock.patch.object(rewind, "ensure_recorder") as ensure:
+            answer = self.client.post(f"/api/channels/rewind/{self.uuid}/", {"viewer": "shield"}, format="json")
+        self.assertEqual(answer.status_code, 404)
+        ensure.assert_not_called()
+        self.assertEqual(self.redis.hgetall(rewind._viewers_key(self.uuid)), {})
+
 
 class RewindForLoginTests(TestCase):
     """On for everybody, unless the login is on the exclusion list (Settings -> arrTV)."""
@@ -246,7 +262,9 @@ class RewindForLoginTests(TestCase):
         self.user = get_user_model().objects.create_user(username="laurent", password="x", user_level=1)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
-        self.uuid = "6f4c3991-f5e6-474e-8e00-a970a654c1d1"
+        from apps.channels.models import Channel
+
+        self.uuid = str(Channel.objects.create(name="┃NL┃ NPO 1", channel_number=1).uuid)
 
     def test_on_by_default_and_said_so_to_that_login(self):
         self.assertTrue(self.client.get("/api/core/capabilities/").json()["rewind"])

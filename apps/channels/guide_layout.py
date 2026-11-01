@@ -16,6 +16,10 @@ Two rules, and the first is the important one:
 
 Nothing is written until it is applied. What is shown before that is worked out here too,
 so there is one set of rules rather than one in Python and another in the page.
+
+Channels are read and written as the channel list shows them: an auto-created channel's name,
+number and group are its provider's, and what the user chose instead is its override, which
+wins (Dispatcharr's effective values, used for sorting and numbering everywhere since 0.32).
 """
 
 import logging
@@ -63,18 +67,75 @@ def renumbered(order, start, step=1):
     return {channel_id: start + at * step for at, channel_id in enumerate(order)}
 
 
+def effective(queryset):
+    """
+    These channels with what the channel list shows for them (effective_name,
+    effective_channel_number, effective_channel_group_id and the effective_*_obj properties).
+    Reading the channel's own columns showed an auto-created channel where its provider put
+    it rather than where the user did, and the two lists disagreed.
+    """
+    from .managers import with_effective_values
+
+    return with_effective_values(queryset, select_related_fks=True)
+
+
+def _put(channel, values):
+    """
+    {field: value} written where the channel list reads it. A channel made by hand is
+    written itself. An auto-created channel's fields are its provider's and a refresh puts
+    them back, so the value goes on its override -- as Dispatcharr's own renumbering does
+    (apply_effective_channel_numbers) -- and an override that comes to equal the provider's
+    value is cleared rather than kept. `channel` comes with its override (effective()).
+    Returns whether anything changed.
+    """
+    from .models import ChannelOverride
+
+    if not channel.auto_created:
+        fields = [f for f, v in values.items() if getattr(channel, f) != v]
+        for field in fields:
+            setattr(channel, field, values[field])
+        if fields:
+            # Saved one at a time with update_fields: a channel moving group or number is
+            # something other parts of Dispatcharr watch for (signals)
+            channel.save(update_fields=[f[:-3] if f.endswith("_id") else f for f in fields])
+        return bool(fields)
+
+    try:
+        override = channel.override
+    except ChannelOverride.DoesNotExist:
+        override = None
+    changed = False
+    for field, value in values.items():
+        wanted = None if value == getattr(channel, field) else value
+        if (getattr(override, field) if override else None) == wanted:
+            continue
+        if override is None:
+            override = ChannelOverride(channel=channel)
+        setattr(override, field, wanted)
+        changed = True
+    if changed:
+        if override.has_any_override():
+            override.save()
+        elif override.pk:
+            override.delete()
+    return changed
+
+
 def _channel_row(channel, clashing):
+    group = channel.effective_channel_group_obj
+    logo = channel.effective_logo_obj
+    epg = channel.effective_epg_data_obj
     return {
         "id": channel.id,
-        "name": channel.name,
-        "number": channel.channel_number,
-        "logo_url": channel.logo.url if channel.logo_id else "",
-        "group": channel.channel_group.name if channel.channel_group_id else "",
-        "group_id": channel.channel_group_id,
-        "epg": channel.epg_data.name if channel.epg_data_id else "",
+        "name": channel.effective_name,
+        "number": channel.effective_channel_number,
+        "logo_url": logo.url if logo else "",
+        "group": group.name if group else "",
+        "group_id": channel.effective_channel_group_id,
+        "epg": epg.name if epg else "",
         # Two channels on one number: a media server sees one flat lineup, so it is a
         # problem across all the groups and not only inside one. Nothing else says so.
-        "clashes": channel.channel_number in clashing,
+        "clashes": channel.effective_channel_number in clashing,
     }
 
 
@@ -86,25 +147,26 @@ def layout(group_ids=()):
     from .show_groups.live import copy_group_ids
 
     channels = (
-        Channel.objects.select_related("channel_group", "logo", "epg_data")
+        effective(Channel.objects.select_related("channel_group", "logo", "epg_data"))
         # Show Groups' copies keep the numbers it gave them (see show_groups.live.copy_group_ids)
-        .exclude(channel_group_id__in=copy_group_ids())
-        .order_by("channel_number", "id")
+        .exclude(effective_channel_group_id__in=copy_group_ids())
+        .order_by("effective_channel_number", "id")
     )
     if group_ids:
-        channels = channels.filter(channel_group_id__in=[int(g) for g in group_ids])
+        channels = channels.filter(effective_channel_group_id__in=[int(g) for g in group_ids])
     channels = list(channels)
 
     # Clashes are counted over every channel there is, whatever is being looked at
     used = Counter(
-        n for n in Channel.objects.values_list("channel_number", flat=True) if n is not None
+        n for n in effective(Channel.objects.all()).values_list("effective_channel_number", flat=True)
+        if n is not None
     )
     clashing = {number for number, how_many in used.items() if how_many > 1}
 
     names = dict(ChannelGroup.objects.values_list("id", "name"))
     groups = {}
     for channel in channels:
-        group_id = channel.channel_group_id
+        group_id = channel.effective_channel_group_id
         group = groups.setdefault(group_id, {
             "id": group_id,
             "name": names.get(group_id, "No group"),
@@ -198,10 +260,8 @@ def rename_channels(names):
     if not wanted:
         return {"renamed": 0}
     renamed_count = 0
-    for channel in Channel.objects.filter(id__in=wanted):
-        if channel.name != wanted[channel.id]:
-            channel.name = wanted[channel.id]
-            channel.save(update_fields=["name"])
+    for channel in effective(Channel.objects.filter(id__in=wanted)):
+        if channel.effective_name != wanted[channel.id] and _put(channel, {"name": wanted[channel.id]}):
             renamed_count += 1
     logger.info(f"Guide Layout: {renamed_count} channel(s) renamed")
     return {"renamed": renamed_count}
@@ -248,16 +308,13 @@ def _write(wanted, moving):
     from .models import Channel
 
     changed = 0
-    for channel in Channel.objects.filter(id__in=set(wanted) | set(moving)):
-        fields = []
+    for channel in effective(Channel.objects.filter(id__in=set(wanted) | set(moving))):
+        values = {}
         number = wanted.get(channel.id)
-        if number is not None and channel.channel_number != number:
-            channel.channel_number = number
-            fields.append("channel_number")
-        if channel.id in moving and channel.channel_group_id != moving[channel.id]:
-            channel.channel_group_id = moving[channel.id]
-            fields.append("channel_group")
-        if fields:
-            channel.save(update_fields=fields)
+        if number is not None and channel.effective_channel_number != number:
+            values["channel_number"] = number
+        if channel.id in moving and channel.effective_channel_group_id != moving[channel.id]:
+            values["channel_group_id"] = moving[channel.id]
+        if values and _put(channel, values):
             changed += 1
     return changed

@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01: merged into `feature/probation-slots` locally, not pushed; v276 built and tested, not published). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01: merged into `feature/probation-slots` locally, not pushed; v276 built and tested, not published; the third pass of handover-2026-11-01 §12 done). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1479,6 +1479,15 @@ at the first gap. A lineup built over months is not rearranged because one chann
 Renumbering a group outright (`renumbered`, from a number, by a step) is asked for
 separately, being a different intention and a far bigger change.
 
+**Effective values** (2026-11-01, on 0.33): channels are read with `with_effective_values` and
+shown with their effective name, number and group, as the channel list shows them since 0.32
+(#1630). Writes go through `_put`: a channel made by hand is written itself; an auto-created
+one gets the value on its `ChannelOverride` (a refresh would put its own column back), and an
+override equal to the provider's value is cleared -- the rule of stock's
+`apply_effective_channel_numbers`. Before, Guide Layout showed and wrote the provider's raw
+columns, so an override-pinned channel sat where its provider put it and a renumber did nothing
+visible. Tests: `ProviderChannelTests`.
+
 The numbers are worked out **on the server** and the page asks after each drag
 (`POST guide-layout/arrange/`), so there is one set of rules rather than one in Python and
 another in JavaScript. Nothing is written until Apply, which sends only what would actually
@@ -2102,12 +2111,13 @@ Three causes, in the order they were found on the Shield:
    (`_resolve_session_archive_scrub`, from the archive's reported length; v257 went back to
    it), also landed on the minute it started from on the user's provider.
 So arrTV now moves **a whole minute a press** (`CatchupMinuteStep`, arr.99), the finest start
-the provider has, and `_open_at_its_minute` has a session starting on a whole minute open the
-provider's archive at exactly that minute, on the same provider connection (the pool's
-`final_url` is cleared, so the request goes to the portal). A start with seconds (resuming)
-keeps the byte offset; Xtream sessions (no API session) are served as stock serves them. A fix
-to stock behaviour without a switch, like the rest of 5.7c. Tests: `SeekSessionTests` in the
-same file.
+the provider has. Until v275 `_open_at_its_minute` had such a session open the provider's
+archive at exactly that minute (it cleared the pool's `final_url`). **Retired on 0.33**
+(2026-11-01): Dispatcharr does it itself now (#1540) -- `_stream_reused_session` mints a new
+archive URL whenever the requested media id differs from the pool's, which is every case the
+fork's function acted on, and no longer estimates byte offsets at all. `adopt`/`_held_pool`
+stay: 0.33 has nothing that keeps a session on its pool. Tests: `SeekSessionTests` in the same
+file.
 
 ### 5.7d A recording's health — `apps/channels/recording_health.py` (v263)
 

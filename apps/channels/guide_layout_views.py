@@ -46,8 +46,10 @@ def guide_layout_arrange(request):
 
     from .models import Channel
 
+    # The numbers the channel list shows: an auto-created channel's override wins
     existing = dict(
-        Channel.objects.filter(id__in=order).values_list("id", "channel_number")
+        guide_layout.effective(Channel.objects.filter(id__in=order))
+        .values_list("id", "effective_channel_number")
     )
     start = request.data.get("start")
     if start not in (None, ""):
@@ -74,10 +76,10 @@ def guide_layout_arrange(request):
     if highest is not None:
         lowest = min((v for v in numbers.values() if v is not None), default=highest)
         in_the_way = [
-            {"id": c.id, "name": c.name, "number": c.channel_number}
-            for c in Channel.objects.filter(
-                channel_number__gte=lowest, channel_number__lte=highest
-            ).exclude(id__in=ours).order_by("channel_number")[:20]
+            {"id": c.id, "name": c.effective_name, "number": c.effective_channel_number}
+            for c in guide_layout.effective(Channel.objects.all()).filter(
+                effective_channel_number__gte=lowest, effective_channel_number__lte=highest
+            ).exclude(id__in=ours).order_by("effective_channel_number")[:20]
         ]
     return JsonResponse({
         "numbers": {str(k): v for k, v in numbers.items()},
@@ -113,7 +115,10 @@ def guide_layout_rename(request):
             ids = [int(one) for one in request.data.get("channels") or ()]
         except (TypeError, ValueError):
             return JsonResponse({"error": "Channels are given by id"}, status=400)
-        names = dict(Channel.objects.filter(id__in=ids).values_list("id", "name"))
+        # The names the channel list shows: an auto-created channel's override wins
+        names = dict(
+            guide_layout.effective(Channel.objects.filter(id__in=ids)).values_list("id", "effective_name")
+        )
         changed = guide_layout.renamed(names, take_off, request.data.get("replace_with", ""))
         if request.data.get("apply"):
             return JsonResponse(guide_layout.rename_channels(changed))

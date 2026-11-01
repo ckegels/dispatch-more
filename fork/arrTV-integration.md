@@ -1030,7 +1030,9 @@ arrTV fetches `GET /api/channels/recordings/<id>/` when a recording starts playi
   `start`/`end` being the stream's PTS in seconds; states "off", "not playing", "busy",
   "starting", "loading model", "listening", "ended", "error". `DELETE` on the same URL when the
   TV is done (channel change, captions off, player closed). A server without it answers a plain
-  404. arrTV shows a line while the frame on screen has its stream time.
+  404, and so does one for a channel this login may not watch (Dispatcharr 0.33's rule: level,
+  adult content, channel profiles; since the move to 0.33). arrTV shows a line while the frame
+  on screen has its stream time.
 - **Translated captions (v248):** the same poll with `&lang=<two letters>` returns the cues
   translated, same `seq` and times, each with its `original`, and `translation: {"to", "from",
   "state", "engine"}` (`state`: `translated`, `same language`, `waiting for the language` -- no
@@ -1051,7 +1053,8 @@ While a TV watches a channel and server rewind is on, arrTV says so every ~20 s:
 server does not offer it; use the TV's own buffer). `DELETE` with the same viewer when leaving the
 channel. Paused or rewinding, arrTV plays `playlist` (`/proxy/ts/rewind/<uuid>/index.m3u8`, an HLS
 EVENT playlist with `#EXT-X-PROGRAM-DATE-TIME`), seeking by wall time; Live goes back to the normal
-stream. A server without it answers 404.
+stream. A server without it answers 404, and so does `POST`/`GET` for a channel this login may
+not watch (0.33's channel access rule; since the move to 0.33).
 
 ## Look back that needs a busy provider (v248)
 

@@ -51,6 +51,13 @@ class FakeRedis:
         value = self.strings.get(key)
         return None if value is None else str(value)
 
+    def getdel(self, key):
+        value = self.get(key)
+        self.strings.pop(key, None)
+        self.expiring.discard(key)
+        self.ttls.pop(key, None)
+        return value
+
     def set(self, key, value, nx=False, ex=None):
         if nx and self.exists(key):
             return None
@@ -2790,6 +2797,27 @@ class AbandonedSlotTests(TestCase):
         self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "0")
         self.assertIsNone(self.redis.get(key))
         self.assertIsNone(self.redis.get(f"stream_profile:{self.stream.id}"))
+        self.assertEqual(self.redis.hgetall(probation.ABANDONED_SLOTS_KEY), {})
+
+    def test_a_teardown_that_takes_the_assignment_meanwhile_frees_the_slot_once(self):
+        # Dispatcharr's own release (Channel.release_stream) reaches the same assignment while
+        # the sweep is at it: whoever's GETDEL removes the key releases, so the slot is freed
+        # once and the counter never goes below the channels really open
+        self._assigned()
+        key = f"channel_stream:{self.channel.id}"
+        self._sweep(self.NOW)
+        own_getdel = self.redis.getdel
+
+        def teardown_first(name):
+            if name == key and self.redis.get(key) is not None:
+                own_getdel(key)
+                own_getdel(f"stream_profile:{self.stream.id}")
+                self.redis.decr(profile_connections_key(self.profile.id))
+            return own_getdel(name)
+
+        self.redis.getdel = teardown_first
+        self.assertEqual(self._sweep(self.NOW + probation.ABANDONED_SLOT_GRACE), [])
+        self.assertEqual(self.redis.get(profile_connections_key(self.profile.id)), "0")
         self.assertEqual(self.redis.hgetall(probation.ABANDONED_SLOTS_KEY), {})
 
     def test_running_channels_keep_their_slot(self):

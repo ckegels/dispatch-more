@@ -481,12 +481,12 @@ def _serve_catchup(request, user, channel, timestamp, client_duration_hint=None)
             effective_session_id = matched
             client_id = matched
             # Dispatch More: the player's own session is kept alive with the pool it now
-            # streams under (sessions.adopt), stays on it (_held_pool), and a whole minute
-            # is played from the provider's own archive for it (_open_at_its_minute)
+            # streams under (sessions.adopt) and stays on it (_held_pool). A start of its own
+            # is opened at the provider by stock since 0.33 (#1540: a different media id
+            # mints a new archive URL in _stream_reused_session)
             from .sessions import adopt
 
             adopt(session_id, matched, redis_client=redis_client)
-            _open_at_its_minute(redis_client, session_id, matched, media_id, timestamp)
 
     if debug:
         if effective_session_id != session_id:
@@ -1765,7 +1765,7 @@ def _held_pool(redis_client, session_id, user_id):
     served by three different old pools, each somewhere else in the programme -- a forward
     press played the same part again or jumped to a random time.
 
-    How the session's start is then served from that pool: _open_at_its_minute.
+    A start other than the pool's is then opened at the provider by stock (0.33, #1540).
     """
     if redis_client is None or not session_id:
         return None
@@ -1778,37 +1778,6 @@ def _held_pool(redis_client, session_id, user_id):
     if not entry or not _pool_entry_owned_by_user(entry, user_id):
         return None
     return held
-
-
-def _open_at_its_minute(redis_client, session_id, pool_session_id, media_id, timestamp):
-    """
-    Dispatch More: an API session handed a pool opened at another position, and starting on
-    a whole minute -- arrTV moves a minute a press (CatchupMinuteStep), the finest start a
-    provider's archive has, since its URLs carry the minute only. The pool forgets its archive
-    URL, so this request opens the provider's archive at exactly that minute, on the same
-    provider connection, rather than estimating a byte offset into the archive it has open
-    (on the user's provider that landed on the minute it started from again, 2026-10-17).
-
-    Since Dispatcharr 0.33 (#1540) stock asks the provider again itself for any start a second
-    or more from the open archive's (_archive_anchor_differs), and no longer estimates offsets
-    at all; this still clears the pool's archive for a whole-minute start the pool has no anchor
-    for. A start with seconds, a session at the pool's own position, and one without an API
-    session (an Xtream player) are left to stock.
-    """
-    if redis_client is None or not catchup_session_exists(session_id, redis_client=redis_client):
-        return False
-    start = parse_catchup_timestamp(timestamp)
-    if start is None or start.second != 0:
-        return False
-    entry = _get_pool_entry(redis_client, pool_session_id) or {}
-    if str(entry.get("media_id") or "") == str(media_id):
-        return False
-    _clear_pool_final_url(redis_client, pool_session_id)
-    logger.info(
-        "Timeshift: session %s opens the archive at its own minute %s, not %s's open archive",
-        session_id, timestamp, pool_session_id,
-    )
-    return True
 
 
 def _find_matching_pool_session(

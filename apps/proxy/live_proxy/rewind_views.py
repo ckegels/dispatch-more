@@ -24,6 +24,12 @@ def rewind_channel(request, channel_uuid):
     if request.method == "DELETE":
         rewind.leave(channel_uuid, viewer)
         return JsonResponse({"left": True})
+    # Recording opens the channel: only one this login may watch (Dispatcharr's own rule since
+    # 0.33 -- level, adult content, channel profiles); one it may not is not there
+    from apps.channels.access import get_channel_for_user
+
+    if get_channel_for_user(request.user, uuid=channel_uuid) is None:
+        return JsonResponse({"error": "No such channel"}, status=404)
     # A login rewind is not for (Settings -> arrTV, "Server rewind is not for"): nothing recorded
     from . import app_devices
 

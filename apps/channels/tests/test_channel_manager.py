@@ -246,6 +246,17 @@ class MergeTests(_Setup):
         self.orf1.refresh_from_db()
         self.assertEqual(self.orf1.name, "┃AT┃ ORF 1")
 
+    def test_a_channel_given_a_catch_up_stream_offers_catch_up_at_once(self):
+        """Streams go on with bulk_create, which sends no signal: the catch-up flags are rolled
+        up after the apply, not left at "no archive" until the provider's next refresh."""
+        self._stream("AT| ORF 1 FHD", self.b, group=ChannelGroup.objects.create(name="EU | AUSTRIA"),
+                     is_catchup=True, catchup_days=7)
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(country_any_way=True), [key])
+        self.orf1.refresh_from_db()
+        self.assertTrue(self.orf1.is_catchup)
+        self.assertEqual(self.orf1.catchup_days, 7)
+
     def test_a_local_station_is_found_by_its_call_sign_when_asked(self):
         usa = ChannelGroup.objects.create(name="┃USA┃ ABC NETWORK")
         wten = self._channel("ABC 10 | ALBANY | WTEN", 10, usa)

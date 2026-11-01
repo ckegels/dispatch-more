@@ -127,6 +127,23 @@ class CheckRecordingTests(TestCase):
         client.force_authenticate(user=viewer)
         self.assertIn(client.post(f"/api/channels/recordings/{self.recording.id}/health/").status_code, (401, 403))
 
+    def test_a_dvr_manager_cannot_check_a_recording_of_a_channel_it_may_not_see(self):
+        # Dispatcharr 0.33 scopes a DVR manager's recordings to the channels it may see
+        from apps.accounts.models import User
+
+        self.recording.channel.is_adult = True
+        self.recording.channel.save()
+        manager = User.objects.create_user(
+            username="dvr", password="x", user_level=User.UserLevel.STANDARD,
+            custom_properties={"dvr_access": "manage", "hide_adult_content": True},
+        )
+        client = APIClient()
+        client.force_authenticate(user=manager)
+        with patch("apps.channels.tasks.recording_health_check.delay") as queued:
+            answer = client.post(f"/api/channels/recordings/{self.recording.id}/health/")
+        self.assertEqual(answer.status_code, 404)
+        queued.assert_not_called()
+
     def test_off_by_default(self):
         from core.models import CoreSettings
 

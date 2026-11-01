@@ -202,6 +202,7 @@ class LiveCaptionsTests(TestCase):
         from apps.channels.models import Channel
 
         user = get_user_model().objects.create_user(username="tv", password="x", user_level=1)
+        self.user = user
         self.client = APIClient()
         self.client.force_authenticate(user)
         self.channel = Channel.objects.create(name="┃NL┃ NPO 1", channel_number=1)
@@ -232,6 +233,15 @@ class LiveCaptionsTests(TestCase):
         self.assertEqual(path, "/jobs/poll")
         self.assertEqual(body["url"], f"http://127.0.0.1:9191/proxy/ts/stream/{self.channel.uuid}")
         self.assertEqual((body["since"], body["model"], body["language"]), (2, "large-v3-turbo", None))
+
+    def test_a_channel_the_login_may_not_watch_gets_no_captions(self):
+        # A caption job opens the channel; Dispatcharr 0.33's rule says who may (apps.channels.access)
+        self.channel.is_adult = True
+        self.channel.save()
+        self.user.custom_properties = {"hide_adult_content": True}
+        self.user.save()
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+        self.assertEqual(self.asked, [])
 
     def test_a_language_set_by_hand_is_passed_on(self):
         from apps.channels import subtitles

@@ -3697,6 +3697,10 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     ]
     created = updated = streams_added = combined = 0
     profiles_for = _ProfilesToJoin(settings)
+    # Channels given streams with bulk_create, which sends no ChannelStream post_save: their
+    # catch-up is rolled up once at the end, as Dispatcharr's own bulk create does since 0.32
+    # (#1542). A channel made from catch-up streams said "no archive" until the next refresh.
+    linked = set()
 
     with transaction.atomic():
         for row in rows:
@@ -3724,6 +3728,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 streams_added += _put_on_channel(
                     target, [i for i in final_ids if i not in custom_ids]
                 )
+                linked.add(target.id)
                 updated += 1
                 continue
             info = row["channel"]
@@ -3805,6 +3810,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 # In one go: an apply is hundreds of channels with half a dozen streams
                 # each, and a query apiece is the wait
                 ChannelStream.objects.bulk_create(fresh)
+                linked.add(channel.id)
             # What was really added, not what the plan meant to add: streams taken off the
             # row by hand are not added and were being counted as though they had been
             streams_added += len(fresh)
@@ -3820,6 +3826,11 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 if going:
                     Channel.objects.filter(id__in=going).delete()
                     combined += len(going)
+
+        if linked:
+            from .utils import rollup_catchup_for_channels
+
+            rollup_catchup_for_channels(linked)
 
     logger.info(
         f"Channel Manager: {created} channel(s) made, {updated} merged, "

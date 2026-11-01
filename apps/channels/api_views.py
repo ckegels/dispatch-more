@@ -3747,9 +3747,11 @@ class RecordingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="health")
     def health(self, request, pk=None):
         """Dispatch More: check this recording's file now (recording_health), e.g. one recorded
-        before the check was switched on."""
+        before the check was switched on. Through the viewset's own queryset, as stock's
+        actions here are: since 0.33 a DVR manager only reaches recordings of channels it may
+        see."""
         from .tasks import recording_health_check
-        rec = get_object_or_404(Recording, pk=pk)
+        rec = self.get_object()
         try:
             recording_health_check.delay(rec.id)
             return Response({"success": True, "queued": True})

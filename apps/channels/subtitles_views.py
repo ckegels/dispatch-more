@@ -63,10 +63,12 @@ def captions_live(request, channel_uuid):
     then, each with the stream time it belongs to; asking keeps the channel's job going and
     starts it. &lang=nl: the same lines translated (captions/translate.py). DELETE: the TV is done (changed channel, turned captions off, closed).
     """
+    from .access import get_channel_for_user
     from .captions import live
-    from .models import Channel
 
-    channel = Channel.objects.filter(uuid=channel_uuid).first()
+    # A caption job opens the channel: only one this login may watch (Dispatcharr's own rule
+    # since 0.33 -- level, adult content, channel profiles); one it may not is not there
+    channel = get_channel_for_user(request.user, uuid=channel_uuid)
     if channel is None:
         return JsonResponse({"error": "No such channel"}, status=404)
     if request.method == "DELETE":
