@@ -2563,3 +2563,55 @@ class ViewTests(_Setup):
         viewer = APIClient()
         viewer.force_authenticate(user=User.objects.create_user(username="v", password="x", user_level=0))
         self.assertEqual(viewer.get("/api/channels/channel-manager/").status_code, 403)
+
+
+class ProviderChannelTests(_Setup):
+    """
+    A channel the provider's auto-sync made: its own name and group are the provider's, and
+    what the user chose instead is its override, which the channel list shows. Recognition
+    goes by the provider's own name (closest to the streams, and what DispatcharrUtils
+    matched on); the row shows, and the apply writes, what the channel list shows.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from apps.channels.models import ChannelOverride
+
+        self.mine = ChannelGroup.objects.create(name="My Austria")
+        self.synced = self._channel("┃AT┃ ORF III", 3, self.austria, auto_created=True, auto_created_by=self.a)
+        self._attach(self.synced, [self._stream("┃AT┃ ORF III", self.a), self.fallback])
+        ChannelOverride.objects.create(channel=self.synced, name="ORF Drei", channel_group=self.mine)
+        self.key = f"ch:{self.synced.id}"
+        self._stream("┃AT┃ ORF III FHD", self.b)
+
+    def _override(self):
+        from apps.channels.models import ChannelOverride
+
+        return ChannelOverride.objects.get(channel=self.synced)
+
+    def test_it_is_still_recognised_by_the_providers_name_and_shown_as_the_list_shows_it(self):
+        row = self._row(channel_manager.build_plan(settings()), self.key)
+        self.assertEqual(row["status"], "merge")
+        self.assertIn("┃AT┃ ORF III FHD", [s["name"] for s in row["streams"]])
+        self.assertEqual((row["channel"]["name"], row["channel"]["group"]), ("ORF Drei", "My Austria"))
+
+    def test_a_name_and_guide_chosen_go_on_its_override_where_a_sync_cannot_undo_them(self):
+        from apps.epg.models import EPGData, EPGSource
+
+        source = EPGSource.objects.create(name="Austria", source_type="xmltv")
+        guide = EPGData.objects.create(tvg_id="ORF3.at", name="ORF III", epg_source=source)
+        channel_manager.apply_plan(settings(), [self.key], names={self.key: "ORF 3"}, epgs={self.key: guide.id})
+        self.synced.refresh_from_db()
+        self.assertEqual((self.synced.name, self.synced.epg_data_id, self.synced.tvg_id), ("┃AT┃ ORF III", None, None))
+        override = self._override()
+        self.assertEqual((override.name, override.epg_data_id, override.tvg_id), ("ORF 3", guide.id, "ORF3.at"))
+        self.assertEqual(override.channel_group_id, self.mine.id)
+
+    def test_a_channel_made_by_hand_is_still_written_itself(self):
+        from apps.channels.models import ChannelOverride
+
+        key = f"ch:{self.orf1.id}"
+        channel_manager.apply_plan(settings(), [key], names={key: "┃AT┃ ORF Eins"})
+        self.orf1.refresh_from_db()
+        self.assertEqual(self.orf1.name, "┃AT┃ ORF Eins")
+        self.assertFalse(ChannelOverride.objects.filter(channel=self.orf1).exists())

@@ -79,7 +79,14 @@ def effective(queryset):
     return with_effective_values(queryset, select_related_fks=True)
 
 
-def _put(channel, values):
+# The fields given by id whose model field is the relation (tvg_id is a plain column)
+_FOREIGN_KEYS = {
+    "channel_group_id": "channel_group", "epg_data_id": "epg_data", "logo_id": "logo",
+    "stream_profile_id": "stream_profile",
+}
+
+
+def write_effective(channel, values):
     """
     {field: value} written where the channel list reads it. A channel made by hand is
     written itself. An auto-created channel's fields are its provider's and a refresh puts
@@ -97,7 +104,7 @@ def _put(channel, values):
         if fields:
             # Saved one at a time with update_fields: a channel moving group or number is
             # something other parts of Dispatcharr watch for (signals)
-            channel.save(update_fields=[f[:-3] if f.endswith("_id") else f for f in fields])
+            channel.save(update_fields=[_FOREIGN_KEYS.get(f, f) for f in fields])
         return bool(fields)
 
     try:
@@ -261,7 +268,7 @@ def rename_channels(names):
         return {"renamed": 0}
     renamed_count = 0
     for channel in effective(Channel.objects.filter(id__in=wanted)):
-        if channel.effective_name != wanted[channel.id] and _put(channel, {"name": wanted[channel.id]}):
+        if channel.effective_name != wanted[channel.id] and write_effective(channel, {"name": wanted[channel.id]}):
             renamed_count += 1
     logger.info(f"Guide Layout: {renamed_count} channel(s) renamed")
     return {"renamed": renamed_count}
@@ -315,6 +322,6 @@ def _write(wanted, moving):
             values["channel_number"] = number
         if channel.id in moving and channel.effective_channel_group_id != moving[channel.id]:
             values["channel_group_id"] = moving[channel.id]
-        if values and _put(channel, values):
+        if values and write_effective(channel, values):
             changed += 1
     return changed

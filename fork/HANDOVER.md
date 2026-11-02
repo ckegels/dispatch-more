@@ -607,6 +607,13 @@ the user's own `merge_group.py`): the whole name, only a quality at the end remo
 ignored, no tvg-id (providers share tvg-ids between different channels — it merged Krone into
 Euronews and every CBS station into one), no country guessing, every same-named channel gets
 the stream. Loose matching etc. are levers. Streams can be reordered on the page.
+**Provider channels with an override** (2026-11-02, on 0.33, the user's choice): recognition
+still goes by a channel's own name and group (the provider's way of writing it, closest to the
+streams, and what DispatcharrUtils matched on); everything about what the channel has -- the
+row, the groups the levers pick, which channel survives a combine, "has no guide/logo yet", the
+tvg-id check -- is the effective value (`_shown`), and an apply writes through
+`guide_layout.write_effective` (an auto-created channel's name/group/guide/logo on its override,
+where its provider's sync cannot undo it). Tests: `ProviderChannelTests`.
 **Channels short of a provider, and streams put on by hand** (v194). A provider is a
 **login** (an M3U account), two logins at one provider included -- the user's word: each
 carries streams of its own. The toolbar filters by "Fewer than N providers" and "Missing
@@ -1481,7 +1488,7 @@ separately, being a different intention and a far bigger change.
 
 **Effective values** (2026-11-01, on 0.33): channels are read with `with_effective_values` and
 shown with their effective name, number and group, as the channel list shows them since 0.32
-(#1630). Writes go through `_put`: a channel made by hand is written itself; an auto-created
+(#1630). Writes go through `write_effective` (Lineup uses it too): a channel made by hand is written itself; an auto-created
 one gets the value on its `ChannelOverride` (a refresh would put its own column back), and an
 override equal to the provider's value is cleared -- the rule of stock's
 `apply_effective_channel_numbers`. Before, Guide Layout showed and wrote the provider's raw

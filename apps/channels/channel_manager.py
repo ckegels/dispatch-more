@@ -998,23 +998,38 @@ def _ordered(streams, settings):
     return sorted(streams, key=lambda s: (s["quality_rank"], s["priority"], s["name"]))
 
 
+def _shown(channel, field):
+    """
+    What the channel list shows for this field of a channel: an auto-created channel's
+    override wins over what its provider gave it (Dispatcharr's effective values, everywhere
+    since 0.32). Channels read by _existing_channels carry them; any other falls back to its own.
+
+    Recognition still goes by the channel's own name and group: that is the provider's way
+    of writing it, closest to the streams being matched, and what DispatcharrUtils matched on
+    ("Exact" reproduces it). What the channel has, and what is written, is the shown value.
+    """
+    return getattr(channel, f"effective_{field}", getattr(channel, field))
+
+
 def _existing_channels(settings, aliases):
     """The channels streams may be added to, with what they have now."""
+    from .guide_layout import effective
     from .models import Channel, ChannelStream
 
     from .show_groups.live import copy_group_ids
 
-    channels = Channel.objects.select_related(
-        "channel_group", "logo", "epg_data", "epg_data__epg_source"
-    ).exclude(channel_group_id__in=copy_group_ids())
+    channels = effective(Channel.objects.select_related(
+        "channel_group", "logo", "epg_data", "epg_data__epg_source", "override__epg_data__epg_source"
+    )).exclude(effective_channel_group_id__in=copy_group_ids())
+    # The groups as the channel list shows them: the page offers them by those names
     groups = [int(g) for g in settings.get("channel_groups") or ()]
     if groups:
-        channels = channels.filter(channel_group_id__in=groups)
+        channels = channels.filter(effective_channel_group_id__in=groups)
     leave_alone = [int(g) for g in settings.get("exclude_channel_groups") or ()]
     if leave_alone:
         # Out of the plan altogether: no row, no streams added, nothing to combine, and
         # (see _NewHomes) never a home for a new channel either
-        channels = channels.exclude(channel_group_id__in=leave_alone)
+        channels = channels.exclude(effective_channel_group_id__in=leave_alone)
     found = {}
     for channel in channels:
         group_name = channel.channel_group.name if channel.channel_group_id else ""
@@ -1094,17 +1109,21 @@ def _stream_summary(stream, added=False, removed=False):
 
 
 def _channel_summary(channel):
-    epg = channel.epg_data
+    # As the channel list shows it (_shown): a renamed or re-pinned provider channel is
+    # recognisable as the channel you have
+    epg = channel.effective_epg_data_obj
+    group = channel.effective_channel_group_obj
+    logo = channel.effective_logo_obj
     return {
         "id": channel.id,
-        "name": channel.name,
-        "number": channel.channel_number,
-        "group": channel.channel_group.name if channel.channel_group_id else "",
+        "name": _shown(channel, "name"),
+        "number": _shown(channel, "channel_number"),
+        "group": group.name if group else "",
         # By id as well as by name, so the page can narrow to a group without matching
         # on text -- and so a new channel's suggested group and a channel you have are
         # the same kind of thing to narrow by
-        "group_id": channel.channel_group_id,
-        "logo_url": channel.logo.url if channel.logo_id else "",
+        "group_id": _shown(channel, "channel_group_id"),
+        "logo_url": logo.url if logo else "",
         # The source is part of it: the page shows the guide a channel has beside the one
         # it would come out with, and two entries of one name are told apart by where
         # they come from
@@ -3016,9 +3035,10 @@ def _which_to_keep(records, group_id):
     """
     def order(record):
         channel = record["channel"]
+        number = _shown(channel, "channel_number")
         return (
-            0 if group_id and channel.channel_group_id == group_id else 1,
-            float(channel.channel_number) if channel.channel_number is not None else float("inf"),
+            0 if group_id and _shown(channel, "channel_group_id") == group_id else 1,
+            float(number) if number is not None else float("inf"),
             channel.id,
         )
 
@@ -3248,7 +3268,8 @@ def build_plan(settings):
                 from collections import Counter
 
                 theirs = Counter(
-                    r["channel"].channel_group_id for r in records if r["channel"].channel_group_id
+                    _shown(r["channel"], "channel_group_id") for r in records
+                    if _shown(r["channel"], "channel_group_id")
                 )
                 group_id = theirs.most_common(1)[0][0] if theirs else None
                 why = "where most of them are already"
@@ -3314,7 +3335,7 @@ def build_plan(settings):
             # was not part of the question, and stays
             judged = [s for s in normal if s["in_scope"]]
             wrong = [s for s in judged if not (s["key"] == record["key"] or (
-                s["tvg_id"] and s["tvg_id"].lower() == (channel.tvg_id or "").lower()))]
+                s["tvg_id"] and s["tvg_id"].lower() == (_shown(channel, "tvg_id") or "").lower()))]
             # Never empties a channel: with nothing of its own left it keeps what it has
             wrong = [s for s in wrong if s["id"] not in left_alone]
             if len(normal) - len(wrong) + len(added) > 0:
@@ -3334,7 +3355,7 @@ def build_plan(settings):
 
         summary = _channel_summary(channel)
         changes = []
-        if not channel.epg_data_id and settings.get("epg") != "keep":
+        if not _shown(channel, "epg_data_id") and settings.get("epg") != "keep":
             found = guides.find(
                 final, _strip_country_box(channel.name), settings.get("epg"),
                 record["country"],
@@ -3342,7 +3363,7 @@ def build_plan(settings):
             if found:
                 summary["epg"] = found
                 changes.append("epg")
-        if not channel.logo_id and settings.get("logo") != "keep":
+        if not _shown(channel, "logo_id") and settings.get("logo") != "keep":
             url = _logo_for(channel.name, final, settings.get("logo"), index)
             if url:
                 summary["logo_url"] = url
@@ -3350,7 +3371,7 @@ def build_plan(settings):
 
         if folding:
             status = "combine"
-            if folding["group_id"] and folding["group_id"] != channel.channel_group_id:
+            if folding["group_id"] and folding["group_id"] != _shown(channel, "channel_group_id"):
                 summary["group_id"] = folding["group_id"]
                 summary["group"] = homes().names.get(folding["group_id"], "")
                 changes.append("group")
@@ -3669,6 +3690,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
     """
     from django.db import transaction
 
+    from .guide_layout import effective, write_effective
     from .models import Channel, ChannelProfileMembership, ChannelStream
 
     wanted = set(keys or ())
@@ -3762,7 +3784,7 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                 )
                 created += 1
             else:
-                channel = Channel.objects.filter(id=info["id"]).first()
+                channel = effective(Channel.objects.filter(id=info["id"])).first()
                 if channel is None:
                     # Gone since the page was looked at -- deleted elsewhere, or by an M3U
                     # refresh. Passed over rather than failing every other row with it.
@@ -3770,29 +3792,26 @@ def apply_plan(settings, keys, orders=None, groups=None, drops=None, names=None,
                         f"Channel Manager: channel {info['id']} is gone; its row was skipped"
                     )
                     continue
-                fields = []
-                if row["status"] == "combine" and info.get("group_id") != channel.channel_group_id:
-                    channel.channel_group_id = info.get("group_id")
-                    fields.append("channel_group")
-                if chosen_name and chosen_name != channel.name:
-                    channel.name = chosen_name
-                    fields.append("name")
+                # Written where the channel list reads it (guide_layout.write_effective): an
+                # auto-created channel's on its override, or its provider's next sync put
+                # its own back and the change was lost without a word
+                values = {}
+                if row["status"] == "combine" and info.get("group_id") != _shown(channel, "channel_group_id"):
+                    values["channel_group_id"] = info.get("group_id")
+                if chosen_name and chosen_name != _shown(channel, "name"):
+                    values["name"] = chosen_name
                 if row["key"] in epgs:
                     # Chosen by hand, which includes choosing no guide at all
                     epg = info.get("epg")
-                    channel.epg_data_id = epg["id"] if epg else None
-                    fields.append("epg_data")
+                    values["epg_data_id"] = epg["id"] if epg else None
                     if epg and epg.get("tvg_id"):
-                        channel.tvg_id = epg["tvg_id"]
-                        fields.append("tvg_id")
+                        values["tvg_id"] = epg["tvg_id"]
                 elif "epg" in row["changes"] and info.get("epg"):
-                    channel.epg_data_id = info["epg"]["id"]
-                    fields.append("epg_data")
+                    values["epg_data_id"] = info["epg"]["id"]
                 if "logo" in row["changes"] and info.get("logo_url"):
-                    channel.logo_id = _logo_id(info["logo_url"])
-                    fields.append("logo")
-                if fields:
-                    channel.save(update_fields=fields)
+                    values["logo_id"] = _logo_id(info["logo_url"])
+                if values:
+                    write_effective(channel, values)
                 updated += 1
 
             # Only what the plan names as removed goes; anything it did not look at stays
