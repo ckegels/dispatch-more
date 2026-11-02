@@ -1,7 +1,7 @@
 # Dispatcharr fork: probation-slots
 
 A personal fork of Dispatcharr on branch `feature/probation-slots`, based on **v0.33.0**
-(`2fa13a67`, `fork/patcher/BASE`; merged into `feature/probation-slots` on 2026-11-01, not pushed yet --
+(`2fa13a67`, `fork/patcher/BASE`; merged into `feature/probation-slots` on 2026-11-01, pushed 2026-11-02 --
 before 2026-11-01 v0.31.0, `bcbb68c4`), delivered as releases of the patcher. **Read `fork/HANDOVER.md` before changing
 anything**: it holds the features, the reasoning, what was measured on the real server, and
 the mistakes not to repeat.
@@ -51,8 +51,8 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v275 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
-   Dispatcharr 0.31.0, v276 will be the first for 0.33.0). Users install one with
+   Releases run from v99; v276 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
+   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0). Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker; `... | sudo bash -s -- --uninstall` takes it off with the
    newest release's uninstaller.
