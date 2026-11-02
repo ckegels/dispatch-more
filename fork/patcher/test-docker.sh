@@ -6,7 +6,7 @@
 #
 #   fork/patcher/test-docker.sh <older release .tar.gz> <this release .tar.gz>
 #
-# Needs Docker and pulls ghcr.io/dispatcharr/dispatcharr:<version> for both. ~10 min. KEEP=1
+# Needs Docker and pulls ghcr.io/dispatcharr/dispatcharr:<version> for both. About 2 min once pulled. KEEP=1
 # leaves the container and its volume. test-real.sh is the same for a Linux machine.
 set -uo pipefail
 OLD="$(realpath "${1:?usage: test-docker.sh <older release .tar.gz> <this release .tar.gz>}")"
