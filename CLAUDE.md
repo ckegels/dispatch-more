@@ -51,9 +51,8 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v276 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
-   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277 built 2026-11-08, not yet
-   published -- handover-2026-11-01 §13). Users install one with
+   Releases run from v99; v277 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
+   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08, is the latest -- handover-2026-11-01 §13). Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker; `... | sudo bash -s -- --uninstall` takes it off with the
    newest release's uninstaller, and `... | sudo bash -s -- --upgrade` (v277) updates Dispatcharr to what the
