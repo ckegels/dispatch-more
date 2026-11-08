@@ -144,8 +144,11 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
 ### And more
 
 - **Media Servers** — Plex and Jellyfin in one place: who watches what, stop a session, and
-  manage Dispatcharr's HDHomeRun tuners and guides on them. Plex and Jellyfin no longer keep
-  streams open too long.
+  manage Dispatcharr's HDHomeRun tuners and guides on them. A channel a media server switches
+  away from is closed at once (with the channel overlap on), and with **Close channels nobody
+  watches** switched on for a Jellyfin server, a channel Jellyfin keeps open after everybody
+  left is closed after 3 minutes -- never one it plays to anybody or records, and never anybody
+  else's stream. (Not on Plex: it cannot say what it is recording.)
 - **Service keys** (Settings → System) — keys for TMDB, TheTVDB, Trakt and OMDb in one place,
   with a Test button.
 - **Modified build** (Settings → System) — what is installed, and the button back to stock.
@@ -177,8 +180,9 @@ docker exec dispatcharr bash -c "curl -fsSL https://github.com/ckegels/dispatch-
 ```
 
 A **restart** keeps Dispatch More, but **recreating** the container (a new image, or a changed
-compose file) brings back stock Dispatcharr. To have it put back at every start, add this to
-the Dispatcharr service in `docker-compose.yml`:
+compose file) brings back stock Dispatcharr. To have it put back at every start -- and the
+matching release fetched by itself when you pull a newer Dispatcharr image -- add this to the
+Dispatcharr service in `docker-compose.yml`:
 
 ```yaml
     entrypoint: ["/bin/bash", "/data/dispatch-more/docker-entrypoint.sh"]
@@ -226,23 +230,41 @@ Phones, tablets and other ways to install are in the
 
 ## Update
 
-Run the same install command again: it replaces the installed release with the newest one.
-arrTV updates itself (Settings › App Updates).
+**Dispatch More only:** run the same install command again. It replaces the installed release
+with the newest one made for your Dispatcharr. arrTV updates itself (Settings › App Updates).
 
-**A new Dispatcharr version:** a Dispatch More release only fits the Dispatcharr version it was
-built for, and the install command picks the newest release made for *your* Dispatcharr. When
-Dispatcharr updates, a new Dispatch More release follows. You can update Dispatcharr whenever you
-like:
+**Dispatcharr and Dispatch More together** (Linux / LXC), in one command:
 
-- **Linux:** update Dispatcharr as you always do, then run the install command again. It takes
-  the old release off (only what is still the old release's -- never the old Dispatcharr's files
-  over the new ones) and puts on the release for your new Dispatcharr. If there is none yet, it
-  says so and changes nothing; Dispatcharr keeps working as stock, and the uninstall command
-  below tidies away what the old release left. Dispatcharr's own `debian_install.sh` does not
-  restart services that are already running, so until you restart Dispatcharr (or reboot) the
-  old version keeps answering; the install command restarts it when it puts a release on.
-- **Docker:** a new image starts as stock Dispatcharr until you run the install command in it
-  again.
+```bash
+curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash -s -- --upgrade
+```
+
+A Dispatch More release only fits the Dispatcharr version it was built for, and Dispatcharr's own
+updaters (`debian_install.sh`, the Proxmox script's `update`) always install the *newest*
+Dispatcharr, which may not have a Dispatch More release yet. `--upgrade` updates Dispatcharr to
+the version the newest Dispatch More is made for, never past it: Dispatch More off (Dispatcharr is
+stock while it is updated), Dispatcharr updated the way it was installed -- `debian_install.sh`
+pinned to that version, or the Proxmox community script's own update steps pinned to it, with
+its backup in `/opt/dispatcharr_backup_<time>.tar.gz` -- then Dispatch More on again. Already on
+that version: it only installs. Dispatcharr newer than any release: it changes nothing. Installed
+some other way: it changes nothing and says what to do. It asks nothing on the Proxmox script's
+install; on a `debian_install.sh` install Dispatcharr's installer asks you to type "I understand".
+
+**Updating Dispatcharr yourself** works too: update it as you always do, then run the install
+command again -- no need to uninstall first. It takes the old release off (only what is still the
+old release's -- never the old Dispatcharr's files over the new ones) and puts on the release for
+your new Dispatcharr. If there is none yet, it says so and changes nothing; Dispatcharr keeps
+working as stock, and the uninstall command below tidies away what the old release left.
+Dispatcharr's own `debian_install.sh` does not restart services that are already running, so until
+you restart Dispatcharr (or reboot) the old version keeps answering; the install command restarts
+it when it puts a release on.
+
+**Docker:** pull the new Dispatcharr image and recreate the container. With Dispatch More's start
+script in your compose file (see Install), the release made for the new image is downloaded and
+put on by itself at that start, when there is one (from v277 on: the start script in `/data`
+comes with the release; set `DISPATCH_MORE_AUTO_UPDATE=0` to keep the release as it is). Without
+the start script, or when there is no release yet, it starts as stock Dispatcharr until you run
+the install command in it again.
 
 ## Uninstall
 

@@ -72,21 +72,27 @@ def server_hosts() -> frozenset:
 
     hosts = set()
     for server in load_servers():
-        host = urlparse(clean_url(server.get("url"))).hostname
-        if not host:
-            continue
-        hosts.add(host.lower())
-        try:
-            for info in socket.getaddrinfo(host, None):
-                hosts.add(info[4][0])
-        except OSError:
-            # A name that cannot be resolved right now still matches by name
-            pass
+        hosts |= addresses(server)
     try:
         cache.set(HOSTS_CACHE_KEY, list(hosts), HOSTS_CACHE_TTL)
     except Exception:
         pass
     return frozenset(hosts)
+
+
+def addresses(server) -> set:
+    """One server's address, as its hostname and the IPs that name resolves to."""
+    host = urlparse(clean_url(server.get("url"))).hostname
+    if not host:
+        return set()
+    found = {host.lower()}
+    try:
+        for info in socket.getaddrinfo(host, None):
+            found.add(info[4][0])
+    except OSError:
+        # A name that cannot be resolved right now still matches by name
+        pass
+    return found
 
 
 def forget_hosts():
@@ -131,6 +137,7 @@ def public(server):
         "url": server.get("url", ""),
         "has_token": bool(server.get("token")),
         "enabled": is_enabled(server),
+        "close_when_left": bool(server.get("close_when_left")),
     }
 
 
@@ -248,8 +255,15 @@ def _jellyfin_sessions(server):
     A live channel is an item of type TvChannel, which is what the overlap cares about; a
     film someone is watching is not a tuner and is left out.
     """
+    return jellyfin_playing(server, _get(server, "/Sessions") or ())
+
+
+def jellyfin_playing(server, raw):
+    """Jellyfin's /Sessions answer, in the same shape as Plex's sessions (see _jellyfin_sessions)."""
     playing = []
-    for session in _get(server, "/Sessions") or ():
+    for session in raw:
+        if not isinstance(session, dict):
+            continue
         item = session.get("NowPlayingItem") or {}
         if not item:
             continue
@@ -941,14 +955,33 @@ def recording_channels(server):
     """
     if kind(server) != "jellyfin":
         return set()
-    names = set()
     try:
-        for timer in _get(server, "/LiveTv/Timers") or ():
-            if isinstance(timer, dict) and (timer.get("Status") or "") == "InProgress":
-                if timer.get("ChannelName"):
-                    names.add(timer["ChannelName"])
+        return jellyfin_recording(_get(server, "/LiveTv/Timers")) or set()
     except Exception as e:
         logger.debug(f"Could not ask {server.get('name')} what it is recording: {e}")
+        return set()
+
+
+def jellyfin_recording(raw):
+    """
+    The channels in Jellyfin's /LiveTv/Timers answer that are being recorded now, by name, or
+    None when there is no answer to read.
+
+    Jellyfin answers with a page of results, {"Items": [...], "TotalRecordCount": n}
+    (LiveTvController.GetTimers returns a QueryResult), not with a bare list. Read as a list,
+    which is how this was first written, the page is a dict whose keys are strings, no timer
+    was ever found and every Jellyfin recording looked like a channel nobody watched. A bare
+    list is still read, in case a version answers that way.
+    """
+    if isinstance(raw, dict):
+        raw = raw.get("Items")
+    if not isinstance(raw, list):
+        return None
+    names = set()
+    for timer in raw:
+        if isinstance(timer, dict) and (timer.get("Status") or "") == "InProgress":
+            if timer.get("ChannelName"):
+                names.add(timer["ChannelName"])
     return names
 
 

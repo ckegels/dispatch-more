@@ -25,7 +25,7 @@ from .output.hls.manager import HLSOutputManager
 from .output.hls.waiters import notify_playlist_ready
 from .output.profile.manager import OutputProfileManager, PROFILE_STATE_ACTIVE
 from .redis_keys import RedisKeys
-from . import media_servers, probation, slate
+from . import left_open, media_servers, probation, slate
 from .constants import ChannelState, EventType, ChannelMetadataField, REDIS_TTL_DEFAULT
 from .config_helper import ConfigHelper
 from .utils import get_logger
@@ -1963,6 +1963,9 @@ class ProxyServer:
                     # Keep track of what the media servers are playing, so a stream request
                     # never waits for one (see media_servers.refresh_sessions)
                     media_servers.refresh_sessions(self.redis_client)
+                    # Close a Jellyfin connection left open after everybody stopped watching
+                    # (left_open.py; off unless switched on for the server)
+                    left_open.sweep(self.redis_client)
 
                     # Create a unified list of all channels we have locally
                     all_local_channels = (

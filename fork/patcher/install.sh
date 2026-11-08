@@ -111,7 +111,7 @@ UNIT
   fi
 
   if [ "$RESTART" = 1 ]; then
-    SERVICES="$(systemctl list-units --type=service --all --no-legend 'dispatcharr*' | awk '{print $1}' | grep -v "^$SLUG" || true)"
+    SERVICES="$(systemctl list-units --type=service --all --no-legend --plain 'dispatcharr*' | awk '{print $1}' | grep -v "^$SLUG" || true)"
     if [ -n "$SERVICES" ]; then
       systemctl stop $SERVICES
       # Nothing streams while stopped: connection slots left by channels that could not clean

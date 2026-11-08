@@ -11,6 +11,14 @@
 # CPU core -- for the whole programme. This adds what Docker has: `dispatcharr-celery-dvr`, a
 # copy of the install's own Celery service started with -Q dvr on threads, and a drop-in that
 # has the normal worker leave `dvr` to it, so the two do not compete for a recording.
+#
+# The Proxmox community script's install runs its worker from a start script instead
+# (ExecStart=/opt/dispatcharr/start-celery.sh, whose last line is `exec uv run celery ... worker
+# -c 4 -Q celery,recordings,dvr,default`). Its files are left as they are: the recordings worker
+# runs a copy of that script made here (celery-dvr.sh in STATE, its worker line on `-Q dvr`),
+# and the drop-in runs the normal worker from another copy (celery-main.sh, its `-Q` without
+# dvr) -- an explicit -Q is not something DISPATCHARR_DVR_ON_DEFAULT_WORKER can change.
+# Removing the drop-in and the copies is all it takes to be as before.
 # Never on Docker (install.sh calls this for the systemd layout only). SYSTEMD_DIR exists for
 # the tests; on a server it is /etc/systemd/system.
 set -euo pipefail
@@ -32,6 +40,7 @@ remove() {
     rmdir "$UNITS/$CELERY.d" 2>/dev/null || true
     rm -f "$MARK"
   fi
+  rm -f "$STATE/celery-dvr.sh" "$STATE/celery-main.sh"
   systemctl daemon-reload || true
   echo "Removed the recordings worker ($DVR); the Celery worker runs recordings again."
 }
@@ -39,8 +48,8 @@ remove() {
 add() {
   # The install's own Celery worker: its ExecStart runs `celery ... worker` and is neither
   # beat nor a worker that was already given the dvr queue
-  CELERY="" SOURCE=""
-  for unit in $(systemctl list-units --type=service --all --no-legend 'dispatcharr*' | awk '{print $1}'); do
+  CELERY="" SOURCE="" SCRIPT=""
+  for unit in $(systemctl list-units --type=service --all --no-legend --plain 'dispatcharr*' | awk '{print $1}'); do
     [ "$unit" = "$DVR.service" ] && continue
     file="$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null || true)"
     [ -n "$file" ] && [ -f "$file" ] || continue
@@ -48,20 +57,48 @@ add() {
       CELERY="$unit" SOURCE="$file"
       break
     fi
+    # A start script whose last command is the worker (the Proxmox community script)
+    start="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "$file" | head -1)"
+    if [ -n "$start" ] && [ -f "$start" ] && grep -qE '^exec .*celery.* worker' "$start" && ! grep -qE '^exec .*celery.* beat' "$start"; then
+      CELERY="$unit" SOURCE="$file" SCRIPT="$start"
+      break
+    fi
   done
   if [ -z "$CELERY" ]; then
     echo "Note: no Celery worker service found to copy; recordings stay on the one worker."
     return 0
   fi
-  sed -e "s|^Description=.*|Description=Dispatcharr recordings: the Celery dvr queue on threads (added by $SLUG)|" \
-      -e "s|^SyslogIdentifier=.*|SyslogIdentifier=$DVR|" \
-      -e "/^ExecStart=.*celery/ s|\$| -Q dvr -n dvr@%%h --pool=threads --concurrency=20|" \
-      -e "s|^Restart=.*|Restart=always|" \
-      "$SOURCE" > "$UNITS/$DVR.service"
+  if [ -n "$SCRIPT" ]; then
+    # Its worker line, without the queues, the pool and the size it was given
+    line="$(grep -E '^exec .*celery.* worker' "$SCRIPT" | tail -1)"
+    bare="$(echo "$line" | sed -E 's/ (-Q|--queues)[ =][^ ]+//g; s/ (-c|--concurrency)[ =][0-9]+//g; s/ (-P|--pool)[ =][^ ]+//g')"
+    awk -v line="$bare -Q dvr -n dvr@\$(hostname) --pool=threads --concurrency=20" \
+      '/^exec .*celery.* worker/ { print line; next } { print }' "$SCRIPT" > "$STATE/celery-dvr.sh"
+    sed -e "s|^Description=.*|Description=Dispatcharr recordings: the Celery dvr queue on threads (added by $SLUG)|" \
+        -e "s|^ExecStart=.*|ExecStart=/bin/bash $STATE/celery-dvr.sh|" \
+        -e "s|^Restart=.*|Restart=always|" \
+        "$SOURCE" > "$UNITS/$DVR.service"
+  else
+    sed -e "s|^Description=.*|Description=Dispatcharr recordings: the Celery dvr queue on threads (added by $SLUG)|" \
+        -e "s|^SyslogIdentifier=.*|SyslogIdentifier=$DVR|" \
+        -e "/^ExecStart=.*celery/ s|\$| -Q dvr -n dvr@%%h --pool=threads --concurrency=20|" \
+        -e "s|^Restart=.*|Restart=always|" \
+        "$SOURCE" > "$UNITS/$DVR.service"
+  fi
   grep -q '^Restart=' "$UNITS/$DVR.service" || sed -i 's|^\[Service\]|[Service]\nRestart=always|' "$UNITS/$DVR.service"
   mkdir -p "$UNITS/$CELERY.d"
-  printf '# Added by %s: recordings are run by %s\n[Service]\nEnvironment="DISPATCHARR_DVR_ON_DEFAULT_WORKER=false"\n' \
-    "$SLUG" "$DVR" > "$UNITS/$CELERY.d/$SLUG-dvr.conf"
+  queues="$( [ -n "$SCRIPT" ] && echo "$line" | sed -nE 's/.* (-Q|--queues)[ =]([^ ]+).*/\2/p' || true)"
+  if [ -n "$queues" ]; then
+    # The normal worker from a copy of its script, its queues without dvr
+    rest="$(echo "$queues" | tr ',' '\n' | grep -vx dvr | paste -sd, -)"
+    awk -v line="$(echo "$line" | sed -E "s/ (-Q|--queues)[ =][^ ]+/ -Q $rest/")" \
+      '/^exec .*celery.* worker/ { print line; next } { print }' "$SCRIPT" > "$STATE/celery-main.sh"
+    printf '# Added by %s: recordings are run by %s; %s is left as it is\n[Service]\nExecStart=\nExecStart=/bin/bash %s\n' \
+      "$SLUG" "$DVR" "$SCRIPT" "$STATE/celery-main.sh" > "$UNITS/$CELERY.d/$SLUG-dvr.conf"
+  else
+    printf '# Added by %s: recordings are run by %s\n[Service]\nEnvironment="DISPATCHARR_DVR_ON_DEFAULT_WORKER=false"\n' \
+      "$SLUG" "$DVR" > "$UNITS/$CELERY.d/$SLUG-dvr.conf"
+  fi
   echo "$CELERY" > "$MARK"
   systemctl daemon-reload
   systemctl enable "$DVR.service" >/dev/null 2>&1 || true

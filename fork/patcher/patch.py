@@ -111,6 +111,26 @@ def unstatic_frontend(app, dist, stock_dist, owner):
                     folder = os.path.dirname(folder)
 
 
+def forget_compiled(module):
+    """
+    Python's compiled copy of a module the release added, which Dispatcharr wrote by running
+    it: left behind, its __pycache__ keeps the release's folders (apps/channels/captions, ...)
+    on a Dispatcharr that never had them. Only that module's own; the folder goes when empty.
+    """
+    if not module.endswith(".py"):
+        return
+    cache = os.path.join(os.path.dirname(module), "__pycache__")
+    stem = os.path.basename(module)[:-3]
+    try:
+        for name in os.listdir(cache):
+            if name.startswith(stem + ".") and name.endswith(".pyc"):
+                os.remove(os.path.join(cache, name))
+        if not os.listdir(cache):
+            os.rmdir(cache)
+    except OSError:
+        pass
+
+
 def load_record(app, state):
     for path in (os.path.join(state, "record.json"), os.path.join(app, RECORD)):
         try:
@@ -198,7 +218,7 @@ def install(app, state, package, layout, force=False):
 
     # What uninstalling needs, kept where the page's request and the watcher can find it
     for script in ("install.sh", "uninstall.sh", "docker-entrypoint.sh", "patch.py", "manifest.json",
-                   "dvr-worker.sh", "captions.sh", "memory-recorder.sh"):
+                   "dvr-worker.sh", "captions.sh", "memory-recorder.sh", "quick-install.sh"):
         source, kept = os.path.join(package, script), os.path.join(state, script)
         # In Docker the release is unpacked in the state folder itself: nothing to copy then
         if os.path.exists(source) and os.path.abspath(source) != os.path.abspath(kept):
@@ -274,6 +294,7 @@ def uninstall(app, state, quiet=False):
                 left.append(entry["path"])
                 continue
             os.remove(target)
+            forget_compiled(target)
             # Folders the release made, left empty now, go too
             folder = os.path.dirname(target)
             while folder.startswith(app + os.sep) and folder != app and not os.listdir(folder):

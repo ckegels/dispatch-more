@@ -14,6 +14,7 @@ vi.mock('../../../api', () => ({
     saveMediaServer: vi.fn(),
     deleteMediaServer: vi.fn(),
     setMediaServerEnabled: vi.fn(),
+    setMediaServerCloseWhenLeft: vi.fn(),
     getMediaServerTuners: vi.fn(),
     addMediaServerTuner: vi.fn(),
     syncMediaServerTuner: vi.fn(),
@@ -654,6 +655,50 @@ describe('MediaServers', () => {
       expect(API.setMediaServerEnabled).toHaveBeenCalledWith('a1', false)
     );
     expect(await screen.findByText('switched off')).toBeInTheDocument();
+  });
+
+  it('closes what Jellyfin leaves open only when switched on, and only on Jellyfin', async () => {
+    const jellyfin = {
+      ...servers[0],
+      id: 'j1',
+      kind: 'jellyfin',
+      name: 'Home Jellyfin',
+      sessions: [],
+      close_when_left: false,
+    };
+    API.getMediaServers.mockResolvedValue({ servers: [servers[0], jellyfin] });
+    API.setMediaServerCloseWhenLeft.mockResolvedValue({
+      servers: [servers[0], { ...jellyfin, close_when_left: true }],
+    });
+
+    render(<MediaServers active={true} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /^Show Home Plex$/ })
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Show Home Jellyfin$/ }));
+
+    // Plex cannot say what it records, so it is never offered there
+    expect(
+      screen.queryByRole('switch', {
+        name: 'Close channels nobody watches on Home Plex',
+      })
+    ).not.toBeInTheDocument();
+    const toggle = screen.getByRole('switch', {
+      name: 'Close channels nobody watches on Home Jellyfin',
+    });
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(API.setMediaServerCloseWhenLeft).toHaveBeenCalledWith('j1', true)
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole('switch', {
+          name: 'Close channels nobody watches on Home Jellyfin',
+        })
+      ).toBeChecked()
+    );
   });
 
   it('removes a server', async () => {

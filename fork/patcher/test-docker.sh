@@ -6,6 +6,10 @@
 #
 #   fork/patcher/test-docker.sh <older release .tar.gz> <this release .tar.gz>
 #
+# Step 5 has a newer image find its release by itself: the start script of this release (on
+# the older one's /data) fetches the release made for the newer image from GitHub -- the real
+# one, so it needs one published for that Dispatcharr version.
+#
 # Needs Docker and pulls ghcr.io/dispatcharr/dispatcharr:<version> for both. About 2 min once pulled. KEEP=1
 # leaves the container and its volume. test-real.sh is the same for a Linux machine.
 set -uo pipefail
@@ -94,6 +98,24 @@ check "...static/ serves the image's frontend, none of the release's" "static_is
 start $NEW_IMAGE entrypoint
 check "...and stays stock in a new container with the entrypoint" "answers $NEW_V ''"
 check "...the log says uninstalled" "logs_say 'Dispatch More: uninstalled'"
+
+echo "5. A newer image finds its release by itself (from GitHub):"
+docker rm -f $N >/dev/null 2>&1; docker volume rm $VOL >/dev/null 2>&1
+start $OLD_IMAGE
+check "stock $OLD_V answers" "answers $OLD_V ''"
+one_command "$OLD"
+# This release's start script and one command on the older one's /data: what a release for the
+# older Dispatcharr that has them leaves there
+tar -xzOf "$NEW" dispatch-more/docker-entrypoint.sh | docker exec -i $N bash -c 'cat > /data/dispatch-more/docker-entrypoint.sh'
+tar -xzOf "$NEW" dispatch-more/quick-install.sh | docker exec -i $N bash -c 'cat > /data/dispatch-more/quick-install.sh'
+start $NEW_IMAGE entrypoint
+PUBLISHED="$(curl -fsSL https://api.github.com/repos/ckegels/dispatch-more/releases?per_page=30 | python3 -c "
+import json, sys
+for r in json.load(sys.stdin):
+    if any(a['name'].endswith('-dispatcharr-$NEW_V.tar.gz') for a in r.get('assets', [])):
+        print(r['tag_name']); break")"
+check "the release published for $NEW_V (${PUBLISHED:-none}) answers, with nothing run by hand" "[ -n '$PUBLISHED' ] && answers $NEW_V '$PUBLISHED'"
+check "...the log says it looked for it" "logs_say 'looking for the one made for it'"
 
 echo
 echo "$PASS passed, $FAIL failed (log: $LOG)"

@@ -76,6 +76,15 @@ const MediaServers = ({ active }) => {
     }
   };
 
+  const setCloseWhenLeft = async (id, on) => {
+    try {
+      const data = await API.setMediaServerCloseWhenLeft(id, on);
+      setServers(data.servers);
+    } catch {
+      setError('Could not change that server.');
+    }
+  };
+
   const remove = async (id) => {
     try {
       const data = await API.deleteMediaServer(id);
@@ -179,6 +188,21 @@ const MediaServers = ({ active }) => {
           </Group>
 
           <Collapse in={!!openServers[server.id]}>
+            {server.kind === 'jellyfin' && (
+              // Jellyfin sometimes keeps reading a channel after its viewer left; it says
+              // what it plays and records, so Dispatcharr can tell (left_open.py)
+              <Switch
+                mt="xs"
+                size="sm"
+                checked={!!server.close_when_left}
+                label="Close channels nobody watches"
+                aria-label={`Close channels nobody watches on ${server.name}`}
+                description="When Jellyfin keeps a channel open for 3 minutes with nobody watching or recording it, its connection is closed. Anybody else on the channel keeps watching."
+                onChange={(event) =>
+                  setCloseWhenLeft(server.id, event.currentTarget.checked)
+                }
+              />
+            )}
             {server.online &&
               (server.sessions.length === 0 ? (
                 <Text size="sm" c="dimmed" mt="xs">

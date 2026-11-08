@@ -2715,6 +2715,13 @@ export default class API {
     });
   }
 
+  static async setMediaServerCloseWhenLeft(id, closeWhenLeft) {
+    return await request(`${host}/proxy/media-servers/`, {
+      method: 'POST',
+      body: { id, close_when_left: closeWhenLeft },
+    });
+  }
+
   static async getMediaServerTuners(serverId) {
     // What the media server has as tuners, plus what a new one can be built from
     try {

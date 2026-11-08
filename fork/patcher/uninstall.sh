@@ -39,7 +39,7 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
   (
     cd "$APP"
     set -a; [ -f .env ] && . ./.env; set +a
-    UNIT="$(systemctl list-units --type=service --all --no-legend 'dispatcharr*' | awk '{print $1}' | head -1)"
+    UNIT="$(systemctl list-units --type=service --all --no-legend --plain 'dispatcharr*' | awk '{print $1}' | head -1)"
     if [ -n "$UNIT" ]; then
       while IFS= read -r line; do [ -n "$line" ] && export "$line"; done < <(systemctl show "$UNIT" -p Environment --value | tr ' ' '\n')
     fi
@@ -67,7 +67,7 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
   rm -f "/etc/systemd/system/$SLUG-uninstall.path" "/etc/systemd/system/$SLUG-uninstall.service"
   systemctl daemon-reload || true
   if [ "$RESTART" = 1 ]; then
-    SERVICES="$(systemctl list-units --type=service --all --no-legend 'dispatcharr*' | awk '{print $1}' || true)"
+    SERVICES="$(systemctl list-units --type=service --all --no-legend --plain 'dispatcharr*' | awk '{print $1}' || true)"
     [ -n "$SERVICES" ] && systemctl restart $SERVICES && echo "Restarted: $SERVICES"
   fi
 fi

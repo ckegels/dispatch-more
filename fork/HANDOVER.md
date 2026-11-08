@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **and v277** (2026-11-08, built, not yet published: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -213,6 +213,28 @@ installed over an existing Dispatcharr by a patcher rather than a `.patch`:
   stock and says why), this release by the one command and across a recreate, `--uninstall`.
   Judged by `/api/core/version/`, the container's log and the sha256 of every file in `/app`
   against the image's, `static/` included. About 2 min once the images are pulled, not run by release.sh either.
+- **Updating in one go** (v277, 2026-11-08, handover-2026-11-01 §13): `quick-install.sh --upgrade`
+  takes Dispatch More off with the newest release's uninstaller, updates Dispatcharr to the
+  version the newest release is made for -- never past it -- the way it was installed
+  (`debian_install.sh` pinned to that tag, or a pinned copy of the Proxmox community script's own
+  update steps, with its backup and its `~/.dispatcharr` version file), checks the version and
+  puts the release on. Already there: it just installs; Dispatcharr newer than every release:
+  exit 3, nothing changed. Which Dispatcharr an archive is for is read from its manifest, never
+  its file name. **Docker**: the start script, before installing, asks
+  `quick-install.sh --fetch-only` (kept in the state folder) for the release made for a newer
+  image (`DISPATCH_MORE_AUTO_UPDATE=0` keeps the release as it is; never after the page's
+  Uninstall).
+- `test-community.sh <older release> <this release>` (v277) -- the Proxmox community script's
+  layout in a Debian 13 systemd container (tarball in `/opt/dispatcharr`, uv `.venv`, root
+  services running `start-*.sh`): the older release, the community update (pinned copy) and the
+  one command -- or `UPGRADE=1`: `--upgrade` -- then the page's Uninstall and `--uninstall`,
+  judged against Dispatcharr's release tarball file by file. It found three things fixed in v277:
+  no recordings worker there (its Celery service runs a start script: `dvr-worker.sh` now writes
+  `celery-dvr.sh` / `celery-main.sh` copies into the state folder and leaves the community files
+  alone), the release's folders left behind by their `__pycache__` (`patch.py forget_compiled`;
+  git ignores `__pycache__`, so test-real could not see it), and `systemctl list-units` parsed
+  without `--plain` (a failed unit's "●" was read as a unit name). `test-real.sh` has `UPGRADE=1`
+  too.
 - `.github/workflows/fork-upstream-check.yml` — daily: if Dispatcharr has a newer release than
   `fork/patcher/BASE`, tries the fork's changes on it and opens an issue saying whether they
   apply or which files conflict. (On 2026-09-19 they applied cleanly to upstream `dev`.) In the
@@ -337,6 +359,26 @@ one guide (lineup) **per channel source**, the exact API sequence Plex's own set
 `PUT devices/{id}?uri=` is ignored (moving a tuner = add new + remove old, slowly: a quick
 sequence crashed Plex with SEGV once), channel scanning is async (poll for the channels
 before enabling them or you get "(69) 0 enabled").
+
+**Close channels nobody watches** (`left_open.py`, v277, 2026-11-08; a switch per Jellyfin
+server, `close_when_left` in the server's entry, off by default). To Dispatcharr the viewer of a
+Jellyfin channel is Jellyfin, and Jellyfin does not always close its tuner stream when its
+viewer leaves: on 2026-11-08 a channel stayed open almost two hours after somebody left within
+seconds. Every 30 s one worker (Redis lock) asks each switched-on server `/Sessions` and
+`/LiveTv/Timers`, and closes (`ChannelService.stop_client`, that connection only) a connection
+from the server's address calling itself Jellyfin or `Lavf` that has been unwatched 3 minutes
+in a row and is at least 3 minutes old. Kept, always: a channel it plays to anybody (paused
+included) or records; everything of the server when either answer cannot be read, or when a
+session or recording names a channel none of its connections is on by name (it may be one of
+them written differently), or a live session has no channel; anything not Jellyfin's
+(other players, one on the same machine, `Dispatcharr-DVR`, the rewind recorder and caption
+worker); Plex entirely (no way to see its recordings). Names are compared bare
+(`_same_channel`) against the channel's own name and its 0.33 effective name (the HDHomeRun
+lineup's `GuideName`). Recorded in Channel health's What happened as "media server left open".
+**Found with it: `recording_channels` never saw a Jellyfin recording.** Jellyfin answers
+`/LiveTv/Timers` with a `QueryResult` (`{"Items": [...]}`, LiveTvController.GetTimers), which was
+iterated as a list; the tests fed it a bare list. `jellyfin_recording` reads both; the overlap's
+"never stop a recording" works on Jellyfin from v277.
 
 Cached logos (`?cachedlogos=`) default to **off** for media servers: the server hands the
 logo URL to the player, and a private address fails off the network.

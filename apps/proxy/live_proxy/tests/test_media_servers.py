@@ -1857,7 +1857,9 @@ class RecordingsAndGuidesTests(TestCase):
                   "kind": "jellyfin"}
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
             get.side_effect = lambda url, **kwargs: (
-                fake_response(timers) if "/LiveTv/Timers" in url else jellyfin(url, **kwargs)
+                # As Jellyfin answers: a page of timers (LiveTvController.GetTimers), not a list
+                fake_response({"Items": timers, "TotalRecordCount": len(timers)})
+                if "/LiveTv/Timers" in url else jellyfin(url, **kwargs)
             )
             self.assertEqual(media_servers.recording_channels(server), {"TFX"})
 
@@ -1874,7 +1876,8 @@ class RecordingsAndGuidesTests(TestCase):
         )
         with patch("apps.proxy.live_proxy.media_servers.requests.get") as get:
             get.side_effect = lambda url, **kwargs: (
-                fake_response([{"Status": "InProgress", "ChannelName": "TFX"}])
+                fake_response({"Items": [{"Status": "InProgress", "ChannelName": "TFX"}],
+                               "TotalRecordCount": 1})
                 if "/LiveTv/Timers" in url else jellyfin(url, **kwargs)
             )
             self.assertEqual(media_servers.channels_being_recorded(self.redis), {"TFX"})

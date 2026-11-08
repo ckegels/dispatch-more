@@ -6,15 +6,30 @@
 #
 # (a separate celery container: add  environment: DISPATCHARR_ENTRYPOINT=/app/docker/entrypoint.celery.sh)
 #
-# An image for another Dispatcharr version starts as stock: the release refuses it, and the log
-# says so. After the page's Uninstall button, the next start puts stock back and stays stock;
-# delete /data/dispatch-more/uninstalled to have it installed again.
+# A newer Dispatcharr image (pulled, the container recreated) gets the Dispatch More release made
+# for it by itself: the one in /data is for the old version, so the matching one is fetched from
+# GitHub first (quick-install.sh --fetch-only, at most DISPATCH_MORE_FETCH_TIMEOUT seconds per
+# download, 60 by default). No release for that version yet, or no internet: the release refuses
+# the image, the log says so, and Dispatcharr starts stock. DISPATCH_MORE_AUTO_UPDATE=0 leaves
+# the release in /data as it is.
+#
+# After the page's Uninstall button, the next start puts stock back and stays stock (nothing is
+# fetched either); delete /data/dispatch-more/uninstalled to have it installed again.
 STATE="$(cd "$(dirname "$0")" && pwd)"
 APP="${DISPATCHARR_APP:-/app}"
 ORIGINAL="${DISPATCHARR_ENTRYPOINT:-$APP/docker/entrypoint.sh}"
 
 if [ -f "$STATE/requests/uninstall" ]; then
   STATE="$STATE" bash "$STATE/uninstall.sh" --docker --app "$APP" && touch "$STATE/uninstalled"
+fi
+if [ ! -f "$STATE/uninstalled" ] && [ "${DISPATCH_MORE_AUTO_UPDATE:-1}" != 0 ] && [ -f "$STATE/quick-install.sh" ]; then
+  made_for="$(sed -n 's/.*"for_dispatcharr": *"\([^"]*\)".*/\1/p' "$STATE/manifest.json" 2>/dev/null | head -1)"
+  image_has="$(sed -n "s/^__version__ = '\(.*\)'.*/\1/p" "$APP/version.py" 2>/dev/null)"
+  if [ -n "$image_has" ] && [ "$made_for" != "$image_has" ]; then
+    echo "Dispatch More: the release here is for Dispatcharr ${made_for:-?}, this image is $image_has; looking for the one made for it."
+    STATE="$STATE" DISPATCHARR_APP="$APP" DISPATCH_MORE_LAYOUT=docker DISPATCH_MORE_FETCH_TIMEOUT="${DISPATCH_MORE_FETCH_TIMEOUT:-60}" \
+      bash "$STATE/quick-install.sh" --fetch-only || true
+  fi
 fi
 if [ -f "$STATE/uninstalled" ]; then
   echo "Dispatch More: uninstalled, starting stock Dispatcharr."

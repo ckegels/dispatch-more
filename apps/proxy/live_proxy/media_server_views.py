@@ -73,6 +73,26 @@ def media_server_list(request):
         logger.info(f"Stopped session {session_id} on {server.get('name')}")
         return JsonResponse({"servers": _server_rows()})
 
+    # Closing what a Jellyfin server leaves open for nobody (left_open.py), switched for that
+    # server alone. Plex cannot say what it records, so it is never offered there.
+    if "close_when_left" in request.data and len(request.data) <= 2:
+        server_id = request.data.get("id")
+        existing = next((s for s in servers if s.get("id") == server_id), None)
+        if existing is None:
+            return JsonResponse({"error": "No such media server"}, status=404)
+        if media_servers.kind(existing) != "jellyfin":
+            return JsonResponse(
+                {"error": "Only Jellyfin says what it records, so only Jellyfin can have this"},
+                status=400,
+            )
+        existing["close_when_left"] = bool(request.data.get("close_when_left"))
+        media_servers.save_servers(servers)
+        logger.info(
+            f"Media server {existing.get('name')}: channels nobody watches are "
+            f"{'closed' if existing['close_when_left'] else 'left to the server'}"
+        )
+        return JsonResponse({"servers": _server_rows()})
+
     # Switching one off (or on) changes nothing else about it, and never needs the server
     if "enabled" in request.data and len(request.data) <= 2:
         server_id = request.data.get("id")

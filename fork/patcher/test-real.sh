@@ -14,6 +14,9 @@
 #   4. The page's Uninstall (an admin's POST, carried out by the watcher): stock, the services up.
 #   5. The one command once more, then the one command's --uninstall: stock again.
 #
+# UPGRADE=1: steps 2 and 3 are the one command's --upgrade instead (Dispatch More off,
+# Dispatcharr updated to this release's version by its own installer, Dispatch More on).
+#
 # Stock is checked with git in /opt/dispatcharr: nothing but what Dispatcharr's own installer
 # writes there (.env, uwsgi-debian.ini, package-lock.json) may differ. KEEP=1 leaves the
 # container running afterwards.
@@ -93,6 +96,14 @@ echo "1. The one command on a machine without Dispatcharr ($OLD_R, Dispatcharr $
 inside "DISPATCH_MORE_ARCHIVE=/root/old.tar.gz DISPATCH_MORE_DISPATCHARR_ANSWER='I understand' DISPATCH_MORE_WAIT=0 bash /root/quick-install.sh" >>"$LOG" 2>&1
 check "Dispatcharr $OLD_V and $OLD_R are on, every service up" "up && answers $OLD_V $OLD_R"
 
+if [ -n "${UPGRADE:-}" ]; then
+echo "2-3. The one command's --upgrade: Dispatcharr $OLD_V -> $NEW_V and $NEW_R, in one go:"
+SINCE="$(inside 'date "+%Y-%m-%d %H:%M:%S"')"
+inside "DISPATCH_MORE_ARCHIVE=/root/new.tar.gz DISPATCH_MORE_DISPATCHARR_ANSWER='I understand' DISPATCH_MORE_WAIT=0 bash /root/quick-install.sh --upgrade" >>"$LOG" 2>&1
+check "$NEW_R is on Dispatcharr $NEW_V, every service up" "up && answers $NEW_V $NEW_R"
+check "...Dispatcharr's own installer put exactly $NEW_V there" "inside 'git -c safe.directory=/opt/dispatcharr -C /opt/dispatcharr describe --tags' | grep -qx v$NEW_V"
+check "...it took $OLD_R off first, on the Dispatcharr it was made for" "grep -q '$OLD_R uninstalled: stock Dispatcharr $OLD_V is back' '$LOG'"
+else
 echo "2. Dispatcharr updated to $NEW_V by its own installer:"
 inside "curl -fsSL https://raw.githubusercontent.com/Dispatcharr/Dispatcharr/v$NEW_V/debian_install.sh -o /root/debian_install.sh && sed -i 's|^\( *\)DISPATCH_BRANCH=\"main\"|\1DISPATCH_BRANCH=\"v$NEW_V\"|' /root/debian_install.sh && printf 'I understand\n' | bash /root/debian_install.sh" >>"$LOG" 2>&1
 # The installer ends with "systemctl enable --now", which starts what is stopped and leaves what
@@ -107,6 +118,7 @@ SINCE="$(inside 'date "+%Y-%m-%d %H:%M:%S"')"
 inside "DISPATCH_MORE_ARCHIVE=/root/new.tar.gz bash /root/quick-install.sh" >>"$LOG" 2>&1
 check "$NEW_R is on, every service up" "up && answers $NEW_V $NEW_R"
 check "...it said it took off only what was still $OLD_R's" "grep -q 'updated from $OLD_V to $NEW_V' '$LOG'"
+fi
 TOKEN="$(admin_token)"
 check "...an admin can log in (for the checks below)" "[ -n '$TOKEN' ]"
 for path in /api/core/modified-build/ /api/core/capabilities/ /api/core/app-sync/ /api/core/arrtv/ \

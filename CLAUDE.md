@@ -52,10 +52,14 @@ the mistakes not to repeat.
    ```
 
    Releases run from v99; v276 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
-   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0). Users install one with
+   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277 built 2026-11-08, not yet
+   published -- handover-2026-11-01 §13). Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker; `... | sudo bash -s -- --uninstall` takes it off with the
-   newest release's uninstaller.
+   newest release's uninstaller, and `... | sudo bash -s -- --upgrade` (v277) updates Dispatcharr to what the
+   newest release is made for and puts that release on. Before publishing a release for a new
+   Dispatcharr version, or one that changes the patcher, also run `fork/patcher/test-real.sh`,
+   `test-docker.sh` and `test-community.sh` (Docker needed; `UPGRADE=1` for the `--upgrade` path).
 
    The user installs a release with `sudo bash dispatch-more/install.sh` (Linux/LXC) or the
    Docker entrypoint; see README.md. The old patch file still works for the user's own server
@@ -83,7 +87,7 @@ the mistakes not to repeat.
   Releases go there with `fork/patcher/release.sh vNN --publish` (it names the fork in every gh
   command). Only the `fork-*` workflow is enabled there; upstream's are disabled on purpose.
 - `docs/channel-switch-overlap.md` — design of the first feature.
-- Fork backend: `apps/proxy/live_proxy/` (probation, media servers, health,
+- Fork backend: `apps/proxy/live_proxy/` (probation, media servers and left_open, health,
   diagnostics with the memory recorder -- memory_recorder.py runs apart as a service of its own
   (`fork/patcher/memory-recorder.sh`), inflight.py, memory_history.py -- and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
   app_alternatives, app_guides, app_one_device, app_links, app_sync) and `apps/channels/` (logo_library, channel_manager,

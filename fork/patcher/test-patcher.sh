@@ -29,6 +29,7 @@ unpack() { rm -rf "$1"; mkdir -p "$1"; tar -xzf "$ARCHIVE" -C "$1" --strip-compo
 unpack "$T/pkg"
 SLUG="$(python3 -c "import json;print(json.load(open('$T/pkg/manifest.json'))['slug'])")"
 RELEASE="$(python3 -c "import json;print(json.load(open('$T/pkg/manifest.json'))['release'])")"
+VERSION="$(python3 -c "import json;print(json.load(open('$T/pkg/manifest.json'))['for_dispatcharr'])")"
 
 echo "Linux (systemd layout, without touching systemd):"
 fresh
@@ -96,6 +97,23 @@ check "uninstalling leaves both as they are, and says so" \
 check "...and everything else is stock" \
   "[ \"\$(diff -r -q '$T/stock' '$T/app' | wc -l)\" = 2 ]"
 
+echo "Python's compiled copies (Dispatcharr ran the release's modules):"
+fresh; rm -rf "$STATE"
+bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+python3 - <<PY
+import json, py_compile
+for f in json.load(open('$T/pkg/manifest.json'))['files']:
+    if f['action'] != 'remove' and f['path'].endswith('.py'):
+        py_compile.compile('$T/app/' + f['path'])
+PY
+out="$(bash "$STATE/uninstall.sh" --app "$T/app" --no-systemd 2>&1)"; code=$?
+# The release's folders (apps/channels/captions, ...) go with their __pycache__; stock's own
+# modules keep theirs, which are Dispatcharr's to keep
+check "uninstalling takes the release's compiled modules and their folders away" \
+  "[ $code = 0 ] && [ -z \"\$(diff -r -q -x __pycache__ '$T/stock' '$T/app')\" ] && [ ! -e '$T/app/apps/channels/captions' ]"
+check "...and leaves the compiled copies of stock's own modules" \
+  "ls '$T/app/apps/proxy/live_proxy/__pycache__/' | grep -q '^views\.'"
+
 echo "No built frontend before:"
 fresh; rm -rf "$STATE" "$T/app/frontend/dist"
 bash "$T/pkg/install.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
@@ -133,8 +151,20 @@ out="$(start)"
 check "...and stays stock" "same_as_stock && echo \"\$out\" | grep -q 'uninstalled, starting stock'"
 fresh; rm -f "$DATA/uninstalled"
 sed -i "s/^__version__ = .*/__version__ = '9.9.9'/" "$T/app/version.py"
-out="$(start)"
+# Not looking on GitHub here (that is test-docker.sh's): the release in /data as it is
+out="$(DISPATCH_MORE_AUTO_UPDATE=0 start)"
 check "an image of another Dispatcharr starts as stock, and says why" "echo \"\$out\" | grep -q 'not applied' && echo \"\$out\" | tail -1 | grep -q started"
+# A newer image: the release in /data is for the Dispatcharr before; the one for this image is
+# fetched (here from the local archive, as GitHub would hand it) and put on at the same start
+fresh; rm -rf "$DATA"; unpack "$DATA"
+sed -i 's/"for_dispatcharr": *"[^"]*"/"for_dispatcharr": "0.0.1"/' "$DATA/manifest.json"
+out="$(DISPATCH_MORE_ARCHIVE="$ARCHIVE" start)"
+check "a newer image gets the release made for it by itself, at the same start" \
+  "echo \"\$out\" | grep -q 'looking for the one made for it' && echo \"\$out\" | grep -q 'installed over' && grep -q '\"for_dispatcharr\": \"$VERSION\"' '$DATA/manifest.json'"
+mkdir -p "$DATA/requests" && echo '{}' > "$DATA/requests/uninstall"; start >/dev/null
+sed -i 's/"for_dispatcharr": *"[^"]*"/"for_dispatcharr": "0.0.1"/' "$DATA/manifest.json"
+out="$(DISPATCH_MORE_ARCHIVE="$ARCHIVE" start)"
+check "...but never after the page's Uninstall" "same_as_stock && ! echo \"\$out\" | grep -q 'looking for'"
 
 echo "One command (quick-install.sh, from a local archive rather than GitHub):"
 fresh
@@ -144,6 +174,28 @@ out="$(DISPATCH_MORE_ARCHIVE="$ARCHIVE" DISPATCHARR_APP="$T/app" STATE="$QUICK_S
 check "installs in one command" "[ $code = 0 ] && [ -f '$T/app/.fork-install.json' ]"
 STATE="$QUICK_STATE" bash "$QUICK_STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
 check "and uninstalls back to stock" "same_as_stock"
+quick() { DISPATCH_MORE_ARCHIVE="$ARCHIVE" DISPATCHARR_APP="$T/app" STATE="$QUICK_STATE" DISPATCH_MORE_LAYOUT=systemd \
+  DISPATCH_MORE_INSTALL_ARGS="--no-systemd" DISPATCH_MORE_WAIT=0 bash "$REPO/fork/patcher/quick-install.sh" "$@" 2>&1; }
+fresh; rm -rf "$QUICK_STATE"
+out="$(quick --upgrade)"; code=$?
+check "--upgrade on the Dispatcharr the release is made for: installs, nothing else" \
+  "[ $code = 0 ] && echo \"\$out\" | grep -q 'already, the version the newest' && [ -f '$T/app/.fork-install.json' ]"
+STATE="$QUICK_STATE" bash "$QUICK_STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+# A release saved under a name of its own says which Dispatcharr it is for in its manifest
+fresh; rm -rf "$QUICK_STATE"; cp "$ARCHIVE" "$T/release.tar.gz"
+out="$(DISPATCH_MORE_ARCHIVE="$T/release.tar.gz" DISPATCHARR_APP="$T/app" STATE="$QUICK_STATE" DISPATCH_MORE_LAYOUT=systemd \
+  DISPATCH_MORE_INSTALL_ARGS="--no-systemd" DISPATCH_MORE_WAIT=0 bash "$REPO/fork/patcher/quick-install.sh" --upgrade 2>&1)"; code=$?
+check "...also from a release saved under any name (its manifest says which Dispatcharr)" \
+  "[ $code = 0 ] && echo \"\$out\" | grep -q 'already, the version the newest' && [ -f '$T/app/.fork-install.json' ]"
+STATE="$QUICK_STATE" bash "$QUICK_STATE/uninstall.sh" --app "$T/app" --no-systemd >/dev/null 2>&1
+fresh; sed -i "s/^__version__ = .*/__version__ = '99.0.0'/" "$T/app/version.py"; cp "$T/app/version.py" "$T/newer-version.py"
+out="$(quick --upgrade)"; code=$?
+check "--upgrade on a newer Dispatcharr: nothing changed, never taken back" \
+  "[ $code = 3 ] && echo \"\$out\" | grep -q 'newer than any' && [ ! -f '$T/app/.fork-install.json' ] && cmp -s '$T/app/version.py' '$T/newer-version.py'"
+fresh; sed -i "s/^__version__ = .*/__version__ = '0.0.1'/" "$T/app/version.py"; cp "$T/app/version.py" "$T/older-version.py"
+out="$(quick --upgrade)"; code=$?
+check "--upgrade on an older Dispatcharr it did not install (or not as root): nothing changed" \
+  "[ $code != 0 ] && echo \"\$out\" | grep -q 'Nothing was changed' && [ ! -f '$T/app/.fork-install.json' ] && cmp -s '$T/app/version.py' '$T/older-version.py'"
 
 # Dispatcharr updated under an installed release, as debian_install.sh updates it: `git reset
 # --hard` and a pull of the new version (every tracked file becomes the new version's, files the
@@ -270,6 +322,35 @@ out="$(dvr add)"
 out="$(dvr remove)"
 check "removed, nothing of it is left" \
   "[ ! -e '$UNITS/dispatcharr-celery-dvr.service' ] && [ ! -e '$UNITS/dispatcharr-celery.service.d' ] && [ ! -e '$T/dvr-state/dvr-worker' ]"
+
+echo "The recordings worker on the Proxmox community script's install (a start script):"
+CU="$T/cunits"; CFAKE="$T/cfake"; CST="$T/cdvr-state"; mkdir -p "$CU" "$CFAKE" "$CST" "$T/copt"
+# As install/dispatcharr-install.sh writes them
+printf '#!/usr/bin/env bash\ncd /opt/dispatcharr\nset -a\nsource .env\nset +a\nexec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,dvr,default\n' > "$T/copt/start-celery.sh"
+printf '#!/usr/bin/env bash\ncd /opt/dispatcharr\nexec uv run celery -A dispatcharr beat -l info\n' > "$T/copt/start-celerybeat.sh"
+cp "$T/copt/start-celery.sh" "$T/start-celery.orig"
+printf '[Unit]\nDescription=Dispatcharr Celery Worker\n\n[Service]\nType=simple\nWorkingDirectory=/opt/dispatcharr\nExecStart=%s\nRestart=on-failure\nUser=root\n' "$T/copt/start-celery.sh" > "$CU/dispatcharr-celery.service"
+printf '[Service]\nExecStart=%s\n' "$T/copt/start-celerybeat.sh" > "$CU/dispatcharr-celerybeat.service"
+cat > "$CFAKE/systemctl" <<FAKE
+#!/bin/bash
+case "\$1" in
+  list-units) for f in "$CU"/dispatcharr*.service; do echo "\$(basename "\$f") loaded active running x"; done ;;
+  show) echo "$CU/\${@: -1}" ;;
+esac
+exit 0
+FAKE
+chmod +x "$CFAKE/systemctl"
+cdvr() { PATH="$CFAKE:$PATH" SYSTEMD_DIR="$CU" bash "$REPO/fork/patcher/dvr-worker.sh" "$@" "$CST" "$SLUG" 2>&1; }
+out="$(cdvr add)"
+check "its worker is found through the start script, and the recordings worker runs a copy on dvr" \
+  "grep -q '^ExecStart=/bin/bash $CST/celery-dvr.sh$' '$CU/dispatcharr-celery-dvr.service' && grep -qx 'exec uv run celery -A dispatcharr worker -l info -Q dvr -n dvr@\$(hostname) --pool=threads --concurrency=20' '$CST/celery-dvr.sh' && grep -qx 'cd /opt/dispatcharr' '$CST/celery-dvr.sh'"
+check "...the normal worker runs a copy without dvr, through a drop-in" \
+  "grep -qx 'exec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,default' '$CST/celery-main.sh' && grep -qx 'ExecStart=' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf' && grep -qx 'ExecStart=/bin/bash $CST/celery-main.sh' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf'"
+check "...and the community script's own files are untouched" \
+  "cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig' && grep -q '^ExecStart=$T/copt/start-celery.sh$' '$CU/dispatcharr-celery.service'"
+out="$(cdvr remove)"
+check "...removed, nothing of it is left and the worker runs its own script again" \
+  "[ ! -e '$CU/dispatcharr-celery-dvr.service' ] && [ ! -e '$CU/dispatcharr-celery.service.d' ] && [ ! -e '$CST/celery-dvr.sh' ] && [ ! -e '$CST/celery-main.sh' ] && cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig'"
 
 echo "The memory recorder (memory-recorder.sh, against a pretend systemd):"
 MEM="$T/mem-state"; MEMFAKE="$T/memfake"; MEMAPP="$T/memapp"; mkdir -p "$MEM" "$MEMFAKE" "$MEMAPP/.venv/bin"
