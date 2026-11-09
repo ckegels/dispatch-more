@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -515,6 +515,29 @@ on it: the LXC raised to 12 GB and a minute log `/etc/cron.d/dispatcharr-mem` ->
 `/var/log/dispatcharr-mem.log` until the memory recorder (below) is installed. The Proxmox
 host's swap was full (8 of 8 GB). Open: the channel list (+50 MB high-water) the same way if it
 shows up again.
+
+**7.9 GB in 50 seconds, 2026-11-09 (v278: `/api/epg/programs/` streamed, and paged when asked).**
+The page stopped answering; one uWSGI worker held 8.3 GB (of 12), 96 MB free, swap nearly full;
+every service up, nothing restarted. The memory recorder had the whole story for that worker: flat
+at ~210 MB for 18 h, then from 16:31:46 UTC **one `GET /api/epg/programs/`** in flight while it
+grew +1.2 GB, +1.2 GB, +0.6 GB ... to 7.9 GB by 16:33:11, never finished. The caller: arrTV's
+guide load (`PlaylistRepository`), whose grid request had failed on the device, falls back to
+`/api/epg/current-programs/` (in the log at 16:31:58) plus `getBulkUpcomingPrograms`:
+`/api/epg/programs/?page_size=1000`, following `next` for up to 10 pages. Stock's
+`ProgramViewSet` has **no paginator** (none set by default either) and no filter, so `page_size`
+and `tvg_id` are ignored and every programme of every guide -- millions of rows with guide
+history -- is serialized into one answer. arrTV's recording-genre lookup
+(`getProgramsByTvgId`, `?tvg_id=<id>&page_size=200`) asks the same. **v278:** with `page_size`
+or `page` the list is one page of at most 1000 in start-time order, DRF's shape (`next`,
+`previous`, `results`; `count` null, no COUNT over millions of rows), of the programmes **not
+ended yet** -- arrTV's fallback wants what is on next and reads 10 pages at most, which from the
+oldest would be 10,000 programmes of history (checked in arrTV: the grid, current-programs and
+`programs/<id>/` are what the guide uses and are untouched; `getProgramsByTvgId` exists but
+nothing calls it); `tvg_id` keeps to that guide, past included; without
+them it is stock's rows byte for byte, in id order (stock's has none: the streamed cursor planned
+another order in the full suite), streamed in batches (`stream_list`, the v273 code of
+`EPGDataViewSet.list` made shared). `apps/epg/tests/test_program_list.py`. Open: why arrTV's grid
+request failed at 16:31 (the grid is 18.8 MB with categories) -- in the arrTV repo.
 
 **The language model out of the web workers** (v241, `meaning.py`). Measured with the Memory
 tab on the user's server (2026-09-30): all 4 uWSGI workers had PyTorch mapped, 550-650 MB

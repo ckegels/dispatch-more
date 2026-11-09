@@ -135,6 +135,53 @@ class ProgramSearchPagination(PageNumberPagination):
     max_page_size = 500
 
 
+def stream_list(view, request, queryset, batch_size=2000):
+    """
+    A list view's JSON answer written out batch by batch, or None when DRF's own path must
+    answer (the browsable API, an indented answer, a view with pages).
+
+    Built whole, a big table's answer costs far more memory than its bytes, and a uWSGI
+    worker never gives that memory back (see EPGDataViewSet.list and ProgramViewSet.list).
+    Each batch goes through the view's serializer and renderer, so the bytes are the ones DRF
+    would have sent.
+    """
+    from django.http import StreamingHttpResponse
+    from rest_framework.renderers import JSONRenderer
+
+    renderer = getattr(request, "accepted_renderer", None)
+    context = view.get_renderer_context()
+    if (
+        type(renderer) is not JSONRenderer
+        or view.paginator is not None
+        or renderer.get_indent(request.accepted_media_type, context) is not None
+    ):
+        return None
+    media_type = request.accepted_media_type
+    # What the renderer puts between list items (compact unless COMPACT_JSON is off)
+    between = b"," if renderer.compact else b", "
+
+    def rendered(rows):
+        # "[a,b]" from the renderer, without its brackets: joined with the separator the
+        # compact renderer itself puts between list items
+        return renderer.render(view.get_serializer(rows, many=True).data, media_type, context)[1:-1]
+
+    def batches():
+        yield b"["
+        first = True
+        batch = []
+        for row in queryset.iterator(chunk_size=batch_size):
+            batch.append(row)
+            if len(batch) >= batch_size:
+                yield (b"" if first else between) + rendered(batch)
+                first = False
+                batch = []
+        if batch:
+            yield (b"" if first else between) + rendered(batch)
+        yield b"]"
+
+    return StreamingHttpResponse(batches(), content_type=renderer.media_type)
+
+
 class ProgramViewSet(
     RawImageContentNegotiationMixin, SchedulesDirectPosterMixin, viewsets.ModelViewSet
 ):
@@ -159,9 +206,74 @@ class ProgramViewSet(
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
+    # The most a page holds, and rows per batch of the streamed list (see list())
+    MAX_PAGE_SIZE = 1000
+    STREAM_BATCH = 2000
+
     def list(self, request, *args, **kwargs):
+        """
+        Every programme, streamed -- or one page of them, when a page is asked for.
+
+        Stock answers this with every programme of every guide built into one response: no
+        pages, `page_size` and `tvg_id` ignored. With days of guide history that is millions
+        of rows. On 2026-11-09 one request from arrTV, falling back to
+        `?page_size=1000` when its grid request failed, took a web worker from 207 MB to
+        7.9 GB in 50 seconds and the server with it, as `/api/epg/epgdata/` did on
+        2026-10-20. So:
+
+        - `page_size` or `page` asked for: one page, at most MAX_PAGE_SIZE rows, ordered by
+          start time, in DRF's page shape (`next`, `previous`, `results`; `count` is null, as
+          counting millions of rows for every page costs more than the page). Only programmes
+          that have not ended: the one caller, arrTV's `getBulkUpcomingPrograms` (its guide
+          when the grid fails, beside `current-programs`), wants what is on next and reads ten
+          pages at most -- from the oldest, those would be ten thousand programmes of the
+          guide's history and nothing to come;
+        - `tvg_id` asked for: only that guide's programmes, past ones included (arrTV's
+          `getProgramsByTvgId` looks for a recording that has ended);
+        - neither: the same rows stock sends, byte for byte, in id order, written out batch by
+          batch (stream_list).
+        """
         logger.debug("Listing all EPG programs.")
-        return super().list(request, *args, **kwargs)
+        queryset = self.filter_queryset(self.get_queryset())
+        tvg_id = request.query_params.get("tvg_id")
+        if tvg_id:
+            queryset = queryset.filter(tvg_id=tvg_id)
+        if "page_size" in request.query_params or "page" in request.query_params:
+            if not tvg_id:
+                queryset = queryset.filter(end_time__gt=timezone.now())
+            return self._page(request, queryset)
+        # Stock's list has no order: Postgres hands rows over as its plan finds them, and the
+        # streamed read (a server-side cursor) may plan differently from a whole read. In id
+        # order -- the order rows were written, which is what stock gives in practice -- the
+        # answer is the same every time, through the primary key's index.
+        streamed = stream_list(self, request, queryset.order_by("id"), self.STREAM_BATCH)
+        return streamed if streamed is not None else super().list(request, *args, **kwargs)
+
+    def _page(self, request, queryset):
+        from rest_framework.utils.urls import remove_query_param, replace_query_param
+
+        def number(name, default):
+            try:
+                return max(1, int(request.query_params.get(name) or default))
+            except (TypeError, ValueError):
+                return default
+
+        size = min(number("page_size", self.MAX_PAGE_SIZE), self.MAX_PAGE_SIZE)
+        page = number("page", 1)
+        start = (page - 1) * size
+        # One row more than the page, to know whether there is a next one without counting
+        rows = list(queryset.order_by("start_time", "id")[start:start + size + 1])
+        url = request.build_absolute_uri()
+        previous = None
+        if page > 1:
+            previous = (remove_query_param(url, "page") if page == 2
+                        else replace_query_param(url, "page", page - 1))
+        return Response({
+            "count": None,
+            "next": replace_query_param(url, "page", page + 1) if len(rows) > size else None,
+            "previous": previous,
+            "results": self.get_serializer(rows[:size], many=True).data,
+        })
 
     @extend_schema(
         summary="Search EPG programs",
@@ -517,44 +629,9 @@ class EPGDataViewSet(viewsets.ReadOnlyModelViewSet):
         are the ones DRF would have sent; anything else (the browsable API, an indented or
         paginated answer) keeps DRF's own path.
         """
-        from django.http import StreamingHttpResponse
-        from rest_framework.renderers import JSONRenderer
-
-        renderer = getattr(request, "accepted_renderer", None)
-        context = self.get_renderer_context()
-        if (
-            type(renderer) is not JSONRenderer
-            or self.paginator is not None
-            or renderer.get_indent(request.accepted_media_type, context) is not None
-        ):
-            return super().list(request, *args, **kwargs)
-        queryset = self.filter_queryset(self.get_queryset())
-        media_type = request.accepted_media_type
-
-        # What the renderer puts between list items (compact unless COMPACT_JSON is off)
-        between = b"," if renderer.compact else b", "
-
-        def batches():
-            yield b"["
-            first = True
-            batch = []
-
-            def rendered(rows):
-                # "[a,b]" from the renderer, without its brackets: joined with the separator
-                # the compact renderer itself puts between list items
-                return renderer.render(self.get_serializer(rows, many=True).data, media_type, context)[1:-1]
-
-            for row in queryset.iterator(chunk_size=self.STREAM_BATCH):
-                batch.append(row)
-                if len(batch) >= self.STREAM_BATCH:
-                    yield (b"" if first else between) + rendered(batch)
-                    first = False
-                    batch = []
-            if batch:
-                yield (b"" if first else between) + rendered(batch)
-            yield b"]"
-
-        return StreamingHttpResponse(batches(), content_type=renderer.media_type)
+        streamed = stream_list(self, request, self.filter_queryset(self.get_queryset()),
+                               self.STREAM_BATCH)
+        return streamed if streamed is not None else super().list(request, *args, **kwargs)
 
 
 # ─────────────────────────────
