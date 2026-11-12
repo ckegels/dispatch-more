@@ -51,8 +51,8 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v278 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
-   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08; v278, 2026-11-09, the programmes list fix -- handover-2026-11-01 §13-14). Users install one with
+   Releases run from v99; v279 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
+   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08; v278, 2026-11-09, the programmes list fix, never published on its own; v279, 2026-11-12, v278 plus a refusing provider tried last -- handover-2026-11-01 §13-15). Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker; `... | sudo bash -s -- --uninstall` takes it off with the
    newest release's uninstaller, and `... | sudo bash -s -- --upgrade` (v277) updates Dispatcharr to what the
@@ -86,7 +86,7 @@ the mistakes not to repeat.
   Releases go there with `fork/patcher/release.sh vNN --publish` (it names the fork in every gh
   command). Only the `fork-*` workflow is enabled there; upstream's are disabled on purpose.
 - `docs/channel-switch-overlap.md` — design of the first feature.
-- Fork backend: `apps/proxy/live_proxy/` (probation, media servers and left_open, health,
+- Fork backend: `apps/proxy/live_proxy/` (probation, media servers and left_open, refusing, health,
   diagnostics with the memory recorder -- memory_recorder.py runs apart as a service of its own
   (`fork/patcher/memory-recorder.sh`), inflight.py, memory_history.py -- and arrTV: app_devices, app_reports, app_stalls, app_own_streams,
   app_alternatives, app_guides, app_one_device, app_links, app_sync) and `apps/channels/` (logo_library, channel_manager,

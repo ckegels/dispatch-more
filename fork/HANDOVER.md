@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -342,6 +342,20 @@ first channel.
 
 Upstream issues: #1694 (the user's own "probation-slots" request), #1600 (configurable retry
 budget, a simpler related idea). CONTRIBUTING.md: PRs target `dev`, need an agreed issue.
+
+**A provider refusing every connection is tried last** (`refusing.py`, v279). Both TiviBridge
+accounts refused every stream on 2026-11-09 and 2026-11-12 (HTTP 456) while their playlists
+refreshed; their streams come first in many channels, so every start asked them three times per
+stream with `refusal_retry_delay`'s 1.5 s and 3 s waits: 12 s of black before Digitalizard, and
+arrTV's own 12 s walk fired at the same moment and landed on the fallback slate. Now an account
+with the overlap on whose connections were refused on **two different streams** (the refusal
+rule at the top of this file), with no data in between, is marked for 10 minutes: its streams
+go after every other account's and before the trailing custom streams (`refusing.last`, in
+`Channel.get_stream` and failover's alternates), a refusal on it gives that stream up after one
+attempt, and "another account" does not move a viewer to it. Nothing is flagged or removed: with
+the others full it is still tried, and its first data (`note_served`, the first chunk of a
+connection) clears the mark. Switch log: "provider refusing every connection" / "provider
+sends again". Off (no account with the overlap): stock.
 
 **arrTV's own device identity and channel change** are in §5.11: a device arrTV declares is
 its own viewer whatever its address, and a channel it says it is leaving is closed at once.

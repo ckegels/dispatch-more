@@ -871,6 +871,13 @@ moves wait at least 12 s so the server moves first: both moving at once would sk
 The server's 5 s already includes connecting: a stream counts as connected when its reader
 thread starts, before the provider answers.
 
+12 s was not always enough: on 2026-11-12 the server spent exactly that on refusing accounts
+(fixed on the server in v279, `refusing.py`), both walked at once and the app's step took the
+"Could Not Dispatch" slate. From arr.117 the app asks `/proxy/ts/status` before each later step
+and, when the server named another stream than the time before (not the app's own target), gives
+the server's stream its time instead of switching; and it takes a channel's last stream only
+after every other one.
+
 ### 8.8 How many other streams a channel could switch to: `X-Dispatch-Alternatives` (server v213, two tiers from v214)
 
 Server switch: `alternatives` (needs `devices`; capabilities say `"alternatives": true`). Each

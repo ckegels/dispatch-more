@@ -16,6 +16,7 @@ from ..utils import detect_stream_type, get_logger, signal_process_tree
 from ..redis_keys import RedisKeys
 from .. import health
 from .. import probation
+from .. import refusing
 from .. import stalling
 from .. import timing
 from ..constants import ChannelState, EventType, StreamType, ChannelMetadataField, TS_PACKET_SIZE
@@ -662,8 +663,20 @@ class StreamManager:
 
                         self.connected = False
                         failures = self._record_connection_failure()
+                        # A provider refusing every connection is not asked again for this
+                        # stream: the next one is tried at once (refusing.py)
+                        refused_by_account = connection_refused and refusing.note_refused(
+                            getattr(getattr(self, "buffer", None), "redis_client", None),
+                            self.current_stream_id,
+                        )
+                        if refused_by_account and failures < self.max_retries:
+                            logger.info(
+                                f"The provider of stream {self.current_stream_id} refuses every "
+                                f"connection; trying the next stream at once for channel "
+                                f"{self.channel_id}"
+                            )
 
-                        if failures >= self.max_retries:
+                        if failures >= self.max_retries or refused_by_account:
                             url_failed = True
                             logger.warning(
                                 f"Maximum retry attempts ({self.max_retries}) reached for URL: {self.url} "
@@ -1518,6 +1531,10 @@ class StreamManager:
                     if self._connection_is_awaiting_data():
                         self._connection_awaiting_data = False
                         self._startup_failover_exhausted = False
+                        # Its provider sends: no longer one refusing every connection
+                        refusing.note_served(
+                            getattr(self.buffer, "redis_client", None), self.current_stream_id
+                        )
                 else:
                     # fetch_chunk() returned False - could be timeout, no data, or error
                     if not self.running:
@@ -2424,6 +2441,10 @@ class StreamManager:
                 alternate_streams = checked_last(getattr(getattr(self, "buffer", None), "redis_client", None), alternate_streams)
             except Exception:
                 pass
+            # A provider refusing every connection after the others (refusing.py)
+            alternate_streams = refusing.last_alternates(
+                getattr(getattr(self, "buffer", None), "redis_client", None), alternate_streams
+            )
             logger.info(f"Found {len(alternate_streams)} potential alternate streams for channel {self.channel_id}")
 
             # Filter out streams we've already tried

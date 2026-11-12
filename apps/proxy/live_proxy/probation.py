@@ -1286,6 +1286,34 @@ def wait_for_stop_to_finish(redis_client, channel_uuid) -> bool:
         return False
 
 
+def stream_account(stream_id):
+    """
+    The M3U account a stream is played through (its assigned profile's, else its own), when
+    that account has the overlap enabled; None otherwise, and when the overlap is not used.
+    """
+    if not stream_id or not in_use():
+        return None
+
+    from core.utils import RedisClient
+    from apps.channels.models import Stream
+    from apps.m3u.models import M3UAccountProfile
+
+    profile_id = _as_str(RedisClient.get_client().get(f"stream_profile:{stream_id}"))
+    profile = (
+        M3UAccountProfile.objects.select_related("m3u_account").filter(id=profile_id).first()
+        if profile_id
+        else None
+    )
+    if profile is not None:
+        account = profile.m3u_account
+    else:
+        stream = Stream.objects.select_related("m3u_account").filter(id=stream_id).first()
+        account = stream.m3u_account if stream else None
+    if account is None or not account_allows_probation(account):
+        return None
+    return account
+
+
 def refusal_retry_delay(stream_id, failures, refused) -> float:
     """
     Seconds the stream manager waits before retrying a connection the provider refused, or 0
@@ -1299,26 +1327,11 @@ def refusal_retry_delay(stream_id, failures, refused) -> float:
     if not refused or not stream_id:
         return 0
     try:
-        if not in_use():
+        account = stream_account(stream_id)
+        if account is None:
             return 0
 
         from core.utils import RedisClient
-        from apps.channels.models import Stream
-        from apps.m3u.models import M3UAccountProfile
-
-        profile_id = _as_str(RedisClient.get_client().get(f"stream_profile:{stream_id}"))
-        profile = (
-            M3UAccountProfile.objects.select_related("m3u_account").filter(id=profile_id).first()
-            if profile_id
-            else None
-        )
-        if profile is not None:
-            account = profile.m3u_account
-        else:
-            stream = Stream.objects.select_related("m3u_account").filter(id=stream_id).first()
-            account = stream.m3u_account if stream else None
-        if account is None or not account_allows_probation(account):
-            return 0
 
         delay = REFUSAL_RETRY_SECONDS * failures
         record_event(
@@ -2091,12 +2104,17 @@ def reserve_alternate_slot(channel, redis_client, viewer):
 
     from apps.m3u.connection_pool import reserve_profile_slot
 
+    from . import refusing
+
+    # An account refusing every connection is not one to move to (refusing.py); normal
+    # selection still tries it, last
+    refusing_accounts = refusing.marked_accounts(redis_client)
     for stream, profile in candidates:
         account = stream.m3u_account
         # Only move between provider accounts that use the overlap themselves (candidates are
         # limited to those). Custom streams (for example a fallback slate added by a plugin on
         # the unlimited "custom" account) are always free, so they would be picked every time.
-        if profile.id in left_profile_ids or stream.is_custom:
+        if profile.id in left_profile_ids or stream.is_custom or account.id in refusing_accounts:
             continue
         reserved, current_count, _failure_reason = reserve_profile_slot(
             profile, redis_client, viewer=viewer

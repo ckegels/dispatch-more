@@ -72,7 +72,9 @@ arrTV (Settings → General → arrTV optimizations).
 
 - **Channel Switch Overlap** (per provider account) — on a provider that allows one stream,
   switching channels no longer waits for the old stream to close: the new channel may use one
-  extra connection for a few seconds.
+  extra connection for a few seconds. An account whose provider refuses every connection (two
+  different streams refused, no data in between) is tried after the others, once per stream,
+  until it sends data again or for 10 minutes, so channels start on the account that works.
 - **Force Close on Identified Traffic** (per provider account) — when a player asks for a new
   channel, the one it was watching is closed straight away, so its connection is free at once.
   Only for players Dispatcharr can tell apart (see [Good to know](#good-to-know)).

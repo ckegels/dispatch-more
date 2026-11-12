@@ -1042,12 +1042,14 @@ class Channel(models.Model):
         # Iterate through channel streams and their profiles -- for an arrTV device away from
         # home, the streams within its quality first (app_devices.ordered_for)
         from apps.channels.stream_check import viewer_order
+        from apps.proxy.live_proxy import refusing
 
         # While Stream Check runs: the provider the viewer is on first, the one being checked
-        # last (stream_check.viewer_order; nothing changes when no check runs)
-        for stream in viewer_order(redis_client, viewer, app_devices.ordered_for(
+        # last (stream_check.viewer_order; nothing changes when no check runs). A provider
+        # refusing every connection after the others (refusing.last; unchanged when none is)
+        for stream in refusing.last(redis_client, viewer_order(redis_client, viewer, app_devices.ordered_for(
             viewer, self.streams.all().order_by("channelstream__order")
-        )):
+        )), lambda s: s.m3u_account_id, lambda s: s.is_custom):
             # Channel Switch Overlap comes before custom streams once the streams before them
             # are full, so a fallback slate on the unlimited "custom" account (for example
             # from the could-not-dispatch plugin) does not replace a channel switch
