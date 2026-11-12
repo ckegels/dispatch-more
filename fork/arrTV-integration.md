@@ -873,7 +873,7 @@ thread starts, before the provider answers.
 
 12 s was not always enough: on 2026-11-12 the server spent exactly that on refusing accounts
 (fixed on the server in v279, `refusing.py`), both walked at once and the app's step took the
-"Could Not Dispatch" slate. From arr.117 the app asks `/proxy/ts/status` before each later step
+"Could Not Dispatch" slate. From arr.117 (published 2026-11-12) the app asks `/proxy/ts/status` before each later step
 and, when the server named another stream than the time before (not the app's own target), gives
 the server's stream its time instead of switching; and it takes a channel's last stream only
 after every other one.
