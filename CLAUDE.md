@@ -53,7 +53,7 @@ the mistakes not to repeat.
    ```
 
    Releases run from v99; v282 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
-   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08; v278, 2026-11-09, the programmes list fix, never published on its own; v279, published 2026-11-12, v278 plus a refusing provider tried last; v280, published 2026-11-22, Stream Check counts the viewers' openings; v281, published 2026-11-22, the generator loop that spun -- handover-2026-11-01 §13-16, the last for 0.33.0; v282, 2026-11-22, the first for 0.34.1, checked and merged, not yet published -- handover-2026-11-22 §0a). Users install one with
+   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08; v278, 2026-11-09, the programmes list fix, never published on its own; v279, published 2026-11-12, v278 plus a refusing provider tried last; v280, published 2026-11-22, Stream Check counts the viewers' openings; v281, published 2026-11-22, the generator loop that spun -- handover-2026-11-01 §13-16, the last for 0.33.0; v282, published 2026-11-22, the first for 0.34.1 -- handover-2026-11-22 §0a). Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker; `... | sudo bash -s -- --uninstall` takes it off with the
    newest release's uninstaller, and `... | sudo bash -s -- --upgrade` (v277) updates Dispatcharr to what the
