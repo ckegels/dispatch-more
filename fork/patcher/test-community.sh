@@ -221,7 +221,11 @@ check "...no traceback in any Dispatcharr service's log since" "no_tracebacks_si
 
 echo "3. The page's Uninstall:"
 inside "curl -fsS -X POST -H 'Authorization: Bearer $TOKEN' localhost:9191/api/core/modified-build/uninstall/" >>"$LOG" 2>&1
-inside 'for _ in $(seq 1 90); do [ -f /opt/dispatcharr/.fork-install.json ] || break; sleep 2; done' >>"$LOG" 2>&1
+# Until the watcher's uninstall has finished, not only until the record is gone: the record goes
+# first (patch.py), then the recordings worker, the units and the restart. Waiting for the
+# record alone checked the services while the old code still answered -- on 2026-11-22, after
+# --upgrade, "stock is back" and "no unit left" failed with the uninstall still running.
+inside 'for _ in $(seq 1 120); do [ ! -f /opt/dispatcharr/.fork-install.json ] && [ "$(systemctl show -p ActiveState --value dispatch-more-uninstall.service 2>/dev/null)" != activating ] && break; sleep 2; done' >>"$LOG" 2>&1
 check "stock Dispatcharr $NEW_V is back, every service up" "up && answers $NEW_V ''"
 check "...every file is Dispatcharr $NEW_V's own (its release tarball)" "stock_files $NEW_V"
 check "...no unit of Dispatch More is left" "fork_units_gone"
