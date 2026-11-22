@@ -38,8 +38,10 @@ itself one day.
   changes, until you switch it on or press Apply**. With its features off, Dispatcharr behaves as
   stock.
 - **For Linux, LXC (including the Proxmox script) and Docker.** Each release is built for one
-  Dispatcharr version; the installer picks the right one for you. From v276 that is Dispatcharr
-  **0.33.0** (v275 is the last for 0.31.0, and still installs on it).
+  Dispatcharr version; the installer picks the right one for you. From v282 that is Dispatcharr
+  **0.34.1** (v281 is the last for 0.33.0 and v275 the last for 0.31.0; both still install on
+  theirs). Dispatcharr 0.34 runs plugin actions on a queue of their own: on a Linux/LXC install
+  Dispatch More makes the Celery worker run it, which Dispatcharr's own installers do not.
 
 ## Better together with arrTV
 

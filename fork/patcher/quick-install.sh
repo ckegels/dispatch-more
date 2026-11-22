@@ -204,12 +204,47 @@ community_update() {
   echo "Getting Dispatcharr $want"
   fetch "https://github.com/Dispatcharr/Dispatcharr/archive/refs/tags/v$want.tar.gz" "$WORK/dispatcharr.tar.gz"
   keep="$WORK/keep"; mkdir -p "$keep"
-  for file in .env start-uwsgi.sh start-celery.sh start-celerybeat.sh start-daphne.sh; do
+  # What it keeps (its create_backup list); start-uwsgi.sh it writes afresh below
+  for file in .env start-celery.sh start-celerybeat.sh start-daphne.sh; do
     [ -f "$APP/$file" ] && cp -p "$APP/$file" "$keep/"
   done
   find "$APP" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   tar --no-same-owner -xzf "$WORK/dispatcharr.tar.gz" -C "$APP" --strip-components=1
   cp -rp "$keep"/. "$APP"/
+  # As its update does since the move to uWSGI: a secret key when .env has none, start-uwsgi.sh
+  # written as it writes it, and a unit still on the old gunicorn script pointed at uWSGI
+  if [ -f "$APP/.env" ] && ! grep -q "DJANGO_SECRET_KEY" "$APP/.env"; then
+    echo "DJANGO_SECRET_KEY=$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 50)" >>"$APP/.env"
+  fi
+  cat <<'UWSGI' >"$APP/start-uwsgi.sh"
+#!/usr/bin/env bash
+cd /opt/dispatcharr
+set -a
+source .env
+set +a
+exec .venv/bin/uwsgi \
+    --chdir=/opt/dispatcharr \
+    --module=dispatcharr.wsgi:application \
+    --master \
+    --workers=4 \
+    --gevent=400 \
+    --http=0.0.0.0:5656 \
+    --http-keepalive=1 \
+    --http-timeout=600 \
+    --socket-timeout=600 \
+    --buffer-size=65536 \
+    --post-buffering=4096 \
+    --lazy-apps \
+    --thunder-lock \
+    --die-on-term \
+    --vacuum
+UWSGI
+  [ "$APP" = /opt/dispatcharr ] || sed -i "s|/opt/dispatcharr|$APP|g" "$APP/start-uwsgi.sh"
+  chmod +x "$APP/start-uwsgi.sh"
+  if grep -q 'start-gunicorn.sh' /etc/systemd/system/dispatcharr.service 2>/dev/null; then
+    sed -i 's|start-gunicorn.sh|start-uwsgi.sh|g' /etc/systemd/system/dispatcharr.service
+    systemctl daemon-reload
+  fi
   echo "Installing Dispatcharr $want's Python packages"
   (
     cd "$APP"

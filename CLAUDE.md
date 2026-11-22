@@ -1,8 +1,8 @@
 # Dispatcharr fork: probation-slots
 
-A personal fork of Dispatcharr on branch `feature/probation-slots`, based on **v0.33.0**
-(`2fa13a67`, `fork/patcher/BASE`; merged into `feature/probation-slots` on 2026-11-01, pushed 2026-11-02 --
-before 2026-11-01 v0.31.0, `bcbb68c4`), delivered as releases of the patcher. **Read `fork/HANDOVER.md` before changing
+A personal fork of Dispatcharr on branch `feature/probation-slots`, based on **v0.34.1**
+(`7448c4ad`, `fork/patcher/BASE`; merged on 2026-11-22, handover-2026-11-22 -- v0.33.0, `2fa13a67`,
+from 2026-11-01; before that v0.31.0, `bcbb68c4`), delivered as releases of the patcher. **Read `fork/HANDOVER.md` before changing
 anything**: it holds the features, the reasoning, what was measured on the real server, and
 the mistakes not to repeat.
 
@@ -33,7 +33,8 @@ the mistakes not to repeat.
 - **Run the server tests on a test database of your own** (`POSTGRES_DB=dispatcharr_claude`):
   another session in this repository shares the default one, and two runs at once break each
   other (missing tables, deadlocks). Redis must be running (handover-2026-11-01 §4). Baseline on
-  0.33: 28 errors, 26 `/data` + 2 `posix_spawn` setsid, the same as stock 0.33 here.
+  0.34.1: 151 by name, `fork/patcher/baseline-034-errors.txt` (114 `/data`, 19 `posix_spawn`
+  setsid, this machine's ffmpeg), the same set as stock 0.34.1 here (handover-2026-11-22 §5.1).
 - **Show Groups' copies are not the Channel Manager's**: anything that lists channels to change
   leaves out `show_groups.live.copy_group_ids()` (handover §7b).
 - **Comments and commit messages explain *why*, in plain sentences**, like the existing fork
@@ -41,8 +42,8 @@ the mistakes not to repeat.
 
 ## Every change
 
-1. Tests for it; full backend suite (baseline: `FAILED (errors=28)`: 26 `/data`
-   PermissionErrors, 2 `posix_spawn` setsid) and frontend `npx vitest run` green, and
+1. Tests for it; full backend suite (baseline: the 151 of `fork/patcher/baseline-034-errors.txt`,
+   compared by name) and frontend `npx vitest run` green, and
    `npm run build` (a merge once passed every test and did not build).
 2. Commit. Ship it as a release of the patcher (the way it is installed now):
 
@@ -51,8 +52,8 @@ the mistakes not to repeat.
    fork/patcher/release.sh vNN --publish   # and makes the GitHub release (gh is logged in as ckegels)
    ```
 
-   Releases run from v99; v281 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
-   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08; v278, 2026-11-09, the programmes list fix, never published on its own; v279, published 2026-11-12, v278 plus a refusing provider tried last; v280, published 2026-11-22, Stream Check counts the viewers' openings; v281, published 2026-11-22, the generator loop that spun -- handover-2026-11-01 §13-16). Users install one with
+   Releases run from v99; v282 is the latest (v253-v257 and v259 were test builds, never published; v275 is the last for
+   Dispatcharr 0.31.0, v276, published 2026-11-02, the first for 0.33.0; v277, published 2026-11-08; v278, 2026-11-09, the programmes list fix, never published on its own; v279, published 2026-11-12, v278 plus a refusing provider tried last; v280, published 2026-11-22, Stream Check counts the viewers' openings; v281, published 2026-11-22, the generator loop that spun -- handover-2026-11-01 §13-16, the last for 0.33.0; v282, 2026-11-22, the first for 0.34.1 -- handover-2026-11-22). Users install one with
    `curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash`,
    or the same inside `docker exec` for Docker; `... | sudo bash -s -- --uninstall` takes it off with the
    newest release's uninstaller, and `... | sudo bash -s -- --upgrade` (v277) updates Dispatcharr to what the
@@ -101,6 +102,9 @@ the mistakes not to repeat.
   `fork/arrTV-guide-choice.md` and `fork/picture-check.md` — designs.
 - `git log bcbb68c4..HEAD` — every change, explained in its message (the 0.33.0 merge is
   `a1749363`).
-- `fork/handover-2026-11-01.md` — **the move to Dispatcharr 0.33.0: read it first**; what upstream
+- `fork/handover-2026-11-22.md` — **the move to Dispatcharr 0.34.1: read it first**; every changed
+  line of 0.33.0..0.34.1 read, what follows for the fork (R1-R8) and how each was settled, the 0.34
+  baseline. The 0.34.1 merge is `c42e92a1`.
+- `fork/handover-2026-11-01.md` — the move to Dispatcharr 0.33.0; what upstream
   changed that the fork had, how each was settled, upgrading across Dispatcharr versions, what is
   open.

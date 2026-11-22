@@ -5,11 +5,14 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22, **published**: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **v281** (2026-11-22, **published**: a client with no chunks left no longer spins, §5.8) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22, **published**: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **v281** (2026-11-22, **published**: a client with no chunks left no longer spins, §5.8) **and the move to Dispatcharr 0.34.1** (2026-11-22: merged `c42e92a1`, reconciled `09353a5f`, release v282 -- handover-2026-11-22) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
-> **Read [`fork/handover-2026-11-01.md`](handover-2026-11-01.md) first** (2026-11-01: the fork on
+> **Read [`fork/handover-2026-11-22.md`](handover-2026-11-22.md) first** (2026-11-22: the fork on
+> Dispatcharr 0.34.1, every changed line of 0.33.0..0.34.1 read, what follows for the fork and how
+> each was settled, the 0.34 baseline). Then
+> [`fork/handover-2026-11-01.md`](handover-2026-11-01.md) (2026-11-01: the fork on
 > Dispatcharr 0.33.0, what upstream changed that the fork had and how each was settled, installing
 > and uninstalling across Dispatcharr updates, what is open). Before it,
 > [`fork/handover-2026-10-20.md`](handover-2026-10-20.md) (2026-10-20 night: v275 and arrTV arr.116 published, the calm cold start, what is open), then [`fork/handover-2026-10-18.md`](handover-2026-10-18.md) (2026-10-18): v269 published
@@ -35,8 +38,9 @@ A fork of [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr), an IPTV pro
 one user for their own installation.
 
 - **Branch:** `feature/probation-slots`
-- **Based on:** upstream **v0.33.0**, commit `2fa13a67` (`fork/patcher/BASE`), since 2026-11-01
-  (the merge `a1749363`, handover-2026-11-01); v99-v275 were on **v0.31.0**, `bcbb68c4`. Every
+- **Based on:** upstream **v0.34.1**, commit `7448c4ad` (`fork/patcher/BASE`), since 2026-11-22
+  (the merge `c42e92a1`, handover-2026-11-22); v276-v281 were on **v0.33.0** (`2fa13a67`, the merge
+  `a1749363`, handover-2026-11-01), v99-v275 on **v0.31.0**, `bcbb68c4`. Every
   patch and overlay is the full diff from the base.
 - **Delivered as:** releases of the patcher, **Dispatch More vNN** (§4.4), public at
   https://github.com/ckegels/dispatch-more. One command installs one:
@@ -279,10 +283,12 @@ cd frontend && npx vitest run      # ~6500 tests
 npx eslint <files>                 # api.js has 14 errors that are stock's own
 ```
 
-- **Baseline:** on 0.33 the full backend run ends `FAILED (errors=28)` (5004 tests) — 26
-  `PermissionError: '/data'` from stock tests that expect Docker paths and 2 `posix_spawn: setsid
-  unavailable` from 0.33's process-group tests; stock 0.33.0 gives the same 28 by name. (On 0.31:
-  `errors=26`, the `/data` ones.) Redis must be running (handover-2026-11-01 §4). Compare the list of
+- **Baseline:** on 0.34.1 the full backend run (about 5,950 tests) fails **151 by name**, kept in
+  `fork/patcher/baseline-034-errors.txt`: 114 `/data` (stock tests that expect Docker paths: plugin
+  dirs, recordings), 19 `posix_spawn: setsid unavailable` (0.34's output-profile and fMP4 restart
+  tests spawn real processes) and the rest the same environment (this machine's ffmpeg build).
+  Stock 0.34.1 run here gives the same set by name (handover-2026-11-22 §5.1). (On 0.33:
+  `errors=28`; on 0.31: `errors=26`.) Redis must be running (handover-2026-11-01 §4). Compare the list of
   errors against a saved baseline, not the count alone. Use `grep -a` on the log.
 - **`--keepdb` runs are not to be trusted on their own**: Stream Check's threads write outside
   the test transaction, so their rows stay in a kept database, and CombineTests then fail or pass
@@ -2101,6 +2107,16 @@ with Celery's own queue selection and `tests/test_dvr_queue.py`. Off:
 for its length. A recording still waiting in the queue is picked up at the next start; one
 whose end has passed ends at once (the loop runs until the end time).
 
+**Plugin actions (Dispatcharr 0.34)** run on a `plugins` queue (`PluginRunAPIView` waits 55 s
+for the Celery result, async actions, Connect events, `dispatch_internal_task`). 0.34's Docker
+workers are given `-Q celery,plugins`; its `debian_install.sh` worker (no `-Q`) and the
+community script's explicit `-Q celery,recordings,dvr,default` do not hear it, so every plugin
+action answered 504. The fork: `celery.default_worker_queues()` adds `plugins` for a worker
+without `-Q` (also with `DISPATCHARR_DVR_ON_DEFAULT_WORKER=false`); `dvr-worker.sh` adds it to
+the community worker's copy (`with_plugins`), and `main-only` (install.sh, recordings worker off;
+`running()` when the recordings worker does not start) changes only that copy. Removing the
+drop-in and the copy undoes it (`remove`, uninstall).
+
 **A worker of its own for recordings** (`fork/patcher/dvr-worker.sh`, run by install.sh on the
 systemd layout only -- never on Docker, whose image already has one). It copies the install's
 own Celery service (found by its ExecStart: `celery ... worker`, not beat, not already `-Q
@@ -3019,10 +3035,8 @@ once break each other (tables missing, deadlocks). Run with `POSTGRES_DB=dispatc
 
 ## 8. Open / possible next
 
-- **Dispatcharr 0.33.0** (2026-11-01): the fork is on it, fast-forwarded into
-  `feature/probation-slots` locally (not pushed); v276 built and every test passed. Pushing,
-  publishing v276, the user's server, and what to look at afterwards are in
-  `fork/handover-2026-11-01.md` §9.
+- **Dispatcharr 0.34.1** (2026-11-22): the fork is on it (`fork/handover-2026-11-22.md`); v282
+  is its release. **Dispatcharr 0.33.0** (2026-11-01): v276-v281 (`fork/handover-2026-11-01.md`).
 
 Planned 2026-10-02 (the user's three asks, designs written, nothing built):
 - **Look back gets a provider** -- **`fork/lookback-priority.md`**: when the only provider with a
