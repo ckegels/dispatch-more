@@ -192,7 +192,9 @@ check "$OLD_R is on, every service up" "up && answers $OLD_V $OLD_R"
 SINCE="$(inside 'date "+%Y-%m-%d %H:%M:%S"')"
 if [ -n "${UPGRADE:-}" ]; then
   echo "2. The one command's --upgrade: Dispatcharr $OLD_V -> $NEW_V and $NEW_R, in one go:"
-  inside "DISPATCH_MORE_ARCHIVE=/root/new.tar.gz DISPATCH_MORE_WAIT=0 bash /root/quick-install.sh --upgrade" >>"$LOG" 2>&1
+  # With the short PATH Proxmox's `pct exec` gives (no /usr/local/bin, where the community script
+  # puts uv): the user's server refused --upgrade that way on 2026-11-22
+  inside "[ -x /usr/local/bin/uv ] && env PATH=/usr/sbin:/usr/bin:/sbin:/bin DISPATCH_MORE_ARCHIVE=/root/new.tar.gz DISPATCH_MORE_WAIT=0 bash /root/quick-install.sh --upgrade" >>"$LOG" 2>&1
   check "...it took $OLD_R off first, on the Dispatcharr it was made for" "grep -q '$OLD_R uninstalled: stock Dispatcharr $OLD_V is back' '$LOG'"
   check "...it said it was updating the community script's install" "grep -q 'installed by community' '$LOG'"
   check "...the community script's own backup is there" "inside 'ls /opt/dispatcharr_backup_*.tar.gz'"

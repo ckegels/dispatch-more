@@ -37,6 +37,18 @@
 # downloaded into the state folder and nothing is installed; the entrypoint applies it.
 set -euo pipefail
 
+# Proxmox's `pct exec 145 -- bash -c '...'` runs this with a short PATH, without /usr/local/bin,
+# where the Proxmox community script puts uv: on 2026-11-22 --upgrade on the user's server took
+# its install for an unknown one ("not installed by ... the Proxmox community script") and,
+# had it gone on, its update could not have run uv either. The usual folders are added.
+for dir in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin "${HOME:-/root}/.local/bin" "${HOME:-/root}/.cargo/bin"; do
+  case ":${PATH:-}:" in
+    *":$dir:"*) ;;
+    *) [ -d "$dir" ] && PATH="${PATH:+$PATH:}$dir" ;;
+  esac
+done
+export PATH
+
 REPOSITORY="${DISPATCH_MORE_REPOSITORY:-ckegels/dispatch-more}"
 APP="${DISPATCHARR_APP:-}"
 # DISPATCH_MORE_LAYOUT=docker|systemd says which, for a caller that knows (docker-entrypoint.sh)
