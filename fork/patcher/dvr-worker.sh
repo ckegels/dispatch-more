@@ -18,6 +18,12 @@
 # runs a copy of that script made here (celery-dvr.sh in STATE, its worker line on `-Q dvr`),
 # and the drop-in runs the normal worker from another copy (celery-main.sh, its `-Q` without
 # dvr) -- an explicit -Q is not something DISPATCHARR_DVR_ON_DEFAULT_WORKER can change.
+#
+# Dispatcharr 0.34 runs plugin actions on a `plugins` queue. Docker's workers are given it; a
+# worker without -Q hears it through dispatcharr/celery.py; the community script's explicit -Q
+# leaves it out, so every plugin action waited 55 s and answered 504. The copy the normal worker
+# runs from gets `plugins` added -- with the recordings worker, and on its own (`main-only`, what
+# install.sh runs when the recordings worker is switched off).
 # Removing the drop-in and the copies is all it takes to be as before.
 # Never on Docker (install.sh calls this for the systemd layout only). SYSTEMD_DIR exists for
 # the tests; on a server it is /etc/systemd/system.
@@ -89,8 +95,8 @@ add() {
   mkdir -p "$UNITS/$CELERY.d"
   queues="$( [ -n "$SCRIPT" ] && echo "$line" | sed -nE 's/.* (-Q|--queues)[ =]([^ ]+).*/\2/p' || true)"
   if [ -n "$queues" ]; then
-    # The normal worker from a copy of its script, its queues without dvr
-    rest="$(echo "$queues" | tr ',' '\n' | grep -vx dvr | paste -sd, -)"
+    # The normal worker from a copy of its script, its queues without dvr and with plugins
+    rest="$(with_plugins "$(echo "$queues" | tr ',' '\n' | grep -vx dvr | paste -sd, -)")"
     awk -v line="$(echo "$line" | sed -E "s/ (-Q|--queues)[ =][^ ]+/ -Q $rest/")" \
       '/^exec .*celery.* worker/ { print line; next } { print }' "$SCRIPT" > "$STATE/celery-main.sh"
     printf '# Added by %s: recordings are run by %s; %s is left as it is\n[Service]\nExecStart=\nExecStart=/bin/bash %s\n' \
@@ -103,6 +109,40 @@ add() {
   systemctl daemon-reload
   systemctl enable "$DVR.service" >/dev/null 2>&1 || true
   echo "Added a worker of its own for recordings ($DVR, up to 20 at once)."
+}
+
+# A queue list with `plugins` in it (Dispatcharr 0.34's plugin actions)
+with_plugins() {
+  if echo "$1" | tr ',' '\n' | grep -qx plugins; then echo "$1"; else echo "$1,plugins"; fi
+}
+
+# The recordings worker switched off: only the community script's normal worker is changed, so
+# that it hears `plugins` (see the top). A worker without -Q needs nothing (dispatcharr/celery.py).
+main_only() {
+  CELERY="" SOURCE="" SCRIPT=""
+  for unit in $(systemctl list-units --type=service --all --no-legend --plain 'dispatcharr*' | awk '{print $1}'); do
+    [ "$unit" = "$DVR.service" ] && continue
+    file="$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null || true)"
+    [ -n "$file" ] && [ -f "$file" ] || continue
+    start="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "$file" | head -1)"
+    if [ -n "$start" ] && [ -f "$start" ] && grep -qE '^exec .*celery.* worker' "$start" && ! grep -qE '^exec .*celery.* beat' "$start"; then
+      CELERY="$unit" SCRIPT="$start"
+      break
+    fi
+  done
+  [ -n "$SCRIPT" ] || return 0
+  line="$(grep -E '^exec .*celery.* worker' "$SCRIPT" | tail -1)"
+  queues="$(echo "$line" | sed -nE 's/.* (-Q|--queues)[ =]([^ ]+).*/\2/p')"
+  [ -n "$queues" ] || return 0
+  echo "$queues" | tr ',' '\n' | grep -qx plugins && return 0
+  awk -v line="$(echo "$line" | sed -E "s/ (-Q|--queues)[ =][^ ]+/ -Q $(with_plugins "$queues")/")" \
+    '/^exec .*celery.* worker/ { print line; next } { print }' "$SCRIPT" > "$STATE/celery-main.sh"
+  mkdir -p "$UNITS/$CELERY.d"
+  printf '# Added by %s: plugin actions are run (the plugins queue); %s is left as it is\n[Service]\nExecStart=\nExecStart=/bin/bash %s\n' \
+    "$SLUG" "$SCRIPT" "$STATE/celery-main.sh" > "$UNITS/$CELERY.d/$SLUG-dvr.conf"
+  echo "$CELERY" > "$MARK"
+  systemctl daemon-reload
+  echo "The Celery worker now runs plugin actions too (the plugins queue)."
 }
 
 # After the services are (re)started: the recordings worker is started, and when it does not
@@ -120,6 +160,8 @@ running() {
   rm -f "$UNITS/$CELERY.d/$SLUG-dvr.conf"
   rmdir "$UNITS/$CELERY.d" 2>/dev/null || true
   systemctl daemon-reload || true
+  # The community script's worker still needs to hear plugin actions (see the top)
+  main_only
   systemctl restart "$CELERY" >/dev/null 2>&1 || true
   echo "Note: the recordings worker ($DVR) did not start; the normal worker runs recordings."
   echo "      See: journalctl -u $DVR"
@@ -127,6 +169,7 @@ running() {
 
 case "$ACTION" in
   add) add ;;
+  main-only) main_only ;;
   remove) remove ;;
   running) running ;;
   *) echo "Unknown action: $ACTION"; exit 2 ;;

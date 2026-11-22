@@ -2720,6 +2720,11 @@ def run_recording(recording_id, channel_id, start_time_str, end_time_str):
                         _pre_rmtree_cp = _pre_rmtree_rec.custom_properties or {}
                         _pre_rmtree_cp["file_url"] = f"/api/channels/recordings/{recording_id}/file/"
                         _pre_rmtree_cp["output_file_url"] = _pre_rmtree_cp["file_url"]
+                        # Dispatch More: the health check (off by default) is told when the
+                        # sound was rebuilt section by section (dvr_remux, Dispatcharr 0.34):
+                        # what the provider did not send is silence then, not a gap it can see
+                        if getattr(_remux, "repaired", False) and CoreSettings.get_dvr_health_check_enabled():
+                            _pre_rmtree_cp["audio_rebuilt"] = True
                         _pre_rmtree_rec.custom_properties = _pre_rmtree_cp
                         _pre_rmtree_rec.save(update_fields=["custom_properties"])
                 except Exception as _pre_e:
@@ -4832,7 +4837,9 @@ def read_guide_programmes(by_source, tries=0, record="", how=""):
                         "stage": f"{seen:,} programmes into {source.name}".replace(",", " "),
                         "done": read, "total": wanted_in_all,
                     })
-                for epg in wanted.get(elem.get("channel"), ()):
+                # Trimmed like Dispatcharr 0.34's own programme import does: a guide that pads
+                # the attribute (channel=" BBC1 ") stores the channel as "BBC1"
+                for epg in wanted.get((elem.get("channel") or "").strip(), ()):
                     try:
                         title = description = sub_title = None
                         for child in elem:

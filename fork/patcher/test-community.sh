@@ -208,6 +208,7 @@ else
 fi
 check "$NEW_R is on Dispatcharr $NEW_V, every service up" "up && answers $NEW_V $NEW_R"
 check "...the recordings worker runs" "inside 'systemctl is-active -q dispatcharr-celery-dvr'"
+check "...the normal worker runs plugin actions (the plugins queue, Dispatcharr 0.34)" "inside 'ps -eo args | grep -E \"celery.* worker.*-Q [a-z,]*plugins\" | grep -qv grep'"
 check "...the memory recorder is set up" "inside 'systemctl is-enabled -q dispatch-more-memory'"
 TOKEN="$(admin_token)"
 check "...an admin can log in" "[ -n '$TOKEN' ]"

@@ -69,6 +69,11 @@ class FakeRedis:
         value = self.data.get(key)
         return dict(value) if isinstance(value, dict) else {}
 
+    def hmget(self, key, *fields):
+        value = self.data.get(key)
+        value = value if isinstance(value, dict) else {}
+        return [value.get(field) for field in fields]
+
     def hdel(self, key, *fields):
         for field in fields:
             (self.data.get(key) or {}).pop(field, None)
@@ -3099,3 +3104,36 @@ class ViewersShareTheAllowanceTests(TestCase):
 
     def test_nothing_known_is_not_at_a_limit(self):
         self.assertFalse(self._budget().at_limit())
+
+
+class VodIsSeenPlayingTests(TestCase):
+    """
+    A movie or episode playing is somebody using a provider. The check looked for the VOD
+    proxy's sessions under "vod_proxy:connection:*", which only a helper nothing calls writes;
+    the sessions are "vod_persistent_connection:<id>" hashes. So VOD was never seen: only-when-
+    idle checked during a film, and a provider a VOD viewer was on looked free to check.
+    """
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        self.account = M3UAccount.objects.create(
+            name="Movies", account_type="XC", server_url="http://vod.example", username="u", password="p",
+        )
+        self.profile = M3UAccountProfile.objects.get(m3u_account=self.account, is_default=True)
+
+    def _session(self, active):
+        self.redis.hset("vod_persistent_connection:abc", "active_streams", str(active))
+        self.redis.hset("vod_persistent_connection:abc", "m3u_profile_id", str(self.profile.id))
+
+    def test_a_film_playing_is_something_playing_on_its_provider(self):
+        self._session(active=1)
+        self.redis.set(f"profile_connections:{self.profile.id}", 1)
+        providers = stream_check._Providers(self.redis)
+        self.assertTrue(providers.anything_playing())
+        self.assertTrue(providers.in_use(providers.provider_of(self.account.id)))
+
+    def test_a_session_waiting_out_its_settle_window_is_not(self):
+        self._session(active=0)
+        providers = stream_check._Providers(self.redis)
+        self.assertFalse(providers.anything_playing())
+        self.assertFalse(providers.in_use(providers.provider_of(self.account.id)))

@@ -2583,8 +2583,10 @@ class StreamManager:
             self._update_bytes_processed(chunk_size)
 
             # Where the time goes while the channel starts (see timing.py). Measuring only,
-            # and the keyframe scan stops as soon as one is found.
-            if not self._timed_start_done:
+            # and the keyframe scan stops as soon as one is found. Read with a default, like
+            # the other start flags: a manager built without __init__ (Dispatcharr 0.34's own
+            # pipe tests do) must still read its chunk.
+            if not getattr(self, "_timed_start_done", False):
                 redis_client = getattr(self.buffer, "redis_client", None)
                 timing.mark(redis_client, self.channel_id, "first_byte")
                 self._timed_start_done = timing.mark_keyframe(

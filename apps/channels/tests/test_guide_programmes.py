@@ -251,3 +251,26 @@ class KeptAfterReadingTests(TestCase):
         with patch("django.utils.timezone.now", return_value=long_ago):
             channel_manager.note_read({self.read.id: 1})
         self.assertEqual(self._refresh_cleans_up(), set())
+
+
+class PaddedChannelAttributeTests(TestCase):
+    """Dispatcharr 0.34 trims a programme's channel attribute before matching it; the guide
+    window reads programmes the same way, or a guide padding it would show nothing there."""
+
+    def test_a_padded_channel_attribute_still_finds_its_guide(self):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False)
+        handle.write(
+            '<?xml version="1.0" encoding="UTF-8"?>\n<tv>\n'
+            '  <programme channel=" BBC1.uk " start="20260920080000 +0000" stop="20260920090000 +0000">\n'
+            '    <title>Breakfast</title>\n  </programme>\n</tv>\n'
+        )
+        handle.close()
+        self.addCleanup(lambda: os.path.exists(handle.name) and os.remove(handle.name))
+        source = EPGSource.objects.create(name="UK", source_type="xmltv", file_path=handle.name)
+        entry = EPGData.objects.create(tvg_id="BBC1.uk", name="BBC One", epg_source=source)
+
+        read_guide_programmes({str(source.id): [entry.id]})
+
+        self.assertEqual(
+            list(ProgramData.objects.filter(epg=entry).values_list("title", flat=True)), ["Breakfast"]
+        )

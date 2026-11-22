@@ -624,6 +624,13 @@ class ChannelStatus:
             if not info.get(key) and saved.get(key) not in (None, ''):
                 info[key] = saved[key]
                 filled = True
+        # Dispatcharr 0.34's audio badge shows the language and every track (audio_streams);
+        # carried when what was saved has them. Not part of the test above: a stream without a
+        # language tag would otherwise be looked up on every poll.
+        if filled:
+            for key in ("audio_language", "audio_streams"):
+                if not info.get(key) and saved.get(key):
+                    info[key] = saved[key]
         if filled:
             info['stream_info_from'] = 'saved'
             if row.get('stream_stats_updated_at'):

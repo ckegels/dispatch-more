@@ -100,10 +100,22 @@ app.conf.task_routes = {
 # it (the user's first recording from arrTV, 2026-09-30, stayed "playback not available" with
 # no status at all). A worker given -Q still listens to what it is given, so Docker is as it
 # was. Off with DISPATCHARR_DVR_ON_DEFAULT_WORKER=false.
-if os.environ.get("DISPATCHARR_DVR_ON_DEFAULT_WORKER", "true").lower() not in ("false", "0", "no", "off"):
-    from kombu import Queue
+#
+# Dispatcharr 0.34 runs every plugin action on a `plugins` queue (apps/plugins/api_views.py,
+# tasks.py, internal_tasks.py) and its Docker workers listen with -Q celery,plugins. A worker
+# with no -Q listened to celery (and dvr) only, so on a Debian install every plugin action
+# waited 55 s and answered 504. It listens to `plugins` too, whether recordings have a worker
+# of their own (DISPATCHARR_DVR_ON_DEFAULT_WORKER=false, fork/patcher/dvr-worker.sh) or not.
+from kombu import Queue
 
-    app.conf.task_queues = (Queue("celery"), Queue("dvr"))
+
+def default_worker_queues(environ=os.environ):
+    """The queues a worker started without -Q listens to."""
+    dvr = environ.get("DISPATCHARR_DVR_ON_DEFAULT_WORKER", "true").lower() not in ("false", "0", "no", "off")
+    return ("celery", "dvr", "plugins") if dvr else ("celery", "plugins")
+
+
+app.conf.task_queues = tuple(Queue(name) for name in default_worker_queues())
 
 
 @task_prerun.connect

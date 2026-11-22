@@ -104,6 +104,44 @@ class CheckRecordingTests(TestCase):
         # The scheduled length goes with it
         self.assertAlmostEqual(check_file.call_args[0][1], 44 * 60, delta=1)
 
+    @patch("apps.channels.recording_health.check_file")
+    @patch("os.path.exists", return_value=True)
+    def test_sound_rebuilt_after_a_failover_is_never_called_whole(self, _exists, check_file):
+        """Dispatcharr 0.34 rebuilds sound that changed part way and fills what is missing with
+        silence: the file alone looks whole, so the check says what happened."""
+        cp = dict(self.recording.custom_properties, audio_rebuilt=True)
+        self.recording.custom_properties = cp
+        self.recording.save(update_fields=["custom_properties"])
+        check_file.return_value = {"status": "ok", "problems": []}
+        with patch("core.utils.send_websocket_update"):
+            health.check_recording(self.recording.id)
+        self.recording.refresh_from_db()
+        kept = self.recording.custom_properties["health"]
+        self.assertEqual(kept["status"], "minor")
+        self.assertEqual(kept["problems"], [health.REBUILT])
+
+    @patch("apps.channels.recording_health.check_file")
+    @patch("os.path.exists", return_value=True)
+    def test_and_what_was_wrong_anyway_stays_as_bad(self, _exists, check_file):
+        self.recording.custom_properties = dict(self.recording.custom_properties, audio_rebuilt=True)
+        self.recording.save(update_fields=["custom_properties"])
+        check_file.return_value = {"status": "damaged", "problems": ["Picture missing for 3 min"]}
+        with patch("core.utils.send_websocket_update"):
+            health.check_recording(self.recording.id)
+        self.recording.refresh_from_db()
+        kept = self.recording.custom_properties["health"]
+        self.assertEqual(kept["status"], "damaged")
+        self.assertEqual(kept["problems"], [health.REBUILT, "Picture missing for 3 min"])
+
+    @patch("apps.channels.recording_health.check_file")
+    @patch("os.path.exists", return_value=True)
+    def test_a_recording_not_rebuilt_is_judged_as_before(self, _exists, check_file):
+        check_file.return_value = {"status": "ok", "problems": []}
+        with patch("core.utils.send_websocket_update"):
+            health.check_recording(self.recording.id)
+        self.recording.refresh_from_db()
+        self.assertEqual(self.recording.custom_properties["health"]["status"], "ok")
+
     def test_a_recording_without_its_file_failed(self):
         with patch("core.utils.send_websocket_update"):
             result = health.check_recording(self.recording.id)

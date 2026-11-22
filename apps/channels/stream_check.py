@@ -551,11 +551,24 @@ class _Providers:
             if time.monotonic() - self.at < 0.5:
                 return
             playing = False
-            for pattern in ("live:channel:*:metadata", "vod_proxy:connection:*"):
-                for _ in self.redis.scan_iter(match=pattern, count=500):
-                    playing = True
-                    break
-            live = set()
+            for _ in self.redis.scan_iter(match="live:channel:*:metadata", count=500):
+                playing = True
+                break
+            # A movie or episode playing: the VOD proxy's session hashes with a stream running.
+            # This looked for "vod_proxy:connection:*", which only a helper nothing calls
+            # writes, so VOD was never seen: only-when-idle checked during a film, and a
+            # provider a VOD viewer was on looked free (Dispatcharr 0.33 and 0.34 alike).
+            vod_profiles = set()
+            for key in self.redis.scan_iter(match="vod_persistent_connection:*", count=500):
+                try:
+                    active, profile_id = self.redis.hmget(key, "active_streams", "m3u_profile_id")
+                    if int(active or 0) > 0:
+                        playing = True
+                        if profile_id:
+                            vod_profiles.add(int(profile_id))
+                except (TypeError, ValueError):
+                    pass
+            live = set(vod_profiles)
             if playing:
                 # The login each running channel is on (set by the proxy as it starts one)
                 for key in self.redis.scan_iter(match="stream_profile:*", count=500):
@@ -1381,7 +1394,10 @@ def _ffprobe(data):
         return {"video": False, "audio": False}
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-    details = stream_details(video, audio, (answer.get("format") or {}).get("format_name", ""))
+    details = stream_details(
+        video, audio, (answer.get("format") or {}).get("format_name", ""),
+        audio_streams=[s for s in streams if s.get("codec_type") == "audio"],
+    )
     details.update(subtitle_details(streams, data))
     return {
         "video": video is not None,
@@ -1443,10 +1459,48 @@ def _rate(text):
         return None
 
 
-def stream_details(video, audio, format_name=""):
+def _audio_track(stream):
+    """One ffprobe audio stream as Dispatcharr 0.34 keeps a track in `audio_streams`
+    (live_proxy/services/log_parsers.py: index, language, codec, layout, kbps, Hz)."""
+    from apps.proxy.live_proxy.services.log_parsers import normalize_channel_layout
+
+    track = {}
+    if isinstance(stream.get("index"), int):
+        track["index"] = stream["index"]
+    language = str((stream.get("tags") or {}).get("language") or "").lower()
+    # "und" is FFmpeg's word for an untagged track; Dispatcharr shows no language for it
+    if language and language != "und":
+        track["audio_language"] = language
+    if stream.get("codec_name"):
+        track["audio_codec"] = stream["codec_name"]
+    channels = stream.get("channels")
+    layout = normalize_channel_layout(stream.get("channel_layout")) or (
+        AUDIO_LAYOUTS.get(channels, f"{channels} channels") if channels else None)
+    if layout:
+        track["audio_channels"] = layout
+    try:
+        if stream.get("bit_rate"):
+            track["audio_bitrate"] = round(int(stream["bit_rate"]) / 1000.0, 1)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if stream.get("sample_rate"):
+            track["sample_rate"] = int(stream["sample_rate"])
+    except (TypeError, ValueError):
+        pass
+    return track
+
+
+def stream_details(video, audio, format_name="", audio_streams=None):
     """What ffprobe read, in the fields and shapes Dispatcharr stores in Stream.stream_stats
     when it parses ffmpeg's output (live_proxy/services/log_parsers.py), so its Stats page
-    shows it the same way."""
+    shows it the same way.
+
+    audio_streams: every audio stream ffprobe found. Since Dispatcharr 0.34 a stream's stats
+    hold them all (`audio_streams`, with languages) and the audio fields describe the best of
+    them (richest layout, then bitrate); its audio badge shows that list. Without it, `audio`
+    alone, as before.
+    """
     details = {}
     if video:
         details["video_codec"] = video.get("codec_name") or None
@@ -1454,7 +1508,15 @@ def stream_details(video, audio, format_name=""):
             details["resolution"] = f"{video['width']}x{video['height']}"
         details["source_fps"] = _rate(video.get("avg_frame_rate")) or _rate(video.get("r_frame_rate"))
         details["pixel_format"] = video.get("pix_fmt") or None
-    if audio:
+    tracks = [t for t in (_audio_track(one) for one in (audio_streams or [])) if t]
+    if tracks:
+        from apps.proxy.live_proxy.services.log_parsers import select_best_audio_track
+
+        best = select_best_audio_track(tracks) or {}
+        details["audio_streams"] = tracks
+        for key in ("audio_codec", "sample_rate", "audio_channels", "audio_bitrate", "audio_language"):
+            details[key] = best.get(key)
+    elif audio:
         details["audio_codec"] = audio.get("codec_name") or None
         try:
             details["sample_rate"] = int(audio.get("sample_rate")) if audio.get("sample_rate") else None
@@ -1482,6 +1544,12 @@ def save_stream_info(stream_id, details):
         if stream is None:
             return False
         stats = dict(stream.stream_stats or {})
+        if "audio_streams" in details:
+            # As Dispatcharr 0.34 writes a track list: the audio fields describe its best track,
+            # so one that track lacks (a language) must not stay from an earlier reading
+            for key in ("audio_codec", "sample_rate", "audio_channels", "audio_bitrate", "audio_language"):
+                if key not in details:
+                    stats.pop(key, None)
         stats.update(details)
         stream.stream_stats = stats
         stream.stream_stats_updated_at = timezone.now()

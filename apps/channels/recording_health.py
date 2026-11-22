@@ -236,6 +236,30 @@ def check_file(path, expected_secs):
     return analyse(streams, _packets(path), duration, expected_secs)
 
 
+REBUILT = (
+    "The sound changed during the recording (another stream after a failover) and was rebuilt"
+    " to match the start; sound that did not arrive is silence in the file, so holes in it"
+    " cannot be measured"
+)
+
+
+def _rebuilt(health):
+    """
+    Dispatcharr 0.34's finalize (channels/dvr_remux.py) rebuilds a recording whose sound
+    changed part way -- the failover this check was made for -- and fills what is missing with
+    silence: a gap in the sound is no gap in the file any more, and the file alone would look
+    whole. Said so, and never better than "minor".
+    """
+    if health.get("status") == "failed":
+        return health
+    health = dict(health)
+    health["problems"] = [REBUILT] + list(health.get("problems") or [])
+    if health.get("status") == "ok":
+        health["status"] = "minor"
+    health["audio_rebuilt"] = True
+    return health
+
+
 def check_recording(recording_id):
     """Check one recording's file and keep the answer with it; never raises."""
     import os
@@ -256,6 +280,8 @@ def check_recording(recording_id):
             }
         else:
             health = check_file(path, _expected_secs(recording))
+            if cp.get("audio_rebuilt"):
+                health = _rebuilt(health)
         # Read again: Comskip or the recorder may have written to it meanwhile
         recording.refresh_from_db()
         cp = recording.custom_properties or {}

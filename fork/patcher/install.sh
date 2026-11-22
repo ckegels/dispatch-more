@@ -89,6 +89,9 @@ UNIT
   if [ "$DVR_WORKER" = 1 ]; then rm -f "$STATE/dvr-worker-off"; fi
   if [ -f "$STATE/dvr-worker-off" ]; then
     bash "$HERE/dvr-worker.sh" remove "$STATE" "$SLUG" || true
+    # ...but a worker started with an explicit -Q (the community script) still gets the
+    # plugins queue, which Dispatcharr 0.34's plugin actions run on
+    bash "$HERE/dvr-worker.sh" main-only "$STATE" "$SLUG" || true
   else
     bash "$HERE/dvr-worker.sh" add "$STATE" "$SLUG" || echo "Note: the recordings worker could not be added; recordings stay on the one worker."
   fi

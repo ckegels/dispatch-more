@@ -33,6 +33,7 @@ class StreamInfoTests(TestCase):
             "video_codec": "h264", "resolution": "1280x720", "source_fps": 50.0,
             "pixel_format": "yuv420p", "audio_codec": "aac", "sample_rate": 48000,
             "audio_channels": "stereo", "stream_type": "mpegts",
+            "audio_streams": [{"audio_codec": "aac", "audio_channels": "stereo", "sample_rate": 48000}],
             "subtitles": [], "audio_languages": [],
         })
 
@@ -44,6 +45,53 @@ class StreamInfoTests(TestCase):
         self.assertEqual(details["source_fps"], 25.0)
         self.assertEqual(details["audio_channels"], "5.1")
         self.assertNotIn("stream_type", details)
+
+    def test_every_audio_track_as_dispatcharr_0_34_keeps_them(self):
+        """Since 0.34 a stream's stats hold every track (`audio_streams`, with languages) and the
+        audio fields describe the best one; its audio badge reads them."""
+        details = stream_check.stream_details(
+            None, None, "",
+            audio_streams=[
+                {"index": 1, "codec_name": "aac", "channels": 2, "channel_layout": "stereo",
+                 "sample_rate": "48000", "bit_rate": "128000", "tags": {"language": "dut"}},
+                {"index": 2, "codec_name": "ac3", "channels": 6, "channel_layout": "5.1(side)",
+                 "sample_rate": "48000", "bit_rate": "384000", "tags": {"language": "eng"}},
+                {"index": 3, "codec_name": "aac", "channels": 2, "tags": {"language": "und"}},
+            ],
+        )
+        self.assertEqual([t["index"] for t in details["audio_streams"]], [1, 2, 3])
+        self.assertEqual(details["audio_streams"][1], {
+            "index": 2, "audio_language": "eng", "audio_codec": "ac3", "audio_channels": "5.1",
+            "audio_bitrate": 384.0, "sample_rate": 48000,
+        })
+        self.assertNotIn("audio_language", details["audio_streams"][2])
+        # The summary is the richest track
+        self.assertEqual(
+            (details["audio_codec"], details["audio_channels"], details["audio_language"]),
+            ("ac3", "5.1", "eng"),
+        )
+
+    def test_ffprobe_hands_every_audio_track_over(self):
+        probe = dict(FFPROBE, streams=FFPROBE["streams"] + [
+            {"codec_type": "audio", "index": 2, "codec_name": "eac3", "channels": 6,
+             "tags": {"language": "fra"}},
+        ])
+        done = subprocess.CompletedProcess([], 0, stdout=json.dumps(probe).encode(), stderr=b"")
+        with mock.patch("subprocess.run", return_value=done):
+            found = stream_check._ffprobe(b"x")
+        self.assertEqual(len(found["details"]["audio_streams"]), 2)
+        self.assertEqual(found["details"]["audio_language"], "fra")
+
+    def test_a_new_track_list_drops_what_its_best_track_lacks(self):
+        stream = Stream.objects.create(name="S", url="http://example.invalid/3",
+                                       stream_stats={"audio_language": "eng", "audio_codec": "ac3"})
+        stream_check.save_stream_info(stream.id, {
+            "audio_streams": [{"audio_codec": "aac", "audio_channels": "stereo"}],
+            "audio_codec": "aac", "audio_channels": "stereo",
+        })
+        stream.refresh_from_db()
+        self.assertNotIn("audio_language", stream.stream_stats)
+        self.assertEqual(stream.stream_stats["audio_codec"], "aac")
 
     def test_saved_on_the_stream_keeping_what_ffmpeg_measured(self):
         stream = Stream.objects.create(name="S", url="http://example.invalid/1",
@@ -74,6 +122,17 @@ class StatsCardTests(TestCase):
         self.assertEqual((info["resolution"], info["video_codec"], info["audio_channels"]),
                          ("1920x1080", "h264", "stereo"))
         self.assertEqual(info["stream_info_from"], "saved")
+
+    def test_the_saved_tracks_reach_the_audio_badge(self):
+        from apps.proxy.live_proxy.channel_status import ChannelStatus
+
+        tracks = [{"index": 1, "audio_codec": "aac", "audio_language": "dut"}]
+        stream = Stream.objects.create(name="S", url="http://example.invalid/4",
+                                       stream_stats={"audio_codec": "aac", "audio_streams": tracks,
+                                                     "audio_language": "dut"})
+        info = {"stream_id": stream.id}
+        ChannelStatus._fill_from_saved_stream_info(info)
+        self.assertEqual((info["audio_streams"], info["audio_language"]), (tracks, "dut"))
 
     def test_live_measurements_win(self):
         from apps.proxy.live_proxy.channel_status import ChannelStatus

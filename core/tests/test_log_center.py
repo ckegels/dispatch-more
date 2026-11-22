@@ -328,3 +328,43 @@ class ViewTests(TestCase):
         viewer = APIClient()
         viewer.force_authenticate(user=User.objects.create_user(username="v", password="x", user_level=0))
         self.assertEqual(viewer.get("/api/core/log-center/read/").status_code, 403)
+
+
+class MaskedCredentialsTests(TestCase):
+    """
+    Dispatcharr 0.34 masks provider credentials in Docker's logs (its log collector) unless
+    "Redact Credentials in Logs" is off. A Debian or LXC install writes to the journal, which
+    nothing masks, so this page and its bundle -- made to be handed to whoever helps -- showed
+    every provider login in its stream URLs.
+    """
+
+    LINE = (
+        "2026-11-22T09:13:19+0000 dispatcharr start-uwsgi.sh[1]: 2026-11-22 09:13:19,001 "
+        "ERROR live_proxy.http_streamer HTTP 456 from http://line.example.cc/live/W6UZMZ/2RAR98/1168981.ts"
+    )
+
+    def _read(self, system_settings=None):
+        from unittest.mock import patch
+
+        from core import log_center
+        from core.models import CoreSettings
+
+        journal = {"id": "journal:dispatcharr", "label": "Web", "kind": "journal", "unit": "dispatcharr"}
+        # The setting is patched, not saved: CoreSettings caches it in Redis, which a test's
+        # rollback does not undo
+        with patch.object(log_center, "sources", return_value=[journal]), \
+                patch.object(log_center, "_raw_journal", return_value=self.LINE), \
+                patch.object(CoreSettings, "get_system_settings", return_value=system_settings or {}):
+            return log_center.read(["journal:dispatcharr"], "1h"), log_center.download(["journal:dispatcharr"])
+
+    def test_the_page_and_the_download_mask_provider_logins(self):
+        found, downloaded = self._read()
+        text = found["records"][0]["text"]
+        self.assertNotIn("W6UZMZ", text)
+        self.assertNotIn("2RAR98", text)
+        self.assertIn("1168981.ts", text)
+        self.assertNotIn(b"2RAR98", downloaded)
+
+    def test_off_when_the_setting_says_so(self):
+        found, _ = self._read({"log_redact": False})
+        self.assertIn("2RAR98", found["records"][0]["text"])

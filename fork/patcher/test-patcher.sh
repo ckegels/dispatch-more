@@ -344,13 +344,19 @@ cdvr() { PATH="$CFAKE:$PATH" SYSTEMD_DIR="$CU" bash "$REPO/fork/patcher/dvr-work
 out="$(cdvr add)"
 check "its worker is found through the start script, and the recordings worker runs a copy on dvr" \
   "grep -q '^ExecStart=/bin/bash $CST/celery-dvr.sh$' '$CU/dispatcharr-celery-dvr.service' && grep -qx 'exec uv run celery -A dispatcharr worker -l info -Q dvr -n dvr@\$(hostname) --pool=threads --concurrency=20' '$CST/celery-dvr.sh' && grep -qx 'cd /opt/dispatcharr' '$CST/celery-dvr.sh'"
-check "...the normal worker runs a copy without dvr, through a drop-in" \
-  "grep -qx 'exec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,default' '$CST/celery-main.sh' && grep -qx 'ExecStart=' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf' && grep -qx 'ExecStart=/bin/bash $CST/celery-main.sh' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf'"
+check "...the normal worker runs a copy without dvr and with plugins, through a drop-in" \
+  "grep -qx 'exec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,default,plugins' '$CST/celery-main.sh' && grep -qx 'ExecStart=' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf' && grep -qx 'ExecStart=/bin/bash $CST/celery-main.sh' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf'"
 check "...and the community script's own files are untouched" \
   "cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig' && grep -q '^ExecStart=$T/copt/start-celery.sh$' '$CU/dispatcharr-celery.service'"
 out="$(cdvr remove)"
 check "...removed, nothing of it is left and the worker runs its own script again" \
   "[ ! -e '$CU/dispatcharr-celery-dvr.service' ] && [ ! -e '$CU/dispatcharr-celery.service.d' ] && [ ! -e '$CST/celery-dvr.sh' ] && [ ! -e '$CST/celery-main.sh' ] && cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig'"
+out="$(cdvr main-only)"
+check "with the recordings worker off, the normal worker still gets the plugins queue (Dispatcharr 0.34)" \
+  "grep -qx 'exec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,dvr,default,plugins' '$CST/celery-main.sh' && grep -qx 'ExecStart=/bin/bash $CST/celery-main.sh' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf' && [ ! -e '$CU/dispatcharr-celery-dvr.service' ] && cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig'"
+out="$(cdvr remove)"
+check "...and removed, nothing of that is left either" \
+  "[ ! -e '$CU/dispatcharr-celery.service.d' ] && [ ! -e '$CST/celery-main.sh' ] && [ ! -e '$CST/dvr-worker' ] && cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig'"
 
 echo "The memory recorder (memory-recorder.sh, against a pretend systemd):"
 MEM="$T/mem-state"; MEMFAKE="$T/memfake"; MEMAPP="$T/memapp"; mkdir -p "$MEM" "$MEMFAKE" "$MEMAPP/.venv/bin"

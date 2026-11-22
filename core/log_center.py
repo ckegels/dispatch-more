@@ -418,6 +418,31 @@ def _keep(record, level, topic, text, plugin=""):
     return True
 
 
+def _redacting():
+    """Dispatcharr 0.34's "Redact Credentials in Logs" (System Settings, on by default)."""
+    try:
+        from core.models import CoreSettings
+
+        return CoreSettings.get_system_settings().get("log_redact", True) is not False
+    except Exception:
+        return True
+
+
+def _masked(text):
+    """
+    Provider credentials masked the way Dispatcharr 0.34 masks Docker's logs (its log
+    collector runs `redact_text` over every line). A Debian or LXC install writes to the
+    journal, which nothing masks, so this page -- and the bundle made to be handed to whoever
+    helps -- showed every provider's user name and password in their stream URLs. Masking a
+    line twice changes nothing, so the collector's files (already masked) pass as they are.
+    """
+    if not text or not _redacting():
+        return text
+    from dispatcharr.log_redaction import redact_text
+
+    return "\n".join(redact_text(line) for line in text.split("\n"))
+
+
 def _raw(source_ids, since, limit=PAGE_LINES):
     available = {s["id"]: s for s in sources()}
     chosen = [available[i] for i in source_ids if i in available] or list(available.values())
@@ -432,7 +457,7 @@ def _raw(source_ids, since, limit=PAGE_LINES):
         parts.append(_raw_journal(units, minutes, limit))
     if files:
         parts.append(_raw_files(files, minutes, limit))
-    return "\n".join(parts)
+    return _masked("\n".join(parts))
 
 
 def read(source_ids=(), since="1h", level="ALL", topic="", text="", plugin=""):
