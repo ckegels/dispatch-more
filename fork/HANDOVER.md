@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22, **published**: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22, **published**: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **v281** (2026-11-22: a client with no chunks left no longer spins, §5.8) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -2305,6 +2305,13 @@ stream twice for stutter; it stays").
 
 ### 5.8 Misc
 
+- **A client with no chunks left no longer spins** (v281, `output/ts/generator.py`, a stock bug,
+  still in upstream's main on 2026-11-22). With the buffer head ahead and none of its chunks in
+  Redis (a channel being torn down; mostly fallback slates during failover storms), the stock
+  loop jumped to "near the head" -- the same index every time -- and retried at once: 33,090
+  warnings in one hour, one client looping ~8,000 times a second for seconds, holding its uWSGI
+  worker from every other stream on it. A jump that does not move the client forward now waits
+  like an empty read (backoff, then the stock ghost and timeout checks end it).
 - **Modified-build label:** `version.py` `__build__` ("Dispatch More dev", stamped "Dispatch
   More vNN" per release); `/api/core/version/` returns it. `__version__` stays Dispatcharr's own
   (it is in the default User-Agent sent to providers and compared by the update check).

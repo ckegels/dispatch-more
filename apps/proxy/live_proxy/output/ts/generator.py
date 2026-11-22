@@ -342,7 +342,8 @@ class StreamGenerator:
                     # Next chunk has expired — find the oldest chunk still in Redis
                     new_index = self.buffer.find_oldest_available_chunk(self.local_index)
 
-                    if new_index is not None:
+                    # Only a jump forward is one (see the wait below)
+                    if new_index is not None and new_index > self.local_index:
                         skipped = new_index - self.local_index
                         logger.warning(
                             f"[{self.client_id}] Next chunk expired (index {self.local_index + 1}), "
@@ -354,15 +355,25 @@ class StreamGenerator:
                         # No chunks available at all — jump to near the buffer head
                         initial_behind = ConfigHelper.initial_behind_chunks()
                         new_index = max(self.local_index, self.buffer.index - initial_behind)
-                        logger.warning(
-                            f"[{self.client_id}] No chunks available in buffer, "
-                            f"jumping to near buffer head: {new_index} "
-                            f"(buffer head at {self.buffer.index})"
-                        )
-                        self.local_index = new_index
+                        if new_index == self.local_index:
+                            # Dispatch More: already as near the head as a jump goes, and still
+                            # nothing to read (the channel's chunks are gone, as when it is torn
+                            # down). Retrying at once spun here: 33,090 warnings in one hour on
+                            # 2026-11-22, a client looping some 8,000 times a second for seconds
+                            # on end and holding its worker from every other stream on it.
+                            # Wait like any other empty read instead.
+                            new_index = None
+                        else:
+                            logger.warning(
+                                f"[{self.client_id}] No chunks available in buffer, "
+                                f"jumping to near buffer head: {new_index} "
+                                f"(buffer head at {self.buffer.index})"
+                            )
+                            self.local_index = new_index
 
-                    self.consecutive_empty = 0
-                    continue  # Retry immediately with the new position
+                    if new_index is not None:
+                        self.consecutive_empty = 0
+                        continue  # Retry immediately with the new position
 
                 if self._should_send_keepalive(self.local_index):
                     if keepalive_start_time is None:
