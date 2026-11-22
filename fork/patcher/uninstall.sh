@@ -11,13 +11,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SLUG="$(sed -n 's/.*"slug": "\([^"]*\)".*/\1/p' "$HERE/manifest.json" 2>/dev/null | head -1)"
 SLUG="${SLUG:-dispatch-more}"
-APP="" LAYOUT="" RESTART=1 SYSTEMD=1
+APP="" LAYOUT="" RESTART=1 SYSTEMD=1 CAPTIONS=remove
 while [ $# -gt 0 ]; do
   case "$1" in
     --app) APP="$2"; shift 2 ;;
     --docker) LAYOUT=docker; shift ;;
     --no-restart) RESTART=0; shift ;;
     --no-systemd) SYSTEMD=0; shift ;;
+    # quick-install.sh --upgrade, which puts Dispatch More back on minutes later (captions.sh keep)
+    --keep-captions) CAPTIONS=keep; shift ;;
     *) echo "Unknown option: $1"; exit 2 ;;
   esac
 done
@@ -59,7 +61,11 @@ if [ "$LAYOUT" = systemd ] && [ "$SYSTEMD" = 1 ]; then
   [ -f "$STATE/dvr-worker.sh" ] && bash "$STATE/dvr-worker.sh" remove "$STATE" "$SLUG" || true
   rm -f "$STATE/dvr-worker-off"
   # The caption worker, its models and the watcher for the Subtitles tab's requests (captions.sh)
-  [ -f "$STATE/captions.sh" ] && bash "$STATE/captions.sh" remove "$STATE" "$SLUG" "$APP" all || true
+  if [ "$CAPTIONS" = keep ]; then
+    [ -f "$STATE/captions.sh" ] && bash "$STATE/captions.sh" keep "$STATE" "$SLUG" "$APP" || true
+  else
+    [ -f "$STATE/captions.sh" ] && bash "$STATE/captions.sh" remove "$STATE" "$SLUG" "$APP" all || true
+  fi
   # The memory recorder's service; its history in /data/memory-history stays (memory-recorder.sh)
   [ -f "$STATE/memory-recorder.sh" ] && bash "$STATE/memory-recorder.sh" remove "$STATE" "$SLUG" || true
   # Stopped as well as disabled: only disabled, it stayed "active" (its file gone) until a reboot

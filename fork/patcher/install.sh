@@ -99,6 +99,8 @@ UNIT
   # The Subtitles tab may ask for the caption worker; a root watcher installs it (captions.sh).
   # Nothing is installed until someone asks.
   bash "$HERE/captions.sh" watch "$STATE" "$SLUG" "$APP" || echo "Note: the captions watcher could not be set up."
+  # ...and the worker an --upgrade kept while Dispatcharr was updated is set up again
+  bash "$HERE/captions.sh" restore "$STATE" "$SLUG" "$APP" || true
 
   # The memory recorder, a service of its own so it keeps writing when the web workers are
   # stuck (memory-recorder.sh); it records only once switched on, on Diagnostics -> Memory.

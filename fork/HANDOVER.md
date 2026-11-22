@@ -2178,7 +2178,11 @@ its own venv `/opt/dispatch-more-captions`, service `dispatch-more-captions` on 
 installed by the root watcher `dispatch-more-captions-request.path` -> `fork/patcher/captions.sh`
 (systemd installs only; Docker gets a compose service to add, shown on the card). Download and
 measure models from the card. Remove (or uninstalling Dispatch More) takes the service, venv
-and models. Off means stock: nothing is installed or run unless asked; `captions.sh` is never
+and models. **Except `--upgrade`** (v284): it takes Dispatch More off for minutes only, so
+`uninstall.sh --keep-captions` -> `captions.sh keep` stops the service and takes its unit and the
+watcher away but keeps the venv and the models (`captions-kept` in the state folder), and the
+release that follows sets the worker up again from them (`install.sh` -> `captions.sh restore`).
+v283's `--upgrade` removed the user's worker and models on 2026-11-22. Off means stock: nothing is installed or run unless asked; `captions.sh` is never
 run on Docker.
 
 **Captions while a TV watches** (v247, `captions/live.py`, worker jobs; `fork/subtitles.md` §9

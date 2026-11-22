@@ -272,9 +272,9 @@ its backup in `/opt/dispatcharr_backup_<time>.tar.gz` -- then Dispatch More on a
 that version: it only installs. Dispatcharr newer than any release: it changes nothing. Installed
 some other way: it changes nothing and says what to do. It asks nothing on the Proxmox script's
 install; on a `debian_install.sh` install Dispatcharr's installer asks you to type "I understand".
-Dispatcharr is down for a few minutes while it is updated. Because Dispatch More is taken off
-first, the optional **caption worker** goes with it, models included: install it again from the
-Subtitles tab afterwards if you used it.
+Dispatcharr is down for a few minutes while it is updated. The optional **caption worker** is
+stopped meanwhile and comes back with its models afterwards (from v284 on; v283 and older
+removed it, to be installed again from the Subtitles tab).
 
 **Updating Dispatcharr yourself** works too: update it as you always do, then run the install
 command again -- no need to uninstall first. It takes the old release off (only what is still the

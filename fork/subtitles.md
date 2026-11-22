@@ -265,7 +265,8 @@ Python packages plus models). The tab offers it when captions are switched on:
 - **Docker:** an optional second container (`dispatch-more-captions`, with the NVIDIA runtime when
   there is a GPU), its address given on the tab.
 - **Anywhere else:** the same container or venv on another machine, by URL.
-Uninstalling Dispatch More removes the worker it installed and its models.
+Uninstalling Dispatch More removes the worker it installed and its models. The one-command
+`--upgrade` (v284 on) keeps them while Dispatcharr is updated and sets the worker up again after.
 
 ## 6. The models
 

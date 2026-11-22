@@ -6,6 +6,8 @@
 #   bash captions.sh request STATE SLUG APP   # what the watcher runs: carries out the request
 #   bash captions.sh install STATE SLUG APP   # by hand: the same as the tab's Install
 #   bash captions.sh remove  STATE SLUG APP   # uninstall.sh, and the tab's Remove
+#   bash captions.sh keep    STATE SLUG APP   # uninstall.sh --keep-captions (quick-install --upgrade)
+#   bash captions.sh restore STATE SLUG APP   # install.sh: the worker kept by `keep` set up again
 #
 # The worker is apps/channels/captions/worker.py, run from a virtualenv of its own
 # (/opt/dispatch-more-captions) with faster-whisper -- and NVIDIA's CUDA libraries only when the
@@ -24,6 +26,8 @@ VENV="${VENV:-/opt/$SLUG-captions}"
 SERVICE="$SLUG-captions"
 PORT="${CAPTIONS_PORT:-9725}"
 REQUEST="$STATE/requests/captions"
+# Left by `keep`: the worker's environment and models are kept for the release that follows
+KEPT="$STATE/captions-kept"
 STATUS="$STATE/captions-status.json"
 LOG="$STATE/captions-install.log"
 
@@ -157,6 +161,7 @@ remove() {
   rm -f "$UNITS/$SERVICE.service"
   rm -rf "$VENV"
   rm -rf "$(models_dir)"
+  rm -f "$KEPT"
   if [ "${1:-}" = all ]; then
     systemctl disable --now "$SERVICE-request.path" >/dev/null 2>&1 || true
     rm -f "$UNITS/$SERVICE-request.path" "$UNITS/$SERVICE-request.service" "$STATUS" "$LOG" "$REQUEST"
@@ -165,6 +170,40 @@ remove() {
   fi
   systemctl daemon-reload || true
   [ -n "$had" ] && echo "Removed the caption worker ($SERVICE) and its models." || true
+}
+
+# --upgrade takes Dispatch More off to update Dispatcharr and puts it back on minutes later. On
+# 2026-11-22 that removed the user's caption worker with its models, to be installed again by
+# hand from the tab. While Dispatcharr is stock its worker.py is gone, so the service and the
+# tab's watcher go as in an uninstall; the environment (/opt/<slug>-captions) and the models,
+# outside Dispatcharr's files, stay, and `restore` sets the worker up again from them. An
+# upgrade that stops half way leaves them; the uninstall command takes them away.
+keep() {
+  if [ ! -f "$UNITS/$SERVICE.service" ] || [ ! -x "$VENV/bin/python" ]; then
+    remove all
+    return
+  fi
+  systemctl disable --now "$SERVICE.service" >/dev/null 2>&1 || true
+  rm -f "$UNITS/$SERVICE.service"
+  systemctl disable --now "$SERVICE-request.path" >/dev/null 2>&1 || true
+  rm -f "$UNITS/$SERVICE-request.path" "$UNITS/$SERVICE-request.service" "$REQUEST"
+  touch "$KEPT"
+  systemctl daemon-reload || true
+  echo "Stopped the caption worker ($SERVICE); its environment and models are kept for the release that follows."
+}
+
+restore() {
+  [ -f "$KEPT" ] || return 0
+  rm -f "$KEPT"
+  if [ ! -x "$VENV/bin/python" ]; then
+    echo "Note: the caption worker kept before the update is gone ($VENV); install it again from the Subtitles tab."
+    return 0
+  fi
+  if install >/dev/null; then
+    echo "The caption worker ($SERVICE) is back, with the models it had."
+  else
+    echo "Note: the caption worker could not be set up again ($LOG); install it again from the Subtitles tab."
+  fi
 }
 
 request() {
@@ -190,5 +229,7 @@ case "$ACTION" in
   request) request ;;
   install) install ;;
   remove) remove "${5:-}" ;;
+  keep) keep ;;
+  restore) restore ;;
   *) echo "Unknown action: $ACTION"; exit 2 ;;
 esac

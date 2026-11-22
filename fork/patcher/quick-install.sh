@@ -139,9 +139,10 @@ version_here() { sed -n "s/^__version__ = '\(.*\)'.*/\1/p" "$APP/version.py"; }
 # Dispatch More taken off with the scripts of the archive in $1 (the newest), never the ones the
 # installed release left: those put their own Dispatcharr version's files back even over a newer
 # Dispatcharr (before v276)
-uninstall_with() {
+uninstall_with() {  # uninstall_with <archive> [uninstall.sh options]
+  local archive="$1"; shift
   mkdir -p "$WORK/new"
-  tar -xzf "$1" -C "$WORK/new" --strip-components=1
+  tar -xzf "$archive" -C "$WORK/new" --strip-components=1
   # The scripts, never the manifest: that one says what the installed release put where
   for script in patch.py uninstall.sh install.sh docker-entrypoint.sh dvr-worker.sh captions.sh memory-recorder.sh quick-install.sh; do
     if [ -f "$WORK/new/$script" ]; then cp "$WORK/new/$script" "$STATE/$script"; fi
@@ -149,7 +150,7 @@ uninstall_with() {
   if [ "$LAYOUT" = docker ]; then
     STATE="$STATE" bash "$STATE/uninstall.sh" --docker --app "$APP" ${DISPATCH_MORE_INSTALL_ARGS:-}
   else
-    STATE="$STATE" bash "$STATE/uninstall.sh" --app "$APP" ${DISPATCH_MORE_INSTALL_ARGS:-}
+    STATE="$STATE" bash "$STATE/uninstall.sh" --app "$APP" "$@" ${DISPATCH_MORE_INSTALL_ARGS:-}
   fi
 }
 
@@ -357,7 +358,9 @@ if [ "$ACTION" = upgrade ] && [ -f "$APP/version.py" ]; then
     sleep "${DISPATCH_MORE_WAIT:-10}"
     get_archive "$ARCHIVE" "$WORK/release.tar.gz"
     if [ -f "$STATE/manifest.json" ]; then
-      uninstall_with "$WORK/release.tar.gz"
+      # Dispatch More goes back on in a few minutes: the caption worker's environment and
+      # models stay meanwhile (captions.sh keep / restore)
+      uninstall_with "$WORK/release.tar.gz" --keep-captions
     fi
     if [ "$BY" = debian_install ]; then
       run_debian_install "$WANT"

@@ -416,6 +416,25 @@ check "asked to remove, the worker, its environment and its models go; the watch
 out="$(cap remove all)"
 check "uninstalling Dispatch More takes the watcher too" \
   "[ ! -e '$UNITS/$SLUG-captions-request.path' ] && [ ! -e '$UNITS/$SLUG-captions-request.service' ] && [ ! -e '$CAP/captions-status.json' ]"
+# --upgrade: Dispatch More off for minutes, then on again (uninstall.sh --keep-captions)
+out="$(cap watch)"
+mkdir -p "$T/capvenv/bin"; printf '#!/bin/bash\nexit 0\n' > "$T/capvenv/bin/python"; chmod +x "$T/capvenv/bin/python"
+echo '{"action": "install"}' > "$CAP/requests/captions"
+out="$(cap request)"
+echo model > "$T/models/m/captions/small.bin"
+out="$(cap keep)"
+check "an --upgrade stops the caption worker but keeps its environment and models" \
+  "[ ! -e '$UNITS/$SLUG-captions.service' ] && [ ! -e '$UNITS/$SLUG-captions-request.path' ] && [ -x '$T/capvenv/bin/python' ] && [ -f '$T/models/m/captions/small.bin' ] && [ -f '$CAP/captions-kept' ]"
+out="$(cap restore)"
+check "...and the release that follows sets it up again, with the models it had" \
+  "echo \"\$out\" | grep -q 'is back' && grep -q '^ExecStart=$T/capvenv/bin/python ' '$UNITS/$SLUG-captions.service' && [ -f '$T/models/m/captions/small.bin' ] && [ ! -e '$CAP/captions-kept' ]"
+out="$(cap restore)"
+check "...once: a release installed again later does not install it again" "[ -z \"\$out\" ]"
+out="$(cap keep)"; out="$(cap remove all)"
+check "the uninstall command still takes all of it, kept or not" \
+  "[ ! -e '$UNITS/$SLUG-captions.service' ] && [ ! -e '$T/capvenv' ] && [ ! -e '$T/models/m/captions' ] && [ ! -e '$CAP/captions-kept' ]"
+rm -rf "$T/capvenv"; out="$(cap keep)"
+check "nothing installed: keeping is the same as removing" "[ ! -e '$CAP/captions-kept' ]"
 
 echo
 echo "$PASS passed, $FAIL failed"
