@@ -192,6 +192,10 @@ check "$OLD_R is on, every service up" "up && answers $OLD_V $OLD_R"
 SINCE="$(inside 'date "+%Y-%m-%d %H:%M:%S"')"
 if [ -n "${UPGRADE:-}" ]; then
   echo "2. The one command's --upgrade: Dispatcharr $OLD_V -> $NEW_V and $NEW_R, in one go:"
+  # A caption worker installed, as on the user's server, and a model beside it: v283's --upgrade
+  # removed both (2026-11-22)
+  inside "bash /var/lib/dispatch-more/captions.sh install /var/lib/dispatch-more dispatch-more /opt/dispatcharr && grep -o -- '--models [^ ]*' /etc/systemd/system/dispatch-more-captions.service | cut -d' ' -f2 > /root/captions-models && echo model > \$(cat /root/captions-models)/kept-model.bin" >>"$LOG" 2>&1
+  check "...(a caption worker running on $OLD_R, a model beside it)" "inside 'systemctl is-active -q dispatch-more-captions && [ -f \$(cat /root/captions-models)/kept-model.bin ]'"
   # With the short PATH Proxmox's `pct exec` gives (no /usr/local/bin, where the community script
   # puts uv): the user's server refused --upgrade that way on 2026-11-22
   inside "[ -x /usr/local/bin/uv ] && env PATH=/usr/sbin:/usr/bin:/sbin:/bin DISPATCH_MORE_ARCHIVE=/root/new.tar.gz DISPATCH_MORE_WAIT=0 bash /root/quick-install.sh --upgrade" >>"$LOG" 2>&1
@@ -199,6 +203,7 @@ if [ -n "${UPGRADE:-}" ]; then
   check "...it said it was updating the community script's install" "grep -q 'installed by community' '$LOG'"
   check "...the community script's own backup is there" "inside 'ls /opt/dispatcharr_backup_*.tar.gz'"
   check "...and where its update reads the version, $NEW_V" "inside 'grep -qx $NEW_V /root/.dispatcharr'"
+  check "...the caption worker runs again on $NEW_R, with the model it had" "inside 'for _ in \$(seq 1 30); do systemctl is-active -q dispatch-more-captions && break; sleep 2; done; systemctl is-active -q dispatch-more-captions && [ -f \$(cat /root/captions-models)/kept-model.bin ] && [ -x /opt/dispatch-more-captions/bin/python ] && [ ! -e /var/lib/dispatch-more/captions-kept ]'"
 else
   echo "2. The community script's update with Dispatch More on, then the one command again:"
   community_update "$NEW_V" >>"$LOG" 2>&1
