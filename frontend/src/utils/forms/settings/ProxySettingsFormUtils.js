@@ -20,5 +20,7 @@ export const getProxySettingDefaults = () => {
     connection_timeout: 10,
     validate_redirect_urls: true,
     leave_stalling_streams: false,
+    max_retries: 3,
+    stream_retry_timeout: 3,
   };
 };

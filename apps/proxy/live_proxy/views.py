@@ -12,6 +12,7 @@ from django.http import (
 )
 from django.views.decorators.csrf import csrf_exempt
 from .server import ProxyServer
+from .config_helper import ConfigHelper
 from .channel_status import ChannelStatus, build_live_channel_stats_data
 from .output.ts.generator import create_stream_generator
 from .output.fmp4.generator import create_fmp4_stream_generator
@@ -110,6 +111,9 @@ def _obtain_stream_with_retries(
 ):
     """Call generate_stream_url, retrying when the failure is connection limits.
 
+    Always tries at least once. stream_retry_timeout is the wall-clock budget for
+    additional waits/retries after that first try (0 = try once, do not wait).
+
     viewer (Dispatch More): the requesting client's probation Viewer, for Channel Switch
     Overlap; redis_client: the proxy server's, for Stream Check and the overlap.
 
@@ -134,13 +138,14 @@ def _obtain_stream_with_retries(
     except Exception as e:  # never let this cost a viewer their channel
         logger.debug(f"[{client_id}] Could not ask the checks to let go: {e}")
 
-    retry_timeout = 3
+    retry_timeout = ConfigHelper.stream_retry_timeout()
     if checks_were_running:
-        # A check was holding connections and has just been told to let go. Three seconds
-        # is stock's guess at how long a provider might take to free one by itself; when we
-        # know one is on its way, waiting for it beats sending somebody to the fallback
-        # stream. Costs nothing when no run is going, which is nearly always.
-        retry_timeout = 12
+        # A check was holding connections and has just been told to let go. Stream Retry
+        # Timeout (3 s by default, 0 for no wait) is the user's guess at how long a provider
+        # takes to free one by itself; when we know one is on its way because of our own
+        # check, waiting for it beats sending somebody to the fallback stream. Costs nothing
+        # when no run is going, which is nearly always.
+        retry_timeout = max(retry_timeout, 12)
         logger.info(
             f"[{client_id}] A stream check is running: waiting up to "
             f"{retry_timeout}s for it to let go rather than giving up"
@@ -158,7 +163,7 @@ def _obtain_stream_with_retries(
     attempt = 0
     should_retry = True
 
-    while should_retry and time.time() - wait_start_time < retry_timeout:
+    while True:
         attempt += 1
         (
             stream_url,
@@ -231,10 +236,13 @@ def _obtain_stream_with_retries(
         elapsed_time = time.time() - wait_start_time
         remaining_time = retry_timeout - elapsed_time
         if remaining_time <= retry_interval:
-            logger.info(
-                f"[{client_id}] Insufficient time ({remaining_time:.1f}s) for "
-                f"another sleep cycle, will make one final attempt"
-            )
+            # Budget exhausted for another sleep cycle. A final attempt may
+            # still run below when any time remains on the clock.
+            if remaining_time > 0:
+                logger.info(
+                    f"[{client_id}] Insufficient time ({remaining_time:.1f}s) for "
+                    f"another sleep cycle, will make one final attempt"
+                )
             break
 
         logger.info(
@@ -543,7 +551,7 @@ def _handle_redirect_stream(
             logger.warning(f"[{client_id}] Failed to release stream before redirect")
 
 
-@api_view(["GET"])
+@api_view(["GET", "HEAD"])
 @permission_classes([AllowAny])
 def stream_ts(
     request, channel_id, user=None, force_output_format=None, *, check_network=True
@@ -558,7 +566,6 @@ def stream_ts(
         user = request.user
 
     client_user_agent = None
-    proxy_server = ProxyServer.get_instance()
     connection_allocated = False  # Track if connection slot was allocated via get_stream()
     # Initialized before the try so the exception handler can always safely
     # check/clean it up, regardless of where in the setup a failure occurs.
@@ -573,7 +580,39 @@ def stream_ts(
             return JsonResponse({"error": "Not found"}, status=404)
 
         channel = get_stream_object(channel_id)
-        channel_display_name = getattr(channel, "name", None)
+        # Prefer the override-aware name when this is a Channel; streams have
+        # no override row, so their own name is the display name.
+        if isinstance(channel, Channel):
+            channel_display_name = channel.get_effective_name()
+        else:
+            channel_display_name = getattr(channel, "name", None)
+
+        # Report the output container without registering a client or opening
+        # upstream. Redirect stays octet-stream unless skip_redirect previews
+        # the proxied type. HLS still only advertises type here; GET redirects
+        # to a session playlist.
+        if request.method == "HEAD":
+            stream_profile = channel.get_stream_profile()
+            skip_redirect = _is_skip_redirect_requested(
+                request, user, "head-probe"
+            )
+            if stream_profile.is_redirect() and not skip_redirect:
+                content_type = "application/octet-stream"
+            else:
+                # Match GET: unknown values are treated as mpegts.
+                content_type = {
+                    "mpegts": "video/mp2t",
+                    "fmp4": "video/mp4",
+                    "hls": "application/vnd.apple.mpegurl",
+                }.get(
+                    _resolve_output_format(user, force_output_format, request),
+                    "video/mp2t",
+                )
+            response = HttpResponse(content_type=content_type)
+            response["Cache-Control"] = "no-cache"
+            return response
+
+        proxy_server = ProxyServer.get_instance()
 
         # Generate a unique client ID
         client_id = f"client_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
@@ -948,7 +987,7 @@ def stream_ts(
                         profile_value,
                         stream_id,
                         m3u_profile_id,
-                        channel_name=channel.name,
+                        channel_name=channel_display_name,
                     )
 
                     if not success:
@@ -1294,7 +1333,7 @@ def _xc_live_channel_or_error(request, username, password, channel_id):
     return user, channel, None
 
 
-@api_view(["GET"])
+@api_view(["GET", "HEAD"])
 @permission_classes([AllowAny])
 def stream_xc(request, username, password, channel_id):
     try:

@@ -86,7 +86,10 @@ class StreamProfile(models.Model):
         blank=True,
     )
     parameters = models.TextField(
-        help_text="Command-line parameters. Use {userAgent}, {streamUrl}, and {channelId} as placeholders.",
+        help_text=(
+            "Command-line parameters. Use {userAgent}, {streamUrl}, "
+            "{channelId}, {channelName}, and {tvgId} as placeholders."
+        ),
         blank=True,
     )
     locked = models.BooleanField(
@@ -150,7 +153,14 @@ class StreamProfile(models.Model):
             return True
         return False
 
-    def build_command(self, stream_url, user_agent, channel_id=None):
+    def build_command(
+        self,
+        stream_url,
+        user_agent,
+        channel_id=None,
+        channel_name=None,
+        tvg_id=None,
+    ):
 
         if self.is_proxy():
             return []
@@ -159,6 +169,8 @@ class StreamProfile(models.Model):
             "{streamUrl}": stream_url,
             "{userAgent}": user_agent,
             "{channelId}": str(channel_id) if channel_id else "",
+            "{channelName}": channel_name if channel_name else "",
+            "{tvgId}": tvg_id if tvg_id else "",
         }
 
         # Split the command and iterate through each part to apply replacements
@@ -536,6 +548,7 @@ class CoreSettings(models.Model):
             "m3u_hash_key": "",
             "default_output_format": "mpegts",
             "hdhr_output_profile_id": None,
+            "hdhr_output_format": "mpegts",
         })
 
     @classmethod
@@ -856,6 +869,8 @@ class CoreSettings(models.Model):
             "connection_timeout": 10,
             "validate_redirect_urls": True,
             "leave_stalling_streams": False,
+            "max_retries": 3,
+            "stream_retry_timeout": 3,
         })
 
     @classmethod
@@ -886,6 +901,7 @@ class CoreSettings(models.Model):
             "log_max_mb": DEFAULT_LOG_MB,
             "log_keep": DEFAULT_LOG_KEEP,
             "log_persist": True,
+            "log_redact": True,
         })
 
     @classmethod
@@ -911,6 +927,20 @@ class CoreSettings(models.Model):
             return int(raw) if raw is not None else None
         except (ValueError, TypeError):
             return None
+
+    @classmethod
+    def get_hdhr_output_format(cls):
+        """HDHR output format, or None to inherit Default Output Format.
+
+        Missing, null, or invalid values default to mpegts. The explicit
+        sentinel ``system`` inherits the system Default Output Format.
+        """
+        raw = cls.get_stream_settings().get("hdhr_output_format")
+        if raw == "system":
+            return None
+        if raw in ("mpegts", "fmp4", "hls"):
+            return raw
+        return "mpegts"
 
     @classmethod
     def get_dvr_output_profile_id(cls):
@@ -991,6 +1021,7 @@ class SystemNotification(models.Model):
         ANNOUNCEMENT = 'announcement', 'System Announcement'
         WARNING = 'warning', 'Warning'
         INFO = 'info', 'Information'
+        PLUGIN_UPDATE = 'plugin_update', 'Plugin Update Available'
 
     class Priority(models.TextChoices):
         LOW = 'low', 'Low'
@@ -1001,6 +1032,7 @@ class SystemNotification(models.Model):
     class Source(models.TextChoices):
         SYSTEM = 'system', 'System Generated'
         DEVELOPER = 'developer', 'Developer Notification'
+        PLUGIN_MANIFEST = 'plugin_manifest', 'Plugin System Notification'
 
     # Unique identifier for the notification (e.g., 'version-0.19.0', 'setting-proxy-buffer')
     # This allows deduplication and targeted dismissals

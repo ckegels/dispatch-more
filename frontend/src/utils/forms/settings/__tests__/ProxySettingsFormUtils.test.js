@@ -67,6 +67,8 @@ describe('ProxySettingsFormUtils', () => {
         connection_timeout: 10,
         validate_redirect_urls: true,
         leave_stalling_streams: false,
+        max_retries: 3,
+        stream_retry_timeout: 3,
       });
     });
 
@@ -91,6 +93,8 @@ describe('ProxySettingsFormUtils', () => {
       expect(typeof result.stream_startup_timeout).toBe('number');
       expect(typeof result.connection_timeout).toBe('number');
       expect(typeof result.validate_redirect_urls).toBe('boolean');
+      expect(typeof result.max_retries).toBe('number');
+      expect(typeof result.stream_retry_timeout).toBe('number');
     });
   });
 });
