@@ -333,9 +333,11 @@ printf '[Unit]\nDescription=Dispatcharr Celery Worker\n\n[Service]\nType=simple\
 printf '[Service]\nExecStart=%s\n' "$T/copt/start-celerybeat.sh" > "$CU/dispatcharr-celerybeat.service"
 cat > "$CFAKE/systemctl" <<FAKE
 #!/bin/bash
+echo "\$*" >> "$T/csystemctl.log"
 case "\$1" in
   list-units) for f in "$CU"/dispatcharr*.service; do echo "\$(basename "\$f") loaded active running x"; done ;;
   show) echo "$CU/\${@: -1}" ;;
+  is-active) [ -e "$T/cdvr-dead" ] && exit 3 ;;
 esac
 exit 0
 FAKE
@@ -348,6 +350,14 @@ check "...the normal worker runs a copy without dvr and with plugins, through a 
   "grep -qx 'exec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,default,plugins' '$CST/celery-main.sh' && grep -qx 'ExecStart=' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf' && grep -qx 'ExecStart=/bin/bash $CST/celery-main.sh' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf'"
 check "...and the community script's own files are untouched" \
   "cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig' && grep -q '^ExecStart=$T/copt/start-celery.sh$' '$CU/dispatcharr-celery.service'"
+# A recordings worker that does not start: the normal worker goes back to hearing dvr, keeps
+# plugins (its own -Q would leave plugin actions unheard), and is restarted to take that up.
+touch "$T/cdvr-dead"
+out="$(cdvr running)"
+check "...one that does not start: the normal worker runs recordings and plugin actions, restarted" \
+  "echo \"\$out\" | grep -q 'did not start' && grep -qx 'exec uv run celery -A dispatcharr worker -l info -c 4 -Q celery,recordings,dvr,default,plugins' '$CST/celery-main.sh' && grep -qx 'ExecStart=/bin/bash $CST/celery-main.sh' '$CU/dispatcharr-celery.service.d/$SLUG-dvr.conf' && grep -qx 'restart dispatcharr-celery.service' '$T/csystemctl.log'"
+rm -f "$T/cdvr-dead"
+out="$(cdvr add)"
 out="$(cdvr remove)"
 check "...removed, nothing of it is left and the worker runs its own script again" \
   "[ ! -e '$CU/dispatcharr-celery-dvr.service' ] && [ ! -e '$CU/dispatcharr-celery.service.d' ] && [ ! -e '$CST/celery-dvr.sh' ] && [ ! -e '$CST/celery-main.sh' ] && cmp -s '$T/copt/start-celery.sh' '$T/start-celery.orig'"

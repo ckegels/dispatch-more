@@ -119,7 +119,10 @@ with_plugins() {
 # The recordings worker switched off: only the community script's normal worker is changed, so
 # that it hears `plugins` (see the top). A worker without -Q needs nothing (dispatcharr/celery.py).
 main_only() {
-  CELERY="" SOURCE="" SCRIPT=""
+  # Its own variables: running() calls this and then restarts the worker it named in CELERY;
+  # had this emptied that CELERY, the normal worker would never be restarted after a
+  # recordings worker that did not start, and would go on leaving recordings to nobody.
+  local CELERY="" SOURCE="" SCRIPT="" unit file start line queues
   for unit in $(systemctl list-units --type=service --all --no-legend --plain 'dispatcharr*' | awk '{print $1}'); do
     [ "$unit" = "$DVR.service" ] && continue
     file="$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null || true)"
