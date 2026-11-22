@@ -28,10 +28,10 @@ ok()  { echo "  ok    $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 check() { if eval "$2" >>"$LOG" 2>&1; then ok "$1"; else bad "$1"; fi; }
 inside() { docker exec "$N" bash -c "$1"; }
-start() {  # start <image> [entrypoint]: a new container on the same /data
+start() {  # start <image> [entrypoint]: a new container on the same /data (START_ENV: -e ... for it)
   docker rm -f $N >/dev/null 2>&1
   if [ -n "${2:-}" ]; then
-    docker run -d --name $N -v $VOL:/data --entrypoint /bin/bash "$1" /data/dispatch-more/docker-entrypoint.sh >/dev/null
+    docker run -d --name $N -v $VOL:/data ${START_ENV:-} --entrypoint /bin/bash "$1" /data/dispatch-more/docker-entrypoint.sh >/dev/null
   else
     docker run -d --name $N -v $VOL:/data "$1" >/dev/null
   fi
@@ -70,7 +70,11 @@ start $OLD_IMAGE entrypoint
 check "...and again in a new container with the entrypoint" "answers $OLD_V $OLD_R"
 
 echo "2. The image updated to $NEW_V, the entrypoint still set ($OLD_R in /data):"
-start $NEW_IMAGE entrypoint
+# Without fetching (DISPATCH_MORE_AUTO_UPDATE=0): what this step is about is that $OLD_R, made for
+# $OLD_V, is never put over $NEW_V. With fetching on, the start script gets the release published
+# for $NEW_V by itself -- step 5 checks that -- and this step could only pass while there was none
+# (it failed so the evening v282 was published, the start script doing just what it should).
+START_ENV="-e DISPATCH_MORE_AUTO_UPDATE=0" start $NEW_IMAGE entrypoint
 check "stock $NEW_V answers" "answers $NEW_V ''"
 check "...the log says the release was not applied" "logs_say 'Dispatch More: not applied'"
 docker run --rm --entrypoint bash $NEW_IMAGE -c 'cd /app && find . -type f ! -path "*/__pycache__/*" ! -name "*.pyc" -print0 | sort -z | xargs -0 sha256sum' > $S/docker-image.txt
