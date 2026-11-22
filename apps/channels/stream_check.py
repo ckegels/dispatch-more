@@ -228,6 +228,17 @@ REFUSAL_PAUSE = 3
 LIMITS_KEY = "stream-check-providers"
 # The streams opened on a provider lately, as times: what its limit is counted against
 OPENS_KEY = "stream-check:opens:{provider}"
+# The connections viewers opened lately through one login (profile), as times. A provider
+# counts everybody's openings against its limit, not only the check's: on 2026-11-22 the check
+# opened 10 Digitalizard streams in the hour viewers made 21 attempts there, against a limit of
+# 6 every 15 minutes, and the provider answered 403 to every channel the user tried.
+VIEWER_OPENS_KEY = "stream-check:viewer-opens:{profile}"
+# After a viewer opens a stream on a provider, the check leaves that provider alone this long:
+# someone zapping opens many in a row, and every one the check takes is one they do not have
+VIEWER_QUIET_SECONDS = 20 * 60
+# Of what a provider allows in a window, the part the check may take, everybody's openings
+# counted; the rest is the viewers'
+CHECK_SHARE = 0.5
 # The streams to look at before the rest, whoever's turn it is: the other copies of a
 # channel one of whose streams has just failed. A channel with one copy broken is either a
 # channel that is gone everywhere or one provider being bad, and which of those it is
@@ -785,12 +796,14 @@ class _Budget:
     under it, with room to spare. A limit set by hand is used as it is and not relearned.
     """
 
-    def __init__(self, redis_client, key, name, state=None):
+    def __init__(self, redis_client, key, name, state=None, profile_ids=()):
         self.redis = redis_client
         self.key = key
         self.name = name
         self.state = dict(state or {})
         self.changed = False
+        # The provider's logins, whose viewers' openings count against its limit too
+        self.profile_ids = list(profile_ids)
 
     def _save(self):
         # Kept by the batch once its threads are done (see save): a thread only talks to
@@ -825,21 +838,56 @@ class _Budget:
             return None
         return max(0.0, float(self.state.get("next_try", 0)) - time.time())
 
+    def _viewer_times(self, since):
+        times = []
+        for profile_id in self.profile_ids:
+            times.extend(
+                score for _member, score in self.redis.zrangebyscore(
+                    VIEWER_OPENS_KEY.format(profile=profile_id), since, "+inf", withscores=True
+                ) or ()
+            )
+        return times
+
+    def viewer_quiet(self):
+        """Seconds left of the quiet after a viewer last opened a stream here, else 0."""
+        now = time.time()
+        recent = self._viewer_times(now - VIEWER_QUIET_SECONDS)
+        return max(0.0, max(recent) + VIEWER_QUIET_SECONDS - now) if recent else 0.0
+
     def wait(self):
-        """Seconds until one more stream may be opened without going over either limit."""
+        """
+        Seconds until one more stream may be opened: never within VIEWER_QUIET_SECONDS of a
+        viewer's opening here, and with everybody's openings in a window kept to the check's
+        share of either limit.
+        """
         return max(
-            self._wait_for(self.state.get("limit"), self.state.get("window")),
-            self._wait_for(self.state.get("long_limit"), self.state.get("long_window")),
+            self.viewer_quiet(),
+            self._wait_for(self.state.get("limit"), self.state.get("window"), CHECK_SHARE),
+            self._wait_for(self.state.get("long_limit"), self.state.get("long_window"), CHECK_SHARE),
         )
 
-    def _wait_for(self, limit, window):
+    def at_limit(self):
+        """Whether the provider is resting after a refusal, or everybody's openings fill
+        either of its limits now: a refusal then is the limit's, not the stream's."""
+        if self.resting() is not None:
+            return True
+        return any(
+            self._wait_for(self.state.get(limit), self.state.get(window)) > 0
+            for limit, window in (("limit", "window"), ("long_limit", "long_window"))
+        )
+
+    def _wait_for(self, limit, window, share=1.0):
         if not limit or not window:
             return 0.0
+        allowed = max(1, int(int(limit) * share))
         now = time.time()
-        if self._opens(now - window) < limit:
+        own = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), now - window, "+inf", withscores=True) or ()
+        times = sorted([score for _member, score in own] + self._viewer_times(now - window))
+        if len(times) < allowed:
             return 0.0
-        first = self.redis.zrangebyscore(OPENS_KEY.format(provider=self.key), now - window, "+inf", start=0, num=1, withscores=True)
-        return max(1.0, (first[0][1] + window - now) if first else window)
+        # When enough of them have left the window for one more
+        oldest_to_go = times[len(times) - allowed]
+        return max(1.0, oldest_to_go + window - now)
 
     @staticmethod
     def _after(retry_after, step):
@@ -981,6 +1029,71 @@ class _Budget:
                 )
             return f"{said} ({self.state.get('how')})"
         return ""
+
+
+_ENABLED = {"at": 0.0, "value": False}
+_PROVIDERS = {"at": 0.0, "value": None}
+# How long what is read from the database for the proxy's calls below is kept
+_PROXY_CACHE_SECONDS = 60
+
+
+def _enabled_for_proxy():
+    """Whether Stream Check is on, read at most once a minute: asked on every connection."""
+    now = time.monotonic()
+    if now - _ENABLED["at"] > _PROXY_CACHE_SECONDS:
+        _ENABLED.update(at=now, value=bool(load_settings().get("enabled")))
+    return _ENABLED["value"]
+
+
+def note_viewer_open(redis_client, profile_id):
+    """
+    The proxy opened a connection to a provider through this login (profile) for a viewer:
+    counted against the provider's limit by the check's budget (_Budget.wait). Nothing is
+    written while Stream Check is off. Never raises.
+    """
+    try:
+        if not redis_client or not profile_id or not _enabled_for_proxy():
+            return
+        now = time.time()
+        key = VIEWER_OPENS_KEY.format(profile=int(profile_id))
+        redis_client.zadd(key, {f"{now:.6f}": now})
+        redis_client.zremrangebyscore(key, 0, now - 4 * 3600)
+        redis_client.expire(key, 4 * 3600)
+    except Exception as e:
+        logger.debug(f"Stream Check: could not count a viewer's connection: {e}")
+
+
+def provider_at_limit(redis_client, profile_id):
+    """
+    Whether the provider behind this login is at what it allows, as far as the check knows:
+    resting after refusing at its limit, or with everybody's openings filling a limit now.
+    Asked by the proxy only after a connection was refused. False when nothing is known.
+    """
+    try:
+        if not redis_client or not profile_id or not _enabled_for_proxy():
+            return False
+        now = time.monotonic()
+        if _PROVIDERS["value"] is None or now - _PROVIDERS["at"] > _PROXY_CACHE_SECONDS:
+            _PROVIDERS.update(at=now, value=_group_providers(_all_profiles()))
+        key_of, members = _PROVIDERS["value"]
+        from apps.m3u.models import M3UAccountProfile
+
+        account_id = M3UAccountProfile.objects.filter(id=int(profile_id)).values_list(
+            "m3u_account_id", flat=True
+        ).first()
+        if account_id is None:
+            return False
+        key = key_of.get(("account", account_id))
+        if key is None:
+            return False
+        state = load_limits().get(_key_text(key))
+        if not state:
+            return False
+        budget = _Budget(redis_client, _key_text(key), "", state, [p.id for p in members.get(key, ())])
+        return budget.at_limit()
+    except Exception as e:
+        logger.debug(f"Stream Check: could not tell whether a provider is at its limit: {e}")
+        return False
 
 
 def provider_limits(redis_client):
@@ -2586,7 +2699,10 @@ def run(redis_client, only=None, batch_seconds=None):
         # What each provider allows, and a stream known to play there
         limits = load_limits()
         budgets = {
-            key: _Budget(redis_client, _key_text(key), names[key], limits.get(_key_text(key)))
+            key: _Budget(
+                redis_client, _key_text(key), names[key], limits.get(_key_text(key)),
+                [profile.id for profile in providers.members.get(key, ())],
+            )
             for key in by_provider
         }
         good_ids = {key: budget.state.get("good_stream") for key, budget in budgets.items() if budget.state.get("good_stream")}
@@ -2914,7 +3030,12 @@ def run(redis_client, only=None, batch_seconds=None):
                     wait = budget.wait()
                     if wait > 0:
                         if wait > 30:
-                            rest("resting", budget.describe(), wait)
+                            rest(
+                                "resting",
+                                "leaving it to the viewers who just started a stream there"
+                                if budget.viewer_quiet() > 0 else budget.describe(),
+                                wait,
+                            )
                             return
                         _pause(wait, lambda: stop_asked() or someone_watching())
                         if not ready():

@@ -97,7 +97,11 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
 - **Stream Check** — finds streams that no longer play (dead, refused, black, frozen, or the
   provider's "no stream" picture). It checks one provider at a time (two when it only runs
   while nothing plays), so your other providers stay free for watching, and keeps a viewer on
-  the provider they are on while it runs. It never touches a provider someone is watching, and can put
+  the provider they are on while it runs. It never touches a provider someone is watching, and
+  leaves a provider alone for 20 minutes after anyone starts a channel there. Providers limit
+  how many streams may be opened in a while; your own channel starts count against that too,
+  and the check keeps to half of what a provider allows. Give it a night window if you watch
+  much: a full round takes days on a provider that allows only a few streams. It can put
   dead streams aside automatically. It also records each stream's resolution, codec, frame rate
   and audio, which the Stats page shows even on the Proxy profile. A channel that ended on its fallback
   slate (the "Could Not Dispatch" screen) keeps trying its real streams and is stopped after

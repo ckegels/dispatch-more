@@ -195,3 +195,11 @@ class StreamManagerTests(TestCase):
     def test_otherwise_the_attempts_and_waits_are_as_before(self):
         attempts, sleeps, _noted = self._run(refused_by_account=False)
         self.assertEqual((len(attempts), sleeps), (3, [1.5, 3.0]))
+
+
+class AtLimitTests(RefusingTests):
+    def test_a_refusal_at_a_known_limit_marks_the_account_at_once(self):
+        self.assertTrue(refusing.note_refused(self.redis, self.hd.id, at_limit=True))
+        self.assertEqual(refusing.marked_accounts(self.redis), {self.bridge.id})
+        events = [e for e in probation.recent_events(self.redis) if e["account"] == "TiviBridge"]
+        self.assertIn("at the limit", events[0]["result"])

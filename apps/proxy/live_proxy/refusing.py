@@ -125,11 +125,16 @@ def last_alternates(redis_client, alternates):
         return alternates
 
 
-def note_refused(redis_client, stream_id):
+def note_refused(redis_client, stream_id, at_limit=False):
     """
     A connection to `stream_id` was closed before any data. Counts it, marks the account once
     REFUSED_STREAMS of its streams were refused, and says whether the stream should be given
     up now (its account is marked) instead of being asked again.
+
+    at_limit: Stream Check knows the provider is at what it allows (resting after refusing,
+    or everybody's openings filling its limit; stream_check.provider_at_limit). The refusal is
+    then the limit's, and the account is marked at once: every retry would be one more
+    opening counted against that limit, and its other streams are refused alike.
     """
     if not redis_client or not stream_id:
         return False
@@ -146,7 +151,7 @@ def note_refused(redis_client, stream_id):
         if account.id in marked_accounts(redis_client):
             return True
         refused = redis_client.scard(key) or 0
-        if refused < REFUSED_STREAMS:
+        if refused < REFUSED_STREAMS and not at_limit:
             return False
         redis_client.hset(MARKS_KEY, account.id, time.time() + MARK_SECONDS)
         redis_client.expire(MARKS_KEY, MARK_SECONDS)
@@ -155,7 +160,9 @@ def note_refused(redis_client, stream_id):
             None,
             "provider refusing every connection",
             account=account.name,
-            result=f"its streams are tried last for {MARK_SECONDS // 60} minutes, "
+            result=(
+                "at the limit of streams it allows; " if at_limit else ""
+            ) + f"its streams are tried last for {MARK_SECONDS // 60} minutes, "
             f"or until it sends data again",
         )
         logger.warning(

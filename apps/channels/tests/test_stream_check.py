@@ -3018,3 +3018,84 @@ class ProviderTurnsTests(_Setup):
             self.redis.set(stream_check.CHECKING_KEY, json.dumps([self.b.id]))
             self.assertEqual(stream_check.viewer_order(self.redis, viewer, [self.second, self.first, self.fallback]),
                              [self.first, self.second, self.fallback])
+
+
+class ViewersShareTheAllowanceTests(TestCase):
+    """
+    The provider counts everybody's openings, not only the check's.
+
+    2026-11-22: Digitalizard allows 6 streams every 15 minutes. The check opened 10 there in the
+    hour the user's channel starts made 21 attempts, and the provider answered 403 to every
+    channel the user tried. The viewers' openings now count against the limit, the check leaves
+    a provider alone for a while after a viewer opened a stream there, and keeps to half.
+    """
+
+    def setUp(self):
+        self.redis = FakeRedis()
+        stream_check._ENABLED.update(at=time.monotonic(), value=True)
+        self.addCleanup(stream_check._ENABLED.update, at=0.0, value=False)
+
+    def _budget(self, **state):
+        return stream_check._Budget(self.redis, "server:d", "Digitalizard", state, profile_ids=[7])
+
+    def _viewer_opened(self, seconds_ago):
+        when = time.time() - seconds_ago
+        self.redis.zadd(stream_check.VIEWER_OPENS_KEY.format(profile=7), {f"{when:.6f}": when})
+
+    def _check_opened(self, budget, seconds_ago):
+        when = time.time() - seconds_ago
+        self.redis.zadd(stream_check.OPENS_KEY.format(provider=budget.key), {f"{when:.6f}": when})
+
+    def test_the_proxy_counts_a_viewers_opening(self):
+        stream_check.note_viewer_open(self.redis, 7)
+        self.assertEqual(self.redis.zcount(stream_check.VIEWER_OPENS_KEY.format(profile=7), 0, "+inf"), 1)
+
+    def test_nothing_is_counted_while_the_check_is_off(self):
+        stream_check._ENABLED.update(at=time.monotonic(), value=False)
+        stream_check.note_viewer_open(self.redis, 7)
+        self.assertEqual(self.redis.data, {})
+
+    def test_the_check_keeps_clear_after_a_viewer_started_a_stream(self):
+        budget = self._budget()
+        self._viewer_opened(60)
+        self.assertGreater(budget.wait(), stream_check.VIEWER_QUIET_SECONDS - 120)
+        self.assertGreater(budget.viewer_quiet(), 0)
+
+    def test_long_after_the_viewer_it_may_go_on(self):
+        budget = self._budget()
+        self._viewer_opened(stream_check.VIEWER_QUIET_SECONDS + 60)
+        self.assertEqual(budget.wait(), 0.0)
+
+    def test_a_viewer_on_another_provider_changes_nothing(self):
+        budget = self._budget()
+        when = time.time()
+        self.redis.zadd(stream_check.VIEWER_OPENS_KEY.format(profile=99), {f"{when:.6f}": when})
+        self.assertEqual(budget.wait(), 0.0)
+
+    def test_the_check_takes_half_of_the_limit_everybodys_openings_counted(self):
+        budget = self._budget(limit=6, window=900)
+        quiet = stream_check.VIEWER_QUIET_SECONDS
+        # Two of the check's, and one viewer's long enough ago for the quiet to be over --
+        # but inside a window made longer than the quiet to tell the two apart
+        budget.state["window"] = quiet + 600
+        self._check_opened(budget, 30)
+        self._check_opened(budget, 20)
+        self.assertEqual(budget.wait(), 0.0)
+        self._viewer_opened(quiet + 60)
+        # 3 of 6 in the window: the check's half is used
+        self.assertGreater(budget.wait(), 0)
+
+    def test_at_its_limit_when_everybodys_openings_fill_it(self):
+        budget = self._budget(limit=4, window=900)
+        for seconds_ago in (300, 200, 100):
+            self._viewer_opened(seconds_ago)
+        self.assertFalse(budget.at_limit())
+        self._check_opened(budget, 50)
+        self.assertTrue(budget.at_limit())
+
+    def test_resting_is_at_its_limit(self):
+        budget = self._budget(blocked_since=time.time() - 60, next_try=time.time() + 600)
+        self.assertTrue(budget.at_limit())
+
+    def test_nothing_known_is_not_at_a_limit(self):
+        self.assertFalse(self._budget().at_limit())

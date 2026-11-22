@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -1934,6 +1934,20 @@ no longer play. Summary of how it works now:
   count/span recorded, provider left completely alone, retried after 30 s…60 min until it
   plays, then limit = 80 % of the count per (span + block). Shown/editable/forgettable in
   settings; limits set by hand kept; `LIMITS_VERSION` drops old learned ones.
+- **Viewers' openings count, and the check keeps to half** (v280). A provider counts everybody's
+  openings, the check counted only its own: on 2026-11-22 it opened 10 Digitalizard streams in
+  the hour the user's starts made 21 attempts, against "6 every 15 min", and the provider
+  answered 403 to every channel (TiviBridge's block since 11-09, "hit its limit after 110
+  streams", looks the same). Now the proxy records each connection it opens per login
+  (`note_viewer_open`, `VIEWER_OPENS_KEY`; one minute-cached settings read, nothing while the
+  check is off), and `_Budget.wait` counts them with its own, keeps everybody's openings in a
+  window under `CHECK_SHARE` (half) of each limit, and stays off a provider for
+  `VIEWER_QUIET_SECONDS` (20 min) after a viewer's opening there. A refused start on a
+  provider the check knows to be at its limit (`provider_at_limit`: resting, or everybody's
+  openings filling a limit) marks its account in `refusing.py` at once (`at_limit`), so the
+  start moves on without three retries that each count. The user's own server got a night
+  window (02:00-07:00 local = 01:00-06:00 on its UTC clock: `in_window` reads the server's
+  clock) and only-when-idle the same day.
 - **The connection goes back before what came is judged** (v161, `done_reading`, and this
   is what v150 missed). A check held its provider slot from taking it to the end of the
   whole probe -- and most of a probe is not the reading. ffprobe runs on the bytes already

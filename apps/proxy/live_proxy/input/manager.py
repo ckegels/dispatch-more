@@ -206,6 +206,42 @@ class StreamManager:
 
         return session
 
+    def _current_profile_id(self):
+        """The login (M3U profile) the current stream is played through, or None."""
+        try:
+            redis_client = getattr(getattr(self, "buffer", None), "redis_client", None)
+            if not redis_client or not self.current_stream_id:
+                return None
+            value = redis_client.get(f"stream_profile:{self.current_stream_id}")
+            return int(value.decode() if isinstance(value, bytes) else value) if value else None
+        except Exception:
+            return None
+
+    def _count_opening(self):
+        """A connection to the provider is being opened: Stream Check counts it against what
+        the provider allows (stream_check.note_viewer_open; nothing while the check is off)."""
+        try:
+            from apps.channels.stream_check import note_viewer_open
+
+            note_viewer_open(
+                getattr(getattr(self, "buffer", None), "redis_client", None),
+                self._current_profile_id(),
+            )
+        except Exception:  # never let this cost a viewer their channel
+            pass
+
+    def _provider_at_limit(self):
+        """Whether Stream Check knows the current stream's provider to be at its limit."""
+        try:
+            from apps.channels.stream_check import provider_at_limit
+
+            return provider_at_limit(
+                getattr(getattr(self, "buffer", None), "redis_client", None),
+                self._current_profile_id(),
+            )
+        except Exception:
+            return False
+
     def _record_connection_failure(self):
         """Count a failed connection towards the retry budget, as Dispatcharr does."""
         now = time.time()
@@ -595,6 +631,10 @@ class StreamManager:
                         f"for URL: {self.url} for channel {self.channel_id}"
                     )
 
+                    # Every opening counts against what the provider allows, the viewers' as
+                    # well as Stream Check's: the check keeps clear of them (nothing while off)
+                    self._count_opening()
+
                     # Handle connection based on whether we transcode or not
                     connection_result = False
                     # No data at all on a new connection (see Channel Switch Overlap below)
@@ -665,9 +705,13 @@ class StreamManager:
                         failures = self._record_connection_failure()
                         # A provider refusing every connection is not asked again for this
                         # stream: the next one is tried at once (refusing.py)
+                        redis_now = getattr(getattr(self, "buffer", None), "redis_client", None)
                         refused_by_account = connection_refused and refusing.note_refused(
-                            getattr(getattr(self, "buffer", None), "redis_client", None),
+                            redis_now,
                             self.current_stream_id,
+                            # A provider Stream Check knows to be at its limit refuses every
+                            # retry alike, and each retry is one more opening against it
+                            at_limit=self._provider_at_limit(),
                         )
                         if refused_by_account and failures < self.max_retries:
                             logger.info(
