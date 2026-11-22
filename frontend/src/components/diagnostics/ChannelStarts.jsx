@@ -11,6 +11,7 @@ import {
 } from '@mantine/core';
 import { Copy } from 'lucide-react';
 import { startAsText } from './copyText';
+import { userTime } from '../../utils/userDates';
 
 // Each phase of a channel start keeps its colour everywhere, so the bars can be compared
 // between rows at a glance.
@@ -73,12 +74,8 @@ export const PHASE_MEANINGS = [
 
 const SLOW_START = 3.0;
 
-const shortTime = (seconds) =>
-  new Date(seconds * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+// As Settings -> UI says times are shown (utils/userDates)
+const shortTime = (seconds) => userTime(seconds * 1000, { seconds: true });
 
 // One bar per start, split into the phases, each as wide as it took
 const PhaseBar = ({ phases, total, colors = PHASE_COLORS }) => (

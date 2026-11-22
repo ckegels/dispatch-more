@@ -3,6 +3,7 @@ import { Alert, Button, Stack, Table, Text } from '@mantine/core';
 import { TriangleAlert, Undo2 } from 'lucide-react';
 import API from '../api';
 import ConfirmationDialog from './ConfirmationDialog';
+import { userDateTime } from '../utils/userDates';
 
 // Settings → System → Modified build: what this build is, and a button to put stock
 // Dispatcharr back. The button only leaves a request -- the web app is not allowed to
@@ -75,7 +76,7 @@ const ModifiedBuild = () => {
             <Table.Td c="dimmed">Installed</Table.Td>
             <Table.Td>
               {status.installed
-                ? `${new Date(record.installed_at).toLocaleString()} · ${LAYOUTS[record.layout] || record.layout}`
+                ? `${userDateTime(record.installed_at)} · ${LAYOUTS[record.layout] || record.layout}`
                 : 'Not by the installer'}
             </Table.Td>
           </Table.Tr>

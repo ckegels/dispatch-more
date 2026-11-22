@@ -1,12 +1,10 @@
 // One line of plain text per row, so a start or a switch can be pasted somewhere useful
 // (a message, an issue) without a screenshot.
 
-const shortTime = (seconds) =>
-  new Date(seconds * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+import { userTime } from '../../utils/userDates';
+
+// As Settings -> UI says times are shown (utils/userDates)
+const shortTime = (seconds) => userTime(seconds * 1000, { seconds: true });
 
 export const startAsText = (start) => {
   const parts = [

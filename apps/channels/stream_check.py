@@ -3387,7 +3387,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     channel_id__in=channel_ids, stream__is_custom=False,
                     stream__m3u_account__isnull=False, stream__m3u_account__is_active=True,
                 )
-                .select_related("stream__m3u_account", "channel")
+                .select_related("stream__m3u_account", "channel", "channel__override")
                 .order_by("channel_id", "order")
             ):
                 by_channel.setdefault(link.channel_id, (link.channel, []))[1].append(link.stream)
@@ -3456,7 +3456,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     for key in mine:
                         entry = accounts.get(_key_text(key))
                         if entry is not None:
-                            entry.update(now=f"{channel.name} (comparing pictures)", status="checking", reason="", until="")
+                            entry.update(now=f"{channel.get_effective_name()} (comparing pictures)", status="checking", reason="", until="")
                     _progress(redis_client, accounts=accounts)
 
                     def read(login_id, login, stream):
@@ -3488,7 +3488,7 @@ def run(redis_client, only=None, batch_seconds=None):
                         except Stopped:
                             stopped.append(login_id)
                         except Exception:
-                            logger.exception(f"Stream Check: comparing the pictures of {channel.name} stopped on an error")
+                            logger.exception(f"Stream Check: comparing the pictures of {channel.get_effective_name()} stopped on an error")
                         finally:
                             give_back()
                             provider_counts.setdefault(key, _ProviderCount()).check_ended()
@@ -3542,7 +3542,7 @@ def run(redis_client, only=None, batch_seconds=None):
                     return True
                 rows = picture_compare.quick_rows(ref_print, others, lambda account_id: names.get(account_id, ""))
                 state = picture_compare.save_quick(
-                    redis_client, {"id": channel.id, "name": channel.name},
+                    redis_client, {"id": channel.id, "name": channel.get_effective_name()},
                     {"id": ref.id, "name": ref.name, "account": names.get(ref.m3u_account_id, "")}, rows,
                 )
                 if state.get("quick"):
@@ -4192,7 +4192,7 @@ def _hide_emptied(channel_ids):
     emptied = [
         # Show Groups shows and hides its own copies
         channel for channel in Channel.objects.filter(id__in=set(channel_ids) - real_left)
-        .exclude(channel_group_id__in=copy_group_ids())
+        .select_related("override").exclude(channel_group_id__in=copy_group_ids())
         # One a person hid already is theirs: not recorded, so never shown again by this
         if not channel.hidden_from_output
     ]
@@ -4201,7 +4201,7 @@ def _hide_emptied(channel_ids):
 
     def change(hidden):
         for channel in emptied:
-            hidden[str(channel.id)] = {"name": channel.name, "number": channel.channel_number, "hidden_at": _now()}
+            hidden[str(channel.id)] = {"name": channel.get_effective_name(), "number": channel.channel_number, "hidden_at": _now()}
 
     # Both together or neither: a channel hidden with no record of this having hidden it is
     # a channel this will never show again, because it cannot tell it from one you hid
@@ -4357,7 +4357,9 @@ def issues(redis_client, show="problems", keep=()):
         return state_of(results.get(str(stream_id)), settings) if str(stream_id) in results else "unchecked"
 
     links = ChannelStream.objects.select_related(
-        "stream", "stream__m3u_account", "channel", "channel__channel_group", "channel__logo"
+        "stream", "stream__m3u_account", "channel", "channel__channel_group", "channel__logo",
+        # The name shown is an override's when the channel has one: read with it, not per row
+        "channel__override",
     ).order_by("channel__channel_number", "channel_id", "order")
     if show != "all":
         # Only the channels that could be on this list. Everything else was read with five
@@ -4415,7 +4417,7 @@ def issues(redis_client, show="problems", keep=()):
             "kind": "channel",
             "channel": {
                 "id": channel.id,
-                "name": channel.name,
+                "name": channel.get_effective_name(),
                 "number": channel.channel_number,
                 "group": channel.channel_group.name if channel.channel_group_id else "",
                 "logo_url": channel.logo.url if channel.logo_id else "",
@@ -4434,7 +4436,7 @@ def issues(redis_client, show="problems", keep=()):
             "dead": bool(real) and not working and len(broken) == len(real),
         })
 
-    names = {c.id: c.name for c in Channel.objects.filter(id__in={p["channel"] for e in parked.values() for p in e.get("channels") or []})}
+    names = {c.id: c.get_effective_name() for c in Channel.objects.select_related("override").filter(id__in={p["channel"] for e in parked.values() for p in e.get("channels") or []})}
     known = {s.id: s for s in Stream.objects.select_related("m3u_account").filter(id__in=[int(i) for i in parked])}
     parked_rows = []
     for stream_id, entry in parked.items():

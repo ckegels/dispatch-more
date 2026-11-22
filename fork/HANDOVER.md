@@ -5,7 +5,7 @@ built under, how it is tested and installed, every feature and why it is the way
 what was measured on the real installation, the mistakes made and what they taught, and
 what is still open.
 
-Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22, **published**: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **v281** (2026-11-22, **published**: a client with no chunks left no longer spins, §5.8) **and the move to Dispatcharr 0.34.1** (2026-11-22: merged `c42e92a1`, reconciled `09353a5f`, release v282 -- handover-2026-11-22) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
+Written 2026-09-19, kept current to **release v275** (2026-10-20; v253-v257 and v259 were test builds on the user's server, never published) **and the move to Dispatcharr 0.33.0** (2026-11-01/02: merged into `feature/probation-slots`, the third pass of handover-2026-11-01 §12 done, **pushed and v276 published 2026-11-02**) **v278** (2026-11-09: the programmes list that took a worker to 7.9 GB, §5.4c; never published on its own) **v279** (2026-11-12, **published**: v278 plus a provider refusing every connection tried last, §5.1 -- handover-2026-11-01 §15) **v280** (2026-11-22, **published**: Stream Check counts the viewers' openings and keeps to half of a provider's limit, §5.7 -- handover-2026-11-01 §16) **v281** (2026-11-22, **published**: a client with no chunks left no longer spins, §5.8) **and the move to Dispatcharr 0.34.1** (2026-11-22: merged `c42e92a1`, reconciled `09353a5f`, the recordings-worker restart fix `26c1511c`, then what 0.34 shows up on the fork's side -- reports masked with 0.34's masking, dates as Settings -> UI says, override names, logo sources fetched IP-pinned -- release v282, handover-2026-11-22 §4.8) **and v277** (2026-11-08, **published**: the one upgrade command, Docker fetching its release, the recordings worker on the community script's install, Close channels nobody watches for Jellyfin -- handover-2026-11-01 §13). The commit messages on the branch
 are the detailed record of each change (`git log bcbb68c4..HEAD`); this file is the map.
 The design of the first feature is in `docs/channel-switch-overlap.md`.
 
@@ -2554,8 +2554,15 @@ while the `reports` switch of `app_devices` is off): the app sends the channel, 
 and error, its measurements and its log; the server adds its own view of that channel at that
 moment -- the streams in order with provider and Stream Check state, `health` readings and
 events, the start phases (`timing`), this device's switches, and 30 minutes of the server log
-about it (`log_center.read`). Credentials are taken out of everything (`_redact`: Xtream
-paths, password/token parameters). Since v204 **every report is kept until an admin deletes
+about it (`log_center.read`). Credentials are taken out of everything: since v282 every
+string of a report, the server's part included (`_masked`), goes through Dispatcharr 0.34's
+`redact_text` (logins in a link's path or before its host, usernames and passwords in a query,
+cookies, provider hosts -> `[provider_host]`; the provider is still named, by its M3U account)
+and then the fork's own two patterns. Until v282 those two (Xtream `/live/<user>/<pass>/`,
+password/token parameters) were all there was, and only on the app's part: `user:pass@host`,
+Xtream links without `/live/`, the username of a `get.php` link, cookies and any link quoted in
+the server's events were kept as they came. Reports kept before are masked again once, on the
+first read after the update (`_mask_stored`, flag row `app-reports-masked-v282`). Since v204 **every report is kept until an admin deletes
 it** (one, or all after a confirmation), each in a `CoreSettings` row of its own
 (`app-report-<id>`): a report can hold 100,000 characters of log, so one row for all of them
 was rewritten whole per report, and two arriving together lost one. The list reads only the

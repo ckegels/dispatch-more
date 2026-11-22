@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import theme from '../../../mantineTheme';
 import StreamCheckTable from '../StreamCheckTable.jsx';
 import API from '../../../api';
+import { userTime } from '../../../utils/userDates';
 
 vi.mock('../../../store/useVideoStore', () => ({
   default: (select) => select({ showVideo: vi.fn() }),
@@ -294,8 +295,8 @@ describe('StreamCheckTable', () => {
     draw();
     expect(await screen.findByText(/Provider A: 4 checked, 2 left · ORF 2/)).toBeInTheDocument();
     expect(screen.getByText(/Provider B: 0 checked, 3 left · in use \(a viewer is on every login of it\)/)).toBeInTheDocument();
-    // In the viewer's own time zone, not the server's
-    const local = new Date('2026-09-19T09:03:00+00:00').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // In the viewer's own time zone, not the server's, and as Settings -> UI says times are shown
+    const local = userTime('2026-09-19T09:03:00+00:00');
     expect(screen.getByText(new RegExp(`Provider C: .* until ${local}`))).toBeInTheDocument();
   });
 

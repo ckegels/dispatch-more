@@ -31,6 +31,7 @@ import ProviderLimits from '../forms/ProviderLimits';
 import { CustomTable, useTable } from './CustomTable';
 import { Logo, Watch } from './StreamParts';
 import PictureCompare from './PictureCompare';
+import { userDateTime, userTime } from '../../utils/userDates';
 
 // The Channel Manager's second tab, laid out like its first. Each row is a channel with a
 // stream that did not play, opening to every stream on it as it was last found; or, under
@@ -55,7 +56,7 @@ const STATE = {
 // How each provider is getting on, while a run goes
 const ACCOUNT_COLOR = { 'in use': 'yellow.5', unavailable: 'orange.5' };
 
-const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
+const when = (iso) => (iso ? userDateTime(iso) : '');
 
 // How long a run has left, at the pace of its last hour: "about 2 h 40 min left (done around 23:10)"
 const timeLeft = (seconds) => {
@@ -64,10 +65,7 @@ const timeLeft = (seconds) => {
     minutes < 60
       ? `${minutes} min`
       : `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
-  const doneAt = new Date(Date.now() + seconds * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const doneAt = userTime(Date.now() + seconds * 1000);
   return `about ${span} left (done around ${doneAt})`;
 };
 
@@ -1326,7 +1324,7 @@ const StreamCheckTable = () => {
                         : ''
                     }${progress.waiting ? ` · paused: ${progress.message || 'waiting'}` : ''}${
                       progress.next_batch_at && progress.waiting
-                        ? ` · trying again at ${new Date(progress.next_batch_at).toLocaleTimeString()}`
+                        ? ` · trying again at ${userTime(progress.next_batch_at, { seconds: true })}`
                         : ''
                     }`
                   : lastRun.finished_at
@@ -1383,7 +1381,7 @@ const StreamCheckTable = () => {
                         : ''}
                       {account.reason ? ` (${account.reason})` : ''}
                       {account.until
-                        ? ` · until ${new Date(account.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                        ? ` · until ${userTime(account.until)}`
                         : ''}
                       {account.status === 'unavailable' && account.since
                         ? ` · since ${when(account.since)}`

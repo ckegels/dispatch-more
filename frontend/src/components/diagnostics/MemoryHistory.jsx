@@ -24,6 +24,7 @@ import {
   YAxis,
 } from 'recharts';
 import API from '../../api';
+import { userDateTime, userTime, userWeekdayTime } from '../../utils/userDates';
 
 // The memory recorder's history (apps/proxy/live_proxy/memory_recorder.py): a sample every 30 s,
 // kept on disk for 14 days and through reboots, so when the server fills up again what led to it
@@ -50,11 +51,10 @@ const EVENT_COLORS = {
 };
 
 export const when = (t, hours) => {
-  const d = new Date(t * 1000);
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // As Settings -> UI says times are shown (utils/userDates)
   return hours > 24
-    ? `${d.toLocaleDateString([], { weekday: 'short', day: 'numeric' })} ${time}`
-    : time;
+    ? userWeekdayTime(t * 1000, { dayOfMonth: true })
+    : userTime(t * 1000);
 };
 
 const ago = (seconds) =>
@@ -74,7 +74,7 @@ export const Moment = ({ moment }) => {
   return (
     <Stack gap={6}>
       <Text size="sm" fw={600}>
-        {new Date(moment.t * 1000).toLocaleString()}
+        {userDateTime(moment.t * 1000)}
         {moment.start && (
           <Badge ml={8} size="xs" color="teal" variant="light">
             recorder started
@@ -145,7 +145,7 @@ export const Moment = ({ moment }) => {
                     state
                   )}
                 </Table.Td>
-                <Table.Td>{started ? new Date(started * 1000).toLocaleString() : ''}</Table.Td>
+                <Table.Td>{started ? userDateTime(started * 1000) : ''}</Table.Td>
                 <Table.Td>
                   {doing ? (
                     <Stack gap={0}>
@@ -339,7 +339,7 @@ const MemoryHistory = () => {
           <Table.Tbody>
             {[...history.events].reverse().map((event, i) => (
               <Table.Tr key={i}>
-                <Table.Td>{new Date(event.t * 1000).toLocaleString()}</Table.Td>
+                <Table.Td>{userDateTime(event.t * 1000)}</Table.Td>
                 <Table.Td>
                   <Badge size="xs" color={EVENT_COLORS[event.kind] || 'blue'} variant="light" mr={6}>
                     {event.kind}

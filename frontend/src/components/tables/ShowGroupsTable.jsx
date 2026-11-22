@@ -39,6 +39,7 @@ import {
 import API from '../../api';
 import Section from '../forms/SettingsSection';
 import ConfirmationDialog from '../ConfirmationDialog';
+import { userIsToday, userTime, userWeekdayTime } from '../../utils/userDates';
 
 // Groups of channels by what is on them right now: a Cooking group holds a copy of every
 // channel airing a cooking show and lets it go when the show is over. Laid out as the other
@@ -53,19 +54,12 @@ const PANEL = {
 
 const time = (iso) =>
   iso
-    ? new Date(iso).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
+    ? userTime(iso)
     : '';
 
 const day = (iso) => {
   if (!iso) return '';
-  const when = new Date(iso);
-  const today = new Date();
-  return when.toDateString() === today.toDateString()
-    ? time(iso)
-    : `${when.toLocaleDateString([], { weekday: 'short' })} ${time(iso)}`;
+  return userIsToday(iso) ? time(iso) : userWeekdayTime(iso);
 };
 
 const slug = (name) =>

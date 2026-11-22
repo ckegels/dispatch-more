@@ -157,9 +157,15 @@ def _send(group, devices, message):
 
 def _channel_names(uuids):
     try:
+        from apps.channels.managers import with_effective_values
         from apps.channels.models import Channel
 
-        return {str(u): n for u, n in Channel.objects.filter(uuid__in=list(uuids)).values_list("uuid", "name")}
+        # The name the person sees in Dispatcharr's own list: an override's when there is one
+        return {
+            str(u): n
+            for u, n in with_effective_values(Channel.objects.filter(uuid__in=list(uuids)))
+            .values_list("uuid", "effective_name")
+        }
     except Exception:
         return {}
 

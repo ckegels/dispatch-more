@@ -21,12 +21,13 @@ import {
 } from '@mantine/core';
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
+import { userDateTime } from '../../utils/userDates';
 
 // The Channel Manager's sixth tab: iptv-org/epg, which is already installed on the box,
 // run from here instead of by hand. Nothing about the grabber changes -- this says where
 // it is, what to grab, and when, and takes the file it writes the rest of the way.
 
-const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
+const when = (iso) => (iso ? userDateTime(iso) : '');
 
 // One guide: a run of the grabber and the file it writes
 const Guide = ({

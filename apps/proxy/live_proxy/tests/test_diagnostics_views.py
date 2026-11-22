@@ -75,3 +75,18 @@ class DiagnosticsPageTests(TestCase):
         shown = response.json()["events"]
         self.assertEqual([e["channel"] for e in shown], ["┃AT┃ ORF 1", "┃AT┃ ORF 1"])
         self.assertEqual([e["from_channel"] for e in shown], ["", "not-a-uuid"])
+
+
+class OverrideNameTests(TestCase):
+    """Diagnostics names a channel as Dispatcharr's own list does: by its override when it has
+    one (Dispatcharr 0.34's channel events say that name too)."""
+
+    def test_switches_name_the_channel_by_its_override(self):
+        from apps.channels.models import Channel, ChannelOverride
+
+        mine = Channel.objects.create(name="AT| ORF 1 HD", channel_number=1)
+        plain = Channel.objects.create(name="ORF 2", channel_number=2)
+        ChannelOverride.objects.create(channel=mine, name="ORF 1")
+        names = diagnostics_views._channel_names([str(mine.uuid), str(plain.id)])
+        self.assertEqual(names[str(mine.uuid)], "ORF 1")
+        self.assertEqual(names[str(plain.id)], "ORF 2")

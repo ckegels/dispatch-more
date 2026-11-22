@@ -102,16 +102,22 @@ def _channel_names(values):
             uuids.add(str(uuid_module.UUID(value)))
         except ValueError:
             continue
+    from apps.channels.managers import with_effective_values
+
+    # The name Dispatcharr shows: an override's when the channel has one (since 0.34 its own
+    # channel events say that name too, so the two pages agree)
     names = {}
     if uuids:
         names.update({
             str(channel_uuid): name
-            for channel_uuid, name in Channel.objects.filter(uuid__in=uuids).values_list("uuid", "name")
+            for channel_uuid, name in with_effective_values(Channel.objects.filter(uuid__in=uuids))
+            .values_list("uuid", "effective_name")
         })
     if ids:
         names.update({
             str(channel_id): name
-            for channel_id, name in Channel.objects.filter(id__in=ids).values_list("id", "name")
+            for channel_id, name in with_effective_values(Channel.objects.filter(id__in=ids))
+            .values_list("id", "effective_name")
         })
     return names
 

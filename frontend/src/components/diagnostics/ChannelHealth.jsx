@@ -11,6 +11,7 @@ import {
   Table,
   Text,
 } from '@mantine/core';
+import { userTime } from '../../utils/userDates';
 
 // What happened to a channel, coloured by whether it helped or gave up.
 export const HEALTH_COLORS = {
@@ -44,12 +45,8 @@ export const HEALTH_MEANINGS = [
   ],
 ];
 
-const shortTime = (seconds) =>
-  new Date(seconds * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+// As Settings -> UI says times are shown (utils/userDates)
+const shortTime = (seconds) => userTime(seconds * 1000, { seconds: true });
 
 const forHowLong = (seconds) => {
   if (!seconds) return '—';

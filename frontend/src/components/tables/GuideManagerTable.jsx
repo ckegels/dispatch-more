@@ -49,6 +49,7 @@ import ConfirmationDialog from '../ConfirmationDialog';
 import { CustomTable, useTable } from './CustomTable';
 import { GuideWindow } from './GuidePicker';
 import useAskAgainWhenNowChanges from '../../hooks/useAskAgainWhenNowChanges';
+import { userDateTime } from '../../utils/userDates';
 
 // The Lineup's third of a set: laid out the same way, a panel with a toolbar over a table.
 // A row here is one channel whose guide is worth changing, next to what it is on now.
@@ -144,7 +145,7 @@ const GuideMeanings = () => {
         {state?.building
           ? 'Working out what every guide means…'
           : state?.built_at
-            ? `What ${state.guides} guides mean, worked out ${new Date(state.built_at).toLocaleString()}`
+            ? `What ${state.guides} guides mean, worked out ${userDateTime(state.built_at)}`
             : 'Not worked out yet: guides are found by name only until it is'}
       </Text>
       <Button
@@ -756,7 +757,7 @@ const GuideManagerTable = () => {
                     'an unknown device'}
                   {one.chosen_by.ip ? ` (${one.chosen_by.ip})` : ''}
                   {one.chosen_at
-                    ? `, ${new Date(one.chosen_at).toLocaleString()}`
+                    ? `, ${userDateTime(one.chosen_at)}`
                     : ''}
                 </Text>
               )}

@@ -14,12 +14,13 @@ import {
 } from '@mantine/core';
 import API from '../../api';
 import ConfirmationDialog from '../ConfirmationDialog';
+import { userDateTime } from '../../utils/userDates';
 
 // Error reports sent from a player app (arrTV): what the app saw, and what the server knew
 // about the channel at that moment (see app_reports.py). Read here, copied whole to pass on.
 
 const when = (seconds) =>
-  seconds ? new Date(seconds * 1000).toLocaleString() : '';
+  seconds ? userDateTime(seconds * 1000) : '';
 
 // A report as text, to paste into an issue or a message: everything, the long parts last
 const reportAsText = (report) =>

@@ -12,6 +12,7 @@ import {
   Text,
 } from '@mantine/core';
 import API from '../../api';
+import { userDateTime } from '../../utils/userDates';
 
 // Do a channel's streams show the same thing? (apps/channels/picture_compare.py) Every
 // stream is opened at the same moment as the channel's first and read for a minute and a
@@ -182,7 +183,7 @@ const PictureCompare = ({ channel, onClose }) => {
                 Compared with: <b>{result.reference.name}</b> (
                 {result.reference.account})
                 {result.started &&
-                  ` · ${new Date(result.started * 1000).toLocaleString()}`}
+                  ` · ${userDateTime(result.started * 1000)}`}
               </Text>
             )}
             {result?.quick && (

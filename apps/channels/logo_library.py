@@ -317,17 +317,32 @@ def change_sources(change):
 
 
 def _download(url):
-    """A source's contents, refusing anything far bigger than a list of logos could be."""
-    response = requests.get(
-        url, timeout=DOWNLOAD_TIMEOUT, stream=True, headers={"User-Agent": "Dispatcharr"}
-    )
-    response.raise_for_status()
-    body = bytearray()
-    for chunk in response.iter_content(1024 * 256):
-        body.extend(chunk)
-        if len(body) > MAX_DOWNLOAD:
-            raise ValueError("That is far bigger than a list of logos; nothing was read")
-    return bytes(body)
+    """
+    A source's contents, refusing anything far bigger than a list of logos could be.
+
+    A source is an address somebody typed on the page, and so are the links its page leads
+    to: fetched the way Dispatcharr 0.34 fetches a logo for its image proxy
+    (core.http_security), every redirect checked again and the address it was checked at the
+    one connected to, so a name cannot point at the server itself, or at a cloud's metadata
+    address, between the check and the download. A collection on the LAN is still allowed,
+    as the image proxy allows one.
+    """
+    from core.http_security import get_with_validated_redirects
+
+    with get_with_validated_redirects(
+        url,
+        timeout=DOWNLOAD_TIMEOUT,
+        stream=True,
+        headers={"User-Agent": "Dispatcharr"},
+        allow_private=True,
+    ) as response:
+        response.raise_for_status()
+        body = bytearray()
+        for chunk in response.iter_content(1024 * 256):
+            body.extend(chunk)
+            if len(body) > MAX_DOWNLOAD:
+                raise ValueError("That is far bigger than a list of logos; nothing was read")
+        return bytes(body)
 
 
 def keep_json(cache, key, value, ttl, size_key=None):

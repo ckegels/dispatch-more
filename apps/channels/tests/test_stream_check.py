@@ -3137,3 +3137,21 @@ class VodIsSeenPlayingTests(TestCase):
         providers = stream_check._Providers(self.redis)
         self.assertFalse(providers.anything_playing())
         self.assertFalse(providers.in_use(providers.provider_of(self.account.id)))
+
+
+class OverrideNameTests(_Setup):
+    """The page names a channel as Dispatcharr's own list does: by its override when it has one
+    (Dispatcharr 0.34's channel events say that name too)."""
+
+    def test_the_list_shows_the_overrides_name(self):
+        from apps.channels.models import ChannelOverride
+
+        ChannelOverride.objects.create(channel=self.orf1, name="ORF 1 (mine)")
+        rows = stream_check.issues(FakeRedis(), show="all", keep=[self.orf1.id])["rows"]
+        row = next(r for r in rows if r["channel"]["id"] == self.orf1.id)
+        self.assertEqual(row["channel"]["name"], "ORF 1 (mine)")
+
+    def test_without_an_override_its_own_name(self):
+        rows = stream_check.issues(FakeRedis(), show="all", keep=[self.orf1.id])["rows"]
+        row = next(r for r in rows if r["channel"]["id"] == self.orf1.id)
+        self.assertEqual(row["channel"]["name"], self.orf1.name)

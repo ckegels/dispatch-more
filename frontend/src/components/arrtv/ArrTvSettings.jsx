@@ -24,6 +24,7 @@ import useEPGsStore from '../../store/epgs';
 import useUsersStore from '../../store/users';
 import AppReports from '../diagnostics/AppReports';
 import { copy } from '../diagnostics/copyText';
+import { userDateTime, userTime } from '../../utils/userDates';
 
 // arrTV is the Android / Google TV player built to work with this server. What it may tell
 // the server, and what it has reported. No other app sends what these switches read, so for
@@ -72,7 +73,7 @@ const HeldDevices = () => {
             {h.name}: starts within {h.quality}
             {WHERE[h.where] ? ` ${WHERE[h.where]}` : ''}
             {h.until
-              ? `, until ${new Date(h.until * 1000).toLocaleString()}`
+              ? `, until ${userDateTime(h.until * 1000)}`
               : ''}
           </Text>
           <Button
@@ -88,7 +89,7 @@ const HeldDevices = () => {
   );
 };
 
-const when = (iso) => (iso ? new Date(iso).toLocaleString() : '');
+const when = (iso) => (iso ? userDateTime(iso) : '');
 
 // A section that opens on a click: the lists below the settings grow long, and the
 // settings are what the page is mostly opened for
@@ -126,10 +127,7 @@ export const Fold = ({ title, note, children, defaultOpen = false }) => {
 
 const clock = (iso) =>
   iso
-    ? new Date(iso).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
+    ? userTime(iso)
     : '';
 
 // "Zeit im Bild (17:30–17:50)", or why there is nothing to compare

@@ -11,6 +11,7 @@ import {
 } from '@mantine/core';
 import { Copy } from 'lucide-react';
 import { switchAsText } from './copyText';
+import { userTime } from '../../utils/userDates';
 
 // A switch is coloured by what Channel Switch Overlap did with it, so the table reads at a
 // glance. Also used by the legend.
@@ -65,12 +66,8 @@ export const ACTION_MEANINGS = [
   ],
 ];
 
-const shortTime = (seconds) =>
-  new Date(seconds * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+// As Settings -> UI says times are shown (utils/userDates)
+const shortTime = (seconds) => userTime(seconds * 1000, { seconds: true });
 
 const ChannelSwitches = ({ activity, onCopy }) => {
   if (!activity.enabled) {

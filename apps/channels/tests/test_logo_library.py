@@ -454,7 +454,15 @@ class AddedSourceTests(TestCase):
         )
 
     def test_something_far_too_big_is_not_read(self):
+        from core import http_security
+
         class Huge:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
             def raise_for_status(self):
                 pass
 
@@ -462,7 +470,7 @@ class AddedSourceTests(TestCase):
                 while True:
                     yield b"x" * size
 
-        with patch("apps.channels.logo_library.requests.get", return_value=Huge()):
+        with patch.object(http_security, "get_with_validated_redirects", return_value=Huge()):
             with self.assertRaises(ValueError):
                 logo_library._download("https://example.com/endless")
 
@@ -988,3 +996,38 @@ class GuideIconCacheTests(TestCase):
     def test_and_what_an_older_install_kept_unpacked_still_reads(self):
         cache.set(logo_library.GUIDE_ICONS_KEY, json.dumps([{"key": "orf1", "name": "ORF 1", "url": "u", "guide": ""}]))
         self.assertEqual(logo_library._guide_icons()[0]["name"], "ORF 1")
+
+
+class SourceDownloadTests(TestCase):
+    """A logo source is an address typed on the page: fetched as Dispatcharr 0.34's image proxy
+    fetches one (core.http_security), so it cannot be pointed at the server itself."""
+
+    def test_the_server_itself_is_refused_before_anything_is_asked(self):
+        with patch("requests.Session.send") as sending:
+            with self.assertRaises(ValueError):
+                logo_library._download("http://127.0.0.1:9191/api/core/settings/")
+            with self.assertRaises(ValueError):
+                logo_library._download("http://169.254.169.254/latest/meta-data/")
+        sending.assert_not_called()
+
+    def test_a_collection_on_the_lan_is_still_allowed(self):
+        from core import http_security
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, size):
+                return iter([b"logo list"])
+
+        with patch.object(http_security, "get_with_validated_redirects", return_value=Answer()) as fetching:
+            self.assertEqual(logo_library._download("http://192.168.1.20/logos.m3u"), b"logo list")
+        self.assertTrue(fetching.call_args.kwargs["allow_private"])
+        self.assertFalse(fetching.call_args.kwargs.get("allow_loopback", False))
+        self.assertTrue(fetching.call_args.kwargs["stream"])

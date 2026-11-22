@@ -156,7 +156,54 @@ class AppReportsTests(TestCase):
         text = str(kept)
         self.assertNotIn("s3cret", text)
         self.assertNotIn("token=abc", text)
-        self.assertIn("/live/<user>/<password>/42.ts", kept["player"]["url"])
+        self.assertNotIn("admin/", kept["player"]["url"])
+        self.assertTrue(kept["player"]["url"].endswith("/42.ts"))
+
+    def test_every_shape_of_a_login_is_masked(self):
+        """Until v282 only /live/<user>/<pass>/ and password= were: these were kept as they came."""
+        from apps.proxy.live_proxy import app_reports
+
+        app_devices.save_settings({"reports": True})
+        log = "\n".join([
+            "open http://joe:s3cret@iptv.example.org/get.php?type=m3u",
+            "open http://iptv.example.org/joe/s3cret/1234",
+            "playlist http://iptv.example.org/get.php?username=joe&password=s3cret",
+            "Cookie: session=c00kie",
+        ])
+        self.as_user(self.tv).post("/api/core/app-reports/", dict(self.report, log=log), format="json")
+        kept = str(app_reports.list_reports()[0])
+        for secret in ("s3cret", "joe", "c00kie"):
+            self.assertNotIn(secret, kept)
+        # What a report is for is still there
+        self.assertIn("Digitalizard.com", kept)
+        self.assertIn("┃AT┃ ORF 1", kept)
+
+    def test_the_servers_part_is_masked_too(self):
+        """Events and readings can quote a stream's link (an ffmpeg error does)."""
+        from apps.proxy.live_proxy import app_reports
+
+        app_devices.save_settings({"reports": True})
+        quoted = {"events": [{"what": "error", "why": "404 for http://d/live/joe/s3cret/1.ts"}]}
+        with mock.patch.object(app_reports, "server_view", return_value=quoted):
+            self.as_user(self.tv).post("/api/core/app-reports/", self.report, format="json")
+        kept = app_reports.list_reports()[0]["server"]
+        self.assertNotIn("s3cret", str(kept))
+        self.assertEqual(kept["events"][0]["what"], "error")
+
+    def test_reports_kept_before_are_masked_once_when_first_read(self):
+        from core.models import CoreSettings
+        from apps.proxy.live_proxy import app_reports
+
+        CoreSettings.objects.create(
+            key=app_reports.ROW_PREFIX + "a1b2c3d4e5f6", name="App report a1b2c3d4e5f6",
+            value={"id": "a1b2c3d4e5f6", "received_at": 1.0, "what": "old",
+                   "log": "http://joe:s3cret@h/get.php", "server": {"events": [{"why": "http://h/live/joe/s3cret/1.ts"}]}},
+        )
+        self.assertNotIn("s3cret", str(app_reports.get_report("a1b2c3d4e5f6")))
+        self.assertNotIn("s3cret", str(CoreSettings.objects.get(key=app_reports.ROW_PREFIX + "a1b2c3d4e5f6").value))
+        self.assertTrue(CoreSettings.objects.filter(key=app_reports.MASKED_KEY).exists())
+        # The flag is not a report
+        self.assertEqual([r["id"] for r in app_reports.list_reports()], ["a1b2c3d4e5f6"])
 
     def test_only_an_admin_reads_and_deletes_them(self):
         app_devices.save_settings({"reports": True})
@@ -635,3 +682,13 @@ class AlternativesTests(TestCase):
     def test_a_stream_playing_on_another_channel_does_not_count(self):
         self.redis.values[f"stream_profile:{self.streams[3].id}"] = b"1"
         self.assertEqual(self.count(), 1)
+
+
+class AppReportOverrideNameTests(TestCase):
+    def test_the_card_names_the_channel_by_its_override(self):
+        from apps.channels.models import Channel, ChannelOverride
+        from apps.proxy.live_proxy import app_reports
+
+        channel = Channel.objects.create(name="AT| ORF 1 HD", channel_number=1)
+        ChannelOverride.objects.create(channel=channel, name="ORF 1")
+        self.assertEqual(app_reports._channel_card(channel)["name"], "ORF 1")

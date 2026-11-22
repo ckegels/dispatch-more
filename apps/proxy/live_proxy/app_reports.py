@@ -32,6 +32,8 @@ logger = logging.getLogger("live_proxy")
 
 ROW_PREFIX = "app-report-"
 OLD_KEY = "app-reports"
+# Set once the reports kept before v282 have been masked again (see _mask_stored)
+MASKED_KEY = "app-reports-masked-v282"
 # A report's id as receive() makes it; anything else asked for is no report
 _REPORT_ID = re.compile(r"^[0-9a-f]{12}$")
 # What one report may be: a player log is useful, a whole day of one is not
@@ -41,8 +43,12 @@ MAX_FIELDS = 60
 LOG_MINUTES = "30m"
 LOG_LINES = 400
 
-# Credentials in anything a report carries: Xtream links (/live/<user>/<pass>/...), and
-# password= or token= in a query. A report is meant to be passed on.
+# Credentials in anything a report carries. A report is meant to be passed on, so every
+# string in it goes through Dispatcharr 0.34's own masking (dispatcharr/log_redaction.py: logins
+# in a link's path or before its host, usernames and passwords in a query, cookies, provider
+# hosts) and then these two, the fork's own from before 0.34, which stay as a second net.
+# Until v282 these two were all there was: a login written as user:pass@host, an Xtream link
+# without /live/, the username in a get.php link and cookies were kept as they came.
 _XC_LINK = re.compile(r"/(live|movie|series|timeshift)/([^/\s]+)/([^/\s]+)/", re.IGNORECASE)
 _SECRET_PARAM = re.compile(r"((?:password|pass|token|api_key|apikey)=)[^&\s\"']+", re.IGNORECASE)
 
@@ -52,8 +58,24 @@ def enabled():
 
 
 def _redact(text):
-    text = _XC_LINK.sub(lambda m: f"/{m.group(1)}/<user>/<password>/", str(text))
+    from dispatcharr.log_redaction import redact_text
+
+    # redact_text reads one line at a time (it is made for a log collector)
+    text = "\n".join(redact_text(line) for line in str(text).split("\n"))
+    text = _XC_LINK.sub(lambda m: f"/{m.group(1)}/<user>/<password>/", text)
     return _SECRET_PARAM.sub(r"\1<hidden>", text)
+
+
+def _masked(value):
+    """Every string in value masked (_redact), the rest as it is: for the server's part of a
+    report, whose events and readings can quote a stream's link (an ffmpeg error does)."""
+    if isinstance(value, dict):
+        return {k: _masked(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_masked(v) for v in value]
+    if isinstance(value, str):
+        return _redact(value)
+    return value
 
 
 def _clean(value, depth=0):
@@ -164,7 +186,8 @@ def _channel_card(channel):
     return {
         "id": channel.id,
         "uuid": str(channel.uuid),
-        "name": channel.name,
+        # The name Dispatcharr shows (an override's when there is one)
+        "name": channel.get_effective_name(),
         "number": channel.channel_number,
         "group": channel.channel_group.name if channel.channel_group_id else "",
         "streams": streams,
@@ -176,7 +199,8 @@ def _log_lines(uuid, channel):
     from core import log_center
 
     lines = []
-    for needle in {uuid, channel.name}:
+    # Both names: the log may say either (0.34's own events say the override's)
+    for needle in {uuid, channel.name, channel.get_effective_name()}:
         found = log_center.read(since=LOG_MINUTES, text=needle)
         lines.extend(log_center.as_line(r) for r in found.get("records", ()))
     return [_redact(line) for line in sorted(set(lines))][-LOG_LINES:]
@@ -208,7 +232,7 @@ def receive(data, request, user):
         "network": _clean(data.get("network") or {}),
         "extra": _clean(data.get("extra") or {}),
         "log": log,
-        "server": server_view(channel, viewer_key, user_id),
+        "server": _masked(server_view(channel, viewer_key, user_id)),
     }
     _keep(report)
     logger.info(
@@ -258,11 +282,43 @@ def _move_old_row():
     logger.info("App reports: moved the reports kept in one row into a row each")
 
 
+def _mask_stored():
+    """
+    The reports kept before v282 were masked with the fork's two patterns only, and their
+    server part not at all: each is masked again the way a new one is, once. Done when the
+    reports are first read after the update; MASKED_KEY says it was.
+    """
+    from core.models import CoreSettings
+
+    if CoreSettings.objects.filter(key=MASKED_KEY).exists():
+        return
+    changed = 0
+    for row in _rows():
+        if not isinstance(row.value, dict):
+            continue
+        masked = _masked(row.value)
+        if masked != row.value:
+            row.value = masked
+            row.save(update_fields=["value"])
+            changed += 1
+    CoreSettings.objects.update_or_create(
+        key=MASKED_KEY, defaults={"name": "App reports masked again (v282)", "value": True}
+    )
+    if changed:
+        logger.info(f"App reports: masked {changed} kept report(s) again, as new ones are")
+
+
+def _ready():
+    """What every read does first: the old single row moved, the kept reports masked."""
+    _move_old_row()
+    _mask_stored()
+
+
 def get_report(report_id):
     """One whole report, or None."""
     if not _REPORT_ID.match(str(report_id or "")):
         return None
-    _move_old_row()
+    _ready()
     row = _rows().filter(key=ROW_PREFIX + report_id).first()
     return row.value if row and isinstance(row.value, dict) else None
 
@@ -270,7 +326,7 @@ def get_report(report_id):
 def list_reports():
     """Every report, whole, newest first."""
     try:
-        _move_old_row()
+        _ready()
         reports = [r.value for r in _rows() if isinstance(r.value, dict)]
     except Exception as e:
         logger.debug(f"App reports: could not read them: {e}")
@@ -284,7 +340,7 @@ def summaries():
     read from the database: the logs stay where they are, however many reports there are.
     """
     try:
-        _move_old_row()
+        _ready()
         rows = _rows().values(
             "value__id",
             "value__received_at",
