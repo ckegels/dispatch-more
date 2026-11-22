@@ -2,10 +2,19 @@
 S=${S:-/tmp/dispatch-more-gate}; mkdir -p "$S"
 R="$(cd "$(dirname "$0")/../.." && pwd)"; E=$HOME/.cache/dispatch-more-test; N=${1:-gate34}; REL=${2:-v282}
 cd "$R"; G=$S/$N.log; : > $G
+rm -rf MagicMock  # what that flaky test leaves (gitignored upstream), see below
 echo "commit $(git rev-parse --short HEAD) on $(git branch --show-current)" >> $G
 POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=dispatcharr_claude DJANGO_SECRET_KEY=x DISPATCHARR_ENV=aio DISPATCHARR_LOG_LEVEL=WARNING timeout 3000 $E/venv/bin/python manage.py test --noinput > $S/$N-backend.log 2>&1
 echo "backend: $(grep -a -E '^Ran ' $S/$N-backend.log) $(grep -a -E '^FAILED|^OK' $S/$N-backend.log)" >> $G
 grep -a -E "^(ERROR|FAIL): " $S/$N-backend.log | sed -E 's/ \(.*//' | sort > $S/$N-errors.txt
+# Stock 0.34.1's own flaky test: it hands the plugin code a MagicMock as its folder, which becomes
+# MagicMock/mock.plugins_dir/<id()> under the checkout, and Python 3.13's isdir() says False for a
+# MagicMock -- so makedirs(exist_ok=True) raises whenever an earlier test of the same run (a
+# reused id) or an earlier run left that folder. Fails in stock's own run here too (handover
+# 2026-11-22 §5.1). Said apart, never counted either way.
+FLAKY="ERROR: test_update_without_new_capabilities_installs_immediately"
+grep -qx "$FLAKY" $S/$N-errors.txt && echo "backend: known flaky stock test failed this time: ${FLAKY#ERROR: }" >> $G
+grep -vx "$FLAKY" $S/$N-errors.txt > $S/$N-errors.tmp; mv $S/$N-errors.tmp $S/$N-errors.txt
 if diff -q fork/patcher/baseline-034-errors.txt $S/$N-errors.txt >/dev/null; then echo "backend errors: the 151 of the 0.34 baseline, by name" >> $G; else echo "backend errors DIFFER from the baseline:" >> $G; diff fork/patcher/baseline-034-errors.txt $S/$N-errors.txt >> $G; fi
 (cd frontend && timeout 2400 npx vitest run > $S/$N-frontend.log 2>&1)
 echo "frontend: $(grep -aE 'Tests ' $S/$N-frontend.log | tail -1)" >> $G
