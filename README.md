@@ -38,9 +38,9 @@ itself one day.
   changes, until you switch it on or press Apply**. With its features off, Dispatcharr behaves as
   stock.
 - **For Linux, LXC (including the Proxmox script) and Docker.** Each release is built for one
-  Dispatcharr version; the installer picks the right one for you. From v282 that is Dispatcharr
-  **0.34.1** (v281 is the last for 0.33.0 and v275 the last for 0.31.0; both still install on
-  theirs). Dispatcharr 0.34 runs plugin actions on a queue of their own: on a Linux/LXC install
+  Dispatcharr version; the installer picks the right one for you. From v282 on that is
+  Dispatcharr **0.34.1** (v281 is the last for 0.33.0 and v275 the last for 0.31.0; both still
+  install on theirs). Dispatcharr 0.34 runs plugin actions on a queue of their own: on a Linux/LXC install
   Dispatch More makes the Celery worker run it, which Dispatcharr's own installers do not.
 
 ## Better together with arrTV
@@ -132,9 +132,11 @@ A new page with everything for keeping a big lineup tidy. Nothing changes until 
 
 ### Recordings
 
-- **Recordings work on Linux installs.** Stock Dispatcharr never starts a recording on a
-  Linux/LXC install (only Docker has the worker for it). Dispatch More fixes that and adds a
-  worker of its own for recordings, up to 20 at once.
+- **Recordings work on Linux installs.** Stock Dispatcharr sends recordings to a worker that
+  only its Docker image has: on a Linux install made with Dispatcharr's own installer
+  (`debian_install.sh`) a recording never starts, and on the Proxmox script's install each
+  recording holds one of the Celery worker's few slots for the whole programme. Dispatch More
+  adds a worker of its own for recordings, up to 20 at once.
 - **Commercial breaks marked, not cut.** With Comskip in *Mark* mode, the breaks are stored with
   the recording so arrTV can skip them; nothing is cut out, so a wrong guess costs nothing.
 - **Comskip when the recording asks for it**, even with the server-wide switch off.
@@ -173,10 +175,17 @@ own installer (it asks you to type "I understand" under its warning), then Dispa
 
 ### Linux or LXC (Debian install, Proxmox script)
 
-Run on the Dispatcharr machine (or a new Debian/Ubuntu machine or LXC, as root):
+Run on the Dispatcharr machine (or a new Debian/Ubuntu machine or LXC). As root, leave out
+`sudo` (a Proxmox LXC's console often has none):
 
 ```bash
 curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash
+```
+
+Or from the **Proxmox host**, for the LXC with Dispatcharr (its id instead of `145`):
+
+```bash
+pct exec 145 -- bash -c 'curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | bash'
 ```
 
 ### Docker
@@ -247,6 +256,12 @@ with the newest one made for your Dispatcharr. arrTV updates itself (Settings â€
 curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | sudo bash -s -- --upgrade
 ```
 
+From the Proxmox host (works from v283 on; its id instead of `145`):
+
+```bash
+pct exec 145 -- bash -c 'curl -fsSL https://github.com/ckegels/dispatch-more/releases/latest/download/quick-install.sh | bash -s -- --upgrade'
+```
+
 A Dispatch More release only fits the Dispatcharr version it was built for, and Dispatcharr's own
 updaters (`debian_install.sh`, the Proxmox script's `update`) always install the *newest*
 Dispatcharr, which may not have a Dispatch More release yet. `--upgrade` updates Dispatcharr to
@@ -257,6 +272,9 @@ its backup in `/opt/dispatcharr_backup_<time>.tar.gz` -- then Dispatch More on a
 that version: it only installs. Dispatcharr newer than any release: it changes nothing. Installed
 some other way: it changes nothing and says what to do. It asks nothing on the Proxmox script's
 install; on a `debian_install.sh` install Dispatcharr's installer asks you to type "I understand".
+Dispatcharr is down for a few minutes while it is updated. Because Dispatch More is taken off
+first, the optional **caption worker** goes with it, models included: install it again from the
+Subtitles tab afterwards if you used it.
 
 **Updating Dispatcharr yourself** works too: update it as you always do, then run the install
 command again -- no need to uninstall first. It takes the old release off (only what is still the
